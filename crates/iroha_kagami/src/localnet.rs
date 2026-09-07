@@ -6256,6 +6256,35 @@ mod tests {
                         .expect("Taira SoraFS storage cap fits i64")
                 )
             );
+            assert_eq!(
+                parsed
+                    .nexus
+                    .storage
+                    .local_budget_bytes
+                    .map(|bytes| bytes.get()),
+                Some(taira_defaults::NEXUS_STORAGE_BUDGET_BYTES)
+            );
+            assert_eq!(
+                parsed
+                    .nexus
+                    .storage
+                    .effective_local_budget_bytes
+                    .map(|bytes| bytes.get()),
+                Some(taira_defaults::NEXUS_STORAGE_BUDGET_BYTES)
+            );
+            assert_eq!(
+                parsed
+                    .nexus
+                    .storage
+                    .configured_sorafs_max_capacity_bytes()
+                    .map(|bytes| bytes.get()),
+                Some(taira_defaults::SORAFS_STORAGE_CAP_BYTES)
+            );
+            assert_eq!(
+                parsed.torii.sorafs_storage.max_capacity_bytes.get(),
+                taira_defaults::SORAFS_STORAGE_CAP_BYTES,
+                "Nexus parsing must preserve the capacity needed by the complete preseed"
+            );
             let egress = config
                 .get("soracloud_runtime")
                 .and_then(toml::Value::as_table)

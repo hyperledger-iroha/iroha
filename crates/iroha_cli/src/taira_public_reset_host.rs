@@ -3621,8 +3621,11 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
         for name in ["maps", "mountinfo"] {
             if name == "mountinfo" {
                 match fs::read_link(proc_root.join("ns/mnt")) {
-                    Ok(namespace) if !mount_namespaces.insert(namespace) => continue,
-                    Ok(_) => {}
+                    Ok(namespace) => {
+                        if !mount_namespaces.insert(namespace) {
+                            continue;
+                        }
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => {
                         return Err(error).wrap_err("inspect vacant target mount namespace");

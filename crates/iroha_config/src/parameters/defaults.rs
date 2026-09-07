@@ -137,13 +137,13 @@ pub mod taira {
     /// Denominator used by the Nexus storage weight fields.
     pub const STORAGE_WEIGHT_BASIS_POINTS: u16 = 10_000;
     /// Aggregate Nexus disk budget for one validator.
-    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
     /// Kura share of the Nexus disk budget, in basis points.
-    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 6_000;
+    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 2_500;
     /// WSV snapshot share of the Nexus disk budget, in basis points.
-    pub const NEXUS_WSV_SNAPSHOTS_BPS: u16 = 2_000;
+    pub const NEXUS_WSV_SNAPSHOTS_BPS: u16 = 1_250;
     /// SoraFS share of the Nexus disk budget, in basis points.
-    pub const NEXUS_SORAFS_BPS: u16 = 2_000;
+    pub const NEXUS_SORAFS_BPS: u16 = 6_250;
     /// Effective SoraFS component cap derived from the aggregate budget.
     pub const SORAFS_STORAGE_CAP_BYTES: u64 =
         NEXUS_STORAGE_BUDGET_BYTES * NEXUS_SORAFS_BPS as u64 / STORAGE_WEIGHT_BASIS_POINTS as u64;
@@ -169,6 +169,25 @@ pub mod taira {
             assert!(NEXUS_MAX_WSV_MEMORY_BYTES < VALIDATOR_MEMORY_BYTES);
         }
         #[test]
+        fn nexus_storage_contains_the_complete_admitted_preseed() {
+            let mib = 1024 * 1024;
+            assert_eq!(NEXUS_STORAGE_BUDGET_BYTES, 4096 * mib);
+            for (weight, expected_mib) in [
+                (NEXUS_KURA_BLOCKS_BPS, 1024),
+                (NEXUS_WSV_SNAPSHOTS_BPS, 512),
+                (NEXUS_SORAFS_BPS, 2560),
+            ] {
+                assert_eq!(
+                    NEXUS_STORAGE_BUDGET_BYTES * u64::from(weight)
+                        / u64::from(STORAGE_WEIGHT_BASIS_POINTS),
+                    expected_mib * mib
+                );
+            }
+            let payload_ceiling = INROU_GUEST_IMAGE_MAX_BYTES
+                + super::super::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT;
+            assert_eq!(SORAFS_STORAGE_CAP_BYTES - payload_ceiling, 448 * mib);
+        }
+        #[test]
         fn normalized_debian_geometry_and_complete_canary_storage_fit_the_profile() {
             let upstream_root = 3_085_959_168_u64;
             let root = 1536 * 1024 * 1024;
@@ -192,6 +211,14 @@ pub mod taira {
     const _: () = assert!(
         NEXUS_KURA_BLOCKS_BPS + NEXUS_WSV_SNAPSHOTS_BPS + NEXUS_SORAFS_BPS
             == STORAGE_WEIGHT_BASIS_POINTS
+    );
+    // Preseed stores the admitted guest and bundle together. Keep at least 64 MiB
+    // beyond both payload ceilings for discovery, manifests and storage metadata.
+    const _: () = assert!(
+        SORAFS_STORAGE_CAP_BYTES
+            >= INROU_GUEST_IMAGE_MAX_BYTES
+                + super::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
+                + 64 * 1024 * 1024
     );
 }
 /// IVM- and banner-related defaults.

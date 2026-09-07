@@ -1688,6 +1688,44 @@ fn full_config_parses_fine() {
     );
 }
 #[test]
+fn taira_storage_profile_matches_the_complete_preseed_budget() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("configs/soranexus/taira/config.toml");
+    let raw = fs::read_to_string(config_path).expect("read Taira profile");
+    let doc: TomlValue = toml::from_str(&raw).expect("parse Taira profile");
+    let storage = &doc["nexus"]["storage"];
+    assert_eq!(
+        storage["local_budget_bytes"].as_integer(),
+        Some(i64::try_from(defaults::taira::NEXUS_STORAGE_BUDGET_BYTES).unwrap())
+    );
+    assert_eq!(
+        storage["max_wsv_memory_bytes"].as_integer(),
+        Some(i64::try_from(defaults::taira::NEXUS_MAX_WSV_MEMORY_BYTES).unwrap())
+    );
+    for (name, expected) in [
+        ("kura_blocks_bps", defaults::taira::NEXUS_KURA_BLOCKS_BPS),
+        (
+            "wsv_snapshots_bps",
+            defaults::taira::NEXUS_WSV_SNAPSHOTS_BPS,
+        ),
+        ("sorafs_bps", defaults::taira::NEXUS_SORAFS_BPS),
+    ] {
+        assert_eq!(
+            storage["disk_budget_weights"][name].as_integer(),
+            Some(i64::from(expected))
+        );
+    }
+    assert_eq!(doc["sorafs"]["storage"]["enabled"].as_bool(), Some(false));
+    assert_eq!(
+        doc["sorafs"]["storage"]["max_capacity_bytes"].as_integer(),
+        Some(i64::try_from(defaults::taira::SORAFS_STORAGE_CAP_BYTES).unwrap())
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
     const TAIRA_VALIDATOR_COUNT: i64 = 4;

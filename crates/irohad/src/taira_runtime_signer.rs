@@ -851,6 +851,24 @@ mod tests {
             )
         };
         canonical().expect("canonical Taira storage profile");
+        assert_eq!(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1, 4 * 1024 * 1024 * 1024);
+        assert_eq!(TAIRA_SORAFS_STORAGE_CAP_BYTES_V1, 2560 * 1024 * 1024);
+        assert!(
+            validate_taira_storage_profile_v1(
+                Some(1024 * 1024 * 1024),
+                Some(1024 * 1024 * 1024),
+                NexusStorageWeights {
+                    kura_blocks_bps: 6_000,
+                    wsv_snapshots_bps: 2_000,
+                    sorafs_bps: 2_000,
+                },
+                Some(214_748_364),
+                false,
+                214_748_364,
+            )
+            .is_err(),
+            "the undersized profile cannot admit the first-release guest"
+        );
 
         assert!(
             validate_taira_storage_profile_v1(

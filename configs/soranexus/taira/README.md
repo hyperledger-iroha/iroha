@@ -88,20 +88,32 @@ plus normalized rootfs total 1,651,772,096 bytes, within the 1600 MiB immutable 
 ceiling; staging still checks the actual prepared bytes. Official HTTPS checksum consistency and the
 independently reviewed repository archive digest remain mandatory. A failed preparation removes the stale
 `env.sh` success entry point and does not publish the failed normalized copy.
-Each validator has a 1 GiB Nexus disk budget and an explicit 256 MiB encoded WSV
-budget. The startup probe derives matching QEMU and cgroup geometry from the
-selected host CPU/RAM ceiling, including VMM overhead.
+Each validator has a 4 GiB Nexus disk budget: 1 GiB for Kura, 512 MiB for
+snapshots and 2.5 GiB for SoraFS, plus an explicit 256 MiB encoded WSV memory
+budget. SoraFS retains both the 1600 MiB guest ceiling and the 512 MiB compressed
+bundle ceiling, leaving 448 MiB for discovery, manifests and storage metadata.
+The shared policy requires at least 64 MiB of that headroom. The startup probe
+derives matching QEMU and cgroup geometry from the selected host CPU/RAM ceiling,
+including VMM overhead.
 
 The signed validator units must bound each validator process to 1000 millicores
 and 2 GiB RAM separately from its Inrou worker. Four validators and workers plus
 1000 millicores/2 GiB for the guest OS require 9 CPUs and 13 GiB RAM; a 16 GiB
 Linux guest leaves 3 GiB additional guest headroom. These are allocation bounds,
 not performance qualification or a physical RAM reservation. Full disk budgeting
-must include all four root volumes, all four immutable image copies, all writable
-and Nexus caps (16.25 GiB plus 320 MiB combined), guest OS, signed release/upload
-artifacts, preparation copies, staging and filesystem overhead. The 12 GB packaging VM cannot contain that full allocation. Expand and
-qualify the actual guest only through the reviewed deployment procedure; never
-use compressed size or sparse current usage as the permitted full growth budget.
+must include all four root volumes, all four immutable image copies, app-data
+and Nexus caps (28.5 GiB combined at the admitted guest-image ceiling), guest OS,
+signed release/upload artifacts, preparation copies, staging and filesystem
+overhead. The 16 MiB temporary filesystem per replica is RAM-backed. Size the
+physically backed guest disk from the exact admitted canary, all retained copies
+and full runtime/Nexus growth allowances. A 64 GiB disk provides headroom; a
+smaller disk requires measured free bytes and artifact sizes demonstrating that
+all owners fit with an explicit operating reserve before native preparation.
+The retained original assets plus workspace, local-stage and host-stage guest
+copies are additional to the 28.5 GiB runtime allowance.
+Expand and qualify the actual guest only through the reviewed deployment
+procedure; never use compressed size or sparse current usage as the permitted
+full growth budget.
 
 Public-reset V1 supports exactly one Linux/AArch64 host running all four
 validators and the edge. Inventory admission rejects a dedicated edge or any
