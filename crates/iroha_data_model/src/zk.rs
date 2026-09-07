@@ -92,8 +92,19 @@ pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
 /// Privacy protocols and verifier profiles are deliberately not represented by
 /// this enum. They have protocol-specific data-model types and must not be
 /// inferred from aliases or free-form catalog labels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::zk::BackendTag")]
 pub enum BackendTag {
     /// Halo2 IPA over Pasta curves.
@@ -545,7 +556,10 @@ pub struct StarkFriOpenProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1", frame = "iroha.privacy.zk-ace.public-inputs.v1")]
+#[norito_schema(
+    name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1",
+    frame = "iroha.privacy.zk-ace.public-inputs.v1"
+)]
 pub struct ZkAcePrivacyPublicInputsV1 {
     /// Public-input schema version.
     pub version: u16,
@@ -1427,15 +1441,15 @@ mod tests {
         );
         assert_eq!(
             hex::encode(identity_commitment.as_bytes()),
-            "fc9da7cde370eb282f7228fca40060a889db5c210c1430c9d8c52292da5d888a79ed0d75afe426f1d5bcaf571379e680"
+            "1eea6c6ac08b188b9b8902f545257924b1c7296e523d7e9d8b83a48d3dd4b6080e5c67ba09bb9a5bf692d6ef2cd18063"
         );
         assert_eq!(
             hex::encode(tx_digest.to_le_bytes()),
-            "71af728bb6110a1cca751e6fe253742d4c30d8f69e3be2ebf056447088aec13e"
+            "f5ca14b54445acea75f775e4cc276310e88a6e73d50eac360603ee13a70dc6c95f1e2cdb5c15d277771c3077a5b9ea31"
         );
         assert_eq!(
             hex::encode(replay_nullifier.as_bytes()),
-            "6496615988495f553fb17dc9dd01cb49c002e870c4e4987aabefe5bf104c732c"
+            "3a561ef8446963f7a969e59483443e8a5a58dccbc37f3d2fabe1acb46243cb4ff6fd1a2cbcd65feddd775cd01bc4486f"
         );
     }
     #[test]

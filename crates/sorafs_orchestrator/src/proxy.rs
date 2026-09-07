@@ -3930,10 +3930,9 @@ mod tests {
     }
     #[test]
     fn disabled_proxy_still_validates_loopback_binding() {
-        let result = spawn_local_quic_proxy(LocalQuicProxyConfig {
-            bind_addr: "0.0.0.0:0".into(),
-            ..LocalQuicProxyConfig::default()
-        });
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "0.0.0.0:0".into();
+        let result = spawn_local_quic_proxy(config);
         match result {
             Err(ProxyError::BindAddressNotLoopback(addr)) => {
                 assert_eq!(addr, "0.0.0.0:0".parse().expect("addr"));

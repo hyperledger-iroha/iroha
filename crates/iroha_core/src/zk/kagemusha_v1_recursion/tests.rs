@@ -226,8 +226,6 @@ pub(crate) fn incoming_payment_fixture(
     let network_id = network();
     let asset = asset();
     let asset_incarnation = incarnation();
-    let mut recipient_encryption_key = recipient_one_time_key();
-    recipient_encryption_key[1] = recipient_key_seed;
     let mut credential = KagemushaHardwareCredentialV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],

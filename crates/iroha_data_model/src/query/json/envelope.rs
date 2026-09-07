@@ -1437,7 +1437,10 @@ mod tests {
         let singular = SingularQueryJson::FindAssetById {
             asset: definition_id.to_string(),
             account_id: account_id.to_string(),
-            scope: Some(norito::json!({ "kind": "Global" })),
+            scope: Some(
+                norito::json::to_value(&crate::asset::AssetBalanceScope::Global)
+                    .expect("serialize canonical global asset scope"),
+            ),
         };
         let envelope = QueryEnvelopeJson::Singular(singular.clone());
         let json = norito::json::to_json(&envelope).expect("serialize");

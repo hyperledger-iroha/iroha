@@ -1020,12 +1020,12 @@ fn assert_canonical_privacy_intent_kat(
     );
     assert_eq!(
         normalized_bytes.len(),
-        50_206,
+        50_264,
         "the canonical fixture wire length is part of the cross-SDK KAT"
     );
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "b6fcc9f51d979881edf5e803fb48e628ac5a8bb95b742edf0957bd98160133e4",
+        "99c38462e3d9dd3e1284cc59a618a42ee507dc1417b545c258d0b2997f04c5ca",
         "canonical privacy transaction-intent V1 digest"
     );
 }
@@ -1328,7 +1328,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         .expect("derive Vega draft intent");
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "855a4bf9e05cb7ccea44020ccc6cdbc1bea2ba9bb3a4a2e74d0a38abae84615b",
+        "cc0150859ff3efb3abc0c6c9491a486672bae9b353c61ebc8db80657acc20915",
         "canonical Vega two-phase transaction-intent projection KAT"
     );
     let mut changed_hdev = payload.clone();

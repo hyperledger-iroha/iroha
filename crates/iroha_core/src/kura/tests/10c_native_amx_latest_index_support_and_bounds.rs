@@ -188,7 +188,8 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
             }],
             nexus_fee_receipts: Vec::new(),
         };
-        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("fixture participant settlement encodes canonically");
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             lane_id: proposal.descriptor.lane_id,
@@ -227,8 +228,16 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         .expect("non-empty Native AMX fixture proposals")
         .descriptor
         .lane_incarnation;
-    kura.install_lane_incarnation_marker_for_test(entry, lane_incarnation, 0)
-        .expect("install active Native AMX participant incarnation");
+    let configured_catalog_hash = kura
+        .configured_lane_catalog_baseline()
+        .expect("read Native AMX fixture catalog baseline")
+        .expect("Native AMX fixture has an authenticated catalog");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        entry,
+        lane_incarnation,
+        configured_catalog_hash,
+    )
+    .expect("bind active Native AMX participant to durable primary geometry");
     let tree = leaves.iter().map(HashOf::new).collect::<MerkleTree<_>>();
     let manifest_root = tree
         .root()
@@ -496,7 +505,8 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
             }],
             nexus_fee_receipts: Vec::new(),
         };
-        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
+        let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+            .expect("fixture participant settlement encodes canonically");
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             lane_id: proposal.descriptor.lane_id,
@@ -707,8 +717,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
     let temp_dir = TempDir::new().expect("temporary Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("initialize Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -737,8 +746,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -773,8 +781,7 @@ fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
     let temp_dir = TempDir::new().expect("temporary Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("initialize Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -804,8 +811,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
         config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native history test bound");
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -976,8 +982,7 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
         config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native history test bound");
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");

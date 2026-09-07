@@ -1002,6 +1002,7 @@ where
         clone
     }
     /// Return the exact maximum raw-row count across the historical four physical lanes.
+    #[cfg(test)]
     pub(super) fn required_rows(&self) -> Result<usize, String> {
         self.required_rows_with_lanes(DENSE_LANES)
     }
@@ -1041,10 +1042,12 @@ where
     }
     /// Return the exact queued-job, source, and row geometry used by the
     /// authenticated composite-circuit capacity check for four lanes.
+    #[cfg(test)]
     pub(super) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
         self.capacity_profile_with_lanes(DENSE_LANES)
     }
     /// Return queued-job, source, and row geometry for `configured_lanes` lanes.
+    #[cfg(test)]
     pub(super) fn capacity_profile_with_lanes(
         &self,
         configured_lanes: usize,

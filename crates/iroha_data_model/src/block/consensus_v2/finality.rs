@@ -1110,7 +1110,20 @@ mod tests {
             .roster
             .sort_by(|left, right| left.validator.cmp(&right.validator));
         snapshot.quorum = DualQuorum::from_roster(&snapshot.roster).expect("mutated valid roster");
+        snapshot.kagemusha_mint_finality_epoch_roster = mint_finality_roster(
+            forged_roster.height_context.network_id,
+            snapshot.epoch,
+            &snapshot.roster,
+        );
+        snapshot.kagemusha_mint_finality_epoch_id = snapshot
+            .kagemusha_mint_finality_epoch_roster
+            .finality_epoch_id()
+            .expect("mutated mint-finality roster remains valid");
         for forged in [forged_seed, forged_roster] {
+            forged
+                .height_context
+                .validate()
+                .expect("forged transition remains structurally valid");
             assert_ne!(forged.height_context.id(), canonical.height_context.id());
             assert_eq!(
                 forged.validate(),

@@ -277,8 +277,8 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     ]["ordered_source_ids"]
     assert 1 <= len(parsed.native_amx_receipts) <= 4096
     expected_settlement_hashes = {
-        (7, 11): "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
-        (8, 12): "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+        (7, 11): "hash:2DA510B86888B5D77EA760618AF06BE5511D39E8588156639EEAB566A91F2F5D#5534",
+        (8, 12): "hash:0CDECBD738386DFB71F6ADB85E49799EC6982634632C99E6E81149E7F7F42FA5#B635",
     }
     for receipt in parsed.native_amx_receipts:
         assert len(receipt.legs) == 2

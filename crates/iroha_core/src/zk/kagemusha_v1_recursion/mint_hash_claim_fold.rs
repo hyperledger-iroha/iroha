@@ -4553,7 +4553,7 @@ mod tests {
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::{
-            group::{Curve as _, Group as _},
+            group::Group as _,
             pasta::{Eq, EqAffine, Fp, Fq},
         },
     };

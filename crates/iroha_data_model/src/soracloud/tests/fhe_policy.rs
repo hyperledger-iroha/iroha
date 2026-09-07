@@ -775,7 +775,7 @@ fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
         &params,
         &public_key,
         "soracloud-bootstrap-proof",
-        2,
+        1,
         bootstrap_seed,
     )
     .expect("bootstrap key");
@@ -790,7 +790,7 @@ fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
         rotation_transcripts: Vec::new(),
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "soracloud-bootstrap-proof".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: 1,
             seed: bootstrap_seed.to_vec(),
         }),
     };
@@ -809,7 +809,7 @@ fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
             &[],
             Some(BfvBootstrapKeyTranscriptSeed {
                 key_id: "soracloud-bootstrap-proof",
-                max_refresh_rounds: 2,
+                max_refresh_rounds: 1,
                 seed: bootstrap_seed,
             }),
         )
@@ -838,7 +838,7 @@ fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
             &params,
             &bounded_public_key,
             "soracloud-bounded-bootstrap-proof",
-            2,
+            1,
             bounded_bootstrap_seed,
         )
         .expect("bounded bootstrap key");
@@ -853,7 +853,7 @@ fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
         rotation_transcripts: Vec::new(),
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "soracloud-bounded-bootstrap-proof".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: 1,
             seed: bounded_bootstrap_seed.to_vec(),
         }),
     };
@@ -1291,7 +1291,7 @@ fn bfv_refresh_transcript_digest_uses_policy_mode() {
             &params,
             &public_key,
             "soracloud-bounded-bootstrap",
-            2,
+            1,
             &bootstrap_seed,
         )
         .expect("bounded-noise bootstrap key");
@@ -1312,7 +1312,7 @@ fn bfv_refresh_transcript_digest_uses_policy_mode() {
         }],
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "soracloud-bounded-bootstrap".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: 1,
             seed: bootstrap_seed,
         }),
     };

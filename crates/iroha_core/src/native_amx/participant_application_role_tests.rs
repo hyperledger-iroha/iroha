@@ -1,23 +1,93 @@
 //! Direct adversarial tests for Native AMX participant application classification.
 
 use super::*;
+use iroha_data_model::block::consensus::LaneBlockCommitment;
+use iroha_primitives::numeric::Quantity;
 
 const INCONSISTENT_IDENTITY: &str =
     "Native AMX participant leg identity is internally inconsistent";
 const SAME_ROUTE_DRIFT: &str = "Native AMX same-route leg differs from the coordinator identity";
 
 fn fixture_receipt() -> NativeAmxReceipt {
-    let document: norito::json::Value = norito::json::from_str(include_str!(
-        "../../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-    ))
-    .expect("decode Rust-owned grouped Native AMX fixture");
-    let commitment: LaneBlockCommitment = norito::json::from_value(
-        document
-            .pointer("/golden/receipt_group")
-            .expect("fixture contains its golden receipt group")
-            .clone(),
-    )
-    .expect("decode grouped Native AMX commitment");
+    let coordinator = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(11));
+    let participant = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(12));
+    let plan = RoutingPlan::native_amx(
+        coordinator,
+        vec![
+            RouteLeg::new(coordinator, RouteLegRole::Participant),
+            RouteLeg::new(participant, RouteLegRole::Participant),
+        ],
+    );
+    let keypairs = (1_u8..=4)
+        .map(|seed| {
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("classification fixture BLS keypair")
+        })
+        .collect::<Vec<_>>();
+    let mut receipt = crate::block::tests::signed_native_amx_receipt(
+        [0xAB; Hash::LENGTH],
+        HashOf::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH])),
+        &plan,
+        42,
+        &keypairs,
+    );
+    // Both roles need a retained predecessor so removing its hash is a real mutation.
+    let remote = receipt
+        .legs
+        .iter_mut()
+        .find(|leg| leg.lane_id == participant.lane_id)
+        .expect("classification fixture has a separate participant");
+    remote
+        .participant_proposal
+        .descriptor
+        .previous_lane_block_height = 41;
+    remote
+        .participant_proposal
+        .descriptor
+        .previous_lane_block_descriptor_hash = Some(Hash::new(b"classification-predecessor"));
+    remote.participant_proposal.descriptor.lane_block_height = 42;
+    rebind_participant_identity(remote);
+    for qc in [&mut remote.prepare_qc, &mut remote.commit_qc] {
+        let min_signers = usize::try_from(qc.body.participant_min_quorum).expect("fixture quorum");
+        let votes = keypairs
+            .iter()
+            .take(min_signers)
+            .map(|keypair| NativeAmxVoteV2 {
+                body: qc.body,
+                signer: PeerId::new(keypair.public_key().clone()),
+                bls_signature: Signature::try_new(
+                    keypair.private_key(),
+                    &qc.body.signature_preimage(),
+                )
+                .expect("sign classification fixture vote")
+                .payload()
+                .to_vec(),
+            })
+            .collect::<Vec<_>>();
+        *qc = aggregate_votes_to_qc(
+            qc.body,
+            qc.validator_set().to_vec(),
+            qc.validator_set_pops().to_vec(),
+            &votes,
+            min_signers,
+        )
+        .expect("aggregate classification fixture quorum");
+    }
+    let commitment = LaneBlockCommitment {
+        block_height: receipt.lane_block_height,
+        lane_id: receipt.lane_id,
+        lane_incarnation: receipt.lane_incarnation,
+        dataspace_id: receipt.dataspace_id,
+        tx_count: 1,
+        total_local_amount: Quantity::zero(),
+        total_xor_due: Quantity::zero(),
+        total_xor_after_haircut: Quantity::zero(),
+        total_xor_variance: Quantity::zero(),
+        swap_metadata: None,
+        receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: vec![receipt],
+    };
     commitment
         .validate_native_amx_receipts()
         .expect("classification fixture has valid grouped receipt structure");
@@ -47,7 +117,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
     leg.participant_settlement.lane_incarnation = descriptor.lane_incarnation;
     leg.participant_settlement.block_height = descriptor.lane_block_height;
     leg.participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
             .expect("mutated fixture settlement hashes");
     leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
     let descriptor = &leg.participant_proposal.descriptor;
@@ -62,7 +132,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
         body.participant_lane_block_height = descriptor.lane_block_height;
         body.participant_lane_block_view = descriptor.lane_block_view;
         body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
-        body.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
+        body.participant_settlement_commitment = leg.participant_settlement_hash;
     }
 }
 
@@ -191,7 +261,8 @@ const BODY_IDENTITY_MUTATIONS: &[BodyIdentityMutation] = &[
         body.participant_proposal_hash = Hash::new(b"phase-proposal-drift")
     }),
     ("participant settlement", |body| {
-        body.participant_settlement_commitment = Hash::new(b"phase-settlement-drift")
+        body.participant_settlement_commitment =
+            HashOf::from_untyped_unchecked(Hash::new(b"phase-settlement-drift"))
     }),
     ("coordinator lane", |body| {
         body.coordinator_lane_id = LaneId::new(90)

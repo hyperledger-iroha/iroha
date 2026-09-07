@@ -1283,7 +1283,6 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
             },
           ],
           nexus_fee_receipts: [],
-          native_amx_receipts: [],
         },
         participant_settlement_hash: participantSettlementHash,
         prepare_qc: qc("prepare"),
@@ -12854,6 +12853,14 @@ test("getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipt
   assert.equal(leg.participant_settlement_hash, leg.commit_qc.body.participant_settlement_commitment);
   assert.equal(leg.participant_settlement.block_height, 8);
   assert.equal(leg.participant_settlement.receipts.length, 2);
+  assert.equal(Object.keys(leg.participant_settlement).length, 12);
+  assert.equal(Object.hasOwn(leg.participant_settlement, "native_amx_receipts"), false);
+  for (const removedValue of [[], [{}]]) {
+    assert.throws(() => __sumeragiNativeAmxTestHelpers.computeParticipantSettlementHash({
+      ...leg.participant_settlement,
+      native_amx_receipts: removedValue,
+    }), /unknown field/u);
+  }
   assert.equal(leg.prepare_qc.body.source_id, "AB".repeat(32));
   assert.equal(leg.prepare_qc.body.tx_entrypoint_hash, fakeSumeragiHash(0x61));
   assert.equal(leg.participant_proposal.payload_block_hint, null);
@@ -13032,6 +13039,7 @@ test("getSumeragiDiagnosticsTyped rejects participant-finality tampering", async
         leg.participant_settlement.receipts[0],
       );
     },
+    (leg) => { leg.participant_settlement.native_amx_receipts = []; },
     (leg) => { leg.participant_settlement.native_amx_receipts = [{}]; },
   ];
 

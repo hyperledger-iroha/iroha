@@ -36,10 +36,10 @@ SOURCE_PATHS = (
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs',
 )
 SOURCE_LINE_LEDGER = {
-    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2_262,
-    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 841,
+    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2_282,
+    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 858,
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1_544,
-    'crates/iroha_torii/src/openapi.rs': 6_393,
+    'crates/iroha_torii/src/openapi.rs': 6_311,
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_836,
 }
 ASSETS = {
@@ -239,6 +239,7 @@ TEST_INVENTORY = {
         'output_witness_polynomial_rehome_moves_allocation_and_clears_exactly_once',
         'right_witness_polynomial_rehome_scales_without_copy_or_allocation',
         'scalar_vector_borrowed_scaled_accumulation_source_boundary',
+        'secret_byte_cleanup_accounting_is_isolated_between_threads',
 ),
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': (
         'inner_product_owner_source_boundary_covers_every_production_caller',
@@ -302,6 +303,7 @@ TEST_INVENTORY = {
         'retired_alias_voprf_surface_does_not_reappear',
         'content_route_documents_conditional_cache_and_auth_contract',
         'ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers',
+        'account_capabilities_document_exact_public_bootstrap_policy',
         'generated_spec_includes_documented_paths',
         'generated_spec_exposes_only_kagemusha_v1',
         'musubi_v1_openapi_matches_the_complete_catalog_and_declares_models',
@@ -339,10 +341,10 @@ TEST_INVENTORY = {
 ),
 }
 ATTRIBUTE_SIGNATURE = {
-    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'a91e1c3bbf4e2512564f795b197544667aae798efb4c609a30f94853ddf9085d',
+    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'b6c135b93185398bfd5dfdc95bc5331eac71cea2ecd6b8778b9634924d800d39',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': '8a61371f2409f09729a5ccfe5ea016c79d7f2168100feab501bd9b2c218263d0',
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
-    'crates/iroha_torii/src/openapi.rs': 'fcd52b48d3f289ea1cfafb186a5221abcaf981de9c386acf49858f796d93808d',
+    'crates/iroha_torii/src/openapi.rs': 'ffb778191d4a7b868120f9998a11e9660dcfcade3069100836421742f5b29d9e',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '6117af48b2adb690add8256579bfdddda01db37bc04025e1b345aaa65acec8c0',
 }
 
@@ -517,7 +519,7 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
-            "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f",
+            "bdf9580fb6445efed599be5ae7c1a73c2e0ef2bc8d3ddb2a6b01b95c4efc7c8d",
         )
 
 

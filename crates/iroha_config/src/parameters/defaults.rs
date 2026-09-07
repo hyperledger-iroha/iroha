@@ -998,8 +998,9 @@ pub mod snapshot {
     /// JSON restoration uses additional transient memory; operators should size this below
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
-    /// Maximum typed-decoder nesting depth for one snapshot payload.
-    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(128_usize);
+    /// Maximum typed-decoder nesting depth supported by Norito's JSON structure limit.
+    pub const MAX_DECODE_DEPTH: NonZeroUsize =
+        nonzero!(::norito::json::MAX_JSON_VALUE_NESTING_DEPTH);
     /// Maximum aggregate collection items decoded from one snapshot payload.
     pub const MAX_DECODE_ITEMS: NonZeroUsize = nonzero!(10_000_000_usize);
     /// Maximum UTF-8 bytes accepted for any individual snapshot string.

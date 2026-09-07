@@ -7,6 +7,7 @@
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fs,
     mem::size_of,
@@ -74,7 +75,6 @@ use iroha_test_network::{
     init_instruction_registry, resolve_release_prebuilt_binary,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
-use norito::codec::Encode as _;
 use sha2::{Digest as _, Sha256};
 use tokio::time::{Instant, sleep, timeout};
 use toml::{Table, Value as TomlValue};
@@ -417,21 +417,21 @@ fn validator_bindings(
             .get("type")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("lane validator item omitted status.type"))?;
-        let validator = item
-            .get("validator")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("lane validator item omitted validator"))?
-            .parse()?;
+        let validator = AccountId::parse_encoded(
+            item.get("validator")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| eyre!("lane validator item omitted validator"))?,
+        )?;
         let peer = item
             .get("peer_id")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("lane validator item omitted peer_id"))?
             .parse()?;
-        let stake_account: AccountId = item
-            .get("stake_account")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("lane validator item omitted stake_account"))?
-            .parse()?;
+        let stake_account = AccountId::parse_encoded(
+            item.get("stake_account")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| eyre!("lane validator item omitted stake_account"))?,
+        )?;
         ensure!(
             stake_account == validator
                 && item
@@ -1117,7 +1117,9 @@ fn assert_bpng_ownership(
     expected_validators: &[PeerId],
     transaction: &SignedTransaction,
 ) -> Result<()> {
-    ownership.validate_replay_material()?;
+    ownership
+        .validate_replay_material()
+        .map_err(|error| eyre!("invalid BPNG replay material: {error:?}"))?;
     let transaction_hash = Hash::from(transaction.hash());
     ensure!(
         ownership.lane_id == BPNG_FIXTURE_LANE
@@ -1600,7 +1602,9 @@ fn inspect_certified_bpng_lane_evidence(
                     .find(|ownership| ownership_matches_descriptor(ownership, descriptor))
             })
             .ok_or_else(|| eyre!("retained Kura carrier omitted certified BPNG ownership"))?;
-        ownership.validate_replay_material()?;
+        ownership
+            .validate_replay_material()
+            .map_err(|error| eyre!("invalid certified BPNG replay material: {error:?}"))?;
         previous_height = descriptor.lane_block_height;
         previous_descriptor = Some(descriptor.descriptor_hash);
         indexed_end = end;
@@ -1998,7 +2002,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     npos.finality_margin_blocks = 2;
     npos.evidence_horizon_blocks = 16;
     npos.slashing_delay_blocks = 8;
-    npos.validate()?;
+    npos.validate().map_err(|error| eyre!(error))?;
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_base_seed(NETWORK_SEED)
@@ -2018,22 +2022,18 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         )))
         .with_block_cadence(Duration::from_secs(1))
         .with_config_layer(|layer| {
+            // Fixed in the ORIGINAL network, never changed during restart.
             layer
                 .write(["snapshot", "mode"], "disabled")
                 .write(["kura", "init_mode"], "strict")
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
                     1_073_741_824_i64,
-                );
-            // Fixed in the ORIGINAL network, never changed during restart.
-            for field in [
-                "base_fee",
-                "per_byte_fee",
-                "per_instruction_fee",
-                "per_gas_unit_fee",
-            ] {
-                layer.write(["nexus", "fees", field], "0");
-            }
+                )
+                .write(["nexus", "fees", "base_fee"], "0")
+                .write(["nexus", "fees", "per_byte_fee"], "0")
+                .write(["nexus", "fees", "per_instruction_fee"], "0")
+                .write(["nexus", "fees", "per_gas_unit_fee"], "0");
         });
     let network = timeout(
         NETWORK_TIMEOUT,
@@ -2294,11 +2294,11 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     }
     // Preserve every original layer, including fees, lane authority and signed
     // genesis. The one new layer adds only the canonical BPNG catalog identity.
-    let mut layers = network
+    let mut layers: Vec<Cow<'static, Table>> = network
         .config_layers()
-        .map(|layer| layer.into_owned())
+        .map(|layer| Cow::Owned(layer.into_owned()))
         .collect::<Vec<_>>();
-    layers.push(dataspace_only_restart_layer(&grant));
+    layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
         timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())

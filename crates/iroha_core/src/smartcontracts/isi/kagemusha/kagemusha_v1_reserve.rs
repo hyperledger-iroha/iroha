@@ -2344,7 +2344,6 @@ mod tests {
 
     use crate::zk::kagemusha_v1_recursion::{
         KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaEpAccumulatorV1, KagemushaEqAccumulatorV1,
-        KagemushaMintAuthorityStepV1,
     };
 
     fn tagged_id(tag: u8, nonce: u64) -> [u8; 32] {

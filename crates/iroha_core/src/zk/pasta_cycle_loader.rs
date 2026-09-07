@@ -565,6 +565,7 @@ where
     /// Source-indexed scalar coefficients for every deferred equality.
     pub(super) equations: Vec<Vec<(usize, Inner<C>)>>,
 }
+#[cfg(test)]
 impl<C> DeferredEquationWitness<C>
 where
     C: CurveAffineExt,
@@ -659,6 +660,13 @@ where
     Inner<C>: BigPrimeField,
 {
     /// Select exact cached point chunks by a strictly increasing source map.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Reciprocal source-map inspection is only used by circuit regression tests"
+        )
+    )]
     pub(super) fn mapped_poseidon_elements_v1(
         &self,
         points: &[C],
@@ -1022,16 +1030,6 @@ where
             Existing(limb_1_high),
         );
         [low, high]
-    }
-    /// Return the stable deferred-source index carried by one assigned point.
-    pub(super) fn assigned_point_source_index(
-        &self,
-        point: &DeferredScalarPoint<C>,
-    ) -> Result<usize, Error> {
-        if bool::from(point.value.is_identity()) {
-            return Err(Error::InvalidInstances);
-        }
-        point.source_index.ok_or(Error::InvalidInstances)
     }
     /// Constrain the injective two-`u128` encoding of one symbolic point.
     pub(super) fn assigned_point_poseidon_elements_v1(

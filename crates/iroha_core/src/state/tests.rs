@@ -7453,7 +7453,7 @@ state_test! { sync native_amx_participant_receipt_requires_exact_v2_frontier_con
     let_row! { (session, _) = sample_committed_lane_block_session_with_payload_for_state_test( lane_id, dataspace_id, incarnation, 73, 2, vec![0], vec![Hash::new(b"native-frontier-receipt-entrypoint")], ) };
     let proposal = session.proposal;
     let_row! { settlement = NativeAmxParticipantSettlement { block_height: proposal.descriptor.lane_block_height, lane_id, lane_incarnation: incarnation, dataspace_id, tx_count: 0, total_local_amount: "0".parse().expect("zero quantity"), total_xor_due: "0".parse().expect("zero quantity"), total_xor_after_haircut: "0".parse().expect("zero quantity"), total_xor_variance: "0".parse().expect("zero quantity"), swap_metadata: None, receipts: Vec::new(), nexus_fee_receipts: Vec::new(), } };
-    let_row! { settlement_hash = iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(&settlement) };
+    let_row! { settlement_hash = iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(&settlement).expect("fixture participant settlement encodes canonically") };
     let_row! { application_block_hash = HashOf::from_untyped_unchecked(Hash::new(b"native-frontier-receipt-application")) };
     let_row! { receipt = crate::kura::NativeAmxParticipantApplicationReceiptArtifact { version: 2, participant_proposal: proposal.clone(), participant_settlement: settlement, participant_settlement_hash: settlement_hash, application_block_height: 73, application_block_hash, executed_block_wire_hash: Hash::new(b"native-frontier-receipt-executed-wire"), finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new( b"native-frontier-receipt-finality", )), manifest_artifact_hash: HashOf::from_untyped_unchecked(Hash::new( b"native-frontier-receipt-manifest", )), source_ids: vec![[0xA5; Hash::LENGTH]], entrypoint_indices: Vec::new(), entrypoint_hashes: Vec::new(), result_hashes: Vec::new(), results: Vec::new(), } };
     let descriptor = &proposal.descriptor;
@@ -7630,7 +7630,7 @@ state_test! { sync mixed_role_native_amx_state_projections_reject_same_route_ide
         coordinator_leg.participant_settlement_hash =
             iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
                 &coordinator_leg.participant_settlement,
-            );
+            ).expect("fixture participant settlement encodes canonically");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,

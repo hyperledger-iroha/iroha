@@ -1098,8 +1098,10 @@ mod tests {
     #[test]
     fn snapshot_file_reader_rejects_non_regular_path() {
         let temporary = tempfile::tempdir().expect("create guard-directory test root");
-        let error = read_guard_directory_snapshot_file(temporary.path())
-            .expect_err("directory path must fail closed");
+        let path = temporary.path().join("directory.norito");
+        fs::create_dir(&path).expect("create directory below custodied test root");
+        let error =
+            read_guard_directory_snapshot_file(&path).expect_err("directory path must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("direct regular file"));
     }

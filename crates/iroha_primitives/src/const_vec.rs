@@ -1423,7 +1423,9 @@ mod tests {
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let items = vec![vec![1u8, 2, 3], vec![4u8, 5]];
         let const_vec = ConstVec::from(items.clone());
-        let const_bytes = const_vec.encode();
+        let mut const_bytes = Vec::new();
+        ncore::serialize_to_buffer(&const_vec, &mut const_bytes)
+            .expect("serialize ConstVec<Vec<u8>> with packed-seq flags");
         let mut vec_bytes = Vec::new();
         ncore::serialize_to_buffer(&items, &mut vec_bytes).expect("serialize Vec<Vec<u8>>");
         assert_eq!(

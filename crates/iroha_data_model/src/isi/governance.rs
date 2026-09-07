@@ -452,7 +452,11 @@ mod tests {
         window: Option<AtWindow>,
         mode: Option<VotingMode>,
     }
-    fn assert_legacy_instruction_payload_rejected<T: Encode>(wire_id: &str, value: &T) {
+    fn assert_legacy_instruction_payload_rejected<T: Encode>(type_name: &str, value: &T) {
+        let registry = crate::isi::registry::default();
+        let wire_id = registry
+            .wire_id(type_name)
+            .expect("current governance instruction has a canonical wire identifier");
         let bare = value.encode();
         let framed = crate::isi::frame_instruction_payload(wire_id, &bare)
             .expect("frame forged legacy governance instruction");

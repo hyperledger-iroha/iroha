@@ -1461,7 +1461,7 @@ pub(crate) fn build_kagemusha_platform_credential_eq_v1(
     validate_platform_credential_claim_pair_v1(witness)?;
     let eq_svk = super::composite::eq_succinct_vk(eq_params);
     let KagemushaPlatformCredentialScalarHalfV1 {
-        builder: mut builder,
+        mut builder,
         output,
         pair_binding,
     } = build_platform_credential_scalar_half_v1::<EqAffine>(
@@ -1522,7 +1522,7 @@ pub(crate) fn build_kagemusha_platform_credential_ep_v1(
     validate_platform_credential_claim_pair_v1(witness)?;
     let ep_svk = super::composite::ep_succinct_vk(ep_params);
     let KagemushaPlatformCredentialScalarHalfV1 {
-        builder: mut builder,
+        mut builder,
         output,
         mut pair_binding,
     } = build_platform_credential_scalar_half_v1::<EpAffine>(
@@ -3099,10 +3099,7 @@ pub(crate) fn device_authority_commitment_v1(secret: DigestV1) -> DigestV1 {
 
 #[cfg(test)]
 mod tests {
-    use halo2_proofs::{
-        dev::MockProver,
-        halo2curves::pasta::{Fp, Fq},
-    };
+    use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
     use super::*;
     use crate::zk::kagemusha_v1_poseidon::digest_limbs;

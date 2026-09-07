@@ -239,6 +239,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(decode_from_slice)]
     pub struct TransactionSignature(pub SignatureOf<TransactionPayload>);
     /// A single signature produced by a multisig member.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -294,13 +295,6 @@ mod model {
                 return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
             }
             Ok(())
-        }
-    }
-    impl<'a> norito::core::DecodeFromSlice<'a> for TransactionSignature {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-            let (inner, used) =
-                <SignatureOf<TransactionPayload> as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-            Ok((TransactionSignature(inner), used))
         }
     }
     /// Payload signed when committing to a sealed transaction.

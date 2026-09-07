@@ -2511,10 +2511,23 @@ mod tests {
     }
     #[test]
     fn canonical_decode_rejects_forged_multisig_count_before_allocation() {
-        let canonical = [0_u8, CONTROLLER_MULTISIG_TAG, 1, 0, 1, 0xff, 0xff];
+        let header = AddressHeader::new(
+            HEADER_VERSION_V1,
+            AddressClass::MultiSig,
+            HEADER_NORM_VERSION_V1,
+        )
+        .expect("valid multisig header")
+        .encode();
+        // The maximum wire count is representable, but no member bytes follow it.
+        // The decoder must reject the truncated inventory before allocating it.
+        let canonical = [header, CONTROLLER_MULTISIG_TAG, 1, 0, 1, 0xff, 0xff];
+        let err = AccountAddress::from_canonical_bytes(&canonical).unwrap_err();
+        assert!(matches!(err, AccountAddressError::InvalidLength));
+        let canonical = [header, CONTROLLER_MULTISIG_TAG, 1, 0, 1, 0, 2];
         let err = AccountAddress::from_canonical_bytes(&canonical).unwrap_err();
         assert!(matches!(err, AccountAddressError::InvalidLength));
     }
+
     #[test]
     fn parse_encoded_accepts_i105_format() {
         let account = AccountId::new(ed25519_pk());

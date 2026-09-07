@@ -1638,6 +1638,23 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
         json.get("native_amx_receipts").is_none(),
         "the dedicated participant settlement wire type cannot nest Native AMX receipts"
     );
+    assert_eq!(
+        norito::json::from_value::<NativeAmxParticipantSettlement>(json.clone())
+            .expect("decode participant settlement JSON"),
+        settlement
+    );
+    for nested_receipts in [norito::json!([]), norito::json!([{}])] {
+        let mut recursive_settlement = json.clone();
+        recursive_settlement
+            .as_object_mut()
+            .expect("participant settlement is a JSON object")
+            .insert("native_amx_receipts".to_owned(), nested_receipts);
+        assert!(
+            norito::json::from_value::<NativeAmxParticipantSettlement>(recursive_settlement)
+                .is_err(),
+            "participant settlement JSON must reject the removed recursive field even when empty"
+        );
+    }
 }
 #[test]
 fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() {

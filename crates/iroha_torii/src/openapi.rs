@@ -274,7 +274,13 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
         top_up.insert(
             "description".to_owned(),
             Value::from(
-                "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
+                concat!(
+                    "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. ",
+                    "The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. ",
+                    "Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. ",
+                    "The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. ",
+                    "The embedded top-up request is limited to 16 KiB.",
+                ),
             ),
         );
         set_kagemusha_norito_request(
@@ -920,28 +926,26 @@ mod tests {
             }
         }
     }
+    /// Traverse only object fields, preserving a missing or mistyped component as `None`.
+    fn nested_object_value<'a>(mut value: Option<&'a Value>, fields: &[&str]) -> Option<&'a Value> {
+        for field in fields {
+            value = value?.as_object()?.get(*field);
+        }
+        value
+    }
     fn documented_reject_codes<'a>(responses: &'a Map, status: &str) -> Vec<&'a str> {
-        responses
-            .get(status)
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .and_then(|headers| headers.get("x-iroha-reject-code"))
-            .and_then(Value::as_object)
-            .and_then(|header| header.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("HTTP {status} x-iroha-reject-code enum"))
-            .iter()
-            .map(|code| code.as_str().expect("reject-code enum value"))
-            .collect()
+        nested_object_value(
+            responses.get(status),
+            &["headers", "x-iroha-reject-code", "schema", "enum"],
+        )
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("HTTP {status} x-iroha-reject-code enum"))
+        .iter()
+        .map(|code| code.as_str().expect("reject-code enum value"))
+        .collect()
     }
     fn response_documents_reject_code(responses: &Map, status: &str) -> bool {
-        responses
-            .get(status)
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
+        nested_object_value(responses.get(status), &["headers"])
             .and_then(Value::as_object)
             .is_some_and(|headers| headers.contains_key("x-iroha-reject-code"))
     }
@@ -958,12 +962,7 @@ mod tests {
             .expect("OpenAPI components")
     }
     fn openapi_operation<'a>(document: &'a Value, path: &str, method: &str) -> &'a Map {
-        document
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| paths.get(path))
-            .and_then(Value::as_object)
-            .and_then(|path_item| path_item.get(method))
+        nested_object_value(document.get("paths"), &[path, method])
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("{method} {path} operation"))
     }
@@ -981,51 +980,31 @@ mod tests {
             vec![expected_reject_code],
             "POST {path} exact 401 reject code"
         );
-        let challenge = responses
-            .get("401")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .and_then(|headers| headers.get("WWW-Authenticate"))
-            .and_then(Value::as_object)
-            .and_then(|header| header.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("const"))
-            .and_then(Value::as_str);
+        let challenge = nested_object_value(
+            responses.get("401"),
+            &["headers", "WWW-Authenticate", "schema", "const"],
+        )
+        .and_then(Value::as_str);
         assert_eq!(challenge, Some("Signature"), "POST {path} challenge");
     }
     fn assert_alias_auth_required_response(operation: &Map, path: &str) {
         assert_canonical_auth_required_response(operation, path, "alias_auth_required");
     }
     fn operation_request_schema_ref<'a>(operation: &'a Map, path: &str) -> &'a str {
-        operation
-            .get("requestBody")
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("content"))
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("application/json"))
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("request schema for {path}"))
+        nested_object_value(
+            operation.get("requestBody"),
+            &["content", "application/json", "schema", "$ref"],
+        )
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("request schema for {path}"))
     }
     fn operation_response_schema_ref<'a>(operation: &'a Map, status: &str, path: &str) -> &'a str {
-        operation
-            .get("responses")
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get(status))
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("application/json"))
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("HTTP {status} response schema for {path}"))
+        nested_object_value(
+            operation.get("responses"),
+            &[status, "content", "application/json", "schema", "$ref"],
+        )
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("HTTP {status} response schema for {path}"))
     }
     fn assert_strict_object_schema(
         schemas: &Map,
@@ -1298,18 +1277,12 @@ mod tests {
         }
     }
     fn component_properties<'a>(schemas: &'a Map, name: &str) -> &'a Map {
-        schemas
-            .get(name)
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
+        nested_object_value(schemas.get(name), &["properties"])
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("{name} properties"))
     }
     fn component_required<'a>(schemas: &'a Map, name: &str) -> Vec<&'a str> {
-        schemas
-            .get(name)
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("required"))
+        nested_object_value(schemas.get(name), &["required"])
             .and_then(Value::as_array)
             .unwrap_or_else(|| panic!("{name} required fields"))
             .iter()
@@ -1384,11 +1357,7 @@ mod tests {
             "{owner}.{property} nullable union must have exactly two variants"
         );
         assert_eq!(
-            variants
-                .get(1)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("type"))
-                .and_then(Value::as_str),
+            nested_object_value(variants.get(1), &["type"]).and_then(Value::as_str),
             Some("null"),
             "{owner}.{property} second variant must be null"
         );
@@ -1647,21 +1616,15 @@ mod tests {
             documented_reject_codes(responses, "409"),
             vec!["alias.catalog.mapping_conflict", "route_conflict"]
         );
-        let challenges = responses
-            .get("401")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .and_then(|headers| headers.get("WWW-Authenticate"))
-            .and_then(Value::as_object)
-            .and_then(|header| header.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .expect("atomic onboarding authentication challenges")
-            .iter()
-            .map(|challenge| challenge.as_str().expect("authentication challenge"))
-            .collect::<Vec<_>>();
+        let challenges = nested_object_value(
+            responses.get("401"),
+            &["headers", "WWW-Authenticate", "schema", "enum"],
+        )
+        .and_then(Value::as_array)
+        .expect("atomic onboarding authentication challenges")
+        .iter()
+        .map(|challenge| challenge.as_str().expect("authentication challenge"))
+        .collect::<Vec<_>>();
         assert_eq!(
             challenges,
             vec!["IrohaApiToken realm=\"torii\"", "Signature"]
@@ -2609,10 +2572,7 @@ mod tests {
             .as_object()
             .expect("public-lane validator status schema");
         assert_eq!(
-            status
-                .get("discriminator")
-                .and_then(Value::as_object)
-                .and_then(|value| value.get("propertyName"))
+            nested_object_value(status.get("discriminator"), &["propertyName"])
                 .and_then(Value::as_str),
             Some("type")
         );
@@ -3483,10 +3443,7 @@ mod tests {
                 "read",
             ),
         ] {
-            let path_item = document
-                .get("paths")
-                .and_then(Value::as_object)
-                .and_then(|paths| paths.get(path))
+            let path_item = nested_object_value(document.get("paths"), &[path])
                 .and_then(Value::as_object)
                 .unwrap_or_else(|| panic!("missing static Musubi path {path}"));
             assert_eq!(
@@ -3561,12 +3518,10 @@ mod tests {
             wire_ids.get(provider_index + 1),
             Some(&"iroha.musubi.v1.archive_location.add")
         );
-        let preview_variants = schemas
-            .get("MusubiInstructionPreviewV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .expect("Musubi instruction preview variants");
+        let preview_variants =
+            nested_object_value(schemas.get("MusubiInstructionPreviewV1"), &["oneOf"])
+                .and_then(Value::as_array)
+                .expect("Musubi instruction preview variants");
         let provider_variants = preview_variants
             .iter()
             .filter(|variant| {
@@ -3636,10 +3591,7 @@ mod tests {
             "static OpenAPI authority must be the feature-independent catalog superset"
         );
         for (path, method) in actual {
-            let operation = paths
-                .get(&path)
-                .and_then(Value::as_object)
-                .and_then(|path_item| path_item.get(&method))
+            let operation = nested_object_value(paths.get(&path), &[&method])
                 .and_then(Value::as_object)
                 .unwrap_or_else(|| panic!("missing static operation {method} {path}"));
             assert_eq!(
@@ -3679,12 +3631,10 @@ mod tests {
             9_007_199_254_740_991
         );
         let schemas = sccp_schemas();
-        let material_properties = schemas
-            .get("SccpSoraOutboundMaterialV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("SCCP outbound material properties");
+        let material_properties =
+            nested_object_value(schemas.get("SccpSoraOutboundMaterialV1"), &["properties"])
+                .and_then(Value::as_object)
+                .expect("SCCP outbound material properties");
         for forbidden in ["private_key", "secret", "signer", "seed", "mnemonic"] {
             assert!(
                 !material_properties.contains_key(forbidden),
@@ -3720,11 +3670,7 @@ mod tests {
             .expect("TON deployment required fields");
         for field in ["jetton_master_initial_data_hash", "route_initial_data_hash"] {
             assert_eq!(
-                properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
+                nested_object_value(properties.get(field), &["$ref"]).and_then(Value::as_str),
                 Some("#/components/schemas/SccpNonzeroUpperHex32"),
                 "TON StateInit commitment `{field}` must remain a nonzero hash",
             );
@@ -3740,14 +3686,12 @@ mod tests {
             "SccpBridgeProofPrepareRequest",
             "SccpBridgeProofSignedRequest",
         ] {
-            let proof = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("destination_proof_b64"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{schema_name} destination proof schema"));
+            let proof = nested_object_value(
+                schemas.get(schema_name),
+                &["properties", "destination_proof_b64"],
+            )
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{schema_name} destination proof schema"));
             assert_eq!(
                 proof.get("maxLength").and_then(Value::as_u64),
                 Some(expected_max),
@@ -3761,35 +3705,28 @@ mod tests {
             assert!(description.contains("TON BLS12-381"));
         }
 
-        let proof_request_response = document
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| paths.get("/v1/sccp/proof-requests/{message_id}"))
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|operation| operation.get("responses"))
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("200"))
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .expect("SCCP proof-request response content");
+        let proof_request_response = nested_object_value(
+            document.get("paths"),
+            &[
+                "/v1/sccp/proof-requests/{message_id}",
+                "get",
+                "responses",
+                "200",
+                "content",
+            ],
+        )
+        .and_then(Value::as_object)
+        .expect("SCCP proof-request response content");
         assert_eq!(
-            proof_request_response
-                .get("application/json")
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("schema")),
+            nested_object_value(proof_request_response.get("application/json"), &["schema"]),
             Some(&schema_ref("SccpProofRequestV1")),
         );
-        let binary_description = proof_request_response
-            .get("application/x-norito")
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("description"))
-            .and_then(Value::as_str)
-            .expect("SCCP proof-request binary description");
+        let binary_description = nested_object_value(
+            proof_request_response.get("application/x-norito"),
+            &["schema", "description"],
+        )
+        .and_then(Value::as_str)
+        .expect("SCCP proof-request binary description");
         for concrete_type in [
             "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
             "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
@@ -4368,27 +4305,17 @@ mod tests {
             .get("responses")
             .and_then(Value::as_object)
             .expect("content responses");
-        let success_headers = responses
-            .get("200")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
+        let success_headers = nested_object_value(responses.get("200"), &["headers"])
             .and_then(Value::as_object)
             .expect("content success cache headers");
-        let cache_description = success_headers
-            .get("Cache-Control")
-            .and_then(Value::as_object)
-            .and_then(|header| header.get("description"))
-            .and_then(Value::as_str)
-            .expect("content cache-control description");
+        let cache_description =
+            nested_object_value(success_headers.get("Cache-Control"), &["description"])
+                .and_then(Value::as_str)
+                .expect("content cache-control description");
         assert!(cache_description.contains("Public bundles"));
         assert!(cache_description.contains("private, no-store"));
         assert_eq!(
-            success_headers
-                .get("Vary")
-                .and_then(Value::as_object)
-                .and_then(|header| header.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("const"))
+            nested_object_value(success_headers.get("Vary"), &["schema", "const"])
                 .and_then(Value::as_str),
             Some(crate::content::CANONICAL_CONTENT_AUTH_VARY)
         );
@@ -4396,28 +4323,17 @@ mod tests {
             "openapi.content_route_documents_conditional_cache_and_auth_contract.rows.1",
         ) {
             assert_eq!(
-                success_headers
-                    .get(name)
-                    .and_then(Value::as_object)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
+                nested_object_value(success_headers.get(name), &["schema", "const"])
                     .and_then(Value::as_str),
                 Some(expected),
                 "content response must document the {name} boundary"
             );
         }
-        let unauthorized = responses
-            .get("401")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("description"))
+        let unauthorized = nested_object_value(responses.get("401"), &["description"])
             .and_then(Value::as_str)
             .expect("content unauthorized description");
         assert!(unauthorized.contains("canonical request authentication"));
-        let not_found = responses
-            .get("404")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("description"))
+        let not_found = nested_object_value(responses.get("404"), &["description"])
             .and_then(Value::as_str)
             .expect("content not-found description");
         assert!(not_found.contains("unknown or expired"));
@@ -4526,10 +4442,7 @@ mod tests {
             .and_then(Value::as_object)
             .expect("paths section");
         assert!(!paths.contains_key("/v1/aliases/voprf/evaluate"));
-        let schemas = doc
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
+        let schemas = nested_object_value(doc.get("components"), &["schemas"])
             .and_then(Value::as_object)
             .expect("schemas section");
         for retired_schema in ["AliasVoprfEvaluateRequest", "AliasVoprfEvaluateResponse"] {
@@ -4604,14 +4517,10 @@ mod tests {
         ) {
             assert!(!paths.contains_key(path));
         }
-        let da_ingest_responses = paths
-            .get("/v1/da/ingest")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|post| post.get("responses"))
-            .and_then(Value::as_object)
-            .expect("DA ingest response map");
+        let da_ingest_responses =
+            nested_object_value(paths.get("/v1/da/ingest"), &["post", "responses"])
+                .and_then(Value::as_object)
+                .expect("DA ingest response map");
         assert!(da_ingest_responses.contains_key("202"));
         assert!(!da_ingest_responses.contains_key("200"));
         #[cfg(feature = "connect")]
@@ -4620,14 +4529,10 @@ mod tests {
         assert!(!paths.contains_key("/v1/connect/session"));
         assert!(paths.contains_key("/v1/vpn/profile"));
         assert!(paths.contains_key("/v1/vpn/quotes"));
-        let vpn_quotes_post_description = paths
-            .get("/v1/vpn/quotes")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|post| post.get("description"))
-            .and_then(Value::as_str)
-            .expect("vpn quote create description");
+        let vpn_quotes_post_description =
+            nested_object_value(paths.get("/v1/vpn/quotes"), &["post", "description"])
+                .and_then(Value::as_str)
+                .expect("vpn quote create description");
         assert!(vpn_quotes_post_description.contains("metering_public_key_hex"));
         assert!(vpn_quotes_post_description.contains("OpenVpnLeaseEscrow"));
         for path in openapi_contract_strings(
@@ -4635,26 +4540,20 @@ mod tests {
         ) {
             assert!(paths.contains_key(path));
         }
-        let vpn_receipts_post_description = paths
-            .get("/v1/vpn/receipts")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|post| post.get("description"))
-            .and_then(Value::as_str)
-            .expect("vpn receipt submit description");
+        let vpn_receipts_post_description =
+            nested_object_value(paths.get("/v1/vpn/receipts"), &["post", "description"])
+                .and_then(Value::as_str)
+                .expect("vpn receipt submit description");
         assert!(vpn_receipts_post_description.contains("settle_lease_instruction"));
         assert!(vpn_receipts_post_description.contains("SettleVpnLease"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
-        let verifying_key_get_description = paths
-            .get("/v1/zk/vk/{backend}/{name}")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|get| get.get("description"))
-            .and_then(Value::as_str)
-            .expect("verifying-key detail description");
+        let verifying_key_get_description = nested_object_value(
+            paths.get("/v1/zk/vk/{backend}/{name}"),
+            &["get", "description"],
+        )
+        .and_then(Value::as_str)
+        .expect("verifying-key detail description");
         assert!(verifying_key_get_description.contains("record_norito_base64"));
         assert!(verifying_key_get_description.contains("namespace"));
         assert!(verifying_key_get_description.contains("owner_manifest_id"));
@@ -4737,14 +4636,12 @@ mod tests {
         }
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
-        let appeal_pricing_status_description = paths
-            .get("/v1/sorafs/appeals/pricing/status")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|get| get.get("description"))
-            .and_then(Value::as_str)
-            .expect("appeal pricing status description");
+        let appeal_pricing_status_description = nested_object_value(
+            paths.get("/v1/sorafs/appeals/pricing/status"),
+            &["get", "description"],
+        )
+        .and_then(Value::as_str)
+        .expect("appeal pricing status description");
         assert!(appeal_pricing_status_description.contains("native deposit lifecycle"));
         assert!(
             appeal_pricing_status_description
@@ -4874,10 +4771,7 @@ mod tests {
             );
         }
         assert!(!paths.contains_key("/v1/attestation/issue"));
-        let topup_post = paths
-            .get("/v1/kagemusha/top-up")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
+        let topup_post = nested_object_value(paths.get("/v1/kagemusha/top-up"), &["post"])
             .and_then(Value::as_object)
             .expect("KAGEMUSHA top-up post operation");
         let topup_description = topup_post
@@ -4887,10 +4781,7 @@ mod tests {
         assert!(topup_description.contains("payer-signed `SignedTransaction`"));
         assert!(topup_description.contains("configured `torii.max_content_len`"));
         assert!(topup_description.contains("embedded top-up request is limited to 16 KiB"));
-        let redeem_post = paths
-            .get("/v1/kagemusha/redeem")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
+        let redeem_post = nested_object_value(paths.get("/v1/kagemusha/redeem"), &["post"])
             .and_then(Value::as_object)
             .expect("KAGEMUSHA redeem post operation");
         let redeem_description = redeem_post
@@ -4898,12 +4789,10 @@ mod tests {
             .and_then(Value::as_str)
             .expect("KAGEMUSHA redeem description");
         assert!(redeem_description.contains("redemption voucher"));
-        let topup_request_content = topup_post
-            .get("requestBody")
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("content"))
-            .and_then(Value::as_object)
-            .expect("KAGEMUSHA V1 top-up request content");
+        let topup_request_content =
+            nested_object_value(topup_post.get("requestBody"), &["content"])
+                .and_then(Value::as_object)
+                .expect("KAGEMUSHA V1 top-up request content");
         assert_eq!(
             topup_request_content
                 .keys()
@@ -4911,12 +4800,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["application/x-norito"]
         );
-        let topup_norito_schema = topup_request_content
-            .get("application/x-norito")
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .expect("typed top-up Norito schema");
+        let topup_norito_schema = nested_object_value(
+            topup_request_content.get("application/x-norito"),
+            &["schema"],
+        )
+        .and_then(Value::as_object)
+        .expect("typed top-up Norito schema");
         assert_eq!(
             topup_norito_schema
                 .get("x-iroha-norito-schema")
@@ -4929,12 +4818,10 @@ mod tests {
             !topup_norito_schema.contains_key("x-iroha-max-bytes"),
             "the static document must not claim one numeric value for runtime-configured transaction ingress"
         );
-        let redeem_request_content = redeem_post
-            .get("requestBody")
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("content"))
-            .and_then(Value::as_object)
-            .expect("KAGEMUSHA V1 redeem request content");
+        let redeem_request_content =
+            nested_object_value(redeem_post.get("requestBody"), &["content"])
+                .and_then(Value::as_object)
+                .expect("KAGEMUSHA V1 redeem request content");
         assert_eq!(
             redeem_request_content
                 .keys()
@@ -4942,12 +4829,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["application/x-norito"]
         );
-        let redeem_norito_schema = redeem_request_content
-            .get("application/x-norito")
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .expect("typed redeem Norito schema");
+        let redeem_norito_schema = nested_object_value(
+            redeem_request_content.get("application/x-norito"),
+            &["schema"],
+        )
+        .and_then(Value::as_object)
+        .expect("typed redeem Norito schema");
         assert_eq!(
             redeem_norito_schema
                 .get("x-iroha-norito-schema")
@@ -4962,10 +4849,7 @@ mod tests {
                 iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 as u64
             )
         );
-        let accepted = topup_post
-            .get("responses")
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("202"))
+        let accepted = nested_object_value(topup_post.get("responses"), &["202"])
             .and_then(Value::as_object)
             .expect("KAGEMUSHA top-up accepted response");
         let accepted_headers = accepted
@@ -4974,10 +4858,7 @@ mod tests {
             .expect("KAGEMUSHA top-up accepted headers");
         assert!(accepted_headers.contains_key("Location"));
         assert!(accepted_headers.contains_key("Retry-After"));
-        let terminal_replay = topup_post
-            .get("responses")
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("200"))
+        let terminal_replay = nested_object_value(topup_post.get("responses"), &["200"])
             .and_then(Value::as_object)
             .expect("KAGEMUSHA top-up terminal replay response");
         let terminal_headers = terminal_replay
@@ -5026,10 +4907,7 @@ mod tests {
         }
 
         assert_eq!(
-            schemas
-                .get("KagemushaReadinessV1")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("required"))
+            nested_object_value(schemas.get("KagemushaReadinessV1"), &["required"])
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(4)
@@ -5152,30 +5030,16 @@ mod tests {
                 .get("x-iroha-norito-response-type")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("{path} exact response type"));
-            let request_schema_reference = operation
-                .get("requestBody")
-                .and_then(Value::as_object)
-                .and_then(|request_body| request_body.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str);
-            let response_schema_reference = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str);
+            let request_schema_reference = nested_object_value(
+                operation.get("requestBody"),
+                &["content", "application/json", "schema", "$ref"],
+            )
+            .and_then(Value::as_str);
+            let response_schema_reference = nested_object_value(
+                operation.get("responses"),
+                &["200", "content", "application/json", "schema", "$ref"],
+            )
+            .and_then(Value::as_str);
             for (model_type, schema_reference) in [
                 (request_type, request_schema_reference),
                 (response_type, response_schema_reference),
@@ -5261,10 +5125,7 @@ mod tests {
         };
         let document = generate_spec();
         let schemas = component_schemas(&document);
-        let variants = schemas
-            .get("MusubiInstructionPreviewV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
+        let variants = nested_object_value(schemas.get("MusubiInstructionPreviewV1"), &["oneOf"])
             .and_then(Value::as_array)
             .expect("Musubi instruction preview variants");
         assert_eq!(variants.len(), 19);
@@ -5280,16 +5141,10 @@ mod tests {
                 .get("properties")
                 .and_then(Value::as_object)
                 .expect("preview variant properties");
-            let wire_id = properties
-                .get("wire_id")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("const"))
+            let wire_id = nested_object_value(properties.get("wire_id"), &["const"])
                 .and_then(Value::as_str)
                 .expect("preview variant wire id");
-            let payload = properties
-                .get("payload")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
+            let payload = nested_object_value(properties.get("payload"), &["$ref"])
                 .and_then(Value::as_str)
                 .expect("preview variant payload reference");
             assert!(
@@ -5313,19 +5168,15 @@ mod tests {
             AcceptMusubiPackageMaintainerV1::WIRE_ID,
             RevokeMusubiPackageMaintainerInvitationV1::WIRE_ID
         );
-        let envelope_wire_ids = schemas
-            .get("MusubiInstructionEnvelopeV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("wire_id"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .expect("Musubi instruction envelope wire ids")
-            .iter()
-            .map(|wire_id| wire_id.as_str().expect("wire id").to_owned())
-            .collect::<BTreeSet<_>>();
+        let envelope_wire_ids = nested_object_value(
+            schemas.get("MusubiInstructionEnvelopeV1"),
+            &["properties", "wire_id", "enum"],
+        )
+        .and_then(Value::as_array)
+        .expect("Musubi instruction envelope wire ids")
+        .iter()
+        .map(|wire_id| wire_id.as_str().expect("wire id").to_owned())
+        .collect::<BTreeSet<_>>();
         assert_eq!(envelope_wire_ids, wire_ids);
     }
     #[test]
@@ -5340,12 +5191,10 @@ mod tests {
             !account.contains_key("maxLength"),
             "native multisignature AccountIds are bounded by their enclosing body"
         );
-        let approval = schemas
-            .get("MusubiControllerApprovalV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("Musubi controller approval properties");
+        let approval =
+            nested_object_value(schemas.get("MusubiControllerApprovalV1"), &["properties"])
+                .and_then(Value::as_object)
+                .expect("Musubi controller approval properties");
         for field in ["public_key", "signature"] {
             assert!(
                 approval
@@ -5356,17 +5205,10 @@ mod tests {
             );
         }
         assert_eq!(
-            approval
-                .get("signature")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
+            nested_object_value(approval.get("signature"), &["pattern"]).and_then(Value::as_str),
             Some("^(?:[0-9A-Fa-f]{2})+$")
         );
-        let provider_id = schemas
-            .get("MusubiProviderIdV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("items"))
+        let provider_id = nested_object_value(schemas.get("MusubiProviderIdV1"), &["items"])
             .and_then(Value::as_object)
             .expect("Musubi provider-id hex item");
         assert_eq!(
@@ -5378,14 +5220,12 @@ mod tests {
     fn musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
-        let cursor_last_key = schemas
-            .get("MusubiFinalizedCursorV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("last_key"))
-            .and_then(Value::as_object)
-            .expect("Musubi finalized-cursor last-key schema");
+        let cursor_last_key = nested_object_value(
+            schemas.get("MusubiFinalizedCursorV1"),
+            &["properties", "last_key"],
+        )
+        .and_then(Value::as_object)
+        .expect("Musubi finalized-cursor last-key schema");
         assert_eq!(
             cursor_last_key.get("maxLength").and_then(Value::as_u64),
             Some(
@@ -5409,19 +5249,13 @@ mod tests {
     fn musubi_chunker_text_bounds_match_the_wire_type() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
-        let chunker = schemas
-            .get("MusubiChunkerProfileHandleV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("Musubi chunker-handle properties");
+        let chunker =
+            nested_object_value(schemas.get("MusubiChunkerProfileHandleV1"), &["properties"])
+                .and_then(Value::as_object)
+                .expect("Musubi chunker-handle properties");
         for field in ["namespace", "name", "semver"] {
             assert_eq!(
-                chunker
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("maxLength"))
-                    .and_then(Value::as_u64),
+                nested_object_value(chunker.get(field), &["maxLength"]).and_then(Value::as_u64),
                 Some(128),
                 "the per-field bound must not exclude a valid 128-byte total handle"
             );
@@ -5431,10 +5265,7 @@ mod tests {
     fn multisig_propose_schema_exposes_optional_validation_fee_bindings_as_strings() {
         let document = canonical_document();
         let schemas = component_schemas(&document);
-        let request = schemas
-            .get("MultisigProposeRequest")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("allOf"))
+        let request = nested_object_value(schemas.get("MultisigProposeRequest"), &["allOf"])
             .and_then(Value::as_array)
             .and_then(|branches| branches.get(1))
             .and_then(Value::as_object)
@@ -5522,11 +5353,7 @@ mod tests {
             .expect("MultisigCancelResponse required fields");
 
         assert_eq!(
-            properties
-                .get("fee_payment")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
+            nested_object_value(properties.get("fee_payment"), &["$ref"]).and_then(Value::as_str),
             Some("#/components/schemas/FeePaymentIntent")
         );
         assert!(
@@ -5587,10 +5414,7 @@ mod tests {
                 );
             }
         }
-        let query = paths
-            .get(uri::QUERY)
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
+        let query = nested_object_value(paths.get(uri::QUERY), &["post"])
             .and_then(Value::as_object)
             .expect("query post operation");
         assert_eq!(
@@ -5600,10 +5424,7 @@ mod tests {
         for path in
             openapi_contract_strings("openapi.generated_operations_declare_tool_effects.strings.1")
         {
-            let operation = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("post"))
+            let operation = nested_object_value(paths.get(path), &["post"])
                 .and_then(Value::as_object)
                 .unwrap_or_else(|| panic!("missing multisig proposal read operation: {path}"));
             assert_eq!(
@@ -5616,12 +5437,10 @@ mod tests {
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
         assert!(!paths.contains_key("/v1/sumeragi/pacemaker"));
-        let protected_namespaces = paths
-            .get("/v1/gov/protected-namespaces")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("protected namespaces post operation");
+        let protected_namespaces =
+            nested_object_value(paths.get("/v1/gov/protected-namespaces"), &["post"])
+                .and_then(Value::as_object)
+                .expect("protected namespaces post operation");
         assert_eq!(
             protected_namespaces
                 .get(TOOL_EFFECT_EXTENSION)
@@ -5651,24 +5470,22 @@ mod tests {
                 route.path()
             );
         }
-        let musubi_publish = paths
-            .get("/v1/musubi/instructions/release-publish")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("Musubi publish instruction operation");
+        let musubi_publish = nested_object_value(
+            paths.get("/v1/musubi/instructions/release-publish"),
+            &["post"],
+        )
+        .and_then(Value::as_object)
+        .expect("Musubi publish instruction operation");
         assert_eq!(
             musubi_publish
                 .get(TOOL_EFFECT_EXTENSION)
                 .and_then(Value::as_str),
             Some("build_instruction")
         );
-        let musubi_resolver = paths
-            .get("/v1/musubi/queries/resolver-index")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("Musubi resolver-index query operation");
+        let musubi_resolver =
+            nested_object_value(paths.get("/v1/musubi/queries/resolver-index"), &["post"])
+                .and_then(Value::as_object)
+                .expect("Musubi resolver-index query operation");
         assert_eq!(
             musubi_resolver
                 .get(TOOL_EFFECT_EXTENSION)
@@ -5906,25 +5723,15 @@ mod tests {
             .and_then(Value::as_object)
             .expect("Sumeragi evidence audit properties");
         assert_eq!(
-            properties
-                .get("penalty_status")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
+            nested_object_value(properties.get("penalty_status"), &["$ref"])
                 .and_then(Value::as_str),
             Some("#/components/schemas/SumeragiEvidencePenaltyStatus")
         );
         assert_eq!(
-            properties
-                .get("kind")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("const"))
-                .and_then(Value::as_str),
+            nested_object_value(properties.get("kind"), &["const"]).and_then(Value::as_str),
             Some("SumeragiV2Equivocation")
         );
-        let classes = properties
-            .get("class")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
+        let classes = nested_object_value(properties.get("class"), &["enum"])
             .and_then(Value::as_array)
             .expect("evidence class enum")
             .iter()
@@ -5938,11 +5745,7 @@ mod tests {
         );
         for hash in ["context_id", "artifact_hash_1", "artifact_hash_2"] {
             assert_eq!(
-                properties
-                    .get(hash)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("pattern"))
-                    .and_then(Value::as_str),
+                nested_object_value(properties.get(hash), &["pattern"]).and_then(Value::as_str),
                 Some("^[0-9a-f]{64}$"),
                 "{hash} must remain canonical lowercase hex"
             );
@@ -5959,44 +5762,31 @@ mod tests {
                 "retired evidence field `{retired}` remains documented"
             );
         }
-        let list_items = schemas
-            .get("SumeragiEvidenceListResponse")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("items"))
-            .and_then(Value::as_object)
-            .expect("evidence-list items schema");
+        let list_items = nested_object_value(
+            schemas.get("SumeragiEvidenceListResponse"),
+            &["properties", "items"],
+        )
+        .and_then(Value::as_object)
+        .expect("evidence-list items schema");
         assert_eq!(
             list_items.get("maxItems").and_then(Value::as_u64),
             Some(1_000)
         );
         assert_eq!(
-            list_items
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
+            nested_object_value(list_items.get("items"), &["$ref"]).and_then(Value::as_str),
             Some("#/components/schemas/SumeragiEvidenceAuditRecord")
         );
 
-        let variants = schemas
-            .get("SumeragiEvidencePenaltyStatus")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .expect("closed evidence penalty variants");
+        let variants =
+            nested_object_value(schemas.get("SumeragiEvidencePenaltyStatus"), &["oneOf"])
+                .and_then(Value::as_array)
+                .expect("closed evidence penalty variants");
         assert_eq!(variants.len(), 3);
         for status in ["pending", "applied", "cancelled"] {
             let variant = variants
                 .iter()
                 .find(|variant| {
-                    variant
-                        .get("properties")
-                        .and_then(Value::as_object)
-                        .and_then(|properties| properties.get("status"))
-                        .and_then(Value::as_object)
-                        .and_then(|status| status.get("const"))
+                    nested_object_value(variant.get("properties"), &["status", "const"])
                         .and_then(Value::as_str)
                         == Some(status)
                 })
@@ -6014,10 +5804,7 @@ mod tests {
                 .map(|field| field.as_str().expect("required field"))
                 .collect::<BTreeSet<_>>();
             assert_eq!(required, ["status", "details"].into_iter().collect());
-            let details = variant
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("details"))
+            let details = nested_object_value(variant.get("properties"), &["details"])
                 .and_then(Value::as_object)
                 .expect("penalty variant details");
             if status == "pending" {
@@ -6091,10 +5878,7 @@ mod tests {
                 .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
             "compiled OpenAPI profile must not expose retired Sumeragi VRF paths"
         );
-        let schemas = canonical
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
+        let schemas = nested_object_value(canonical.get("components"), &["schemas"])
             .and_then(Value::as_object)
             .expect("canonical schemas section");
         for retired_schema in [
@@ -6149,10 +5933,7 @@ mod tests {
                 }),
                 "retired validation-fee plaintext route remains in {label} OpenAPI"
             );
-            let schemas = document
-                .get("components")
-                .and_then(Value::as_object)
-                .and_then(|components| components.get("schemas"))
+            let schemas = nested_object_value(document.get("components"), &["schemas"])
                 .and_then(Value::as_object)
                 .expect("OpenAPI schemas section");
             for retired_schema in [
@@ -6317,16 +6098,12 @@ mod tests {
     #[test]
     fn signed_transaction_submission_documents_exact_preadmission_contract() {
         let document = generate_spec();
-        let responses = document
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| paths.get(uri::TRANSACTION))
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|post| post.get("responses"))
-            .and_then(Value::as_object)
-            .expect("signed transaction submission responses");
+        let responses = nested_object_value(
+            document.get("paths"),
+            &[uri::TRANSACTION, "post", "responses"],
+        )
+        .and_then(Value::as_object)
+        .expect("signed transaction submission responses");
         assert_eq!(
             documented_reject_codes(responses, "400"),
             transaction_submission_bad_request_reject_codes()
@@ -6353,10 +6130,7 @@ mod tests {
                 "transaction submission HTTP {status} must not claim a canonical reject code"
             );
         }
-        let conflict_description = responses
-            .get("409")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("description"))
+        let conflict_description = nested_object_value(responses.get("409"), &["description"])
             .and_then(Value::as_str)
             .expect("transaction submission 409 description");
         assert!(
@@ -6374,10 +6148,7 @@ mod tests {
                 operation_response_schema_ref(operation, "503", path),
                 "#/components/schemas/ErrorEnvelope"
             );
-            let unavailable = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("503"))
+            let unavailable = nested_object_value(operation.get("responses"), &["503"])
                 .and_then(Value::as_object)
                 .unwrap_or_else(|| panic!("POST {path} HTTP 503 response"));
             let description = unavailable
@@ -6428,11 +6199,7 @@ mod tests {
                     );
                 }
                 assert_eq!(
-                    header
-                        .get("schema")
-                        .and_then(Value::as_object)
-                        .and_then(|schema| schema.get("pattern"))
-                        .and_then(Value::as_str),
+                    nested_object_value(header.get("schema"), &["pattern"]).and_then(Value::as_str),
                     Some("^[0-9a-f]{64}$"),
                     "POST {path} HTTP 503 {header_name} exact hash syntax"
                 );

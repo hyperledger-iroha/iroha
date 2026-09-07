@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from typing import Any, Callable
 
 import pytest
@@ -17,6 +18,7 @@ from iroha_python import (
     SumeragiLaneRelayEnvelope,
     SumeragiLaneSettlementCommitment,
     SumeragiNativeAmxPhase,
+    SumeragiNativeAmxParticipantSettlement,
 )
 
 _NATIVE_AMX_VALIDATOR_SET = [
@@ -158,7 +160,6 @@ def _leg(
             },
         ],
         "nexus_fee_receipts": [],
-        "native_amx_receipts": [],
     }
     return {
         "lane_id": lane_id,
@@ -381,6 +382,15 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     )
     assert receipt.legs[0].participant_settlement.block_height == 42
     assert len(receipt.legs[0].participant_settlement.receipts) == 2
+    assert isinstance(receipt.legs[0].participant_settlement, SumeragiNativeAmxParticipantSettlement)
+    participant = asdict(receipt.legs[0].participant_settlement)
+    assert len(participant) == 12
+    assert "native_amx_receipts" not in participant
+    for removed_value in ([], [{}]):
+        with pytest.raises(ValueError, match="exactly its 12 fields"):
+            compute_native_amx_participant_settlement_hash(
+                {**participant, "native_amx_receipts": removed_value}
+            )
     assert receipt.legs[0].prepare_qc.body.source_id == "AB" * 32
     assert receipt.legs[0].prepare_qc.body.tx_entrypoint_hash == _hash(0xAD)
     assert not receipt.legs[0].requires_mixed_role_anchor_validation
@@ -680,6 +690,9 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         leg["participant_settlement"]["tx_count"] = 4097
         leg["participant_settlement"]["receipts"] = [receipt] * 4097
 
+    def empty_recursive_settlement(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = []
+
     def recursive_settlement(leg: dict[str, Any]) -> None:
         leg["participant_settlement"]["native_amx_receipts"] = [{}]
 
@@ -713,6 +726,7 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         wrong_settlement_tx_count,
         empty_settlement,
         oversized_settlement,
+        empty_recursive_settlement,
         recursive_settlement,
     )
     for mutate in mutations:

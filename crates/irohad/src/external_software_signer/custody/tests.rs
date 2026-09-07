@@ -102,7 +102,6 @@ fn attest_unchecked(statement: HardwareSignerCustodyStatementV1, attester: &KeyP
         statement,
         attestation: signature
             .payload()
-            .as_ref()
             .try_into()
             .expect("Ed25519 signature size"),
     })
@@ -236,12 +235,12 @@ fn wrong_role_purpose_algorithm_or_key_shape_is_rejected_before_attestation() {
 #[test]
 fn software_imported_exportable_and_previously_exported_keys_cannot_qualify() {
     let fixture = fixture();
-    for mutate in [
-        (|statement: &mut HardwareSignerCustodyStatementV1| statement.generated_in_hardware = false)
-            as fn(&mut HardwareSignerCustodyStatementV1),
+    let mutations: &[fn(&mut HardwareSignerCustodyStatementV1)] = &[
+        |statement| statement.generated_in_hardware = false,
         |statement| statement.exportable = true,
         |statement| statement.ever_exported = true,
-    ] {
+    ];
+    for mutate in mutations {
         let mut statement = fixture.statement.clone();
         mutate(&mut statement);
         assert_eq!(
@@ -281,18 +280,17 @@ fn authority_identity_policy_and_public_key_are_independently_pinned() {
 
 #[test]
 fn matching_software_key_self_attestation_is_rejected_even_if_trust_is_misconfigured() {
-    let mut fixture = fixture();
-    fixture.trust.public_key = fixture.signer.public_key().clone();
-    let bytes = attest_unchecked(fixture.statement.clone(), &fixture.signer);
+    let mut self_attested = fixture();
+    self_attested.trust.public_key = self_attested.signer.public_key().clone();
+    let bytes = attest_unchecked(self_attested.statement.clone(), &self_attested.signer);
     assert_error(
         &bytes,
-        &fixture,
+        &self_attested,
         HardwareSignerCustodyErrorV1::SelfAttestation,
     );
-    fixture.trust.public_key = fixture.attester.public_key().clone();
     for identity in [
-        &fixture.statement.binding.service_id,
-        &fixture.statement.binding.administrator_id,
+        &self_attested.statement.binding.service_id,
+        &self_attested.statement.binding.administrator_id,
     ] {
         let mut fixture = fixture();
         fixture.statement.authority.administrator_id = identity.clone();
@@ -308,12 +306,12 @@ fn matching_software_key_self_attestation_is_rejected_even_if_trust_is_misconfig
 #[test]
 fn exact_finalized_anchor_is_required_and_self_selected_forks_fail() {
     let fixture = fixture();
-    for mutate in [
-        (|anchor: &mut HardwareSignerCustodyAnchorV1| anchor.height += 1)
-            as fn(&mut HardwareSignerCustodyAnchorV1),
+    let mutations: &[fn(&mut HardwareSignerCustodyAnchorV1)] = &[
+        |anchor| anchor.height += 1,
         |anchor| anchor.block_hash[0] ^= 1,
         |anchor| anchor.state_digest[0] ^= 1,
-    ] {
+    ];
+    for mutate in mutations {
         let mut statement = fixture.statement.clone();
         mutate(&mut statement.anchor);
         assert_error(
@@ -423,12 +421,12 @@ fn explicit_time_enforces_exclusive_expiry_future_and_current_anchor_freshness()
 fn invalid_trust_and_key_activation_intervals_cannot_extend_qualification() {
     let fixture = fixture();
     let bytes = attest_unchecked(fixture.statement.clone(), &fixture.attester);
-    for mutate in [
-        (|trust: &mut HardwareSignerCustodyTrustV1| trust.max_validity_ms = 0)
-            as fn(&mut HardwareSignerCustodyTrustV1),
+    let mutations: &[fn(&mut HardwareSignerCustodyTrustV1)] = &[
+        |trust| trust.max_validity_ms = 0,
         |trust| trust.max_anchor_age_ms = MAX_VALIDITY_MS_V1 + 1,
         |trust| trust.active_from_unix_ms = trust.active_until_unix_ms,
-    ] {
+    ];
+    for mutate in mutations {
         let mut trust = fixture.trust.clone();
         mutate(&mut trust);
         assert_eq!(
@@ -442,12 +440,12 @@ fn invalid_trust_and_key_activation_intervals_cannot_extend_qualification() {
             HardwareSignerCustodyErrorV1::UntrustedAuthority
         );
     }
-    for mutate in [
-        (|trust: &mut HardwareSignerCustodyTrustV1| trust.max_validity_ms = 999)
-            as fn(&mut HardwareSignerCustodyTrustV1),
+    let mutations: &[fn(&mut HardwareSignerCustodyTrustV1)] = &[
+        |trust| trust.max_validity_ms = 999,
         |trust| trust.active_from_unix_ms = 1_001,
         |trust| trust.active_until_unix_ms = 1_999,
-    ] {
+    ];
+    for mutate in mutations {
         let mut trust = fixture.trust.clone();
         mutate(&mut trust);
         assert_eq!(

@@ -38938,7 +38938,6 @@ fn rotation_steps_mod_slot_count(
 #[cfg(test)]
 mod first_release_hard_cut_tests {
     use super::*;
-    use digest::Digest as _;
     use sha3::Sha3_256;
 
     #[derive(Encode)]

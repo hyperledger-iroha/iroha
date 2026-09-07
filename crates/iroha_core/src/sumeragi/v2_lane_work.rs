@@ -140,7 +140,7 @@ use iroha_data_model::{
     block::{
         AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
+            CertPhase, LaneBlockCertificateV1, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
             LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
@@ -27054,10 +27054,9 @@ pub(super) mod tests {
             participant_lane_block_height: 1,
             participant_lane_block_view: 0,
             participant_proposal_hash: Hash::new(b"native-amx-test-participant-proposal"),
-            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
-                0;
-                Hash::LENGTH
-            ])),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -27117,7 +27116,8 @@ pub(super) mod tests {
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         let mut participant_proposal = proposal.clone();
         participant_proposal.payload_block_hint = None;
         NativeAmxAttestationRequestV2 {
@@ -27234,7 +27234,8 @@ pub(super) mod tests {
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source distinct-participant settlement is valid");
         body.participant_settlement_commitment =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),

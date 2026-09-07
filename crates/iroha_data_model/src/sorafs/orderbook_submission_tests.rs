@@ -113,10 +113,10 @@ fn embedded_signature_owner_and_discriminant_fail_closed() {
     let mut padded = owner(seed); padded.push(b' '); let padded = signed(vec![order_instruction(padded, seed)], seed);
     assert_eq!(inspect_sorafs_orderbook_submission_for_discriminant_v1(&padded.encode_wire_v1().unwrap(), Route::SubmitOrder, &network(NETWORK_SEED), DISCRIMINANT), Err(Error::InvalidEmbeddedPayload));
 
-    let canonical = AccountAddress::from_account_id(&AccountId::new(keypair(seed).public_key().clone())).unwrap();
-    let mut alternate = hex::decode(canonical.canonical_hex().unwrap().trim_start_matches("0x")).unwrap(); alternate[0] ^= 0b0010_0000;
-    let alternate = AccountAddress::from_canonical_bytes(&alternate).unwrap().to_i105_for_discriminant(DISCRIMINANT).unwrap().into_bytes();
-    let alternate = signed(vec![order_instruction(alternate, seed)], seed);
+    // I105 for raw header 0x20: its checksum is valid, but header version 1 is retired.
+    let alternate = "testZVVNPUA";
+    assert!(matches!(AccountAddress::from_i105_for_discriminant(alternate, Some(DISCRIMINANT)), Err(crate::account::address::AccountAddressError::InvalidHeaderVersion(1))));
+    let alternate = signed(vec![order_instruction(alternate.as_bytes().to_vec(), seed)], seed);
     assert_eq!(inspect_sorafs_orderbook_submission_for_discriminant_v1(&alternate.encode_wire_v1().unwrap(), Route::SubmitOrder, &network(NETWORK_SEED), DISCRIMINANT), Err(Error::InvalidEmbeddedPayload));
 }
 #[test]

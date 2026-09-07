@@ -227,6 +227,7 @@ pub(super) struct KagemushaMintAuthorityTransportEpCircuitV1 {
 }
 
 /// Physical Base inventory, not a proving-key, RSS, or proof-size qualification.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct KagemushaMintTransportDeciderCapacityProfileV1 {
     pub(super) k: usize,
@@ -246,15 +247,6 @@ pub(super) struct KagemushaMintTransportDeciderCapacityProfileV1 {
 
 macro_rules! impl_mint_transport_circuit {
     ($circuit:ty, $field:ty, $label:literal) => {
-        impl $circuit {
-            /// Inventory the configured Base graph without claiming whole-prover feasibility.
-            pub(super) fn capacity_profile(
-                &self,
-            ) -> Result<KagemushaMintTransportDeciderCapacityProfileV1, String> {
-                mint_transport_capacity_profile_v1(&self.builder)
-            }
-        }
-
         impl Circuit<$field> for $circuit {
             type Config = KagemushaMintTransportDeciderConfigV1<$field>;
             type FloorPlanner = V1;
@@ -602,133 +594,6 @@ pub(super) fn build_kagemusha_mint_authority_transport_ep_v1(
     ))
 }
 
-/// Build compact recipient-authorization parities and derive both outer audits.
-pub(super) fn build_kagemusha_mint_authorization_transport_pair_v1(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaMintAuthorizationTransportEqCircuitV1,
-        KagemushaMintAuthorizationTransportEpCircuitV1,
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
-    let (eq_builder, ep_builder, eq_audit, ep_audit) = build_mint_transport_pair_v1(
-        MintTransportFamilyV1::Authorization,
-        eq_params,
-        ep_params,
-        witness,
-    )?;
-    Ok((
-        KagemushaMintAuthorizationTransportEqCircuitV1 {
-            builder: eq_builder,
-        },
-        KagemushaMintAuthorizationTransportEpCircuitV1 {
-            builder: ep_builder,
-        },
-        eq_audit,
-        ep_audit,
-    ))
-}
-
-/// Build compact mint-authority parities, preserving the proven inner pair commitment.
-pub(super) fn build_kagemusha_mint_authority_transport_pair_v1(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaMintAuthorityTransportEqCircuitV1,
-        KagemushaMintAuthorityTransportEpCircuitV1,
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
-    let (eq_builder, ep_builder, eq_audit, ep_audit) = build_mint_transport_pair_v1(
-        MintTransportFamilyV1::Authority,
-        eq_params,
-        ep_params,
-        witness,
-    )?;
-    Ok((
-        KagemushaMintAuthorityTransportEqCircuitV1 {
-            builder: eq_builder,
-        },
-        KagemushaMintAuthorityTransportEpCircuitV1 {
-            builder: ep_builder,
-        },
-        eq_audit,
-        ep_audit,
-    ))
-}
-
-fn build_mint_transport_pair_v1(
-    family: MintTransportFamilyV1,
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
-) -> Result<
-    (
-        BaseCircuitBuilder<Fp>,
-        BaseCircuitBuilder<Fq>,
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
-    validate_mint_transport_parameter_degrees_v1(eq_params.k(), ep_params.k())?;
-    let eq_svk = eq_succinct_vk(eq_params);
-    let ep_svk = ep_succinct_vk(ep_params);
-    let MintTransportScalarHalfV1 {
-        builder: mut eq_builder,
-        output: eq_output,
-        inner_binding_cells: eq_inner_binding_cells,
-    } = build_mint_transport_scalar_half_v1(
-        family,
-        KagemushaPastaParityV1::Eq,
-        &eq_svk,
-        witness.eq,
-    )?;
-    let MintTransportScalarHalfV1 {
-        builder: mut ep_builder,
-        output: ep_output,
-        inner_binding_cells: ep_inner_binding_cells,
-    } = build_mint_transport_scalar_half_v1(
-        family,
-        KagemushaPastaParityV1::Ep,
-        &ep_svk,
-        witness.ep,
-    )?;
-
-    bind_own_audit_v1(&mut eq_builder, family.eq_audit_start(), &eq_output)?;
-    bind_own_audit_v1(&mut ep_builder, family.ep_audit_start(), &ep_output)?;
-
-    let eq_expected_ep_audit = public_digest_cells_v1(&eq_builder, family.ep_audit_start())?;
-    constrain_reciprocal_output_with_u128_binding_serialized_v1::<EpAffine>(
-        &mut eq_builder,
-        &ep_output,
-        &eq_expected_ep_audit,
-        &eq_inner_binding_cells,
-    )?;
-    let ep_expected_eq_audit = public_digest_cells_v1(&ep_builder, family.eq_audit_start())?;
-    constrain_reciprocal_output_with_u128_binding_serialized_v1::<EqAffine>(
-        &mut ep_builder,
-        &eq_output,
-        &ep_expected_eq_audit,
-        &ep_inner_binding_cells,
-    )?;
-
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    let eq_audit = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
-    let ep_audit = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
-    Ok((eq_builder, ep_builder, eq_audit, ep_audit))
-}
-
 fn validate_mint_transport_parameter_degrees_v1(eq_k: u32, ep_k: u32) -> Result<(), String> {
     if eq_k != KAGEMUSHA_RECURSION_IPA_K_V1 {
         return Err(format!(
@@ -995,6 +860,7 @@ fn public_digest_cells_v1<F: ScalarField>(
         .map_err(|_| "Kagemusha mint transport public audit has wrong shape".to_owned())
 }
 
+#[cfg(test)]
 fn checked_inventory_sum_v1(values: &[usize]) -> Result<usize, String> {
     values
         .iter()
@@ -1002,6 +868,7 @@ fn checked_inventory_sum_v1(values: &[usize]) -> Result<usize, String> {
         .ok_or_else(|| "Kagemusha mint transport inventory overflow".to_owned())
 }
 
+#[cfg(test)]
 fn packed_rows_v1(cells: &[usize], columns: &[usize]) -> Result<usize, String> {
     if cells.len() != columns.len() {
         return Err("Kagemusha mint transport phase inventory mismatch".to_owned());
@@ -1020,6 +887,7 @@ fn packed_rows_v1(cells: &[usize], columns: &[usize]) -> Result<usize, String> {
         })
 }
 
+#[cfg(test)]
 fn mint_transport_capacity_profile_v1<F>(
     builder: &BaseCircuitBuilder<F>,
 ) -> Result<KagemushaMintTransportDeciderCapacityProfileV1, String>

@@ -2007,11 +2007,11 @@ mod tests {
         assert_eq!(fee.observation_height, Some(42));
     }
     #[test]
-    fn error_envelope_json_discards_unknown_members_and_rejects_duplicates() {
+    fn error_envelope_json_rejects_unknown_members_and_duplicates() {
         let decoded: ErrorEnvelope = norito::json::from_str(
-            r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"field":"amount"}}"#,
         )
-        .expect("decode envelope with independently additive members");
+        .expect("decode envelope with its declared members");
         assert_eq!(decoded.code(), "bad_request");
         assert_eq!(
             decoded
@@ -2023,6 +2023,14 @@ mod tests {
         let canonical = norito::json::to_string(&decoded).expect("re-encode closed envelope");
         assert!(!canonical.contains("unknown"));
         assert!(!canonical.contains("secret"));
+        for json in [
+            r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+        ] {
+            let error = norito::json::from_str::<ErrorEnvelope>(json)
+                .expect_err("unknown error members must fail closed at either boundary");
+            assert!(matches!(error, norito::json::Error::UnknownField { .. }));
+        }
         for json in [
             r#"{"code":"bad_request","code":"conflict","message":"invalid"}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","field":"asset"}}"#,

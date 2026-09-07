@@ -2117,7 +2117,7 @@ Root {
         merkle_chunk_size_bytes: 1048576,
         max_payload_bytes: 1073741824,
         resources: SnapshotResourcePolicy {
-            max_decode_depth: 128,
+            max_decode_depth: 33,
             max_decode_items: 10000000,
             max_string_bytes: 1048576,
             max_blob_bytes: 67108864,

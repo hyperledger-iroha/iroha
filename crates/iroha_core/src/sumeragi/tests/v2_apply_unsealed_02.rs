@@ -390,7 +390,8 @@ fn native_amx_receipts_for_apply_fixture(
     let participant_settlement_hash =
         iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
             &participant_settlement,
-        );
+        )
+        .expect("fixture participant settlement encodes canonically");
     let qc_for = |body: NativeAmxAttestationBodyV2| {
         let votes = validator_keys
             .iter()

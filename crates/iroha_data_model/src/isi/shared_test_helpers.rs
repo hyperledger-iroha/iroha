@@ -110,8 +110,8 @@ mod tests {
             assert!(!source.contains("fn assert_slice_roundtrip"));
             slice_calls += source.matches("assert_slice_roundtrip(").count();
         }
-        assert_eq!(slice_calls, 243);
-        assert_eq!(registry_calls, 183);
+        assert_eq!(slice_calls, 238);
+        assert_eq!(registry_calls, 181);
         assert!(include_str!("register.rs").contains("fn assert_slice_roundtrip"));
         assert!(include_str!("privacy.rs").contains("fn assert_slice_roundtrip"));
         assert!(include_str!("defi.rs").contains("fn assert_registry_decodes"));

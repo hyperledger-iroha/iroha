@@ -2938,7 +2938,7 @@ private_key = "{}"
         );
         server.join().expect("cached rejection server");
         let cached_applied = norito::json::to_vec(&norito::json!({
-            "hash": transaction_hash.clone(),
+            "hash": (transaction_hash.clone()),
             "status": { "kind": "Applied", "block_height": 44 },
             "scope": "global",
             "resolved_from": "cache",

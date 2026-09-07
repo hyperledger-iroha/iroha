@@ -1400,9 +1400,8 @@ fn validate_native_amx_attestation_qc(
     }
     let participant_descriptor = &leg.participant_proposal.descriptor;
     let participant_settlement_hash =
-        compute_native_amx_participant_settlement_hash(&leg.participant_settlement).map_err(
-            |_| "native AMX participant settlement cannot be hashed".to_owned(),
-        )?;
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
+            .map_err(|_| "native AMX participant settlement cannot be hashed".to_owned())?;
     if participant_descriptor.lane_id != leg.lane_id
         || participant_descriptor.dataspace_id != leg.dataspace_id
         || participant_descriptor.lane_incarnation != body.participant_lane_incarnation
@@ -28352,8 +28351,9 @@ mod dsu_tests {
     }
 }
 include!("block/scheduler_variant_tests.rs");
+/// Block validation tests and signed Native AMX fixtures shared within Core.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         block::event::map_sig_err_to_reason,
@@ -28485,10 +28485,9 @@ mod tests {
             participant_lane_block_height,
             participant_lane_block_view,
             participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
-                0;
-                Hash::LENGTH
-            ])),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -28537,7 +28536,8 @@ mod tests {
         )
         .expect("fixture validator set and proofs must align")
     }
-    fn signed_native_amx_receipt(
+    /// Build a signed typed receipt for Core's Native AMX validation fixtures.
+    pub(crate) fn signed_native_amx_receipt(
         source_id: [u8; iroha_crypto::Hash::LENGTH],
         tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
         routing_plan: &crate::queue::RoutingPlan,
@@ -28628,7 +28628,8 @@ mod tests {
                     .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
                     .expect("single-source test fixture settlement is valid");
                 let participant_settlement_hash =
-                    compute_native_amx_participant_settlement_hash(&participant_settlement);
+                    compute_native_amx_participant_settlement_hash(&participant_settlement)
+                        .expect("fixture participant settlement encodes canonically");
                 NativeAmxLegRecordV2 {
                     lane_id: leg.route.lane_id,
                     dataspace_id: leg.route.dataspace_id,
@@ -28988,7 +28989,8 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
         };
         let participant_settlement_hash =
-            compute_native_amx_participant_settlement_hash(&participant_settlement);
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         for receipt in [&mut first_receipt, &mut second_receipt] {
             let leg = receipt
                 .legs
@@ -29069,9 +29071,8 @@ mod tests {
             .descriptor
             .lane_incarnation;
         coordinator_leg.participant_settlement_hash =
-            compute_native_amx_participant_settlement_hash(
-                &coordinator_leg.participant_settlement,
-            );
+            compute_native_amx_participant_settlement_hash(&coordinator_leg.participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,
@@ -29694,9 +29695,9 @@ mod tests {
         stale_leg.participant_proposal.proposal_hash =
             stale_leg.participant_proposal.computed_proposal_hash();
         stale_leg.participant_settlement.lane_incarnation = stale_incarnation;
-        stale_leg.participant_settlement_hash = compute_native_amx_participant_settlement_hash(
-            &stale_leg.participant_settlement,
-        );
+        stale_leg.participant_settlement_hash =
+            compute_native_amx_participant_settlement_hash(&stale_leg.participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         for body in [
             &mut stale_leg.prepare_qc.body,
             &mut stale_leg.commit_qc.body,
@@ -29835,9 +29836,8 @@ mod tests {
         unexpected_leg.participant_settlement.lane_id = unexpected_leg.lane_id;
         unexpected_leg.participant_settlement.dataspace_id = unexpected_leg.dataspace_id;
         unexpected_leg.participant_settlement_hash =
-            compute_native_amx_participant_settlement_hash(
-                &unexpected_leg.participant_settlement,
-            );
+            compute_native_amx_participant_settlement_hash(&unexpected_leg.participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         for body in [
             &mut unexpected_leg.prepare_qc.body,
             &mut unexpected_leg.commit_qc.body,

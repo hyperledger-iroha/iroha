@@ -1,7 +1,7 @@
 const PROOF_SCHEMA_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const PROOF_SCHEMA_CONTRACT_ASSET_LEN: usize = 87_069;
+const PROOF_SCHEMA_CONTRACT_ASSET_LEN: usize = 87_147;
 const PROOF_SCHEMA_CONTRACT_ASSET_SHA256: &str =
-    "95bfa35fd410178d64d5dd8af8a091b5ffefceb0f81d4e23dc6f06d788adb657";
+    "eba2fdf2452fb720fc531069734d68deb14a1d8d234c9d33b3bdb34b1dff3adf";
 const PROOF_SCHEMA_CONTRACT_ASSET: &[u8] = include_bytes!("proof_schema_contracts_v1.txt");
 
 fn proof_schema_contracts() -> &'static std::collections::BTreeMap<String, Vec<String>> {
@@ -88,22 +88,22 @@ fn soracloud_fhe_public_input_schema_hashes_are_stable() {
     }
     assert_eq!(
         hex::encode(soracloud_fhe_input_admission_public_inputs_schema_hash_v1()),
-        "3a4ea767a17590fa97da2f481630673ca1f492c6ccddf982d37c203f31bb3f6b",
+        "777332556cd9f5e7866f7e9666568fc80a772bbdacf20ce9d18185b03572547d",
         "input admission public-input schema hash drifted"
     );
     assert_eq!(
         hex::encode(soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1()),
-        "c208cb0bd5df814bb7c2d382a288633e34f004dbd66832fd495659f861afb45f",
+        "d588387f141eaa07c3f2292a8651e2ccfb4bded0f36630a34c6d17a1b14df3f9",
         "public-key proof public-input schema hash drifted"
     );
     assert_eq!(
         hex::encode(soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()),
-        "47f9c35097833abe736254b49544d15fd3f47dd22abac78c0d5fbc46b69520a3",
+        "a07065caf701ef0cf8b98b42fc6ad379e6a9310cc6db614853f51d9cdfe2861d",
         "bootstrap-key proof public-input schema hash drifted"
     );
     assert_eq!(
         hex::encode(soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()),
-        "2df6d711dfec113250c004dbf1904db999c07fc3f5dfcf7f53c17204538d1c1f",
+        "006b15847f07dd14fa730c22a12c95c1d7c02465c4e76b9ec9a86a3b23f37909",
         "full-bootstrap execution proof public-input schema hash drifted"
     );
 }

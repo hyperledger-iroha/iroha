@@ -254,7 +254,8 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
     };
-    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement);
+    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+        .expect("fixture participant settlement encodes canonically");
     let mut receipt = NativeAmxParticipantApplicationReceiptArtifact {
         version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
         participant_proposal: proposal.clone(),
@@ -1452,7 +1453,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("symlinked")
+        error.to_string().contains("symlink")
             || error.to_string().contains("non-regular")
             || error.to_string().contains("multi-link")
             || error.to_string().contains("single-link regular file"),

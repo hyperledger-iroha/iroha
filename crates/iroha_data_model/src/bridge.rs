@@ -1755,9 +1755,17 @@ mod tests {
             (&destination.payload, 3),
         ] {
             let encoded = payload.encode();
-            let decoded_index =
-                u32::decode(&mut encoded.as_slice()).expect("bridge payload variant index decodes");
+            let decoded_index = u32::from_le_bytes(
+                encoded[..4]
+                    .try_into()
+                    .expect("bridge payload starts with a four-byte variant index"),
+            );
             assert_eq!(decoded_index, expected_index);
+            assert_eq!(
+                BridgeProofPayload::decode(&mut encoded.as_slice())
+                    .expect("complete bridge payload decodes"),
+                *payload
+            );
         }
     }
     #[test]

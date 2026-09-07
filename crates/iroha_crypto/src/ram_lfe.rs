@@ -2015,9 +2015,20 @@ mod tests {
             ],
         };
         validate_hidden_ram_fhe_program(&program).expect("profile-wide program shape validates");
-        let (public_parameters, _, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+        let (mut public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(
+                &params,
+                RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+                secret,
+                associated_data,
+            )
+            .expect("derive BFV public parameters");
+        let input_err = validate_hidden_program_input_slots(&program, 1)
+            .expect_err("input slot two must exceed a one-byte envelope");
+        assert!(input_err.to_string().contains("max_input_bytes 1"));
+        // Smaller envelopes are malformed in V1; construct valid keys before
+        // mutating the public metadata to exercise constructor admission.
+        public_parameters.max_input_bytes = 1;
         let err = try_bfv_programmed_public_parameters_with_program(
             public_parameters,
             BfvEvaluationKeyBundle {
@@ -2047,9 +2058,13 @@ mod tests {
                 HiddenRamFheInstruction::Output(0),
             ],
         };
-        let (public_parameters, _, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
+            &params,
+            RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+            secret,
+            associated_data,
+        )
+        .expect("derive BFV public parameters");
         let err = try_bfv_programmed_public_parameters_with_program(
             public_parameters,
             BfvEvaluationKeyBundle {
@@ -2083,9 +2098,20 @@ mod tests {
             ],
         };
         validate_hidden_ram_fhe_program(&program).expect("profile-wide program shape validates");
-        let (public_parameters, _, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+        let (mut public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(
+                &params,
+                RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+                secret,
+                associated_data,
+            )
+            .expect("derive BFV public parameters");
+        let input_err = validate_hidden_program_input_slots(&program, 1)
+            .expect_err("input slot two must exceed a one-byte envelope");
+        assert!(input_err.to_string().contains("max_input_bytes 1"));
+        // Smaller envelopes are malformed in V1; construct valid keys before
+        // mutating the public metadata to exercise constructor admission.
+        public_parameters.max_input_bytes = 1;
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
@@ -2137,7 +2163,8 @@ mod tests {
         let err = decode_bfv_programmed_public_parameters(&encoded)
             .expect_err("oversized programmed envelope capacity must be rejected");
         assert!(
-            err.to_string().contains("max_input_bytes must be at most"),
+            err.to_string()
+                .contains("max_input_bytes must be exactly 63"),
             "unexpected error: {err}"
         );
     }
@@ -2683,8 +2710,13 @@ mod tests {
         };
         validate_hidden_ram_fhe_program(&program).expect("select program validates");
         let (public_parameters, secret_key, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+            derive_identifier_key_material_from_seed(
+                &params,
+                RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+                secret,
+                associated_data,
+            )
+            .expect("derive BFV public parameters");
         let programmed = try_bfv_programmed_public_parameters_with_program(
             public_parameters.clone(),
             BfvEvaluationKeyBundle {
