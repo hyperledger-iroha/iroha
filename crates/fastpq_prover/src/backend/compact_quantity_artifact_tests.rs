@@ -387,12 +387,14 @@ fn complete_axt_quantity_artifact_verifies_retained_bundle_and_cumulative_limits
 }
 
 #[test]
-fn public_quantity_construction_returns_an_error_when_account_formatting_is_over_budget() {
+fn public_quantity_construction_preserves_enclosing_decode_allocation_budget() {
     use crate::gadgets::public_transfer_statement::{
         TransferSmtBuildLimits, materialize_quantity_public_transfers,
         prepare_quantity_public_transfers,
     };
     let f = fixture();
+    // Balance keys use canonical identity encoding, independently of account display.
+    // The actual bounded decode here is each QuantityValueV1 transition value.
     let budget = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32);
     let prepared = norito::core::with_decode_limits_scope(budget, || {
         prepare_quantity_public_transfers(
@@ -403,7 +405,13 @@ fn public_quantity_construction_returns_an_error_when_account_formatting_is_over
             PublicTransferLimits::default(),
         )
     });
-    assert!(matches!(prepared, Err(Error::TransferInvariant { .. })));
+    assert!(matches!(
+        prepared,
+        Err(Error::Encode(norito::Error::TotalAllocationExceeded {
+            attempted,
+            limit: 0,
+        })) if attempted > 0
+    ));
     let materialized = norito::core::with_decode_limits_scope(budget, || {
         materialize_quantity_public_transfers(
             &f.claims,
@@ -413,5 +421,28 @@ fn public_quantity_construction_returns_an_error_when_account_formatting_is_over
             TransferSmtBuildLimits::for_update_limit(4).unwrap(),
         )
     });
-    assert!(matches!(materialized, Err(Error::TransferInvariant { .. })));
+    assert!(matches!(
+        materialized,
+        Err(Error::Encode(norito::Error::TotalAllocationExceeded {
+            attempted,
+            limit: 0,
+        })) if attempted > 0
+    ));
+
+    // A rejected nested decode must release its scope. The same immutable public
+    // inputs still prepare and materialize to the original rows, roots and order.
+    let restored = f.prepare(ProofSemantics::StateTransition);
+    assert_eq!(restored.transitions(), f.rows.as_slice());
+    assert_eq!(*restored.public_inputs(), f.inputs);
+    let materialized = materialize_quantity_public_transfers(
+        &f.claims,
+        f.inputs,
+        ProofSemantics::StateTransition,
+        PublicTransferLimits::default(),
+        TransferSmtBuildLimits::for_update_limit(4).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(materialized.transitions(), f.rows.as_slice());
+    assert_eq!(materialized.public_inputs(), f.inputs);
+    assert_eq!(materialized.ordering_hash(), restored.ordering_hash());
 }

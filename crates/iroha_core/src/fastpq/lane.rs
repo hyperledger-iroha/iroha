@@ -1501,6 +1501,13 @@ mod tests {
             new_root: [0; 32],
             perm_root: [0; 32],
         };
+        // This fixture has an internal transcript and no external transaction wires.
+        // Supply the real empty-wire commitment so admission reaches the prover.
+        let entrypoints: [iroha_data_model::transaction::TransactionEntrypoint; 0] = [];
+        let tx_set_hash =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(&entrypoints)
+                .expect("canonical empty transaction-wire commitment")
+                .into();
         let job = FastpqWitnessJob {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32])),
             height: 7,
@@ -1512,11 +1519,18 @@ mod tests {
             },
             context: FastpqWitnessContext {
                 public_inputs: Some(template),
-                tx_set_hash: Some([0; 32]),
+                tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::new(),
                 source_inventory: None,
             },
         };
+        assert_eq!(
+            batches_for_job(&job)
+                .expect("shutdown fixture must reach proof execution")
+                .len(),
+            1,
+            "shutdown fixture must produce exactly one admissible batch"
+        );
         let kura = Kura::blank_kura_for_testing();
 
         process_job(

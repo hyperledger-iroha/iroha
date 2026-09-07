@@ -5532,7 +5532,13 @@ mod fastpq_submission_tests {
             new_root: [0x33; 32],
             perm_root: [0x44; 32],
         };
-        let tx_set_hash = [0x55; 32];
+        // Direct fixture execution has no external or time entrypoint wires.
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
+                &iroha_data_model::transaction::TransactionEntrypoint,
+            >())
+            .unwrap()
+            .into();
         let entry_hash = Hash::prehashed([0x66; Hash::LENGTH]);
         let entry_dsid = [0x77; 16];
         let state = crate::state::State::new(
@@ -5548,6 +5554,7 @@ mod fastpq_submission_tests {
             23,
             view,
         ));
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
         state_block
             .finalize_fastpq_source_inventory(&[], &[], &[])
             .unwrap();
@@ -5558,6 +5565,7 @@ mod fastpq_submission_tests {
                 .unwrap()
                 .clone(),
         );
+        assert_eq!(inventory.tx_set_hash(), tx_set_hash);
         let context = FastpqWitnessContext {
             public_inputs: Some(public_inputs),
             tx_set_hash: Some(tx_set_hash),

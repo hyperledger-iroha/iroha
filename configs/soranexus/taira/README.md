@@ -429,8 +429,8 @@ its Iroha private-key string with at most one trailing newline. No authority key
 generated or returned. Outputs are created as private files without replacement;
 use fresh paths instead of overwriting prior inputs. Authorization lasts at most
 15 minutes for admission, with the separate bounded execution lease computed by
-the existing coordinator. Run preflight promptly after signing; only `apply`
-contacts hosts or mutates the public deployment.
+the existing coordinator. Run read-only host preflight promptly after signing;
+`apply` performs the live deployment changes.
 
 `InventoryV1` must contain `canary_onboarding_request`; it is not optional and
 has no derived-at-runtime fallback. The value must be the exact canonical
@@ -450,7 +450,13 @@ accepted only when their signer, transfer asset, amount, fee closure, and
 instruction bytes all match these independently admitted values; no value is
 learned from the envelope being authenticated.
 
-`iroha taira public-reset preflight` performs local fail-closed admission;
+`iroha taira public-reset preflight` admits the signed local inputs and then
+contacts all four validators and the edge through their exact pinned SSH endpoints
+for read-only host admission. Run it from the Linux controller before `apply`.
+It requires no canary signing config, onboarding token or runtime stage, and
+creates no journal, host lease, lock, progress or durable receipt. Each host check
+uses the signed install timeout. A failed host check fails the command and names
+the target. `apply` repeats host preflight to detect changes since that check.
 `iroha taira public-reset apply` is the live mutating operation. Apply requires
 explicit owner-private, runtime-only authorization, SSH, and canary inputs. Each
 admitted host must already have the trusted compiled dispatcher and reset guard

@@ -149,7 +149,8 @@ materialized symlink referents require an explicitly supported closure; never
 ignore them or relabel working-tree observations as a committed release.
 
 Build the public-reset evidence binary with the release profile, then admit the
-complete runtime input closure locally before authorizing mutation:
+signed local inputs and all five read-only host targets from the Linux controller
+before starting mutation:
 
 ```bash
 cargo build --locked --profile release -p iroha_cli --bin iroha
@@ -164,8 +165,12 @@ target/release/iroha taira public-reset preflight \
 `iroha taira public-reset preflight` and `iroha taira public-reset apply` are
 the only public-reset admission and execution surfaces. The local
 `source-manifest` command only exports source metadata. There is no Python controller, compatibility
-alias, or parallel V1 schema. Preflight performs local fail-closed admission;
-apply is the live mutating operation. Apply requires explicit owner-private,
+alias, or parallel V1 schema. Preflight performs local fail-closed admission and
+then checks the four validators and edge through pinned SSH without creating a
+journal, host lease, lock, progress or durable receipt. It does not load canary
+signing inputs, tokens or runtime stages. Each host uses the signed install
+timeout, and any host failure fails preflight. Apply repeats these host checks
+and is the live mutating operation. Apply requires explicit owner-private,
 runtime-only authorization, SSH, and canary inputs and every admitted host must
 already contain the trusted compiled dispatcher and reset guard. Never persist
 those inputs in the repository or let the candidate provision its own host
