@@ -174,7 +174,7 @@ where
     impl<'params, 'a, 'b, F, Scheme, P, C, E, R, T> Assignment<F>
         for WitnessCollection<'params, 'a, 'b, Scheme, P, C, E, R, T>
     where
-        F: Field,
+        F: WithSmallOrderMulGroup<3>,
         Scheme: CommitmentScheme<Curve = C>,
         P: Prover<'params, Scheme>,
         C: CurveAffine<ScalarExt = F>,
@@ -450,7 +450,8 @@ where
     #[cfg(feature = "profile")]
     let phase1_time = start_timer!(|| "Phase 1: Witness assignment and MSM commitments");
     let (advice, challenges) = {
-        let mut advice = Vec::with_capacity(instances.len());
+        let mut advice: Vec<AdviceSingle<Scheme::Curve, LagrangeCoeff>> =
+            Vec::with_capacity(instances.len());
         let mut challenges = HashMap::<usize, Scheme::Scalar>::with_capacity(meta.num_challenges);
 
         let unusable_rows_start = params.n() as usize - (meta.blinding_factors() + 1);

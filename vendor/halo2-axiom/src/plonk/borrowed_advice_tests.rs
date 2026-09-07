@@ -5,7 +5,7 @@ use crate::{
     circuit::{Layouter, SimpleFloorPlanner},
     plonk::{FirstPhase, SecondPhase, ThirdPhase, keygen_pk, keygen_vk, verifier::verify_proof},
     poly::{
-        Rotation,
+        Rotation, VerificationStrategy,
         commitment::ParamsProver,
         ipa::{
             commitment::{IPACommitmentScheme, ParamsIPA},
