@@ -150,7 +150,8 @@ struct PublicResetApply {
     /// Owner-private signing config for forward work or read-only mutation recovery.
     #[arg(long, value_name = "PATH")]
     runtime_client_config: Option<PathBuf>,
-    /// Four ordered validator read configs for forward work or RestartProof recovery.
+    /// Four ordered validator read configs for forward work or RestartProof recovery;
+    /// other recovery steps ignore these paths.
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_client_config: Vec<PathBuf>,
     /// Owner-private account-onboarding token required only for forward work.
@@ -181,15 +182,11 @@ impl PublicResetApply {
             executor_model::ExecutionStep::RestartProof => Err(eyre!(
                 "RestartProof recovery requires exactly four --validator-client-config values"
             )),
-            executor_model::ExecutionStep::Canary | executor_model::ExecutionStep::EdgeVerify
-                if self.validator_client_config.is_empty() =>
-            {
-                Ok(Vec::new())
-            }
             executor_model::ExecutionStep::Canary | executor_model::ExecutionStep::EdgeVerify => {
-                Err(eyre!(
-                    "Canary/EdgeVerify recovery rejects unrelated validator client configs"
-                ))
+                // Retrying the original apply command must retain its exact inputs.
+                // These steps reconcile only the runtime client's prepared mutations;
+                // do not open or admit the unused forward validator configs.
+                Ok(Vec::new())
             }
             _ => Err(eyre!("journal does not identify a recoverable V1 step")),
         }
@@ -4878,6 +4875,56 @@ mod executor_model {
     pub(super) mod tests {
         use super::*;
         use iroha_crypto::{KeyPair, Signature};
+
+        #[test]
+        fn recovery_args_accept_identical_forward_inputs_without_admitting_unused_paths() {
+            let unavailable = PathBuf::from("/unused-public-reset-recovery-input");
+            let validator_configs = (0..4)
+                .map(|index| unavailable.join(format!("validator-{index}.toml")))
+                .collect::<Vec<_>>();
+            let mut args = PublicResetApply {
+                inventory: unavailable.join("inventory.json"),
+                authorization: unavailable.join("authorization.json"),
+                trusted_public_key: unavailable.join("trusted-key.json"),
+                ssh_identity: unavailable.join("identity"),
+                known_hosts: unavailable.join("known-hosts"),
+                runtime_client_config: Some(unavailable.join("runtime.toml")),
+                validator_client_config: validator_configs.clone(),
+                onboarding_token: Some(unavailable.join("onboarding-token")),
+                inrou_stage_dir: Some(unavailable.join("inrou-stage")),
+            };
+            for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+                assert!(
+                    args.recovery_validator_client_configs(step)
+                        .expect("identical forward arguments permit read-only recovery")
+                        .is_empty(),
+                    "unused validator paths must not reach recovery custody"
+                );
+            }
+            assert_eq!(
+                args.recovery_validator_client_configs(ExecutionStep::RestartProof)
+                    .expect("RestartProof retains its exact ordered four-config closure"),
+                validator_configs
+            );
+            for count in [0, 3, 5] {
+                args.validator_client_config = (0..count)
+                    .map(|index| unavailable.join(format!("validator-{index}.toml")))
+                    .collect();
+                assert!(
+                    args.recovery_validator_client_configs(ExecutionStep::RestartProof)
+                        .is_err(),
+                    "RestartProof must reject {count} configs"
+                );
+            }
+            args.validator_client_config.clear();
+            for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+                assert!(
+                    args.recovery_validator_client_configs(step)
+                        .expect("unused forward arguments remain optional")
+                        .is_empty()
+                );
+            }
+        }
 
         struct MemoryJournal {
             state: JournalV1,

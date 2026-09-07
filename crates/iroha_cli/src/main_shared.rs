@@ -314,6 +314,17 @@ struct Args {
     /// client configuration or ledger signing material.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
+    /// Read an owner-private regular inherited configuration descriptor without environment overrides.
+    #[arg(long, value_name("FD"), value_parser = clap::value_parser!(u32).range(3..=65535), conflicts_with = "config", requires = "config_source_path")]
+    config_fd: Option<u32>,
+    /// Absolute original configuration path used only as provenance and the relative-path base; never reopened.
+    #[arg(
+        long,
+        value_name("ABSOLUTE_PATH"),
+        requires = "config_fd",
+        conflicts_with = "config"
+    )]
+    config_source_path: Option<PathBuf>,
     /// Absolute path to an owner-only operator private-key file for operator reads.
     ///
     /// This runtime-only credential is never inferred from the account key, environment, or
@@ -1140,10 +1151,26 @@ fn run() -> ReportResult<(), MainError> {
         unreachable!("local SoraFS pack dispatch matched above");
     }
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
-        || (LoadPath::Default(PathBuf::from("client.toml")), false),
+        || {
+            (
+                LoadPath::Default(PathBuf::from("client.toml")),
+                args.config_fd.is_some(),
+            )
+        },
         |path| (LoadPath::Explicit(resolve_config_path(path)), true),
     );
-    let (config, filesystem_config) = match load_cli_client_config(load_path) {
+    let loaded_config = if let Some(fd) = args.config_fd {
+        let source = args
+            .config_source_path
+            .as_deref()
+            .expect("clap requires descriptor provenance");
+        client_config::load_inherited(fd, source)
+            .into_report()
+            .change_context(MainError::Config)
+    } else {
+        load_cli_client_config(load_path)
+    };
+    let (config, filesystem_config) = match loaded_config {
         Ok(loaded) => loaded,
         Err(_)
             if !config_was_explicit
@@ -1235,6 +1262,8 @@ fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
 }
 fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
     if args.config.is_some()
+        || args.config_fd.is_some()
+        || args.config_source_path.is_some()
         || args.operator_private_key_file.is_some()
         || args.verbose
         || args.metadata.is_some()
@@ -1252,6 +1281,9 @@ fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportRes
 }
 fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainError> {
     let mut flags = Vec::new();
+    if args.config_fd.is_some() || args.config_source_path.is_some() {
+        flags.push("--config-fd/--config-source-path");
+    }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
     }
@@ -1289,6 +1321,12 @@ fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(),
     let mut flags = Vec::new();
     if args.config.is_some() {
         flags.push("--config");
+    }
+    if args.config_fd.is_some() {
+        flags.push("--config-fd");
+    }
+    if args.config_source_path.is_some() {
+        flags.push("--config-source-path");
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");

@@ -420,8 +420,11 @@ pub struct WriteCanary {
     #[arg(long, required_if_eq("operation", "faucet"))]
     pub faucet_amount: Option<String>,
     /// Owner-only onboarding token; required only while preparing or submitting the envelope.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", conflicts_with = "onboarding_token_fd")]
     pub onboarding_token_file: Option<PathBuf>,
+    /// Inherited read-only owner-private token descriptor for onboarding prepare or submit.
+    #[arg(long, value_name = "FD", conflicts_with = "onboarding_token_file", value_parser = clap::value_parser!(u32).range(3..=65535))]
+    pub onboarding_token_fd: Option<u32>,
     /// Exact ordered child operation; each invocation handles one transaction only.
     #[arg(long, value_enum)]
     pub operation: WriteCanaryOperation,
@@ -594,12 +597,40 @@ impl WriteCanary {
         }
     }
 
-    fn require_onboarding_token(&self) -> Result<&Path> {
-        self.onboarding_token_file.as_deref().ok_or_else(|| {
-            eyre!(
-                "the onboarding operation requires --onboarding-token-file in prepare/submit mode"
-            )
-        })
+    fn validate_onboarding_token_action(&self, action: PreparedEnvelopeAction) -> Result<()> {
+        let sources = usize::from(self.onboarding_token_file.is_some())
+            + usize::from(self.onboarding_token_fd.is_some());
+        let required = self.operation == WriteCanaryOperation::Onboarding
+            && matches!(
+                action,
+                PreparedEnvelopeAction::Prepare(_) | PreparedEnvelopeAction::Submit(_)
+            );
+        if required && sources != 1 {
+            eyre::bail!(
+                "onboarding prepare/submit requires exactly one of --onboarding-token-file or --onboarding-token-fd"
+            );
+        }
+        if !required && sources != 0 {
+            eyre::bail!("onboarding token inputs are valid only for onboarding prepare/submit");
+        }
+        if self
+            .onboarding_token_fd
+            .is_some_and(|fd| !(3..=65535).contains(&fd))
+        {
+            eyre::bail!("--onboarding-token-fd must be in 3..=65535");
+        }
+        Ok(())
+    }
+
+    fn read_onboarding_token(&self) -> Result<Zeroizing<String>> {
+        match (
+            self.onboarding_token_file.as_deref(),
+            self.onboarding_token_fd,
+        ) {
+            (Some(path), None) => read_onboarding_token_file(path),
+            (None, Some(fd)) => read_onboarding_token_fd(fd),
+            _ => eyre::bail!("onboarding requires exactly one explicit token input"),
+        }
     }
 }
 
@@ -3580,6 +3611,7 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
     let binding = args.binding()?;
     let action = args.prepared_action()?;
     args.validate_prerequisite_action(action)?;
+    args.validate_onboarding_token_action(action)?;
     let expected_fee_payment = context.transaction_fee_payment()?;
     match action {
         PreparedEnvelopeAction::Prepare(output) => {
@@ -3684,7 +3716,6 @@ fn prepare_one_write_canary_operation(
 ) -> Result<PreparedMutationEnvelopeV1> {
     match args.operation {
         WriteCanaryOperation::Onboarding => {
-            let _ = args.require_onboarding_token()?;
             prepare_onboarding_operation(config, args, public_root, binding, &fee_payment)
         }
         WriteCanaryOperation::Faucet => {
@@ -4783,7 +4814,7 @@ fn prepare_onboarding_operation(
     binding: &PreparedMutationBindingV1,
     fee_payment: &FeePaymentIntent,
 ) -> Result<PreparedMutationEnvelopeV1> {
-    let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
+    let token = args.read_onboarding_token()?;
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
     let client = IrohaClient::new(canary_config.clone());
@@ -4899,7 +4930,7 @@ fn submit_server_prepared_operation(
     }
     let submitted = match &validated.envelope.operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
-            let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
+            let token = args.read_onboarding_token()?;
             let request = AccountOnboardingPlanRequestV1::try_new(
                 canary_alias(signer.key_pair.public_key()),
                 &signer.account_id,
@@ -5204,6 +5235,14 @@ fn validate_onboarding_token(token: &str) -> Result<&str> {
         );
     }
     Ok(token)
+}
+fn read_onboarding_token_fd(fd: u32) -> Result<Zeroizing<String>> {
+    let raw =
+        crate::client_config::read_inherited_private_file(fd, 256, "account onboarding token")?;
+    let token = std::str::from_utf8(&raw)
+        .map_err(|_| eyre!("account onboarding token must contain printable ASCII"))?;
+    validate_onboarding_token(token)?;
+    Ok(Zeroizing::new(token.to_owned()))
 }
 #[cfg(unix)]
 fn validate_onboarding_token_file_metadata(metadata: &fs::Metadata) -> Result<()> {
@@ -7621,6 +7660,7 @@ mod tests {
             faucet_asset_id: Some(DEFAULT_GAS_ASSET_ID.to_owned()),
             faucet_amount: Some("25000".to_owned()),
             onboarding_token_file: None,
+            onboarding_token_fd: None,
             operation,
             authorization_sha256: "ab".repeat(32),
             authorization_nonce,
@@ -10354,6 +10394,161 @@ mod tests {
                 assert!(!format!("{error:#}").contains(&malformed));
             }
         }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn onboarding_token_fd_is_exact_private_and_offset_independent() {
+        use std::{
+            io::{Seek as _, SeekFrom},
+            os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _},
+        };
+        let file = test_onboarding_token_file();
+        let mut inherited = File::open(file.path()).expect("open read-only token descriptor");
+        inherited
+            .seek(SeekFrom::Start(7))
+            .expect("advance caller offset");
+        let fd = u32::try_from(inherited.as_raw_fd()).expect("positive descriptor");
+        let mut args = fixture_write_canary_args(WriteCanaryOperation::Onboarding);
+        args.onboarding_token_fd = Some(fd);
+        args.validate_onboarding_token_action(PreparedEnvelopeAction::Prepare(3))
+            .expect("explicit inherited token source");
+        assert_eq!(
+            args.read_onboarding_token().expect("token").as_str(),
+            TEST_ONBOARDING_TOKEN
+        );
+        assert_eq!(inherited.stream_position().expect("caller offset"), 7);
+        let replacement = "Z".repeat(32);
+        fs::write(file.path(), &replacement).expect("replace token");
+        assert_eq!(
+            read_onboarding_token_fd(fd).expect("fresh token").as_str(),
+            replacement
+        );
+        for malformed in [
+            "T".repeat(31),
+            "T".repeat(257),
+            format!("{TEST_ONBOARDING_TOKEN}\n"),
+        ] {
+            fs::write(file.path(), &malformed).expect("write invalid token");
+            let error = read_onboarding_token_fd(fd).expect_err("invalid exact token");
+            assert!(!format!("{error:#}").contains(&malformed));
+        }
+        fs::write(file.path(), TEST_ONBOARDING_TOKEN).expect("restore token");
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640)).expect("unsafe mode");
+        assert!(read_onboarding_token_fd(fd).is_err());
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600)).expect("private mode");
+        let writable_fd = u32::try_from(file.as_raw_fd()).expect("writable descriptor");
+        assert!(read_onboarding_token_fd(writable_fd).is_err());
+        let directory = tempfile::tempdir().expect("directory");
+        let directory_fd = File::open(directory.path()).expect("open directory");
+        assert!(
+            read_onboarding_token_fd(
+                u32::try_from(directory_fd.as_raw_fd()).expect("directory descriptor")
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn onboarding_token_sources_are_exact_and_action_scoped() {
+        let mut args = fixture_write_canary_args(WriteCanaryOperation::Onboarding);
+        assert!(
+            args.validate_onboarding_token_action(PreparedEnvelopeAction::Prepare(3))
+                .is_err()
+        );
+        args.onboarding_token_file = Some(PathBuf::from("/private/runtime/onboarding.token"));
+        for action in [
+            PreparedEnvelopeAction::Prepare(3),
+            PreparedEnvelopeAction::Submit(3),
+        ] {
+            assert!(args.validate_onboarding_token_action(action).is_ok());
+        }
+        args.onboarding_token_fd = Some(4);
+        assert!(
+            args.validate_onboarding_token_action(PreparedEnvelopeAction::Prepare(3))
+                .is_err()
+        );
+        assert!(args.read_onboarding_token().is_err());
+        args.onboarding_token_file = None;
+        assert!(
+            args.validate_onboarding_token_action(PreparedEnvelopeAction::Submit(3))
+                .is_ok()
+        );
+        assert!(
+            args.validate_onboarding_token_action(PreparedEnvelopeAction::Recover(3))
+                .is_err()
+        );
+        for operation in [
+            WriteCanaryOperation::Faucet,
+            WriteCanaryOperation::FinalCanary,
+        ] {
+            args.operation = operation;
+            for action in [
+                PreparedEnvelopeAction::Prepare(3),
+                PreparedEnvelopeAction::Submit(3),
+                PreparedEnvelopeAction::Recover(3),
+            ] {
+                assert!(args.validate_onboarding_token_action(action).is_err());
+            }
+        }
+        args.onboarding_token_fd = None;
+        assert!(
+            args.validate_onboarding_token_action(PreparedEnvelopeAction::Recover(3))
+                .is_ok()
+        );
+        args.operation = WriteCanaryOperation::Onboarding;
+        args.onboarding_token_fd = Some(2);
+        assert!(
+            args.validate_onboarding_token_action(PreparedEnvelopeAction::Prepare(3))
+                .is_err()
+        );
+    }
+    #[test]
+    fn onboarding_token_fd_cli_rejects_invalid_and_conflicting_arguments() {
+        #[derive(clap::Parser)]
+        struct TokenArgs {
+            #[command(flatten)]
+            write_canary: WriteCanary,
+        }
+        use clap::Parser as _;
+        let base = [
+            "token-test",
+            "--operation",
+            "onboarding",
+            "--authorization-sha256",
+            "abababababababababababababababababababababababababababababababab",
+            "--authorization-nonce",
+            "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+            "--mutation-phase",
+            "pre_edge",
+            "--idempotency-key",
+            "abababababababababababababababababababababababababababababababab",
+            "--execution-expires-at-unix-ms",
+            "18446744073709551615",
+            "--prepare-envelope",
+            "--prepared-output-fd",
+            "3",
+        ];
+        let parse = |extra: &[&str]| {
+            TokenArgs::try_parse_from(base.iter().copied().chain(extra.iter().copied()))
+        };
+        assert_eq!(
+            parse(&["--onboarding-token-fd", "4"])
+                .expect("numeric token descriptor")
+                .write_canary
+                .onboarding_token_fd,
+            Some(4)
+        );
+        for invalid in ["2", "65536", "-1", "not-a-descriptor"] {
+            assert!(parse(&["--onboarding-token-fd", invalid]).is_err());
+        }
+        assert!(
+            parse(&[
+                "--onboarding-token-fd",
+                "4",
+                "--onboarding-token-file",
+                "/private/runtime/onboarding.token"
+            ])
+            .is_err()
+        );
     }
     #[test]
     fn onboarding_token_file_is_exact_owner_only_regular_and_not_cached() {

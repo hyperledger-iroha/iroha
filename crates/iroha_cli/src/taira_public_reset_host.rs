@@ -20,7 +20,7 @@ use iroha::{
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
-    config::{Config as ClientConfig, LoadPath},
+    config::Config as ClientConfig,
     data_model::{
         NetworkId,
         account::{AccountId, address::ChainDiscriminantGuard},
@@ -11648,19 +11648,27 @@ pub(super) fn load_client_config_from_pinned(
     label: &str,
 ) -> Result<ClientConfig> {
     revalidate_pinned(input, label)?;
-    let retained = input
+    let mut retained = input
         .file
         .try_clone()
         .wrap_err_with(|| format!("failed to duplicate {label} descriptor"))?;
-    #[cfg(target_os = "linux")]
-    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
-    #[cfg(all(unix, not(target_os = "linux")))]
-    let descriptor_path = PathBuf::from(format!("/dev/fd/{}", retained.as_raw_fd()));
-    #[cfg(not(unix))]
-    return Err(eyre!(
-        "client config semantic admission requires Unix descriptors"
-    ));
-    let config = ClientConfig::load(LoadPath::Explicit(descriptor_path))
+    retained
+        .rewind()
+        .map_err(|_| eyre!("cannot rewind {label}"))?;
+    let maximum = iroha_config_base::toml::MAX_TOML_SOURCE_BYTES;
+    if input.snapshot.len == 0 || input.snapshot.len > maximum {
+        return Err(eyre!(
+            "{label} exceeds the bounded client configuration size"
+        ));
+    }
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &input.path,
+        label,
+        retained,
+        &input.snapshot,
+        maximum,
+    )?);
+    let (config, _) = ClientConfig::load_bytes_with_musubi_publication(&input.path, &bytes)
         .map_err(|_| eyre!("{label} failed strict semantic loading"))?;
     revalidate_pinned(input, label)?;
     Ok(config)
@@ -11702,6 +11710,26 @@ fn ensure_local_deadline(deadline: Option<Instant>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn inherited_client_config_args(
+    input: &super::PinnedInput,
+    label: &str,
+) -> Result<(Vec<OsString>, File)> {
+    revalidate_pinned(input, label)?;
+    let file = input
+        .file
+        .try_clone()
+        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
+    Ok((
+        vec![
+            "--config-fd".into(),
+            file.as_raw_fd().to_string().into(),
+            "--config-source-path".into(),
+            input.path.as_os_str().to_owned(),
+        ],
+        file,
+    ))
 }
 
 fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
@@ -13242,9 +13270,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         _timeout_secs: u64,
         include_submission_secret: bool,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
-        let mut args = vec!["-c".into(), config_path.into_os_string()];
+        let (mut args, config_file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
         let mut inherited_files = vec![config_file];
         args.extend(self.runtime.fee_args.iter().cloned());
         args.extend([
@@ -13287,15 +13316,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             ]);
         }
         if kind == "onboarding" && include_submission_secret {
-            let (token_path, token_file) = inherited_input_path(
+            let (_token_path, token_file) = inherited_input_path(
                 self.runtime
                     .onboarding_token
                     .as_ref()
                     .ok_or_else(|| eyre!("write-canary submission lacks onboarding custody"))?,
                 "Taira onboarding token",
             )?;
-            args.push(OsString::from("--onboarding-token-file"));
-            args.push(token_path.into_os_string());
+            args.push(OsString::from("--onboarding-token-fd"));
+            args.push(token_file.as_raw_fd().to_string().into());
             inherited_files.push(token_file);
         }
         args.push(OsString::from("--json"));
@@ -13675,8 +13704,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         idempotency_key: &str,
         timeout_secs: u64,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
+        let (mut args, config_file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
         let operation = match kind {
             "inrou_bundle_pin" => "bundle-pin",
             "inrou_guest_pin" => "guest-pin",
@@ -13684,7 +13715,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "inrou_canary" => "service-mutation",
             _ => return Err(eyre!("unsupported prepared Inrou child kind")),
         };
-        let mut args = vec!["-c".into(), config_path.into_os_string()];
         args.extend(self.runtime.fee_args.iter().cloned());
         args.extend([
             OsString::from("taira"),
@@ -14041,10 +14071,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "Taira runtime client config".to_owned(),
             )
         };
-        let (config_path, config_file) = inherited_input_path(config, &label)?;
-        let args = vec![
-            "-c".into(),
-            config_path.into_os_string(),
+        let (mut args, config_file) = inherited_client_config_args(config, &label)?;
+        args.extend([
             "taira".into(),
             "inrou-check".into(),
             "--public-root".into(),
@@ -14061,7 +14089,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "--timeout-secs".into(),
             timeout_secs.to_string().into(),
             "--json".into(),
-        ];
+        ]);
         let authorization_deadline_unix_ms = (!recovery_only).then_some(
             self.admitted
                 .authorization
@@ -14169,7 +14197,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "four-validator convergence did not reach one atomic checkpoint"
                     ));
                 }
-                let (config_path, config_file) = inherited_input_path(
+                let (mut config_args, config_file) = inherited_client_config_args(
                     &self.runtime.validator_client_configs[index],
                     "validator client config",
                 )?;
@@ -14177,16 +14205,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     .checked_add(Duration::from_secs(10))
                     .ok_or_else(|| eyre!("convergence poll deadline overflow"))?
                     .min(deadline);
+                config_args.extend([
+                    "--output-format".into(),
+                    "json".into(),
+                    "ops".into(),
+                    "sumeragi".into(),
+                    "status".into(),
+                ]);
                 let output = self.run_local_cli_until(
-                    vec![
-                        "-c".into(),
-                        config_path.into_os_string(),
-                        "--output-format".into(),
-                        "json".into(),
-                        "ops".into(),
-                        "sumeragi".into(),
-                        "status".into(),
-                    ],
+                    config_args,
                     vec![config_file],
                     timeout_secs,
                     poll_deadline,
@@ -18781,6 +18808,56 @@ mod tests {
                 snapshot: known_hosts_snapshot,
             },
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_client_config_semantics_and_child_fd_share_exact_source() {
+        let directory = tempfile::Builder::new()
+            .prefix(".taira-client-fd-test-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("private fixture directory");
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private fixture directory");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("canonical directory")
+            .join("client.toml");
+        fs::write(&path, include_bytes!("../../../defaults/client.toml"))
+            .expect("write public fixture config");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private config fixture");
+        let input = pin_owner_private_file(&path, "test client config").expect("pin config");
+        hash_pinned_input(&input, "test client config", None)
+            .expect("consume retained input offset");
+        let config = load_client_config_from_pinned(&input, "test client config")
+            .expect("semantic loading reads exact retained bytes");
+        assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+        let (args, retained) = inherited_client_config_args(&input, "test client config")
+            .expect("child descriptor arguments");
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("--config-fd"),
+                OsString::from(retained.as_raw_fd().to_string()),
+                OsString::from("--config-source-path"),
+                path.as_os_str().to_owned()
+            ]
+        );
+        let (child_config, _) = crate::client_config::load_inherited(
+            u32::try_from(retained.as_raw_fd()).expect("descriptor"),
+            &path,
+        )
+        .expect("actual inherited FD semantic load");
+        assert_eq!(child_config.account, config.account);
+        assert_eq!(child_config.torii_api_url, config.torii_api_url);
+        let changed = format!(
+            "{}\nunknown_runtime_key = \"private diagnostic fixture\"\n",
+            include_str!("../../../defaults/client.toml")
+        );
+        fs::write(&path, changed).expect("change fixture source");
+        assert!(load_client_config_from_pinned(&input, "test client config").is_err());
     }
 
     fn prepared_write_report_fixture(

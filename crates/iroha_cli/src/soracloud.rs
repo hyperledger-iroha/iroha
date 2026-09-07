@@ -24531,9 +24531,13 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     #[test]
     fn taira_inrou_canary_validator_rejects_non_atomic_rollout() {
-        let mut bundle = canonical_taira_inrou_bundle_fixture();
-        bundle.service.rollout.canary_percent = 99;
-        assert_taira_canary_validation_error(&bundle, "use 0 or 100");
+        for canary_percent in [0, 1, 99] {
+            let mut bundle = canonical_taira_inrou_bundle_fixture();
+            bundle.service.rollout.canary_percent = canary_percent;
+            // Generic Inrou admission rejects partial revisions; Taira additionally
+            // requires 100. Assert the policy field, not which validator runs first.
+            assert_taira_canary_validation_error(&bundle, "canary_percent");
+        }
     }
     #[test]
     fn taira_inrou_canary_validator_accepts_published_v1_bundle() {
@@ -24768,6 +24772,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         fs::create_dir(config_dir).expect("create validator fixture directory");
         fs::set_permissions(config_dir, fs::Permissions::from_mode(0o700))
             .expect("make validator fixture directory owner-private");
+        // The copied native profile selects this sibling file. Materialize its
+        // public checked identity before parsing any of the four fixture configs.
+        let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"Taira validator binding fixture genesis identity",
+            )),
+        );
+        let expected_hash_path = config_dir.join("genesis.expected_hash");
+        fs::write(&expected_hash_path, format!("{network_id}\n"))
+            .expect("write public fixture genesis identity");
+        fs::set_permissions(&expected_hash_path, fs::Permissions::from_mode(0o600))
+            .expect("make fixture genesis identity owner-private");
         let mut placements = BTreeSet::new();
         for (peer_index, source) in TAIRA_VALIDATOR_CONFIG_FIXTURES.iter().enumerate() {
             let mut table = toml::from_str(source).expect("parse generated validator fixture");

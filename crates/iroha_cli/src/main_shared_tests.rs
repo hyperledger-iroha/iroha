@@ -1813,6 +1813,61 @@ status_timeout_ms = 3400
 }
 
 #[test]
+fn inherited_config_cli_requires_explicit_provenance_and_rejects_mixed_sources() {
+    let valid = [
+        "iroha",
+        "--config-fd",
+        "19",
+        "--config-source-path",
+        "/private/runtime/client.toml",
+        "ops",
+        "sumeragi",
+        "status",
+    ];
+    let args = Args::try_parse_from(valid).expect("explicit descriptor CLI");
+    assert_eq!(args.config_fd, Some(19));
+    assert_eq!(
+        args.config_source_path,
+        Some(PathBuf::from("/private/runtime/client.toml"))
+    );
+    for invalid in [
+        vec!["iroha", "--config-fd", "19", "ops", "sumeragi", "status"],
+        vec![
+            "iroha",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+        vec![
+            "iroha",
+            "--config-fd",
+            "2",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+        vec![
+            "iroha",
+            "--config-fd",
+            "19",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "--config",
+            "/private/runtime/other.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+    ] {
+        assert!(Args::try_parse_from(invalid).is_err());
+    }
+}
+
+#[test]
 fn cli_loader_owns_filesystem_sections_before_sdk_validation() {
     let file = NamedTempFile::new().expect("client configuration file");
     let source = format!(

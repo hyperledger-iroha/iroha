@@ -1412,6 +1412,7 @@ fn generate_localnet_inner<T: Write>(
     )?;
     genesis = apply_parameter_overrides(
         genesis,
+        opts.peers,
         Some(block_cadence_ms),
         block_max_transactions,
         opts.consensus_mode,
@@ -3443,12 +3444,19 @@ fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     }
     epoch_seed
 }
-fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId) {
+fn apply_localnet_npos_overrides(
+    parameters: &mut Parameters,
+    chain_id: &ChainId,
+    peers: NonZeroU16,
+) {
     let mut npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .unwrap_or_default();
+    // The signed election ceiling must match the roster used to size ingress capacity.
+    // A future larger committee requires an explicit capacity and parameter update.
+    npos.max_validators = u32::from(peers.get());
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
     npos.min_self_bond = 1_u64.into();
@@ -3504,6 +3512,7 @@ fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -
 }
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
+    peers: NonZeroU16,
     block_cadence_ms: Option<u64>,
     block_max_transactions: u64,
     consensus_mode: SumeragiConsensusMode,
@@ -3552,7 +3561,7 @@ fn apply_parameter_overrides(
             NonZeroU64::new(block_cadence_ms).expect("validated non-zero block cadence");
     }
     if include_npos {
-        apply_localnet_npos_overrides(&mut parameters, genesis.chain_id());
+        apply_localnet_npos_overrides(&mut parameters, genesis.chain_id(), peers);
     }
     apply_localnet_ivm_gas_limit_override(&mut parameters);
     if include_npos {
@@ -6637,6 +6646,7 @@ mod tests {
         }
         genesis = apply_parameter_overrides(
             genesis,
+            opts.peers,
             block_cadence_ms,
             block_max_transactions,
             opts.consensus_mode,
@@ -6747,6 +6757,17 @@ mod tests {
             .expect("read generated signed genesis");
         let decoded = decode_framed_signed_block(&signed).expect("decode generated signed genesis");
         assert_eq!(decoded.hash(), expected_hash.into_genesis_hash());
+        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            .expect("read generated manifest");
+        let parameters = manifest
+            .effective_parameters()
+            .expect("one genesis parameter block");
+        let npos = parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("generated NPoS parameters");
+        assert_eq!(npos.max_validators(), u32::from(opts.peers.get()));
         for index in 0..opts.peers.get() {
             let path = temp.path().join(format!("peer{index}.toml"));
             let rendered = fs::read_to_string(&path).expect("read rendered validator config");
@@ -6768,6 +6789,20 @@ mod tests {
             let config =
                 actual::Root::from_toml_source(source).expect("generated config must parse");
             assert_eq!(config.genesis.expected_hash, decoded.hash());
+            let runtime = config
+                .sumeragi
+                .v2_config(
+                    std::time::Duration::from_millis(
+                        parameters.sumeragi().block_cadence_ms().get(),
+                    ),
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                )
+                .expect("generated canonical Sumeragi runtime config");
+            runtime
+                .validate_ingress_roster_capacity(
+                    usize::try_from(npos.max_validators()).expect("bounded signed NPoS ceiling"),
+                )
+                .expect("each generated validator must admit the signed election ceiling");
         }
         let client = fs::read_to_string(temp.path().join("client.toml"))
             .expect("read generated client config")
@@ -8475,6 +8510,33 @@ mod tests {
         assert_eq!(actual, expected, "validator roster should match peers");
         assert_localnet_dataspace_catalog_quorum(temp.path(), peer_count);
     }
+    #[test]
+    fn localnet_npos_election_ceiling_matches_generated_committee() {
+        let chain_id = ChainId::from(DEFAULT_CHAIN_ID);
+        for count in [4, 7, 31] {
+            let peers = NonZeroU16::new(count).expect("nonzero committee");
+            let mut parameters = Parameters::default();
+            apply_localnet_npos_overrides(&mut parameters, &chain_id, peers);
+            let npos = parameters
+                .custom()
+                .get(&SumeragiNposParameters::parameter_id())
+                .and_then(SumeragiNposParameters::from_custom_parameter)
+                .expect("generated NPoS parameters");
+            assert_eq!(npos.max_validators(), u32::from(count));
+            let maximum = usize::try_from(npos.max_validators()).expect("bounded committee");
+            assert_eq!(
+                localnet_sumeragi_body_bytes(usize::from(count))
+                    .expect("generated ingress capacity"),
+                actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                    maximum,
+                    LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+                    LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
+                )
+                .expect("signed election ceiling fits ingress geometry"),
+            );
+        }
+    }
+
     #[test]
     fn localnet_body_ingress_budget_enforces_protocol_roster_limit() {
         for validator_count in [4, MAX_VALIDATORS_PER_HEIGHT] {

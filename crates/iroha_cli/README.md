@@ -32,10 +32,19 @@ For automation, prefer `--output-format json --machine` to suppress startup chat
 
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
-coordinator. Its low-level `write-canary` child accepts exactly one ordered
+coordinator. Retry the same apply command with the same inventory and authorization;
+the durable journal selects recovery inputs for the interrupted phase. Its low-level `write-canary` child accepts exactly one ordered
 operation and one prepare, retained-envelope submit, or read-only recovery
 action; it is not a one-shot operator command. Keep onboarding tokens and all
 signing inputs in owner-only runtime files outside the repository.
+
+Automation that already retains a private client file uses `--config-fd <FD>`
+with `--config-source-path <absolute-original-path>`. The descriptor is read
+directly, without environment overrides; the source path provides provenance
+and the base for relative paths and is never reopened. Descriptors must be
+read-only, owner-private regular files. Onboarding prepare/submit similarly
+accepts `--onboarding-token-fd <FD>` instead of `--onboarding-token-file`.
+Do not pass descriptor pseudo-paths through the ordinary file options.
 
 Public node onboarding is deliberately a single future surface:
 `iroha taira join --data-dir <owner-only-directory>`. It will consume the
