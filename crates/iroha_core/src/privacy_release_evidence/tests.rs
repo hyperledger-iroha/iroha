@@ -2,10 +2,6 @@
 //
 // Included by `privacy_release_evidence::tests` to preserve exact libtest names.
 use super::*;
-use crate::privacy_engines::vega::{
-    build_signed_vega_privacy_action_with_rng_v1, sign_prepared_vega_privacy_action_v1,
-};
-use iroha_primitives::json::Json;
 const RAYON_POOL_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_RAYON_POOL_CHILD_V1";
 fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1); 5] {
     [

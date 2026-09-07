@@ -16,7 +16,7 @@ use crate::{
     crypto::{HashOf, KeyPair},
     da::{
         DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
-        DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams, DaManifestBundle,
+        DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams,
         DaPinIntentListRequest, DaPinIntentListResponse, DaPinIntentQueryRequest,
         DaPinIntentVerifyResponse, PDP_COMMITMENT_HEADER, build_da_request,
         decode_pdp_commitment_header,
@@ -19330,25 +19330,21 @@ impl Client {
         }
         norito::json::from_slice(response.body()).wrap_err(decode_message)
     }
-    /// Fetch the canonical DA manifest + chunk-plan bundle for a storage ticket.
-    ///
-    /// This is equivalent to running `iroha da get-blob --storage-ticket=...` and returns the
-    /// Norito manifest bytes, rendered JSON, and chunk plan emitted by Torii.
+    /// Fetch the raw DA manifest response for a storage ticket.
     ///
     /// # Errors
     ///
     /// Returns an error if the storage ticket is malformed, the HTTP request fails, or the response
-    /// payload cannot be decoded.
-    pub fn get_da_manifest_bundle(&self, storage_ticket_hex: &str) -> Result<DaManifestBundle> {
+    /// payload cannot be decoded as JSON.
+    pub fn get_da_manifest_json(&self, storage_ticket_hex: &str) -> Result<JsonValue> {
         let normalized = normalize_storage_ticket_hex(storage_ticket_hex)?;
         let path = format!("v1/da/manifests/{normalized}");
         let response = self.send_da_json_get(&path)?;
-        let value: JsonValue = Self::decode_da_json_response(
+        Self::decode_da_json_response(
             &response,
-            "failed to fetch DA manifest bundle",
+            "failed to fetch DA manifest",
             "failed to parse DA manifest response",
-        )?;
-        DaManifestBundle::from_json(&value)
+        )
     }
     /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof-policies`.
     ///
@@ -25613,14 +25609,10 @@ mod tests {
                 DaCommitmentWithLocation, DaProofPolicyBundle, DaProofScheme,
             },
             ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1, DaStripeLayout},
-            manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
             pin_intent::{
                 DaPinIntent, DaPinIntentBundle, DaPinIntentProof, DaPinIntentWithLocation,
             },
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                ExtraMetadata, RetentionPolicy, StorageTicketId,
-            },
+            types::{BlobDigest, DaRentQuote, ExtraMetadata, RetentionPolicy, StorageTicketId},
         },
         domain::DomainId,
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
@@ -25648,7 +25640,6 @@ mod tests {
     use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;
     use norito::json::Value;
-    use sorafs_car::{CarBuildPlan, ChunkStore, fetch_plan::try_chunk_fetch_plan_to_json};
     use std::{
         collections::HashMap,
         fs,
@@ -30593,27 +30584,23 @@ mod tests {
         assert_eq!(store[1].url.path(), "/v1/da/ingest");
     }
     #[test]
-    fn get_da_manifest_bundle_fetches_without_query_parameters() {
-        let (mut bundle, _) = sample_da_manifest_bundle();
-        let response = manifest_bundle_response(&mut bundle);
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+    fn get_da_manifest_json_fetches_without_query_parameters() {
+        let storage_ticket_hex = "ab".repeat(32);
+        let expected = JsonValue::Object(JsonMap::from_iter([(
+            "storage_ticket".into(),
+            JsonValue::from(storage_ticket_hex.clone()),
+        )]));
         let client = client_with_base_url(base_url());
-        let fetched = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_da_manifest_bundle(&bundle.storage_ticket_hex)
-        })
-        .expect("fetch manifest");
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
+        let (fetched, snapshot) = capture_request(
+            json_ok_response(&expected, "encode DA manifest response"),
+            || client.get_da_manifest_json(&storage_ticket_hex),
+        );
+        assert_eq!(fetched.expect("fetch manifest"), expected);
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/da/manifests/{}", bundle.storage_ticket_hex)
+            format!("/v1/da/manifests/{storage_ticket_hex}")
         );
         assert_eq!(snapshot.url.query(), None);
-        assert_eq!(fetched.storage_ticket_hex, bundle.storage_ticket_hex);
     }
     #[test]
     fn get_da_proof_policies_fetches_bundle() {
@@ -34515,88 +34502,6 @@ mod tests {
             Some(6)
         );
     }
-    fn manifest_bundle_from_payload(payload: &[u8]) -> DaManifestBundle {
-        let mut store = ChunkStore::new();
-        store
-            .ingest_bytes(payload)
-            .expect("sample payload must be accepted by the chunk store");
-        let profile = ErasureProfile {
-            parity_shards: 0,
-            ..ErasureProfile::default()
-        };
-        let data_shards = usize::from(profile.data_shards);
-        let chunk_commitments = store
-            .chunks()
-            .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let idx = u32::try_from(idx).expect("chunk index fits in u32");
-                let stripe_id = u32::try_from(idx as usize / data_shards).unwrap_or(u32::MAX);
-                ChunkCommitment::new_with_role(
-                    idx,
-                    chunk.offset,
-                    chunk.length,
-                    ChunkDigest::new(chunk.blake3),
-                    ChunkRole::Data,
-                    stripe_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        let blob_hash = BlobDigest::new(*store.payload_digest().as_bytes());
-        let chunk_root = BlobDigest::new(*store.por_tree().root());
-        let chunk_size = chunk_commitments
-            .first()
-            .map_or(0, |commitment| commitment.length);
-        let total_stripes = u32::try_from(
-            chunk_commitments
-                .len()
-                .div_ceil(usize::from(profile.data_shards)),
-        )
-        .expect("stripe count fits in u32");
-        let shards_per_stripe =
-            u32::from(profile.data_shards.saturating_add(profile.parity_shards));
-        let ticket_bytes = *blake3::hash(payload).as_bytes();
-        let manifest = DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: blob_hash,
-            lane_id: LaneId::new(0),
-            epoch: 0,
-            blob_class: BlobClass::NexusLaneSidecar,
-            codec: BlobCodec::new("application/octet-stream"),
-            blob_hash,
-            chunk_root,
-            storage_ticket: StorageTicketId::new(ticket_bytes),
-            total_size: payload.len() as u64,
-            chunk_size,
-            total_stripes,
-            shards_per_stripe,
-            erasure_profile: profile,
-            retention_policy: RetentionPolicy::default(),
-            rent_quote: DaRentQuote::default(),
-            chunks: chunk_commitments,
-            ipa_commitment: chunk_root,
-            metadata: ExtraMetadata::default(),
-            issued_at_unix: 0,
-        };
-        let manifest_bytes = norito::to_bytes(&manifest).expect("serialize manifest");
-        let chunk_plan = try_chunk_fetch_plan_to_json(
-            &CarBuildPlan::single_file(payload).expect("build fixture CAR plan"),
-        )
-        .expect("render canonical chunk fetch plan");
-        DaManifestBundle {
-            storage_ticket_hex: hex::encode(manifest.storage_ticket.as_ref()),
-            client_blob_id_hex: hex::encode(manifest.client_blob_id.as_ref()),
-            blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
-            chunk_root_hex: hex::encode(manifest.chunk_root.as_ref()),
-            manifest_hash_hex: hex::encode(blake3::hash(&manifest_bytes).as_bytes()),
-            lane_id: u64::from(manifest.lane_id.as_u32()),
-            epoch: manifest.epoch,
-            manifest_len: manifest_bytes.len() as u64,
-            manifest_bytes,
-            manifest_json: JsonValue::Null,
-            chunk_plan,
-        }
-    }
     fn sample_da_proof_policy_bundle() -> DaProofPolicyBundle {
         DaProofPolicyBundle::new(Vec::new())
     }
@@ -34692,11 +34597,6 @@ mod tests {
             root: Hash::prehashed([0x73; Hash::LENGTH]),
             path: Vec::new(),
         }
-    }
-    fn sample_da_manifest_bundle() -> (DaManifestBundle, Vec<u8>) {
-        let payload = vec![0xAB; 32];
-        let bundle = manifest_bundle_from_payload(&payload);
-        (bundle, payload)
     }
     fn sccp_client_with_base_url(url: Url) -> Client {
         let mut client = client_with_base_url(url);
@@ -37224,53 +37124,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-    fn manifest_bundle_response(bundle: &mut DaManifestBundle) -> HttpResponse<Vec<u8>> {
-        let manifest: DaManifestV1 =
-            norito::decode_from_bytes(&bundle.manifest_bytes).expect("decode manifest");
-        if bundle.manifest_json.is_null() {
-            bundle.manifest_json =
-                norito::json::value::to_value(&manifest).expect("render manifest json");
-        }
-        assert!(
-            !bundle.chunk_plan.is_null(),
-            "fixture chunk plan is required"
-        );
-        let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(&bundle.manifest_bytes);
-        let response_map = JsonMap::from_iter([
-            (
-                "storage_ticket".into(),
-                JsonValue::String(bundle.storage_ticket_hex.clone()),
-            ),
-            (
-                "client_blob_id".into(),
-                JsonValue::String(bundle.client_blob_id_hex.clone()),
-            ),
-            (
-                "blob_hash".into(),
-                JsonValue::String(bundle.blob_hash_hex.clone()),
-            ),
-            (
-                "chunk_root".into(),
-                JsonValue::String(bundle.chunk_root_hex.clone()),
-            ),
-            (
-                "manifest_hash".into(),
-                JsonValue::String(bundle.manifest_hash_hex.clone()),
-            ),
-            ("lane_id".into(), JsonValue::from(bundle.lane_id)),
-            ("epoch".into(), JsonValue::from(bundle.epoch)),
-            ("manifest_len".into(), JsonValue::from(bundle.manifest_len)),
-            ("manifest_norito".into(), JsonValue::String(manifest_b64)),
-            ("manifest".into(), bundle.manifest_json.clone()),
-            ("chunk_plan".into(), bundle.chunk_plan.clone()),
-        ]);
-        let response_value = JsonValue::Object(response_map);
-        HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&response_value).expect("encode manifest response"))
-            .expect("response build")
     }
     #[cfg(test)]
     mod join_torii_url {

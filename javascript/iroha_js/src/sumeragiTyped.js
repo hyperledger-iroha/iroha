@@ -577,31 +577,23 @@ const SUMERAGI_NATIVE_PARTICIPANT_SETTLEMENT_FIELDS = [
 ];
 
 function computeSumeragiNativeParticipantSettlementHash(settlement) {
-  assertExactSumeragiRecord(
+  const canonicalSettlement = parseSumeragiNativeParticipantSettlement(
     settlement,
-    SUMERAGI_NATIVE_PARTICIPANT_SETTLEMENT_FIELDS,
     "Native AMX participant settlement",
   );
-  if (
-    settlement.swap_metadata !== null ||
-    !Array.isArray(settlement.nexus_fee_receipts) ||
-    settlement.nexus_fee_receipts.length !== 0
-  ) {
-    throw new TypeError("Native AMX participant settlement cannot contain swap metadata or fee receipts");
-  }
   const payload = encodeSumeragiNativeStruct([
-    u64ToLittleEndianBuffer(settlement.block_height),
-    encodeSumeragiNativeLaneId(settlement.lane_id),
-    encodeSumeragiNativeHash(settlement.lane_incarnation),
-    encodeSumeragiNativeDataspaceId(settlement.dataspace_id),
-    u64ToLittleEndianBuffer(settlement.tx_count),
-    encodeSumeragiNativeQuantity(settlement.total_local_amount),
-    encodeSumeragiNativeQuantity(settlement.total_xor_due),
-    encodeSumeragiNativeQuantity(settlement.total_xor_after_haircut),
-    encodeSumeragiNativeQuantity(settlement.total_xor_variance),
+    u64ToLittleEndianBuffer(canonicalSettlement.block_height),
+    encodeSumeragiNativeLaneId(canonicalSettlement.lane_id),
+    encodeSumeragiNativeHash(canonicalSettlement.lane_incarnation),
+    encodeSumeragiNativeDataspaceId(canonicalSettlement.dataspace_id),
+    u64ToLittleEndianBuffer(canonicalSettlement.tx_count),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_local_amount),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_due),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_after_haircut),
+    encodeSumeragiNativeQuantity(canonicalSettlement.total_xor_variance),
     Buffer.from([0]),
     encodeNoritoVec(
-      settlement.receipts,
+      canonicalSettlement.receipts,
       encodeSumeragiNativeSettlementReceipt,
       true,
     ),
@@ -1001,7 +993,9 @@ function parseSumeragiNativeParticipantSettlement(value, context) {
     `${context}.receipts`,
     1,
   ).map((receipt, index) =>
-    parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${index}]`),
+    Object.freeze(
+      parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${index}]`),
+    ),
   );
   return Object.freeze({
     block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),

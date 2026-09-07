@@ -666,6 +666,32 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         }
     }
 
+    func testParticipantSettlementRejectsNestedNativeAmxReceipts() throws {
+        try requireNativeAmxABI23Bridge()
+        let canonical = try loadNativeAmxGroupedFixture()
+        let settlementPath = [
+            "golden", "expected_diagnostics", "lane_settlement_commitments", "0",
+            "native_amx_receipts", "0", "legs", "0", "participant_settlement",
+        ]
+        var settlement = try XCTUnwrap(
+            try fixtureValue(at: settlementPath[...], in: canonical) as? [String: Any]
+        )
+        XCTAssertNil(settlement["native_amx_receipts"])
+        settlement["native_amx_receipts"] = []
+        let mutated = try assigningFixtureValue(
+            settlement,
+            at: settlementPath[...],
+            in: canonical
+        )
+        let document = try XCTUnwrap(mutated as? [String: Any])
+        let golden = try XCTUnwrap(document["golden"] as? [String: Any])
+        let diagnostics = try XCTUnwrap(golden["expected_diagnostics"])
+        let data = try JSONSerialization.data(withJSONObject: diagnostics)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
+        )
+    }
+
     func testRustOwnedGroupedNativeAmxV2EndpointSeparation() async throws {
         try requireNativeAmxABI23Bridge()
         let document = try loadNativeAmxGroupedFixture()

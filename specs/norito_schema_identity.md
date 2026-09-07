@@ -170,9 +170,10 @@ Module-owned immutable fixture suites preserve those codec capabilities and
 original cfg scopes. All 110 owner-scoped tests pass on the sealed
 post-declaration harness, and a second controlled 6,112-probe capture is exactly
 equal to the pre-declaration capture after excluding source coordinates. A
-wider sealed model run, with the known recursive-wire regression excluded,
-completed 3,045 passes and exposed 37 failures that still require disposition;
-therefore this evidence does not qualify the complete model suite.
+wider sealed model run completed 3,045 passes and exposed 37 failures that
+still require disposition. That historical run predates the finite Native AMX
+participant-settlement wire repair; therefore it does not qualify the complete
+model suite.
 
 ### Batch declaration migration
 

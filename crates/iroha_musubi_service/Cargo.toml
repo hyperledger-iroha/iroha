@@ -46,3 +46,5 @@ url = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
+iroha_service_model = { workspace = true }
+sorafs_manifest = { workspace = true }

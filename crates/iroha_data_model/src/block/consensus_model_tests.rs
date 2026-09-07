@@ -1573,6 +1573,32 @@ fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
     assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
 }
 #[test]
+fn native_amx_participant_settlement_declares_canonical_schema_identity() {
+    // This finite wire type was introduced after the immutable compiler capture.
+    let name = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement";
+    let hash = norito::core::schema_hash_for_name(name);
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::nominal_name(),
+        name
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::frame_name(),
+        name
+    );
+    assert_eq!(
+        norito::schema::identity::frame_hash::<NativeAmxParticipantSettlement>(),
+        hash
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSerialize>::schema_hash(),
+        hash
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoDeserialize>::schema_hash(),
+        hash
+    );
+}
+#[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
     let source_id = [0xC7; 32];
     let fifo_sources = [[0xC8; 32], source_id];

@@ -19616,9 +19616,9 @@ enum ToriiNativeAmxWire {
         "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage"
     private static let proposalPreimageType =
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
-    private static let settlementType =
+    private static let participantSettlementType =
         "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
-    private static let settlementHashDomain =
+    private static let participantSettlementHashDomain =
         Data("iroha.consensus.native-amx.participant-settlement.v1".utf8)
     private static let blsKeyAdmissionMessage =
         Data("native-amx:bls-normal-key-admission:v1".utf8)
@@ -20130,7 +20130,9 @@ enum ToriiNativeAmxWire {
         ])
     }
 
-    static func settlementHash(_ settlement: ToriiNativeAmxParticipantSettlement) -> String? {
+    static func participantSettlementHash(
+        _ settlement: ToriiNativeAmxParticipantSettlement
+    ) -> String? {
         guard settlement.swapMetadata == nil,
               settlement.nexusFeeReceipts.isEmpty,
               let laneIncarnation = hashBytes(settlement.laneIncarnation),
@@ -20157,9 +20159,9 @@ enum ToriiNativeAmxWire {
             receipts,
             emptyNexusReceipts,
         ])
-        var hashPreimage = littleEndian(UInt64(settlementHashDomain.count))
-        hashPreimage.append(settlementHashDomain)
-        hashPreimage.append(noritoFrame(typeName: settlementType, payload: payload))
+        var hashPreimage = littleEndian(UInt64(participantSettlementHashDomain.count))
+        hashPreimage.append(participantSettlementHashDomain)
+        hashPreimage.append(noritoFrame(typeName: participantSettlementType, payload: payload))
         return hashLiteral(hashPreimage)
     }
 }
@@ -21000,7 +21002,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               coordinatorParticipantProposalMatches,
               participantSettlementHash == body.participantSettlementCommitment,
               participantSettlementHash
-                == ToriiNativeAmxWire.settlementHash(participantSettlement),
+                == ToriiNativeAmxWire.participantSettlementHash(participantSettlement),
               participantSettlement.blockHeight == body.participantLaneBlockHeight,
               participantSettlement.laneId == laneId,
               participantSettlement.dataspaceId == dataspaceId,

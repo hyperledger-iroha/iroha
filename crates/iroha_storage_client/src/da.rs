@@ -4,17 +4,241 @@ use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::da::manifest::DaManifestV1;
 use norito::{
+    decode_from_bytes,
     derive::JsonSerialize,
-    json::{Map, Value},
+    json::{self, Map, Value},
 };
+use sorafs_car::fetch_plan::chunk_fetch_plan_from_json;
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
 use sorafs_orchestrator::prelude::{CarBuildPlan, ChunkStore, InMemoryPayload, PorProof};
 use std::{
     collections::HashSet,
     convert::TryFrom,
+    fs,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+/// Canonical manifest and chunk-plan artefacts returned by Torii.
+#[derive(Debug, Clone)]
+pub struct DaManifestBundle {
+    /// Hex-encoded storage ticket returned by Torii.
+    pub storage_ticket_hex: String,
+    /// Hex-encoded client blob id bound to the manifest.
+    pub client_blob_id_hex: String,
+    /// Hex-encoded BLAKE3 digest of the payload.
+    pub blob_hash_hex: String,
+    /// Hex-encoded chunk root recorded in the manifest.
+    pub chunk_root_hex: String,
+    /// Hex-encoded manifest hash recorded in the receipt/manifest fetch.
+    pub manifest_hash_hex: String,
+    /// Lane identifier associated with the blob.
+    pub lane_id: u64,
+    /// Epoch recorded by the manifest.
+    pub epoch: u64,
+    /// Length of the Norito manifest payload in bytes.
+    pub manifest_len: u64,
+    /// Raw Norito manifest bytes.
+    pub manifest_bytes: Vec<u8>,
+    /// Rendered manifest JSON, when provided by Torii.
+    pub manifest_json: Value,
+    /// Chunk plan JSON emitted by Torii.
+    pub chunk_plan: Value,
+}
+
+/// Paths produced when a manifest bundle is written to disk.
+#[derive(Debug, Clone)]
+pub struct DaManifestPersistedPaths {
+    /// Path to the raw Norito manifest bytes.
+    pub manifest_raw: PathBuf,
+    /// Path to the pretty-rendered JSON copy of the manifest.
+    pub manifest_json: PathBuf,
+    /// Path to the pretty-rendered chunk plan JSON payload.
+    pub chunk_plan: PathBuf,
+}
+
+impl DaManifestBundle {
+    /// Parse a Torii `/v1/da/manifests/{ticket}` JSON payload into a bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when required fields are missing, malformed, or fail to decode.
+    pub fn from_json(value: &Value) -> Result<Self> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| eyre!("DA manifest response must be a JSON object"))?;
+        let storage_ticket_hex = require_hex_field(object, &["storage_ticket", "storageTicket"])?;
+        let client_blob_id_hex = require_hex_field(object, &["client_blob_id", "clientBlobId"])?;
+        let blob_hash_hex = require_hex_field(object, &["blob_hash", "blobHash"])?;
+        let chunk_root_hex = require_hex_field(object, &["chunk_root", "chunkRoot"])?;
+        let manifest_hash_hex = require_hex_field(object, &["manifest_hash", "manifestHash"])?;
+        let lane_id = require_u64_field(object, &["lane_id", "laneId"])?;
+        let epoch = require_u64_field(object, &["epoch"])?;
+        let manifest_len =
+            optional_u64_field(object, &["manifest_len", "manifestLen"])?.unwrap_or(0);
+        let manifest_b64 = object
+            .get("manifest_norito")
+            .or_else(|| object.get("manifestNorito"))
+            .or_else(|| object.get("manifest_b64"))
+            .or_else(|| object.get("manifestB64"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| eyre!("DA manifest response missing `manifest_norito` field"))?;
+        let manifest_bytes = Base64Standard
+            .decode(manifest_b64.as_bytes())
+            .map_err(|err| eyre!("failed to decode manifest_norito: {err}"))?;
+        let manifest_json = object
+            .get("manifest")
+            .or_else(|| object.get("manifest_json"))
+            .or_else(|| object.get("manifestJson"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let chunk_plan = object
+            .get("chunk_plan")
+            .or_else(|| object.get("chunkPlan"))
+            .cloned()
+            .ok_or_else(|| eyre!("DA manifest response missing `chunk_plan` field"))?;
+        let parsed_chunk_plan = chunk_fetch_plan_from_json(&chunk_plan)
+            .map_err(|err| eyre!("DA manifest response contained invalid chunk_plan: {err}"))?;
+        if hex::encode(parsed_chunk_plan.payload_digest) != blob_hash_hex {
+            return Err(eyre!(
+                "DA manifest response contained invalid chunk_plan: payload digest does not match blob_hash"
+            ));
+        }
+        Ok(Self {
+            storage_ticket_hex,
+            client_blob_id_hex,
+            blob_hash_hex,
+            chunk_root_hex,
+            manifest_hash_hex,
+            lane_id,
+            epoch,
+            manifest_len,
+            manifest_bytes,
+            manifest_json,
+            chunk_plan,
+        })
+    }
+
+    /// Decode the embedded Norito manifest payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if manifest deserialization fails.
+    pub fn decode_manifest(&self) -> Result<DaManifestV1> {
+        decode_from_bytes(&self.manifest_bytes)
+            .map_err(|err| eyre!("failed to decode DaManifestV1: {err}"))
+    }
+
+    /// Persist the manifest artefacts to the provided directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the output directory cannot be created, the ticket label is invalid,
+    /// or an artefact fails to write.
+    pub fn persist_to_dir(
+        &self,
+        output_dir: impl AsRef<Path>,
+        ticket_label: impl AsRef<str>,
+    ) -> Result<DaManifestPersistedPaths> {
+        let parsed_chunk_plan = chunk_fetch_plan_from_json(&self.chunk_plan)
+            .map_err(|err| eyre!("refusing to persist invalid DA chunk plan: {err}"))?;
+        if hex::encode(parsed_chunk_plan.payload_digest) != self.blob_hash_hex {
+            return Err(eyre!(
+                "refusing to persist DA chunk plan whose payload digest does not match blob_hash"
+            ));
+        }
+        let root = output_dir.as_ref();
+        if root.as_os_str().is_empty() {
+            return Err(eyre!("manifest output directory must not be empty"));
+        }
+        fs::create_dir_all(root).wrap_err_with(|| {
+            format!(
+                "failed to create manifest output directory `{}`",
+                root.display()
+            )
+        })?;
+        let label = sanitize_manifest_label(ticket_label.as_ref())?;
+        let manifest_path = root.join(format!("manifest_{label}.norito"));
+        let manifest_json_path = root.join(format!("manifest_{label}.json"));
+        let chunk_plan_path = root.join(format!("chunk_plan_{label}.json"));
+        fs::write(&manifest_path, &self.manifest_bytes)
+            .wrap_err_with(|| format!("failed to write `{}`", manifest_path.display()))?;
+        let manifest_json = json::to_json_pretty(&self.manifest_json)
+            .map_err(|err| eyre!("failed to render manifest JSON: {err}"))?;
+        fs::write(&manifest_json_path, manifest_json)
+            .wrap_err_with(|| format!("failed to write `{}`", manifest_json_path.display()))?;
+        let chunk_plan_json = json::to_json_pretty(&self.chunk_plan)
+            .map_err(|err| eyre!("failed to render chunk plan JSON: {err}"))?;
+        fs::write(&chunk_plan_path, chunk_plan_json)
+            .wrap_err_with(|| format!("failed to write `{}`", chunk_plan_path.display()))?;
+        Ok(DaManifestPersistedPaths {
+            manifest_raw: manifest_path,
+            manifest_json: manifest_json_path,
+            chunk_plan: chunk_plan_path,
+        })
+    }
+}
+
+fn sanitize_manifest_label(label: &str) -> Result<String> {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("ticket label must not be empty"));
+    }
+    let mut sanitized = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            sanitized.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            return Err(eyre!(
+                "ticket label `{trimmed}` contains unsupported character `{ch}`"
+            ));
+        }
+    }
+    Ok(sanitized)
+}
+
+fn require_hex_field(object: &Map, keys: &[&str]) -> Result<String> {
+    for key in keys {
+        if let Some(Value::String(value)) = object.get(*key) {
+            let trimmed = value.trim();
+            if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(trimmed.to_ascii_lowercase());
+            }
+            return Err(eyre!("field `{key}` must be a 32-byte hex string"));
+        }
+    }
+    Err(eyre!("response missing `{}` field", keys[0]))
+}
+
+fn require_u64_field(object: &Map, keys: &[&str]) -> Result<u64> {
+    optional_u64_field(object, keys)?
+        .map_or_else(|| Err(eyre!("response missing `{}` field", keys[0])), Ok)
+}
+
+fn optional_u64_field(object: &Map, keys: &[&str]) -> Result<Option<u64>> {
+    for key in keys {
+        if let Some(value) = object.get(*key) {
+            return parse_u64_value(value, key).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn parse_u64_value(value: &Value, label: &str) -> Result<u64> {
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .ok_or_else(|| eyre!("field `{label}` must be a positive integer")),
+        Value::String(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| eyre!("invalid integer value for `{label}`: {err}")),
+        _ => Err(eyre!("field `{label}` must be an integer")),
+    }
+}
 
 /// Sampling and verification controls for `PoR` proof generation.
 #[derive(Debug, Clone)]
@@ -553,6 +777,133 @@ mod tests {
         },
         nexus::LaneId,
     };
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn empty_chunk_fetch_plan(payload_digest_byte: u8) -> Value {
+        Value::Object(Map::from_iter([
+            (
+                "schema".into(),
+                Value::from(sorafs_car::fetch_plan::CHUNK_FETCH_PLAN_SCHEMA_V1),
+            ),
+            (
+                "payload_digest_blake3_hex".into(),
+                Value::from(hex::encode([payload_digest_byte; 32])),
+            ),
+            ("chunk_fetch_specs".into(), Value::Array(Vec::new())),
+        ]))
+    }
+
+    #[test]
+    fn manifest_bundle_parses_required_fields() {
+        let mut object = Map::new();
+        object.insert("storage_ticket".into(), Value::from("11".repeat(32)));
+        object.insert("client_blob_id".into(), Value::from("22".repeat(32)));
+        object.insert("blob_hash".into(), Value::from("33".repeat(32)));
+        object.insert("chunk_root".into(), Value::from("44".repeat(32)));
+        object.insert("lane_id".into(), Value::from(0));
+        object.insert("epoch".into(), Value::from(1));
+        object.insert("manifest_len".into(), Value::from(16));
+        object.insert(
+            "manifest_norito".into(),
+            Value::from(Base64Standard.encode([0_u8; 4])),
+        );
+        object.insert(
+            "manifest".into(),
+            Value::Object(Map::from_iter([("dummy".into(), Value::from(1))])),
+        );
+        object.insert("chunk_plan".into(), empty_chunk_fetch_plan(0x33));
+        object.insert("manifest_hash".into(), Value::from("55".repeat(32)));
+        let bundle = DaManifestBundle::from_json(&Value::Object(object)).expect("bundle");
+        assert_eq!(bundle.storage_ticket_hex, "11".repeat(32));
+        assert_eq!(bundle.client_blob_id_hex, "22".repeat(32));
+        assert_eq!(bundle.blob_hash_hex, "33".repeat(32));
+        assert_eq!(bundle.chunk_root_hex, "44".repeat(32));
+        assert_eq!(bundle.manifest_hash_hex, "55".repeat(32));
+        assert_eq!(bundle.lane_id, 0);
+        assert_eq!(bundle.epoch, 1);
+    }
+
+    #[test]
+    fn manifest_bundle_rejects_retired_or_unbound_chunk_plans() {
+        let base = Map::from_iter([
+            ("storage_ticket".into(), Value::from("11".repeat(32))),
+            ("client_blob_id".into(), Value::from("22".repeat(32))),
+            ("blob_hash".into(), Value::from("33".repeat(32))),
+            ("chunk_root".into(), Value::from("44".repeat(32))),
+            ("manifest_hash".into(), Value::from("55".repeat(32))),
+            ("lane_id".into(), Value::from(0)),
+            ("epoch".into(), Value::from(1)),
+            ("manifest_len".into(), Value::from(4)),
+            (
+                "manifest_norito".into(),
+                Value::from(Base64Standard.encode([0_u8; 4])),
+            ),
+        ]);
+        let invalid_plans = [
+            Value::Array(Vec::new()),
+            Value::Object(Map::from_iter([
+                (
+                    "schema".into(),
+                    Value::from(sorafs_car::fetch_plan::CHUNK_FETCH_PLAN_SCHEMA_V1),
+                ),
+                ("chunk_fetch_specs".into(), Value::Array(Vec::new())),
+            ])),
+            empty_chunk_fetch_plan(0),
+            empty_chunk_fetch_plan(0x77),
+        ];
+        for plan in invalid_plans {
+            let mut object = base.clone();
+            object.insert("chunk_plan".into(), plan);
+            let error = DaManifestBundle::from_json(&Value::Object(object))
+                .expect_err("retired or unbound plan must be rejected");
+            assert!(
+                error.to_string().contains("invalid chunk_plan"),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_bundle_persist_to_dir_writes_outputs() {
+        let (manifest, payload) = sample_manifest_and_payload();
+        let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
+        let bundle = DaManifestBundle {
+            storage_ticket_hex: "11".repeat(32),
+            client_blob_id_hex: "22".repeat(32),
+            blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
+            chunk_root_hex: hex::encode(manifest.chunk_root.as_ref()),
+            manifest_hash_hex: hex::encode(blake3::hash(&manifest_bytes).as_bytes()),
+            lane_id: u64::from(manifest.lane_id.as_u32()),
+            epoch: manifest.epoch,
+            manifest_len: manifest_bytes.len() as u64,
+            manifest_bytes: manifest_bytes.clone(),
+            manifest_json: norito::json::value::to_value(&manifest).expect("manifest json"),
+            chunk_plan: sorafs_car::fetch_plan::try_chunk_fetch_plan_to_json(
+                &CarBuildPlan::single_file(&payload).expect("build fixture CAR plan"),
+            )
+            .expect("render canonical chunk fetch plan"),
+        };
+        let dir = tempdir().expect("tempdir");
+        let paths = bundle
+            .persist_to_dir(dir.path(), "AA11")
+            .expect("persist bundle");
+        assert!(paths.manifest_raw.exists());
+        assert!(paths.manifest_json.exists());
+        assert!(paths.chunk_plan.exists());
+        assert_eq!(
+            fs::read(&paths.manifest_raw).expect("read manifest"),
+            manifest_bytes
+        );
+        let manifest_json = fs::read_to_string(&paths.manifest_json).expect("read manifest json");
+        let manifest_value: Value =
+            norito::json::from_slice(manifest_json.as_bytes()).expect("manifest json parses");
+        assert!(manifest_value.is_object());
+        let chunk_plan_json = fs::read_to_string(&paths.chunk_plan).expect("read chunk plan");
+        let chunk_plan_value: Value =
+            norito::json::from_slice(chunk_plan_json.as_bytes()).expect("chunk plan JSON parses");
+        assert!(chunk_plan_value.is_object());
+    }
 
     #[test]
     fn chunk_profile_from_chunk_size_rejects_zero() {
@@ -582,8 +933,8 @@ mod tests {
     fn car_plan_rejects_foreign_stripe_geometry() {
         let (mut manifest, _) = sample_manifest_and_payload();
         manifest.shards_per_stripe = 14;
-        let err = build_car_plan_from_manifest(&manifest)
-            .expect_err("foreign stripe geometry must fail");
+        let err =
+            build_car_plan_from_manifest(&manifest).expect_err("foreign stripe geometry must fail");
         assert!(
             err.to_string()
                 .contains("manifest shards_per_stripe is 14; canonical value is 1"),
@@ -750,7 +1101,9 @@ mod tests {
             chunk_root,
             storage_ticket: StorageTicketId::new([0; 32]),
             total_size: payload.len() as u64,
-            chunk_size: chunks.first().map_or(payload.len() as u32, |chunk| chunk.length),
+            chunk_size: chunks
+                .first()
+                .map_or(payload.len() as u32, |chunk| chunk.length),
             total_stripes: u32::try_from(chunks.len()).expect("stripe count fits in u32"),
             shards_per_stripe: 1,
             erasure_profile,

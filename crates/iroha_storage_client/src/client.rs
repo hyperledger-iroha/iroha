@@ -1,14 +1,11 @@
 //! Storage orchestration layered over the protocol-only Iroha client.
 
 use crate::da::{
-    DaProofArtifactMetadata, DaProofConfig, build_car_plan_from_manifest,
-    generate_da_proof_artifact, generate_da_proof_summary,
+    DaManifestBundle, DaManifestPersistedPaths, DaProofArtifactMetadata, DaProofConfig,
+    build_car_plan_from_manifest, generate_da_proof_artifact, generate_da_proof_summary,
 };
 use eyre::{Result, WrapErr, eyre};
-use iroha::{
-    client::Client,
-    da::{DaManifestBundle, DaManifestPersistedPaths},
-};
+use iroha::client::Client;
 use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy, WriteModeHint};
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use sorafs_orchestrator::{
@@ -109,6 +106,16 @@ impl<'client> StorageClient<'client> {
         Self { client }
     }
 
+    /// Fetch and validate a DA manifest bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the manifest and chunk plan are invalid.
+    pub fn get_da_manifest_bundle(&self, storage_ticket_hex: &str) -> Result<DaManifestBundle> {
+        let response = self.client.get_da_manifest_json(storage_ticket_hex)?;
+        DaManifestBundle::from_json(&response)
+    }
+
     /// Fetch and persist a DA manifest bundle.
     ///
     /// # Errors
@@ -119,7 +126,7 @@ impl<'client> StorageClient<'client> {
         storage_ticket_hex: &str,
         output_dir: impl AsRef<Path>,
     ) -> Result<DaManifestPersistedPaths> {
-        let bundle = self.client.get_da_manifest_bundle(storage_ticket_hex)?;
+        let bundle = self.get_da_manifest_bundle(storage_ticket_hex)?;
         let label = bundle.storage_ticket_hex.clone();
         bundle.persist_to_dir(output_dir, label)
     }
@@ -167,7 +174,7 @@ impl<'client> StorageClient<'client> {
         fetch_options: SorafsGatewayFetchOptions,
         proof_config: DaProofConfig,
     ) -> Result<DaAvailabilityProof> {
-        let manifest = self.client.get_da_manifest_bundle(storage_ticket_hex)?;
+        let manifest = self.get_da_manifest_bundle(storage_ticket_hex)?;
         let plan = build_car_plan_from_manifest(&manifest.decode_manifest()?)?;
         let fetch_session = self
             .sorafs_fetch_via_gateway(&plan, gateway_config, providers, fetch_options)
@@ -477,16 +484,9 @@ fn annotate_scoreboard_with_gateway_context(
 mod tests {
     use super::*;
     use iroha::{
-        config::{
-            Config, DEFAULT_TORII_REQUEST_TIMEOUT, default_connect_queue_root,
-        },
+        config::{Config, DEFAULT_TORII_REQUEST_TIMEOUT, default_connect_queue_root},
         crypto::{Algorithm, Hash, HashOf, KeyPair},
-        data_model::{
-            NetworkId,
-            account::AccountId,
-            block::BlockHeader,
-            prelude::ChainId,
-        },
+        data_model::{NetworkId, account::AccountId, block::BlockHeader, prelude::ChainId},
     };
     use iroha_service_model::soranet::RolloutPhase;
     use sorafs_manifest::alias_cache::AliasCachePolicy;

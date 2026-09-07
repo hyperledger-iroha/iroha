@@ -10402,8 +10402,8 @@ class SumeragiNativeAmxParticipantSettlement:
     total_xor_after_haircut: str
     total_xor_variance: str
     swap_metadata: None
-    receipts: List[SumeragiLaneSettlementReceipt]
-    nexus_fee_receipts: Tuple[SumeragiNexusFeeReceipt, ...]
+    receipts: Tuple[SumeragiLaneSettlementReceipt, ...]
+    nexus_fee_receipts: Tuple[()]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxParticipantSettlement":
@@ -10448,7 +10448,7 @@ class SumeragiNativeAmxParticipantSettlement:
             ),
             total_xor_variance=_strict_quantity_string(payload, "total_xor_variance", context),
             swap_metadata=None,
-            receipts=_parse_sumeragi_lane_settlement_receipts(receipts_payload, context),
+            receipts=tuple(_parse_sumeragi_lane_settlement_receipts(receipts_payload, context)),
             nexus_fee_receipts=(),
         )
 
@@ -10497,7 +10497,9 @@ class SumeragiNativeAmxLeg:
         ):
             raise TypeError(f"{context} participant artifacts and QCs must be objects")
         proposal = SumeragiNativeAmxParticipantLaneBlockProposal.from_payload(proposal_payload)
-        settlement = SumeragiNativeAmxParticipantSettlement.from_payload(settlement_payload)
+        settlement = SumeragiNativeAmxParticipantSettlement.from_payload(
+            settlement_payload
+        )
         prepare = SumeragiNativeAmxAttestationQc.from_payload(prepare_payload)
         commit = SumeragiNativeAmxAttestationQc.from_payload(commit_payload)
         if prepare.body.phase is not SumeragiNativeAmxPhase.PREPARE:

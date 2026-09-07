@@ -60,7 +60,8 @@ object NativeAmxV2 {
     private const val SETTLEMENT_TYPE =
         "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
     private val SETTLEMENT_HASH_DOMAIN =
-        "iroha.consensus.native-amx.participant-settlement.v1".toByteArray(StandardCharsets.UTF_8)
+        "iroha.consensus.native-amx.participant-settlement.v1"
+            .toByteArray(StandardCharsets.UTF_8)
 
     private class BlsNormalPeerId(
         val literal: String,

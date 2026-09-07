@@ -7630,7 +7630,8 @@ state_test! { sync mixed_role_native_amx_state_projections_reject_same_route_ide
         coordinator_leg.participant_settlement_hash =
             iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
                 &coordinator_leg.participant_settlement,
-            ).expect("fixture participant settlement encodes canonically");
+            )
+            .expect("fixture participant settlement encodes canonically");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,

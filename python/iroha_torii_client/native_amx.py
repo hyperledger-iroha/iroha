@@ -1,8 +1,8 @@
 """Canonical Native AMX V2 hashing and participant-identity helpers.
 
 The routines in this module intentionally mirror the Rust data-model encodings
-used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and terminal lane
-settlement commitments.  They are private SDK plumbing, not a second wire
+used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and Native AMX
+participant settlements. They are private SDK plumbing, not a second wire
 format.
 """
 
@@ -36,7 +36,9 @@ _DESCRIPTOR_PREIMAGE_TYPE = (
 _PROPOSAL_PREIMAGE_TYPE = (
     "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
 )
-_SETTLEMENT_TYPE = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+_SETTLEMENT_TYPE = (
+    "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+)
 _SETTLEMENT_HASH_DOMAIN = b"iroha.consensus.native-amx.participant-settlement.v1"
 _APPLICATION_MANIFEST_LEAF_DOMAIN = b"iroha:merkle:leaf:v1\0"
 

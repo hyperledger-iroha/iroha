@@ -47,8 +47,6 @@ pub mod gpu_zstd;
 /// Default upper bound on Norito archive length (bytes) when hosts do not
 /// provide an explicit configuration.
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
-/// Maximum number of recursively owned values reconstructed by one decoder.
-///
 /// Maximum nesting depth for recursively encoded or decoded Norito values.
 ///
 /// Owned containers such as `Box`, `Rc`, and `Arc` make a finite Rust type recursively shaped at

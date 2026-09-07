@@ -17,6 +17,7 @@ from iroha_torii_client.native_amx import (
 from iroha_python import (
     SumeragiLaneRelayEnvelope,
     SumeragiLaneSettlementCommitment,
+    SumeragiNativeAmxParticipantSettlement,
     SumeragiNativeAmxPhase,
     SumeragiNativeAmxParticipantSettlement,
 )
@@ -381,6 +382,14 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
         == receipt.legs[0].commit_qc.body.participant_settlement_commitment
     )
     assert receipt.legs[0].participant_settlement.block_height == 42
+    assert isinstance(
+        receipt.legs[0].participant_settlement,
+        SumeragiNativeAmxParticipantSettlement,
+    )
+    assert not hasattr(
+        receipt.legs[0].participant_settlement,
+        "native_amx_receipts",
+    )
     assert len(receipt.legs[0].participant_settlement.receipts) == 2
     assert isinstance(receipt.legs[0].participant_settlement, SumeragiNativeAmxParticipantSettlement)
     participant = asdict(receipt.legs[0].participant_settlement)

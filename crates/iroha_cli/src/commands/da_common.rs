@@ -8,7 +8,6 @@ use iroha::{
     },
     config::Config,
     crypto::{KeyPair, Signature},
-    da::DaManifestBundle,
     http::Method as HttpMethod,
 };
 use iroha_data_model::{
@@ -23,6 +22,7 @@ use iroha_data_model::{
     prelude::AccountId,
     sorafs::pin_registry::StorageClass,
 };
+use iroha_storage_client::da::DaManifestBundle;
 use norito::{
     decode_from_bytes,
     json::{Map, Value},

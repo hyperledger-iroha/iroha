@@ -75,7 +75,6 @@ iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 iroha_sccp = { workspace = true }
 sorafs_manifest = { workspace = true }
-sorafs_car = { workspace = true, features = ["manifest"] }
 
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http", "transparent_api"] }
 iroha_executor_data_model = { workspace = true }
@@ -93,7 +92,7 @@ thiserror = { workspace = true }
 displaydoc = { workspace = true }
 derive_more = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
 futures-util = "0.3.31"
