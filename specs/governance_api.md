@@ -917,9 +917,15 @@ Convenience Endpoint
     signed transaction with `SetParameter(Custom)`.
 
 CLI Helpers
+- Both standalone ballot modes take `authority` and the exact canonical
+  `network_id` from the client configuration and authenticate that request
+  through the configured account signer. Public-input files cannot override
+  either identity or introduce alternate chain selectors.
 - `iroha --output-format text app gov deploy audit --contract-address irohac1...`
   - Fetches the active binding for the governed contract address and cross-checks that:
-    - Torii stores bytecode for the active `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+    - Torii stores bytecode for the active `code_hash`, and its canonical
+      `contract_code_hash` matches: the domain-separated Blake2b-32 digest
+      covers the complete deployable artifact, including its execution header.
     - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
     - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
 - `iroha app gov deploy meta --contract-address irohac1... [--approver <i105-account-id> --approver <i105-account-id>]`

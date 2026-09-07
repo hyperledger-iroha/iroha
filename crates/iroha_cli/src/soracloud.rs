@@ -7105,7 +7105,7 @@ fn validate_taira_inrou_canary_storage(
         || shared.max_total_bytes.get() != TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1
     {
         return Err(eyre!(
-            "Taira Inrou canary requires canonical 8 GiB root and 2 GiB shared service-volume geometry"
+            "Taira Inrou canary requires canonical root ({TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1} bytes) and shared service-volume ({TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1} bytes) geometry"
         ));
     }
     let per_host_storage_bytes = container
@@ -7114,16 +7114,17 @@ fn validate_taira_inrou_canary_storage(
         .get()
         .checked_add(root.max_total_bytes.get())
         .ok_or_else(|| eyre!("Taira Inrou canary per-host storage geometry overflow"))?;
-    let lease_storage_bytes = root
-        .max_total_bytes
-        .get()
+    // Host-local admission charges the root and temporary filesystem. The
+    // complete writable budget additionally includes the shared app-data lease.
+    let writable_storage_bytes = per_host_storage_bytes
         .checked_add(shared.max_total_bytes.get())
-        .ok_or_else(|| eyre!("Taira Inrou canary lease storage geometry overflow"))?;
+        .ok_or_else(|| eyre!("Taira Inrou canary writable storage geometry overflow"))?;
     if per_host_storage_bytes != TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1
-        || lease_storage_bytes != TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1
+        || writable_storage_bytes != defaults::taira::INROU_MAX_STORAGE_BYTES
     {
         return Err(eyre!(
-            "Taira Inrou canary storage geometry must total exactly 10 GiB"
+            "Taira Inrou canary storage geometry requires exactly {TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1} host-local bytes and {} total writable bytes",
+            defaults::taira::INROU_MAX_STORAGE_BYTES,
         ));
     }
     Ok(())
@@ -10298,32 +10299,28 @@ fn derive_service_mutation_precondition(
                     "{context} upgrade preflight current version and latest revision disagree for service `{service_name}`"
                 ));
             }
-            let service_manifest_hash = revision
-                .get("service_manifest_hash")
-                .and_then(json::Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
+            // Status hashes use the canonical Norito JSON literal, including its
+            // type tag and checksum; Hash::from_str accepts a different CLI format.
+            let service_manifest_hash = json::from_value::<Hash>(
+                revision.get("service_manifest_hash").cloned().ok_or_else(|| {
                     eyre!(
                         "{context} upgrade preflight found no service manifest hash for service `{service_name}`"
                     )
-                })?
-                .parse::<Hash>()
-                .wrap_err_with(|| {
+                })?,
+            )
+            .wrap_err_with(|| {
                     format!(
                         "{context} upgrade preflight found an invalid service manifest hash for service `{service_name}`"
                     )
                 })?;
-            let container_manifest_hash = revision
-                .get("container_manifest_hash")
-                .and_then(json::Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
+            let container_manifest_hash = json::from_value::<Hash>(
+                revision.get("container_manifest_hash").cloned().ok_or_else(|| {
                     eyre!(
                         "{context} upgrade preflight found no container manifest hash for service `{service_name}`"
                     )
-                })?
-                .parse::<Hash>()
-                .wrap_err_with(|| {
+                })?,
+            )
+            .wrap_err_with(|| {
                     format!(
                         "{context} upgrade preflight found an invalid container manifest hash for service `{service_name}`"
                     )
@@ -10366,7 +10363,6 @@ fn derive_service_mutation_precondition(
         }
     }
 }
-
 fn derive_app_infra_mutation_precondition(
     status: &json::Value,
     app_name: &str,
@@ -10410,17 +10406,14 @@ fn derive_app_infra_mutation_precondition(
                     "{context} upgrade refuses already-current app revision `{app_version}` before artifact publication"
                 ));
             }
-            let manifest_hash = app
-                .get("current_manifest_hash")
-                .and_then(json::Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
+            let manifest_hash = json::from_value::<Hash>(
+                app.get("current_manifest_hash").cloned().ok_or_else(|| {
                     eyre!(
                         "{context} upgrade preflight found no current manifest hash for app `{app_name}`"
                     )
-                })?
-                .parse::<Hash>()
-                .wrap_err_with(|| {
+                })?,
+            )
+            .wrap_err_with(|| {
                     format!(
                         "{context} upgrade preflight found an invalid manifest hash for app `{app_name}`"
                     )
@@ -10449,7 +10442,6 @@ fn derive_app_infra_mutation_precondition(
 fn status_tagged_enum_name<'a>(value: &'a json::Value, field: &str) -> Option<&'a str> {
     value.as_object()?.get(field)?.as_str()
 }
-
 fn preflight_service_upgrade_identity(
     status: &json::Value,
     service_manifest: &SoraServiceManifestV1,
@@ -23524,20 +23516,31 @@ mod tests {
             ]))
             .expect_err("publication must reject artifacts absent from the source workspace");
 
-        let dual_source =
+        let mut dual_source =
             build_split_app_live_service_bundle("dual_source", "dual-source.sora", "1.0.0")
                 .expect("build dual-ISA unpublished source");
+        let published_artifacts = BTreeMap::from([
+            (
+                SoraInrouGuestIsaV1::X8664,
+                sample_published_inrou_artifact(0xB1),
+            ),
+            (
+                SoraInrouGuestIsaV1::Aarch64,
+                sample_published_inrou_artifact(0xB2),
+            ),
+        ]);
+        let error = dual_source
+            .clone()
+            .into_admitted(published_artifacts.clone())
+            .expect_err("published guests alone cannot authorize an unplaced Inrou service");
+        assert!(
+            format!("{error:#}").contains("identity-bound operator-preseed placement targets"),
+            "{error:#}"
+        );
+        dual_source.service.placement_targets =
+            test_inrou_placement_targets(usize::from(dual_source.service.replicas.get()));
         let dual_admitted = dual_source
-            .into_admitted(BTreeMap::from([
-                (
-                    SoraInrouGuestIsaV1::X8664,
-                    sample_published_inrou_artifact(0xB1),
-                ),
-                (
-                    SoraInrouGuestIsaV1::Aarch64,
-                    sample_published_inrou_artifact(0xB2),
-                ),
-            ]))
+            .into_admitted(published_artifacts)
             .expect("publication must fill every source guest ISA");
         let images = &dual_admitted
             .container
@@ -24412,7 +24415,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             "apps": [{
                 "app_name": "portal_app",
                 "current_app_version": "1.0.0",
-                "current_manifest_hash": (manifest_hash.to_string()),
+                "current_manifest_hash": (manifest_hash),
                 "revision_count": 3
             }]
         });
@@ -24433,6 +24436,28 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 }
             )
         );
+        for invalid_hash in [
+            Value::from(manifest_hash.to_string()),
+            Value::from("hash:invalid"),
+            Value::Null,
+        ] {
+            let mut invalid = present.clone();
+            *invalid
+                .pointer_mut("/apps/0/current_manifest_hash")
+                .expect("app hash") = invalid_hash;
+            let error = derive_app_infra_mutation_precondition(
+                &invalid,
+                "portal_app",
+                "2.0.0",
+                MutationMode::Upgrade,
+                "app test",
+            )
+            .expect_err("only canonical Norito JSON hashes may bind app upgrades");
+            assert!(
+                error.to_string().contains("invalid manifest hash"),
+                "{error:#}"
+            );
+        }
     }
     #[test]
     fn service_mutation_preflight_binds_state_and_rejects_identity_drift() {
@@ -24456,8 +24481,8 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                     "active_rollout": null,
                     "latest_revision": {
                         "service_version": "artifact-1111111111111111111111111111111111111111111111111111111111111111",
-                        "service_manifest_hash": (current_service_manifest_hash.to_string()),
-                        "container_manifest_hash": (current_container_manifest_hash.to_string()),
+                        "service_manifest_hash": (current_service_manifest_hash),
+                        "container_manifest_hash": (current_container_manifest_hash),
                         "execution_plane": {"execution_plane": "HttpService"},
                         "runtime": {"runtime": "Inrou"},
                         "route_host": (route.host.clone()),
@@ -24470,7 +24495,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 }]
             }
         });
-        assert!(matches!(
+        assert_eq!(
             derive_service_mutation_precondition(
                 &status,
                 &service_name,
@@ -24479,8 +24504,45 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 "service test",
             )
             .expect("upgrade must bind the exact service revision"),
-            SoraServiceMutationPreconditionV1::ExactCurrentRevision(_)
-        ));
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version:
+                        "artifact-1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_owned(),
+                    service_manifest_hash: current_service_manifest_hash,
+                    container_manifest_hash: current_container_manifest_hash,
+                    process_generation: 7,
+                    config_generation: 3,
+                    secret_generation: 5,
+                }
+            )
+        );
+        for (field, hash) in [
+            ("service_manifest_hash", current_service_manifest_hash),
+            ("container_manifest_hash", current_container_manifest_hash),
+        ] {
+            for invalid_hash in [
+                Value::from(hash.to_string()),
+                Value::from("hash:invalid"),
+                Value::Null,
+            ] {
+                let mut invalid = status.clone();
+                *invalid
+                    .pointer_mut(&format!(
+                        "/control_plane/services/0/latest_revision/{field}"
+                    ))
+                    .expect("service revision hash") = invalid_hash;
+                let error = derive_service_mutation_precondition(
+                    &invalid,
+                    &service_name,
+                    &candidate_version,
+                    MutationMode::Upgrade,
+                    "service test",
+                )
+                .expect_err("only canonical Norito JSON hashes may bind service upgrades");
+                assert!(error.to_string().contains("invalid"), "{error:#}");
+            }
+        }
         preflight_service_upgrade_identity(
             &status,
             &bundle.service,
@@ -24510,7 +24572,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     fn taira_inrou_canary_validator_rejects_non_atomic_rollout() {
         let mut bundle = canonical_taira_inrou_bundle_fixture();
         bundle.service.rollout.canary_percent = 99;
-        assert_taira_canary_validation_error(&bundle, "use 0 or 100");
+        assert_taira_canary_validation_error(&bundle, "require canary_percent 0 or 100");
     }
     #[test]
     fn taira_inrou_canary_validator_accepts_published_v1_bundle() {
@@ -24596,7 +24658,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         bundle.service.lease_volumes[0].max_total_bytes =
             NonZeroU64::new(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1 - 1)
                 .expect("smaller root volume");
-        assert_taira_canary_validation_error(&bundle, "canonical 8 GiB root");
+        assert_taira_canary_validation_error(&bundle, "canonical root (");
 
         validate_taira_inrou_rootfs_source_bytes(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1)
             .expect("rootfs at the root-volume boundary");
@@ -24604,6 +24666,25 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             validate_taira_inrou_rootfs_source_bytes(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1 + 1)
                 .is_err()
         );
+    }
+    #[test]
+    fn taira_inrou_canary_storage_accounts_for_each_writable_volume() {
+        let bundle = canonical_taira_inrou_bundle_fixture();
+        let ephemeral = bundle.container.resources.ephemeral_storage_bytes.get();
+        let root = bundle.service.lease_volumes[0].max_total_bytes.get();
+        let shared = bundle.service.lease_volumes[1].max_total_bytes.get();
+        assert_ne!(ephemeral, shared);
+        assert_eq!(root + ephemeral, TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1);
+        assert_eq!(root + ephemeral + shared, defaults::taira::INROU_MAX_STORAGE_BYTES);
+        validate_taira_inrou_canary_storage(&bundle.container, &bundle.service)
+            .expect("canonical host and shared writable budgets are distinct");
+
+        let mut container = bundle.container;
+        container.resources.ephemeral_storage_bytes =
+            NonZeroU64::new(ephemeral + 1).expect("positive altered temporary budget");
+        let error = validate_taira_inrou_canary_storage(&container, &bundle.service)
+            .expect_err("additional temporary storage exceeds the exact host budget");
+        assert!(error.to_string().contains("host-local bytes"), "{error}");
     }
     fn canonical_taira_stage_receipt_fixture() -> TairaInrouStageReceiptV1 {
         TairaInrouStageReceiptV1 {
@@ -24745,6 +24826,16 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         fs::create_dir(config_dir).expect("create validator fixture directory");
         fs::set_permissions(config_dir, fs::Permissions::from_mode(0o700))
             .expect("make validator fixture directory owner-private");
+        let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"Taira validator config binding fixture genesis",
+            )),
+        );
+        fs::write(
+            config_dir.join("genesis.expected_hash"),
+            format!("{network_id}\n"),
+        )
+        .expect("write the generated profiles' canonical genesis trust root");
         let mut placements = BTreeSet::new();
         for (peer_index, source) in TAIRA_VALIDATOR_CONFIG_FIXTURES.iter().enumerate() {
             let mut table = toml::from_str(source).expect("parse generated validator fixture");
@@ -25170,17 +25261,28 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         );
     }
     #[test]
-    fn taira_stage_guest_budget_accepts_real_multi_gibibyte_layout() {
-        let sizes = [27_236_288_u64, 3_085_959_168, 13_923_072];
+    fn taira_stage_guest_budget_accepts_normalized_layout_and_rejects_oversized_source() {
+        let sizes = [
+            27_236_288_u64,
+            TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1,
+            13_923_072,
+        ];
         let total = sizes.into_iter().sum::<u64>();
-        assert_eq!(total, 3_127_118_528);
         assert_eq!(
-            taira_stage_guest_total_bytes(sizes).expect("real Taira guest layout"),
+            taira_stage_guest_total_bytes(sizes).expect("normalized Taira guest layout"),
             total
         );
-        assert!(total > 3_000_000_000);
         assert!(total > 512 * 1024 * 1024);
+        let error = taira_stage_guest_total_bytes([27_236_288_u64, 3_085_959_168, 13_923_072])
+            .expect_err("unnormalized upstream image exceeds the canonical Taira profile");
+        assert!(error.to_string().contains("maximum is"), "{error}");
+        assert_eq!(
+            taira_stage_guest_total_bytes([TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1])
+                .expect("exact guest byte budget"),
+            TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1,
+        );
         assert!(taira_stage_guest_total_bytes([TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1 + 1]).is_err());
+        assert!(taira_stage_guest_total_bytes([u64::MAX, 1]).is_err());
     }
     #[test]
     fn taira_stage_regular_file_read_enforces_exact_byte_limit() {
@@ -25450,7 +25552,26 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         .expect("offline service preseed must produce the exact qualification");
         receipt_out
     }
+    fn sync_test_app_manifests(root: &Path) {
+        SyncManifestsArgs {
+            app_manifest: Some(root.join("app_manifest.json")),
+            container: root.join("container_manifest.json"),
+            service: root.join("service_manifest.json"),
+            bundle_file: None,
+        }
+        .run()
+        .expect("synchronize fixture manifests with exact app bundle bytes");
+    }
     fn qualify_test_inrou_app(root: &Path, key_pair: &KeyPair, label: &str) -> PathBuf {
+        // Fixture scripts emit repeatable bytes without invoking a separately built CLI.
+        // Bind those bytes here; preseed's next build must match these exact hashes.
+        AppBuildAndSyncArgs {
+            manifest: root.join("app_manifest.json"),
+            dry_run: false,
+        }
+        .run()
+        .expect("build exact app fixture artifacts");
+        sync_test_app_manifests(root);
         let receipt_out = test_inrou_preseed_receipt_output(root, label);
         let (inrou_preseed_helper, inrou_preseed_helper_sha256) = test_inrou_preseed_helper(root);
         InrouAppPreseedArgs {
@@ -25603,7 +25724,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
 
     #[test]
-    fn canonical_template_outputs_match_pre_extraction_manifest() {
+    fn canonical_template_outputs_match_current_v1_manifest() {
         let outputs = [
             site_package_json("travel-ops"),
             webapp_root_package_json("travel-ops"),
@@ -28466,6 +28587,14 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     impl MockHttpServer {
         fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
+            Self::start_with_mutation_transition(routes, BTreeMap::new(), None)
+        }
+
+        fn start_with_mutation_transition(
+            routes: BTreeMap<String, MockHttpResponse>,
+            initial_routes: BTreeMap<String, MockHttpResponse>,
+            mutation_route: Option<String>,
+        ) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
             listener
                 .set_nonblocking(true)
@@ -28481,6 +28610,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             let captured_requests = Arc::clone(&requests);
             let handle = thread::spawn(move || {
                 let mut registered_pin_manifests = BTreeMap::<String, Vec<u8>>::new();
+                let mut mutation_requested = false;
                 while !stop_flag.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
@@ -28490,6 +28620,8 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                                 continue;
                             }
                             let path = request.path.clone();
+                            mutation_requested |= request.method == "POST"
+                                && mutation_route.as_deref() == Some(path.as_str());
                             let fee_quote_response = mock_fee_quote_response(&request);
                             let pin_registration = mock_sorafs_pin_registration(&request);
                             let is_pin_registration = request.method == "POST"
@@ -28498,7 +28630,12 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                                 .lock()
                                 .expect("lock captured requests")
                                 .push(request);
-                            let configured_response = routes.get(&path).cloned();
+                            let configured_response = if mutation_requested {
+                                routes.get(&path)
+                            } else {
+                                initial_routes.get(&path).or_else(|| routes.get(&path))
+                            }
+                            .cloned();
                             let pin_registration_response = configured_response
                                 .as_ref()
                                 .filter(|_| is_pin_registration)
@@ -29964,14 +30101,139 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         })
         .expect("encode exact Soracloud submission receipt")
     }
+    fn mock_prior_service_status(workspace: &Path, final_status: &Value) -> Value {
+        let mut status = final_status.clone();
+        let services = status
+            .pointer_mut("/control_plane/services")
+            .and_then(Value::as_array_mut)
+            .expect("canonical service status list");
+        for service_status in services {
+            let service_name = service_status
+                .get("service_name")
+                .and_then(Value::as_str)
+                .expect("service name");
+            let (container_path, service_path) = if workspace.join("app_manifest.json").exists() {
+                let app: SoracloudAppManifestV1 =
+                    load_json(&workspace.join("app_manifest.json")).expect("app fixture");
+                let service = app
+                    .services
+                    .iter()
+                    .find(|service| service.service_name == service_name)
+                    .expect("app service fixture");
+                (
+                    resolve_manifest_path(workspace, &service.container_manifest),
+                    resolve_manifest_path(workspace, &service.service_manifest),
+                )
+            } else {
+                (
+                    workspace.join("container_manifest.json"),
+                    workspace.join("service_manifest.json"),
+                )
+            };
+            let container: UnpublishedContainerManifestV1 =
+                load_json(&container_path).expect("container fixture");
+            let mut service: SoraServiceManifestV1 =
+                load_json(&service_path).expect("service fixture");
+            service.service_version = "0.9.0".to_owned();
+            let route = service.route.as_ref();
+            let revision = ControlPlaneServiceRevision {
+                sequence: 1,
+                action: SoracloudAction::Deploy,
+                service_version: service.service_version.clone(),
+                service_manifest_hash: Hash::new(Encode::encode(&service)),
+                container_manifest_hash: container.workspace_hash().expect("container hash"),
+                replicas: service.replicas.get(),
+                execution_plane: service.execution_plane,
+                route_host: route.map(|route| route.host.clone()),
+                route_path_prefix: route.map(|route| route.path_prefix.clone()),
+                route_service_port: route.map(|route| route.service_port.get()),
+                route_visibility: route.map(|route| format!("{:?}", route.visibility)),
+                route_tls_mode: route.map(|route| format!("{:?}", route.tls_mode)),
+                base_url: None,
+                healthcheck_url: None,
+                public_discovery_content_cid: None,
+                public_discovery_url: None,
+                public_discovery_cid_host_url: None,
+                state_binding_count: u32::try_from(service.state_bindings.len())
+                    .expect("binding count"),
+                state_bindings: service.state_bindings.clone(),
+                lease_volumes: service.lease_volumes.clone(),
+                allow_model_inference: container.capabilities.allow_model_inference,
+                allow_model_training: container.capabilities.allow_model_training,
+                runtime: container.runtime,
+                allow_state_writes: container.capabilities.allow_state_writes,
+                network: container.capabilities.network,
+                cpu_millis: container.resources.cpu_millis.get(),
+                memory_bytes: container.resources.memory_bytes.get(),
+                ephemeral_storage_bytes: container.resources.ephemeral_storage_bytes.get(),
+                max_open_files_per_process: container.resources.max_open_files_per_process.get(),
+                max_tasks: container.resources.max_tasks.get(),
+                start_grace_secs: container.lifecycle.start_grace_secs.get(),
+                stop_grace_secs: container.lifecycle.stop_grace_secs.get(),
+                healthcheck_path: container.lifecycle.healthcheck_path,
+                required_config_names: container.required_config_names,
+                required_secret_names: container.required_secret_names,
+                config_exports: container.config_exports,
+                sandbox_profile_hash: Hash::new(b"prior fixture sandbox"),
+                process_generation: 1,
+                process_started_sequence: 1,
+                signed_by: soracloud_fixture_key_pair(0x20).public_key().to_string(),
+            };
+            let object = service_status
+                .as_object_mut()
+                .expect("service status object");
+            object.insert(
+                "current_version".to_owned(),
+                json::to_value(&service.service_version).expect("version"),
+            );
+            object.insert(
+                "latest_revision".to_owned(),
+                json::to_value(&revision).expect("revision"),
+            );
+        }
+        decode_network_control_plane_snapshot(&status).expect("canonical prior service status");
+        status
+    }
     fn mock_bundle_mutation_server(
+        workspace: &Path,
         mutation_route: &str,
         draft_response: &norito::json::Value,
         status_payload: &norito::json::Value,
         pin_encode_error: &str,
         draft_encode_error: &str,
     ) -> MockHttpServer {
-        MockHttpServer::start(BTreeMap::from([
+        let upgrading = mutation_route.ends_with("/upgrade");
+        let initial_status = if upgrading {
+            mock_prior_service_status(workspace, status_payload)
+        } else {
+            mock_control_plane_status_payload(&[])
+        };
+        let mut initial_apps = app_infra_status_fixture_for_name("travel_ops");
+        if upgrading {
+            let app = &mut initial_apps.apps[0];
+            app.manifest.app_version = "0.9.0".to_owned();
+            app.current_app_version = app.manifest.app_version.clone();
+            app.current_manifest_hash = app.manifest.manifest_hash();
+            initial_apps.recent_audit_events[0].to_version = app.current_app_version.clone();
+            initial_apps.recent_audit_events[0].app_manifest_hash = app.current_manifest_hash;
+        } else {
+            initial_apps.app_count = 0;
+            initial_apps.audit_event_count = 0;
+            initial_apps.apps.clear();
+            initial_apps.recent_audit_events.clear();
+        }
+        initial_apps.validate().expect("valid initial app status");
+        let initial_routes = BTreeMap::from([
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse::json(json::to_vec(&initial_status).expect("initial status")),
+            ),
+            (
+                "/v1/soracloud/apps/status".to_owned(),
+                MockHttpResponse::json(json::to_vec(&initial_apps).expect("initial app status")),
+            ),
+        ]);
+        let routes = BTreeMap::from([
             (
                 "/v1/sorafs/pin/register".to_owned(),
                 MockHttpResponse::json(
@@ -30009,9 +30271,13 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                     body: b"<!doctype html><title>ready</title>".to_vec(),
                 },
             ),
-        ]))
+        ]);
+        MockHttpServer::start_with_mutation_transition(
+            routes,
+            initial_routes,
+            Some(mutation_route.to_owned()),
+        )
     }
-
     fn point_split_app_live_route_at_mock_server(dir: &Path, base_url: &str) {
         let parsed = reqwest::Url::parse(base_url).expect("parse mock server URL");
         let hostname = parsed.host_str().expect("mock server hostname").to_owned();
@@ -30189,6 +30455,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 "schema_version": 1,
                 "service_count": 0,
                 "audit_event_count": 0,
+                "active_inrou_hosts": [],
                 "services": [],
                 "recent_audit_events": []
             }
@@ -30330,6 +30597,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 "schema_version": 1,
                 "service_count": 1,
                 "audit_event_count": 1,
+                "active_inrou_hosts": [],
                 "services": [(service_value)],
                 "recent_audit_events": [(audit_value)]
             }
@@ -30444,6 +30712,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                     "schema_version": 1,
                     "service_count": 0,
                     "audit_event_count": 1,
+                    "active_inrou_hosts": [],
                     "services": [],
                     "recent_audit_events": [event]
                 }
@@ -30501,6 +30770,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 "schema_version": 1,
                 "service_count": 1,
                 "audit_event_count": 0,
+                "active_inrou_hosts": [],
                 "services": [
                     {
                         "service_name": "echo_console"
@@ -30559,6 +30829,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 "schema_version": 1,
                 "service_count": 0,
                 "audit_event_count": 0,
+                "active_inrou_hosts": [],
                 "services": [],
                 "recent_audit_events": []
             }
@@ -30567,6 +30838,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             "schema_version",
             "service_count",
             "audit_event_count",
+            "active_inrou_hosts",
             "services",
             "recent_audit_events",
         ] {
@@ -31758,13 +32030,15 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     #[test]
     fn signed_inrou_bundle_request_uses_canonical_guest_images_signature() {
-        let bundle = build_split_app_live_service_bundle(
+        let mut source = build_split_app_live_service_bundle(
             "signed_inrou_bundle",
             "signed-inrou-bundle.sora",
             "1.0.0",
         )
-        .expect("build unpublished dual-ISA Inrou bundle")
-        .into_admitted(BTreeMap::from([
+        .expect("build unpublished dual-ISA Inrou bundle");
+        source.service.placement_targets =
+            test_inrou_placement_targets(usize::from(source.service.replicas.get()));
+        let bundle = source.into_admitted(BTreeMap::from([
             (
                 SoraInrouGuestIsaV1::X8664,
                 sample_published_inrou_artifact(0x31),
@@ -33963,6 +34237,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let deploy_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/deploy",
             &deploy_response,
             &status_payload,
@@ -34022,6 +34297,12 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             .into_iter()
             .find(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
             .expect("capture admitted deploy request");
+        let request: SignedBundleRequest =
+            json::from_slice(&deploy_request.body).expect("decode exact signed deployment");
+        assert_eq!(
+            request.precondition,
+            SoraServiceMutationPreconditionV1::ServiceAbsent
+        );
         let body: Value = json::from_slice(&deploy_request.body).expect("decode deploy request");
         for guest_isa in ["x86_64", "aarch64"] {
             let artifact = body
@@ -34043,13 +34324,16 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     fn deploy_guest_publication_failure_never_signs_or_submits_a_service_mutation() {
         let (dir, _) = service_fixture("deploy_missing_guest_member", InitTemplate::HttpService);
         let bundle_file = prepare_http_service_bundle(&dir, "deploy-missing-guest");
+        let key_pair = soracloud_fixture_key_pair(0x7A);
+        let inrou_preseed_receipt =
+            qualify_test_inrou_service(&dir, &bundle_file, &key_pair, "deploy-missing-guest");
         fs::remove_file(dir.join("http-service/inrou/aarch64/rootfs.ext4"))
             .expect("remove one required guest-image member");
-        let key_pair = soracloud_fixture_key_pair(0x7A);
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/deploy",
             &draft_response,
             &status_payload,
@@ -34064,7 +34348,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
-            inrou_preseed_receipt: None,
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -34102,6 +34386,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/deploy",
             &draft_response,
             &status_payload,
@@ -34136,13 +34421,16 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     fn deploy_empty_inrou_guest_image_fails_before_any_upload() {
         let (dir, _) = service_fixture("deploy_empty_guest_image", InitTemplate::HttpService);
         let bundle_file = prepare_http_service_bundle(&dir, "deploy-empty-guest-image");
+        let key_pair = soracloud_fixture_key_pair(0x7C);
+        let inrou_preseed_receipt =
+            qualify_test_inrou_service(&dir, &bundle_file, &key_pair, "deploy-empty-guest-image");
         fs::write(dir.join("http-service/inrou/aarch64/rootfs.ext4"), b"")
             .expect("truncate one required guest-image member");
-        let key_pair = soracloud_fixture_key_pair(0x7C);
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/deploy",
             &draft_response,
             &status_payload,
@@ -34157,7 +34445,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
-            inrou_preseed_receipt: None,
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -34182,6 +34470,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let upgrade_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/upgrade",
             &upgrade_response,
             &status_payload,
@@ -34236,6 +34525,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
+        let upgrade_request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/upgrade")
+            .expect("capture exact upgrade request");
+        let request: SignedBundleRequest =
+            json::from_slice(&upgrade_request.body).expect("decode exact signed upgrade");
+        assert!(matches!(
+            request.precondition,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(prior)
+                if prior.service_version == "0.9.0" && prior.process_generation == 1
+        ));
         assert_notes_contain(&output.notes, "live Torii status");
     }
     #[test]
@@ -35698,6 +35999,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
@@ -35811,6 +36113,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
@@ -36880,11 +37183,13 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             b"deploy-single-api-bundle",
         )
         .expect("write api bundle");
+        sync_test_app_manifests(&dir);
         let key_pair = soracloud_fixture_key_pair(0x43);
         let authority = AccountId::new(key_pair.public_key().clone());
         let status_payload = mock_control_plane_status_payload(&["travel-ops_api"]);
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
@@ -37046,24 +37351,19 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             b"app-infra-deploy-bundle",
         )
         .expect("write api bundle");
+        sync_test_app_manifests(&dir);
         let key_pair = soracloud_fixture_key_pair(0x45);
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse::json(
-                    json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode public discovery pin register response"),
-                ),
-            ),
-            (
-                "/v1/soracloud/apps/deploy".to_owned(),
-                MockHttpResponse::json(
-                    json::to_vec(&draft_response).expect("encode app deploy draft response"),
-                ),
-            ),
-        ]));
+        let status_payload = mock_control_plane_status_payload(&["travel-ops_api"]);
+        let server = mock_bundle_mutation_server(
+            &dir,
+            "/v1/soracloud/apps/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin registration response",
+            "encode app deploy draft response",
+        );
         install_mock_submission_config(&authority, &key_pair);
         let output = AppReleaseMutationArgs {
             manifest: manifest_path,
@@ -37133,12 +37433,15 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             b"deploy-vault-bundle",
         )
         .expect("write vault bundle");
+        fs::write(dir.join("build-and-sync.sh"), "#!/bin/sh\nexit 0\n")
+            .expect("retain prebuilt exact app fixture artifacts");
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let key_pair = soracloud_fixture_key_pair(0x46);
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
@@ -37305,12 +37608,15 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             b"upgrade-vault-bundle",
         )
         .expect("write vault bundle");
+        fs::write(dir.join("build-and-sync.sh"), "#!/bin/sh\nexit 0\n")
+            .expect("retain prebuilt exact app fixture artifacts");
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let key_pair = soracloud_fixture_key_pair(0x47);
         let authority = AccountId::new(key_pair.public_key().clone());
         let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
+            &dir,
             "/v1/soracloud/apps/upgrade",
             &draft_response,
             &status_payload,
@@ -37375,6 +37681,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 request.method == "POST" && request.path == "/v1/soracloud/apps/upgrade"
             })
             .expect("canonical app upgrade request");
+        let request: SignedAppInfraRequest =
+            json::from_slice(&upgrade_request.body).expect("decode exact signed app upgrade");
+        assert!(matches!(
+            request.precondition,
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(prior)
+                if prior.app_version == "0.9.0" && prior.revision_count == 1
+        ));
+        assert!(request.upgrade_services.iter().all(|service| matches!(
+            &service.precondition,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(prior)
+                if prior.service_version == "0.9.0" && prior.process_generation == 1
+        )));
         let upgrade_body: norito::json::Value =
             json::from_slice(&upgrade_request.body).expect("decode upgrade request");
         let upgrade_services = upgrade_body
@@ -37664,7 +37982,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         }
         assert_eq!(
             hex::encode(digest.finalize()),
-            "6d187b88d5f46f58474ad9237ab5e4997047f90dd5d6302dbf718bbea9ab8df1"
+            "3f7bc8344d679c13a5138ed6149c9f86cf2ac486b1c2f16cb160900f82ae9774"
         );
         assert_eq!(
             webapp_api_server_mjs().strip_prefix(soracloud_auth_core_mjs()),

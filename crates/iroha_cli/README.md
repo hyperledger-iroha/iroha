@@ -30,6 +30,12 @@ the current installation instructions.
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
+Validator summaries retain complete activation heights and tenure bounds.
+Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
+(`MAX_JSON_VALUE_NESTING_DEPTH`, currently 33 including the root value).
+Local contract durable-state fixtures require exact NFC path spelling and
+reject duplicate decoded JSON keys.
+
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
 coordinator. Its low-level `write-canary` child accepts exactly one ordered

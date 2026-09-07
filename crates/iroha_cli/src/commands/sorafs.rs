@@ -17972,7 +17972,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::StrictPq) => "anon-strict-pq" };
     }
     fn load_guard_directory_json_rejected() {
-        let mut file = NamedTempFile::new().expect("temp file");
+        let (_directory, mut file) = guard_directory_snapshot_file();
         let id_primary = "01".repeat(32);
         let id_secondary = "02".repeat(32);
         let pq_hex = "aa".repeat(ML_KEM_768_PUBLIC_LEN);
@@ -18007,7 +18007,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
     }
     fn load_guard_directory_decodes_srcv2_bundle() {
         let bytes = sample_guard_directory_snapshot_bytes();
-        let mut file = NamedTempFile::new().expect("temp file");
+        let (_directory, mut file) = guard_directory_snapshot_file();
         file.write_all(&bytes).expect("write snapshot");
         let digest = hex::encode(compute_snapshot_digest(&bytes));
         let directory =

@@ -488,6 +488,28 @@ fn sample_inventory_fixture() -> InventoryV1 {
     executor_model::tests::sample_inventory()
 }
 
+/// Create a disposable fixture with the same ancestor custody as operator inputs.
+#[cfg(test)]
+fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
+    // A private leaf below a shared temporary directory does not satisfy the
+    // public-reset custody policy. Keep fixtures beneath the owned workspace.
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    fs::create_dir_all(&target).expect("workspace target directory");
+    let target = target.canonicalize().expect("canonical workspace target");
+    let directory = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(target)
+        .expect("private workspace fixture");
+    #[cfg(unix)]
+    {
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private workspace fixture permissions");
+        validate_owner_private_dir(directory.path(), "test fixture")
+            .expect("fixture ancestors must meet operator custody policy");
+    }
+    directory
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct InventoryV1 {
@@ -5233,28 +5255,34 @@ mod executor_model {
         }
 
         fn private_tempdir() -> tempfile::TempDir {
-            let directory = tempfile::tempdir().expect("tempdir");
-            #[cfg(unix)]
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-                .expect("private tempdir mode");
-            directory
+            private_custody_test_dir("taira-reset-journal-")
         }
 
         #[cfg(unix)]
-        fn private_custody_tempdir() -> tempfile::TempDir {
-            let current = std::env::current_dir().expect("current directory");
-            let directory = tempfile::Builder::new()
-                .prefix(".taira-artifact-test-")
-                .tempdir_in(current)
-                .expect("workspace tempdir");
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-                .expect("private workspace tempdir mode");
-            directory
+        #[test]
+        fn private_fixture_rejects_writable_ancestor_custody() {
+            let directory = private_tempdir();
+            let ancestor = directory.path().join("replaceable");
+            fs::create_dir(&ancestor).expect("fixture ancestor");
+            let private = ancestor.join("private");
+            fs::create_dir(&private).expect("private fixture leaf");
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))
+                .expect("safe ancestor mode");
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o700))
+                .expect("private leaf mode");
+            validate_owner_private_dir(&private, "fixture").expect("safe fixture custody");
+            for mode in [0o770, 0o777, 0o1777] {
+                fs::set_permissions(&ancestor, fs::Permissions::from_mode(mode))
+                    .expect("replaceable ancestor mode");
+                let error = validate_owner_private_dir(&private, "fixture")
+                    .expect_err("a private leaf cannot repair writable ancestor custody");
+                assert!(error.to_string().contains("unsafe custody"), "{error:#}");
+            }
         }
 
         #[cfg(unix)]
         fn materialize_artifact_sources(inventory: &mut InventoryV1) -> tempfile::TempDir {
-            let directory = private_custody_tempdir();
+            let directory = private_custody_test_dir("taira-reset-artifacts-");
             let root = directory.path().canonicalize().expect("artifact root");
             let mut materialized = BTreeSet::new();
             let mut materialize = |slug: &str, artifact: &mut ArtifactV1| {
@@ -5913,9 +5941,7 @@ mod executor_model {
 
         #[test]
         fn completed_receipt_rejects_replay() {
-            let directory = tempfile::tempdir().expect("tempdir");
-            #[cfg(unix)]
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect("mode");
+            let directory = private_tempdir();
             let admitted = admitted(sample_inventory());
             let completed = directory.path().join("completed");
             fs::create_dir(&completed).expect("completed");
