@@ -4,6 +4,8 @@ static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Copy)]
 struct ExactLen(u8);
 impl NoritoSerialize for ExactLen {
+}
+impl SerializePayload for ExactLen {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[self.0])?;
         Ok(())
@@ -29,6 +31,8 @@ fn serialize_owned_counts_real_payload_instead_of_trusting_exact_hint() {
 #[derive(Clone, Copy)]
 struct BadExactLen;
 impl NoritoSerialize for BadExactLen {
+}
+impl SerializePayload for BadExactLen {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[0xAA, 0xBB])?;
         Ok(())
@@ -52,6 +56,8 @@ fn serialize_owned_ignores_an_incorrect_exact_length_hint() {
 #[derive(Clone, Copy)]
 struct UnknownLen(u8);
 impl NoritoSerialize for UnknownLen {
+}
+impl SerializePayload for UnknownLen {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[self.0, self.0.wrapping_add(1)])?;
         Ok(())
@@ -73,6 +79,8 @@ fn serialize_owned_rejects_a_changed_second_pass() {
     use std::cell::Cell;
     struct Growing(Cell<usize>);
     impl NoritoSerialize for Growing {
+}
+impl SerializePayload for Growing {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
             self.0.set(pass + 1);

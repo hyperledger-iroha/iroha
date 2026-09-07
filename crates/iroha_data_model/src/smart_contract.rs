@@ -66,6 +66,8 @@ pub mod payloads {
     /// Context for smart contract entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::SmartContractContext")]
     pub struct SmartContractContext {
         /// Account that submitted the transaction containing the smart contract
         pub authority: AccountId,
@@ -75,6 +77,8 @@ pub mod payloads {
     /// Context for trigger entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::TriggerContext")]
     pub struct TriggerContext {
         /// Id of this trigger
         pub id: TriggerId,
@@ -88,6 +92,8 @@ pub mod payloads {
     /// Context for migrate entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::ExecutorContext")]
     pub struct ExecutorContext {
         /// Account that is executing the operation
         pub authority: AccountId,
@@ -95,7 +101,8 @@ pub mod payloads {
         pub curr_block: BlockHeader,
     }
     /// Generic payload for `validate_*()` entrypoints of executor.
-    #[derive(Debug, Clone, Encode, Decode)]
+    #[derive(Debug, Clone, Encode, Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::Validate")]
     pub struct Validate<T> {
         /// Context of the executor
         pub context: ExecutorContext,
@@ -613,15 +620,16 @@ impl AsRef<str> for ContractAlias {
         self.0.as_ref()
     }
 }
-impl norito::core::NoritoSerialize for ContractAlias {
+impl norito::core::NoritoSerialize for ContractAlias {}
+impl norito::core::SerializePayload for ContractAlias {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
@@ -793,15 +801,16 @@ impl AsRef<str> for ContractAddress {
         &self.0
     }
 }
-impl norito::core::NoritoSerialize for ContractAddress {
+impl norito::core::NoritoSerialize for ContractAddress {}
+impl norito::core::SerializePayload for ContractAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {

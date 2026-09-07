@@ -7325,7 +7325,7 @@ impl V2LaneWorkAdapter {
                     self.outbound_lane_message_predecessor_is_ready(message)?
                 }
                 V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
-                    self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)?
+                    self.durable_lane_certificate_source_is_ready(&certificate.proposal)?
                 }
                 _ => true,
             };
@@ -10279,13 +10279,39 @@ impl V2LaneWorkAdapter {
             V2LaneIngressOutcome::Duplicate
         })
     }
+    /// Keep exact Kura-backed certificate responses available after economic
+    /// application advances beyond the slot's predecessor. This is transport
+    /// authority only: fresh votes still require the strict predecessor and an
+    /// open application slot. The fallback must independently authenticate the
+    /// exact applied proposal and its finalized public autonomous carrier.
+    fn durable_lane_certificate_source_is_ready(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<bool, V2LaneWorkError> {
+        if self.proposal_predecessor_is_ready_for_progress(proposal)? {
+            return Ok(true);
+        }
+        if !self.consensus_storage_read(
+            self.state
+                .certified_autonomous_lane_block_is_globally_applied(proposal),
+        )? {
+            return Ok(false);
+        }
+        Ok(self
+            .canonical_finalized_autonomous_payload_for_proposal(proposal)
+            .map_err(|error| {
+                self.output_guard.close_admission_for_restart();
+                V2LaneWorkError::Persistence(error)
+            })?
+            .is_some())
+    }
     fn reconstruct_durable_lane_certificate(
         &self,
         proposal: &LaneBlockProposalV1,
         sender: &PeerId,
     ) -> Result<Option<LaneBlockCertificateV1>, ()> {
         if !self
-            .proposal_predecessor_is_ready_for_progress(proposal)
+            .durable_lane_certificate_source_is_ready(proposal)
             .map_err(|_| ())?
         {
             return Ok(None);
@@ -14502,7 +14528,7 @@ impl V2LaneWorkAdapter {
                 self.outbound_lane_message_predecessor_is_ready(message)
             }
             V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
-                self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)
+                self.durable_lane_certificate_source_is_ready(&certificate.proposal)
             }
             _ => Ok(true),
         };
@@ -14678,7 +14704,7 @@ impl V2LaneWorkAdapter {
             let proposal = &certificate.proposal;
             let canonical = proposal.descriptor.proposal_height < self.context.height
                 || self.proposal_is_bound_to_decided_carrier(proposal)?;
-            if canonical && self.proposal_predecessor_is_ready_for_progress(proposal)? {
+            if canonical && self.durable_lane_certificate_source_is_ready(proposal)? {
                 allowed_durable_certificates.insert(lane_work_effect_key(effect));
             }
         }

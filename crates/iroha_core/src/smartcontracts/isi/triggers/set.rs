@@ -97,11 +97,11 @@ pub(crate) fn data_trigger_action_matches(
 }
 struct BorrowedEnumVariant<'a, T> {
     discriminant: u32,
-    value: &'a dyn norito::core::NoritoSerialize,
+    value: &'a dyn norito::core::SerializePayload,
     marker: core::marker::PhantomData<T>,
 }
 impl<'a, T> BorrowedEnumVariant<'a, T> {
-    fn new(discriminant: u32, value: &'a dyn norito::core::NoritoSerialize) -> Self {
+    fn new(discriminant: u32, value: &'a dyn norito::core::SerializePayload) -> Self {
         Self {
             discriminant,
             value,
@@ -115,11 +115,15 @@ impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
     fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
+}
+impl<T: norito::core::NoritoSerialize> norito::core::SerializePayload
+    for BorrowedEnumVariant<'_, T>
+{
     fn serialize(
         &self,
         writer: &mut norito::core::Encoder<'_>,
     ) -> core::result::Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.discriminant, writer)?;
+        norito::core::SerializePayload::serialize(&self.discriminant, writer)?;
         norito::core::write_len_prefixed(writer, self.value)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
@@ -1401,7 +1405,7 @@ pub trait SetReadOnly {
     where
         F: norito::core::NoritoSerialize,
     {
-        let (executable_discriminant, executable): (u32, &dyn norito::core::NoritoSerialize) =
+        let (executable_discriminant, executable): (u32, &dyn norito::core::SerializePayload) =
             match &action.executable {
                 ExecutableRef::Instructions(instructions) => (0, instructions),
                 ExecutableRef::ContractCall(invocation) => (1, invocation),

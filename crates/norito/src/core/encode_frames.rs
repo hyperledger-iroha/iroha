@@ -155,6 +155,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::SerializePayload;
     use std::cell::Cell;
 
     use super::*;
@@ -166,7 +167,8 @@ mod tests {
 
     struct Leaf<'a>(&'a Cell<usize>);
 
-    impl NoritoSerialize for Leaf<'_> {
+    impl NoritoSerialize for Leaf<'_> {}
+    impl SerializePayload for Leaf<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.0.set(self.0.get() + 1);
             writer.write_all(&[0xab])?;
@@ -180,7 +182,8 @@ mod tests {
 
     struct Framed<T>(T);
 
-    impl<T: NoritoSerialize> NoritoSerialize for Framed<T> {
+    impl<T: NoritoSerialize> NoritoSerialize for Framed<T> {}
+    impl<T: NoritoSerialize> SerializePayload for Framed<T> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             write_frame_with_prefix(&self.0, writer, |writer, length| {
                 writer.write_all(
@@ -278,7 +281,8 @@ mod tests {
         flag_drift: bool,
     }
 
-    impl NoritoSerialize for Changes {
+    impl NoritoSerialize for Changes {}
+    impl SerializePayload for Changes {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let first = self.visits.replace(self.visits.get() + 1) == 0;
             if self.flag_drift && first {
@@ -338,7 +342,8 @@ mod tests {
     #[test]
     fn prefixed_frame_propagates_measurement_and_prefix_errors_without_replay() {
         struct Fails;
-        impl NoritoSerialize for Fails {
+        impl NoritoSerialize for Fails {}
+        impl SerializePayload for Fails {
             fn serialize(&self, _writer: &mut Encoder<'_>) -> Result<(), Error> {
                 Err(Error::NonCanonicalEncoding)
             }

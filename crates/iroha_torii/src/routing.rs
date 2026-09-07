@@ -31139,7 +31139,7 @@ mod multisig_native_norito_dto_tests {
         IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
     use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
-    use norito::NoritoSerialize;
+    use norito::{NoritoSerialize, SerializePayload};
     fn bare_payload_with_flags<T: NoritoSerialize>(
         value: &T,
         flags: u8,

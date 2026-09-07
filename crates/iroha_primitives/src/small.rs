@@ -8,7 +8,7 @@ use crate::conststr::ConstString;
 use core::fmt;
 use iroha_schema::{IntoSchema, TypeId};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, core as ncore,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
 pub use small_string::SmallStr;
@@ -77,9 +77,10 @@ mod small_string {
             Ok(Self::from_string(value))
         }
     }
-    impl NoritoSerialize for SmallStr {
+    impl NoritoSerialize for SmallStr {}
+    impl SerializePayload for SmallStr {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            <&str as NoritoSerialize>::serialize(&self.as_str(), writer)
+            <&str as SerializePayload>::serialize(&self.as_str(), writer)
         }
     }
     impl<'a> NoritoDeserialize<'a> for SmallStr {
@@ -113,7 +114,7 @@ mod small_string {
 mod tests {
     use super::*;
     use norito::{
-        NoritoDeserialize, NoritoSerialize,
+        NoritoDeserialize, NoritoSerialize, SerializePayload,
         codec::{Decode, Encode},
         core as ncore, decode_from_bytes, json, to_bytes,
     };
@@ -551,7 +552,8 @@ mod tests {
     #[test]
     fn nested_smallvec_counts_once_and_retains_fixed_element_prefixes() {
         struct Leaf<'a>(&'a std::cell::Cell<usize>);
-        impl NoritoSerialize for Leaf<'_> {
+        impl NoritoSerialize for Leaf<'_> {}
+        impl SerializePayload for Leaf<'_> {
             fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
                 self.0.set(self.0.get() + 1);
                 writer.write_all(&[0xAB])?;
@@ -680,7 +682,8 @@ mod tests {
     fn smallvec_zero_sized_round_trip() {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         struct Zst;
-        impl NoritoSerialize for Zst {
+        impl NoritoSerialize for Zst {}
+        impl SerializePayload for Zst {
             fn serialize(
                 &self,
                 _writer: &mut norito::core::Encoder<'_>,
@@ -914,9 +917,10 @@ mod small_vector {
             )
         }
     }
-    impl<A: Array> NoritoSerialize for SmallVec<A>
+    impl<A: Array> NoritoSerialize for SmallVec<A> where A::Item: NoritoSerialize {}
+    impl<A: Array> SerializePayload for SmallVec<A>
     where
-        A::Item: NoritoSerialize,
+        A::Item: SerializePayload,
     {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             use ncore::WriteBytesExt;

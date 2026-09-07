@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use norito::{
-    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, FastJsonWrite, JsonDeserialize},
 };
 /// Nominal schema name of a V1 integer frame.
@@ -613,6 +613,8 @@ macro_rules! impl_frame_codec {
             fn schema_hash() -> [u8; 16] {
                 $schema
             }
+        }
+        impl SerializePayload for $ty {
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
                 writer
                     .write_all(&$encode(self))

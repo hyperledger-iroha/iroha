@@ -888,7 +888,7 @@ impl PopMembershipWitnessV1 {
     }
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     pub(super) struct Vec<'a, T>(Option<&'a std::vec::Vec<T>>);
     impl<'a, T> Vec<'a, T> {
         pub(super) fn borrowed(value: &'a std::vec::Vec<T>) -> Self {
@@ -902,6 +902,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             std::vec::Vec::<T>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -945,6 +947,8 @@ impl norito::core::NoritoSerialize for PopSignatureSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         PopSignatureV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PopSignatureSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1000,6 +1004,8 @@ impl norito::core::NoritoSerialize for PopCredentialSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         PopCredentialV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PopCredentialSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1046,6 +1052,8 @@ impl norito::core::NoritoSerialize for PopCommitmentRootSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         PopCommitmentRootV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PopCommitmentRootSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1090,6 +1098,8 @@ impl norito::core::NoritoSerialize for PopRevocationListSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         PopRevocationListV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PopRevocationListSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }

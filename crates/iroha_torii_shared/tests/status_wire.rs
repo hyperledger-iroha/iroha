@@ -1,7 +1,7 @@
 //! Named status wire identities and complete payloads captured before DTO extraction.
 use iroha_torii_shared::status::*;
 use norito::{
-    core::{NoritoDeserialize, NoritoSerialize},
+    core::{NoritoDeserialize, NoritoSerialize, SerializePayload},
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 

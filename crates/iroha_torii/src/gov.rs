@@ -127,13 +127,14 @@ pub struct PlainBallotDto {
     /// One of: "Aye" | "Nay" | "Abstain"
     pub direction: String,
 }
-impl norito::core::NoritoSerialize for PlainBallotDto {
+impl norito::core::NoritoSerialize for PlainBallotDto {}
+impl norito::core::SerializePayload for PlainBallotDto {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         let json = norito::json::to_string(&value)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
+        <String as norito::core::SerializePayload>::serialize(&json, writer)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for PlainBallotDto {

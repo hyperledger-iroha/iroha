@@ -13,7 +13,7 @@
 use iroha_crypto::Hash;
 use iroha_data_model::{account::AccountId, asset::id::AssetDefinitionId};
 use iroha_primitives::numeric::Quantity;
-use norito::{NoritoSerialize, codec::Encode};
+use norito::{NoritoSerialize, SerializePayload, codec::Encode};
 
 use super::{
     compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},

@@ -11,7 +11,7 @@ use norito::{
     Decode, Encode,
     core::{
         Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
-        serialize_to_writer,
+        SerializePayload, serialize_to_writer,
     },
 };
 use std::io::{self, Write};
@@ -844,6 +844,8 @@ impl NoritoSerialize for StateValueSchemaV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
     }
+}
+impl SerializePayload for StateValueSchemaV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         encode_state_value_schema_payload(self)?.serialize(writer)
     }
@@ -2224,6 +2226,8 @@ impl NoritoSerialize for StateValueRecordV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
     }
+}
+impl SerializePayload for StateValueRecordV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         encode_state_value_record_payload(self)?.serialize(writer)
     }

@@ -386,6 +386,9 @@ fn second_autonomous_cycle_preserves_terminal_replay(
                 .expect("authenticate exact durable application evidence")
         );
     }
+    // Reopening the same signer must follow release of the previous process owner.
+    // Keep the journal on disk so restart authenticates its retained signing history.
+    drop(lane_work);
     let context_six = verified_successor_context_at_fixture_tip(fixture);
     assert_eq!(context_six.context().height, 6);
     crate::sumeragi::v2_lane_work::tests::inspect_applied_public_lane_qc_replay_for_test(

@@ -1,6 +1,8 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
 #![allow(unexpected_cfgs)]
 mod algorithm;
+#[cfg(feature = "bls")]
+mod bls_decode_cache;
 #[cfg(test)]
 mod captured_schema_tests;
 mod confidential;
@@ -782,7 +784,9 @@ impl PublicKeyFull {
     }
     /// Validate borrowed bytes for decoding. Only the Ed25519, secp256k1,
     /// and ML-DSA branches are cache-free and heap-free on success; allocating
-    /// fallback parsers are explicitly precharged.
+    /// fallback parsers are explicitly precharged. BLS may reuse an exact
+    /// validated key from fixed thread-local storage; its decode charge is
+    /// reserved before lookup and never depends on cache history.
     fn validate_bytes_for_decode(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
         match algorithm {
             Algorithm::Ed25519 => {
@@ -802,7 +806,7 @@ impl PublicKeyFull {
             }
             #[cfg(feature = "bls")]
             Algorithm::BlsNormal | Algorithm::BlsSmall => {
-                Self::from_bytes(algorithm, payload).map(drop)
+                bls_decode_cache::validate(algorithm, payload)
             }
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => Self::from_bytes(algorithm, payload).map(drop),
@@ -1919,11 +1923,12 @@ impl From<PublicKeyFull> for PublicKeyCompact {
         Self::new(public_key.algorithm(), &public_key.payload())
     }
 }
-impl norito::core::NoritoSerialize for PublicKeyCompact {
+impl norito::core::NoritoSerialize for PublicKeyCompact {}
+impl norito::core::SerializePayload for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.structural_components()
             .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
-        <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
+        <ConstVec<u8> as norito::core::SerializePayload>::serialize(
             &self.algorithm_and_payload,
             writer,
         )
@@ -1933,13 +1938,13 @@ impl norito::core::NoritoSerialize for PublicKeyCompact {
         // Norito decoder establishes its validity. Encoding and sizing are
         // therefore structural and never reparse cryptographic key material.
         self.structural_components().ok()?;
-        <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
+        <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_hint(
             &self.algorithm_and_payload,
         )
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         self.structural_components().ok()?;
-        <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
+        <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_exact(
             &self.algorithm_and_payload,
         )
     }
@@ -2166,8 +2171,9 @@ impl Zeroize for PublicKey {
 impl PublicKey {
     /// Validate and retain a public key under active decode resource accounting.
     ///
-    /// Ed25519, secp256k1, ML-DSA, and blstrs validation borrow the input and do
-    /// not populate parse caches. The w3f, GOST, and SM2 fallback parsers retain
+    /// Ed25519, secp256k1 and ML-DSA validation borrow the input without caching.
+    /// BLS validation has a bounded exact-byte cache and retains the same
+    /// worst-case decode charge on hits and misses. GOST and SM2 also retain
     /// their explicit source-derived decode charges. The compact key's exact
     /// retained allocation is charged and created fallibly in every case.
     /// Ordinary callers should continue to use [`Self::from_bytes`].
@@ -2528,17 +2534,18 @@ impl FromStr for PublicKey {
         Self::from_bytes(algorithm, &payload)
     }
 }
-impl norito::core::NoritoSerialize for PublicKey {
+impl norito::core::NoritoSerialize for PublicKey {}
+impl norito::core::SerializePayload for PublicKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         // See `PublicKeyCompact`: the private invariant makes both sizing and
         // serialization structural and free of cryptographic reparsing.
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
@@ -3132,10 +3139,11 @@ impl norito::json::JsonDeserialize for ExposedPrivateKey {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-impl norito::core::NoritoSerialize for ExposedPrivateKey {
+impl norito::core::NoritoSerialize for ExposedPrivateKey {}
+impl norito::core::SerializePayload for ExposedPrivateKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let normalized = self.normalize();
-        norito::core::NoritoSerialize::serialize(&normalized, writer)
+        norito::core::SerializePayload::serialize(&normalized, writer)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for ExposedPrivateKey {

@@ -30,7 +30,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::{
-    NoritoSerialize,
+    NoritoSerialize, SerializePayload,
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };

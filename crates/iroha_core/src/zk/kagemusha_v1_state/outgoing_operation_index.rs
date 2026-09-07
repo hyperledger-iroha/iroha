@@ -1167,12 +1167,16 @@ fn nonzero_option(value: Option<DigestV1>) -> bool {
     value.is_some_and(|digest| digest != [0; 32])
 }
 
-fn canonical_len<T: Encode>(value: &T) -> KagemushaOutgoingOperationIndexResultV1<u64> {
+fn canonical_len<T: norito::NoritoSerialize>(
+    value: &T,
+) -> KagemushaOutgoingOperationIndexResultV1<u64> {
     u64::try_from(canonical_bytes(value)?.len())
         .map_err(|_| KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
 }
 
-fn canonical_bytes<T: Encode>(value: &T) -> KagemushaOutgoingOperationIndexResultV1<Vec<u8>> {
+fn canonical_bytes<T: norito::NoritoSerialize>(
+    value: &T,
+) -> KagemushaOutgoingOperationIndexResultV1<Vec<u8>> {
     norito::encode_canonical(value)
         .map_err(|_| KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
 }

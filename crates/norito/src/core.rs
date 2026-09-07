@@ -44,8 +44,14 @@ use encode_writers::{ExactLengthWriter, LengthCountingWriter};
 #[cfg(test)]
 #[path = "core/counting_tests.rs"]
 mod counting_tests;
+#[cfg(test)]
+#[path = "core/element_sequence_tests.rs"]
+mod element_sequence_tests;
 pub mod heuristics;
 pub mod hw;
+#[cfg(test)]
+#[path = "core/payload_tests.rs"]
+mod payload_tests;
 pub mod simd_crc64;
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub use simd_crc64::crc64_neon;
@@ -129,7 +135,7 @@ impl DecodeLimits {
         self.max_nesting_depth
     }
 }
-fn serialize_owned<T: NoritoSerialize>(writer: &mut Encoder<'_>, value: &T) -> Result<(), Error> {
+fn serialize_owned<T: SerializePayload>(writer: &mut Encoder<'_>, value: &T) -> Result<(), Error> {
     let _flags_guard = if decode_flags_active() {
         None
     } else {
@@ -2255,7 +2261,7 @@ pub fn write_len_to_vec_with_flags(out: &mut Vec<u8>, value: u64, flags: u8) {
 /// beyond the declared length. Callers must discard the incomplete destination after any error.
 pub fn write_len_prefixed(
     writer: &mut Encoder<'_>,
-    value: &dyn NoritoSerialize,
+    value: &dyn SerializePayload,
 ) -> Result<(), Error> {
     let flags = effective_layout_flags();
     let exact_len = encoded_payload_len(value)?;
@@ -2274,7 +2280,7 @@ pub fn write_len_prefixed(
 #[doc(hidden)]
 pub fn write_fixed_len_prefixed(
     writer: &mut Encoder<'_>,
-    value: &dyn NoritoSerialize,
+    value: &dyn SerializePayload,
 ) -> Result<(), Error> {
     let length = encoded_payload_len(value)?;
     writer.write_u64::<LittleEndian>(u64::try_from(length).map_err(|_| Error::LengthMismatch)?)?;
@@ -2307,10 +2313,11 @@ pub fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Resul
     }
     Ok(())
 }
-fn collect_payload_lengths<'a, T, I>(len: usize, iter: I) -> Result<Vec<usize>, Error>
+fn collect_payload_lengths<T, I>(len: usize, iter: I) -> Result<Vec<usize>, Error>
 where
-    T: NoritoSerialize + 'a,
-    I: IntoIterator<Item = &'a T>,
+    T: SerializePayload,
+    I: IntoIterator,
+    I::Item: std::borrow::Borrow<T>,
 {
     let mut lengths = Vec::new();
     let allocation_bytes = len
@@ -2325,27 +2332,30 @@ where
         if lengths.len() == len {
             return Err(Error::LengthMismatch);
         }
-        lengths.push(encoded_payload_len(item)?);
+        let value: &T = std::borrow::Borrow::borrow(&item);
+        lengths.push(encoded_payload_len(value)?);
     }
     if lengths.len() != len {
         return Err(Error::LengthMismatch);
     }
     Ok(lengths)
 }
-fn write_payloads_with_lengths<'a, T, I>(
+fn write_payloads_with_lengths<T, I>(
     writer: &mut Encoder<'_>,
     iter: I,
     lengths: &[usize],
 ) -> Result<(), Error>
 where
-    T: NoritoSerialize + 'a,
-    I: IntoIterator<Item = &'a T>,
+    T: SerializePayload,
+    I: IntoIterator,
+    I::Item: std::borrow::Borrow<T>,
 {
     let mut count = 0usize;
     let mut expected_lengths = lengths.iter().copied();
     for item in iter {
         let expected_len = expected_lengths.next().ok_or(Error::LengthMismatch)?;
-        write_counted_payload(item, writer, expected_len)?;
+        let value: &T = std::borrow::Borrow::borrow(&item);
+        write_counted_payload(value, writer, expected_len)?;
         count += 1;
     }
     if count != lengths.len() || expected_lengths.next().is_some() {
@@ -2353,23 +2363,19 @@ where
     }
     Ok(())
 }
-fn encode_seq_payloads<'a, T, I>(writer: &mut Encoder<'_>, len: usize, iter: I) -> Result<(), Error>
-where
-    T: NoritoSerialize + 'a,
-    I: IntoIterator<Item = &'a T> + Clone,
-{
-    encode_seq_payloads_with_limit(writer, len, iter, None)
-}
-fn encode_seq_payloads_with_limit<'a, T, I>(
+fn encode_seq_payloads<T, I>(
     writer: &mut Encoder<'_>,
-    len: usize,
-    iter: I,
+    items: I,
     packed_byte_limit: Option<u64>,
 ) -> Result<(), Error>
 where
-    T: NoritoSerialize + 'a,
-    I: IntoIterator<Item = &'a T> + Clone,
+    T: SerializePayload,
+    I: IntoIterator,
+    I::IntoIter: ExactSizeIterator + Clone,
+    I::Item: std::borrow::Borrow<T>,
 {
+    let iter = items.into_iter();
+    let len = iter.len();
     write_seq_len(
         writer,
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
@@ -2381,13 +2387,14 @@ where
             if count == len {
                 return Err(Error::LengthMismatch);
             }
-            let encoded_len = encoded_payload_len(item)?;
+            let value: &T = std::borrow::Borrow::borrow(&item);
+            let encoded_len = encoded_payload_len(value)?;
             write_len_with_flags(
                 writer,
                 u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
                 flags,
             )?;
-            write_counted_payload(item, writer, encoded_len)?;
+            write_counted_payload(value, writer, encoded_len)?;
             count += 1;
         }
         return (count == len).then_some(()).ok_or(Error::LengthMismatch);
@@ -2405,7 +2412,7 @@ where
             return Err(Error::ArchiveLengthExceeded { length, limit });
         }
     }
-    let lengths = collect_payload_lengths(len, iter.clone())?;
+    let lengths = collect_payload_lengths::<T, _>(len, iter.clone())?;
     if let Some(limit) = packed_byte_limit {
         let total = lengths.iter().try_fold(table_bytes, |total, &length| {
             total.checked_add(length).ok_or(Error::LengthMismatch)
@@ -2417,13 +2424,13 @@ where
     }
     note_fixed_offsets_emitted();
     write_fixed_offsets(writer, &lengths)?;
-    write_payloads_with_lengths(writer, iter, &lengths)
+    write_payloads_with_lengths::<T, _>(writer, iter, &lengths)
 }
 fn encode_slice_payloads<T>(writer: &mut Encoder<'_>, slice: &[T]) -> Result<(), Error>
 where
-    T: NoritoSerialize,
+    T: SerializePayload,
 {
-    encode_seq_payloads(writer, slice.len(), slice.iter())
+    encode_seq_payloads::<T, _>(writer, slice.iter(), None)
 }
 /// Write an element sequence, bounding its packed offset table and payload.
 ///
@@ -2431,23 +2438,33 @@ where
 /// the raw-byte `Vec<u8>` specialization. The sequence count is fixed-width, and the
 /// active flags select length-prefixed elements or packed offsets. In packed mode,
 /// `packed_byte_limit` covers the offset table plus element payloads, excluding the
-/// sequence count. Measurement and emission have one codec owner.
+/// sequence count. Measurement and emission have one codec owner. Items may borrow
+/// existing elements or contain projected views without collecting another sequence.
+/// The iterator's reported count is checked against its actual yields in both packed
+/// passes; its clone must reproduce the same ordered elements.
 ///
 /// # Errors
 ///
-/// Returns serialization/allocation errors, a changed second-pass length, or
-/// [`Error::ArchiveLengthExceeded`] before writing an oversized packed table.
+/// Returns serialization/allocation errors, inconsistent iterator cardinality, a changed
+/// second-pass length, or [`Error::ArchiveLengthExceeded`] before writing an oversized
+/// packed table. Discard the incomplete destination after any error.
 #[doc(hidden)]
-pub fn write_element_sequence<T: NoritoSerialize>(
+pub fn write_element_sequence<T, I>(
     writer: &mut Encoder<'_>,
-    slice: &[T],
+    items: I,
     packed_byte_limit: u64,
-) -> Result<(), Error> {
-    encode_seq_payloads_with_limit(writer, slice.len(), slice.iter(), Some(packed_byte_limit))
+) -> Result<(), Error>
+where
+    T: SerializePayload,
+    I: IntoIterator,
+    I::IntoIter: ExactSizeIterator + Clone,
+    I::Item: std::borrow::Borrow<T>,
+{
+    encode_seq_payloads::<T, I>(writer, items, Some(packed_byte_limit))
 }
 fn sequence_encoded_len_hint<'a, T, I>(len: usize, items: I) -> Option<usize>
 where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
 {
     let mut total = 8usize;
@@ -2474,7 +2491,7 @@ where
 }
 fn sequence_encoded_len_exact<'a, T, I>(len: usize, items: I) -> Option<usize>
 where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
 {
     let mut total = 8usize;
@@ -2496,8 +2513,8 @@ where
 }
 fn map_encoded_len_hint<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
 where
-    K: NoritoSerialize + 'a,
-    V: NoritoSerialize + 'a,
+    K: SerializePayload + 'a,
+    V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)>,
 {
     let mut total = 8usize;
@@ -2531,8 +2548,8 @@ where
 }
 fn map_encoded_len_exact<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
 where
-    K: NoritoSerialize + 'a,
-    V: NoritoSerialize + 'a,
+    K: SerializePayload + 'a,
+    V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)>,
 {
     let mut total = 8usize;
@@ -2564,8 +2581,8 @@ fn encode_map_payloads<'a, K, V, I>(
     entries: I,
 ) -> Result<(), Error>
 where
-    K: NoritoSerialize + 'a,
-    V: NoritoSerialize + 'a,
+    K: SerializePayload + 'a,
+    V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)> + Clone,
 {
     write_seq_len(
@@ -2579,7 +2596,7 @@ where
             if count == len {
                 return Err(Error::LengthMismatch);
             }
-            for item in [key as &dyn NoritoSerialize, value as &dyn NoritoSerialize] {
+            for item in [key as &dyn SerializePayload, value as &dyn SerializePayload] {
                 let encoded_len = encoded_payload_len(item)?;
                 write_len_with_flags(
                     writer,
@@ -2594,17 +2611,17 @@ where
     }
     note_fixed_offsets_emitted();
     let key_lengths =
-        collect_payload_lengths(len, entries.clone().into_iter().map(|(key, _)| key))?;
+        collect_payload_lengths::<K, _>(len, entries.clone().into_iter().map(|(key, _)| key))?;
     let value_lengths =
-        collect_payload_lengths(len, entries.clone().into_iter().map(|(_, value)| value))?;
+        collect_payload_lengths::<V, _>(len, entries.clone().into_iter().map(|(_, value)| value))?;
     write_fixed_offsets(writer, &key_lengths)?;
     write_fixed_offsets(writer, &value_lengths)?;
-    write_payloads_with_lengths(
+    write_payloads_with_lengths::<K, _>(
         writer,
         entries.clone().into_iter().map(|(key, _)| key),
         &key_lengths,
     )?;
-    write_payloads_with_lengths(
+    write_payloads_with_lengths::<V, _>(
         writer,
         entries.into_iter().map(|(_, value)| value),
         &value_lengths,
@@ -2622,7 +2639,8 @@ mod encode_seq_payloads_tests {
         let items: Vec<Vec<u8>> = vec![vec![1, 2], vec![3], vec![4, 5, 6]];
         let mut out = Vec::new();
         let mut encoder = Encoder::for_buffer(&mut out);
-        encode_seq_payloads(&mut encoder, items.len(), items.iter()).expect("encode packed seq");
+        encode_seq_payloads::<Vec<u8>, _>(&mut encoder, items.iter(), None)
+            .expect("encode packed seq");
         let encoded_items: Vec<Vec<u8>> = items
             .iter()
             .map(|item| {
@@ -3496,6 +3514,12 @@ where
     K: NoritoSerialize + Ord,
     V: NoritoSerialize,
 {
+}
+impl<K, V> SerializePayload for BTreeMap<K, V>
+where
+    K: SerializePayload + Ord,
+    V: SerializePayload,
+{
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         encode_map_payloads(writer, self.len(), self.iter())
     }
@@ -3533,6 +3557,12 @@ impl<K, V> NoritoSerialize for HashMap<K, V>
 where
     K: NoritoSerialize + Eq + Hash + Ord,
     V: NoritoSerialize,
+{
+}
+impl<K, V> SerializePayload for HashMap<K, V>
+where
+    K: SerializePayload + Eq + Hash + Ord,
+    V: SerializePayload,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut entries = Vec::new();
@@ -3579,12 +3609,13 @@ where
         Ok(map)
     }
 }
-impl<T> NoritoSerialize for BTreeSet<T>
+impl<T> NoritoSerialize for BTreeSet<T> where T: NoritoSerialize + Ord {}
+impl<T> SerializePayload for BTreeSet<T>
 where
-    T: NoritoSerialize + Ord,
+    T: SerializePayload + Ord,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        encode_seq_payloads(writer, self.len(), self.iter())
+        encode_seq_payloads::<T, _>(writer, self.iter(), None)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
@@ -3615,9 +3646,10 @@ where
         Ok(set)
     }
 }
-impl<T> NoritoSerialize for HashSet<T>
+impl<T> NoritoSerialize for HashSet<T> where T: NoritoSerialize + Eq + Hash + Ord {}
+impl<T> SerializePayload for HashSet<T>
 where
-    T: NoritoSerialize + Eq + Hash + Ord,
+    T: SerializePayload + Eq + Hash + Ord,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut items = Vec::new();
@@ -3632,7 +3664,7 @@ where
             })?;
         items.extend(self.iter());
         items.sort();
-        encode_seq_payloads(writer, items.len(), items.iter().copied())
+        encode_seq_payloads::<T, _>(writer, items.iter().copied(), None)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
@@ -4222,7 +4254,9 @@ impl Header {
 /// Trait implemented for types that can be archived.
 ///
 /// The archived representation of `Self` is [`Archived<Self>`].
-pub trait NoritoSerialize {
+pub trait NoritoSerialize: SerializePayload {
+    // TODO: after all wire owners declare NoritoSchema, bind the typed codec
+    // directions to it and replace their schema_hash methods atomically.
     /// Hash representing the schema of the type.
     ///
     /// Implementations may override this if they want a custom scheme, but by
@@ -4233,6 +4267,55 @@ pub trait NoritoSerialize {
     {
         compute_schema_hash::<Self>()
     }
+}
+/// Object-safe serialization of bare Norito payloads.
+///
+/// This contract owns bytes and encoded-size hints. It carries no root-frame
+/// identity; borrowed field views and erased writers use it directly.
+/// Use [`NoritoSerialize`] for a type that can be written as a typed frame.
+/// A payload-only derived struct supports bare encoding:
+///
+/// ```
+/// #[derive(norito::SerializePayload)]
+/// struct Field<T>(T);
+/// struct Leaf(u32);
+/// impl norito::SerializePayload for Leaf {
+///     fn serialize(
+///         &self,
+///         writer: &mut norito::core::Encoder<'_>,
+///     ) -> Result<(), norito::Error> {
+///         norito::SerializePayload::serialize(&self.0, writer)
+///     }
+/// }
+/// let payload = norito::codec::Encode::encode(&Field(Leaf(7)));
+/// assert!(!payload.is_empty());
+/// ```
+///
+/// A payload-only derive cannot declare a root-frame schema:
+///
+/// ```compile_fail
+/// #[derive(norito::SerializePayload)]
+/// #[norito(schema_name = "example.Field")]
+/// struct Field(u32);
+/// ```
+///
+/// Payload derives support structs and enums, and reject unions:
+///
+/// ```compile_fail
+/// #[derive(norito::SerializePayload)]
+/// union Field {
+///     value: u32,
+/// }
+/// ```
+///
+/// A payload-only derive cannot enter a typed frame:
+///
+/// ```compile_fail
+/// #[derive(norito::SerializePayload)]
+/// struct Field(u32);
+/// let _ = norito::to_bytes(&Field(7));
+/// ```
+pub trait SerializePayload {
     /// Serialize `self` into the encoder.
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error>;
     /// Optional hint: estimated encoded byte length for `self`.
@@ -4258,7 +4341,7 @@ pub trait NoritoSerialize {
 /// callers should use the framed encoding helpers such as [`to_bytes`].
 #[doc(hidden)]
 pub fn serialize_to_writer(
-    value: &dyn NoritoSerialize,
+    value: &dyn SerializePayload,
     writer: &mut dyn Write,
 ) -> Result<(), Error> {
     let mut encoder = Encoder::new(writer);
@@ -4273,7 +4356,7 @@ pub fn serialize_to_writer(
 /// rejected by the final equality check.
 #[doc(hidden)]
 pub fn serialize_to_writer_exact<W: Write>(
-    value: &dyn NoritoSerialize,
+    value: &dyn SerializePayload,
     writer: &mut W,
     expected_len: usize,
 ) -> Result<(), Error> {
@@ -4291,7 +4374,7 @@ pub fn serialize_to_writer_exact<W: Write>(
 // serialize_to_writer_exact seam deliberately always validates actual bytes:
 // its caller-supplied expected_len is not evidence for a counting destination.
 fn write_counted_payload(
-    value: &dyn NoritoSerialize,
+    value: &dyn SerializePayload,
     writer: &mut Encoder<'_>,
     measured_len: usize,
 ) -> Result<(), Error> {
@@ -4306,7 +4389,10 @@ fn write_counted_payload(
 /// This is the buffer-specialized counterpart to [`serialize_to_writer`] used
 /// by generated length-delimited field encoders.
 #[doc(hidden)]
-pub fn serialize_to_buffer(value: &dyn NoritoSerialize, buffer: &mut Vec<u8>) -> Result<(), Error> {
+pub fn serialize_to_buffer(
+    value: &dyn SerializePayload,
+    buffer: &mut Vec<u8>,
+) -> Result<(), Error> {
     let mut encoder = Encoder::for_buffer(buffer);
     value.serialize(&mut encoder)
 }
@@ -4689,7 +4775,8 @@ pub fn prepare_decode_from_slice(
         _borrow: PhantomData,
     })
 }
-impl NoritoSerialize for u8 {
+impl NoritoSerialize for u8 {}
+impl SerializePayload for u8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[*self])?;
         Ok(())
@@ -4709,7 +4796,8 @@ impl<'a> NoritoDeserialize<'a> for u8 {
         Ok(try_read_archived_bytes::<_, 1>(archived)?[0])
     }
 }
-impl NoritoSerialize for i8 {
+impl NoritoSerialize for i8 {}
+impl SerializePayload for i8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[*self as u8])?;
         Ok(())
@@ -4729,7 +4817,8 @@ impl<'a> NoritoDeserialize<'a> for i8 {
         try_read_archived_bytes(archived).map(i8::from_le_bytes)
     }
 }
-impl NoritoSerialize for u16 {
+impl NoritoSerialize for u16 {}
+impl SerializePayload for u16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -4749,7 +4838,8 @@ impl<'a> NoritoDeserialize<'a> for u16 {
         try_read_archived_bytes(archived).map(u16::from_le_bytes)
     }
 }
-impl NoritoSerialize for NonZeroU16 {
+impl NoritoSerialize for NonZeroU16 {}
+impl SerializePayload for NonZeroU16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
@@ -4772,7 +4862,8 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU16 {
         NonZeroU16::new(value).ok_or(Error::InvalidNonZero)
     }
 }
-impl NoritoSerialize for i16 {
+impl NoritoSerialize for i16 {}
+impl SerializePayload for i16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -4792,7 +4883,8 @@ impl<'a> NoritoDeserialize<'a> for i16 {
         try_read_archived_bytes(archived).map(i16::from_le_bytes)
     }
 }
-impl NoritoSerialize for u32 {
+impl NoritoSerialize for u32 {}
+impl SerializePayload for u32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -4812,7 +4904,8 @@ impl<'a> NoritoDeserialize<'a> for u32 {
         try_read_archived_bytes(archived).map(u32::from_le_bytes)
     }
 }
-impl NoritoSerialize for NonZeroU32 {
+impl NoritoSerialize for NonZeroU32 {}
+impl SerializePayload for NonZeroU32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
@@ -4835,7 +4928,8 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU32 {
         NonZeroU32::new(value).ok_or(Error::InvalidNonZero)
     }
 }
-impl NoritoSerialize for bool {
+impl NoritoSerialize for bool {}
+impl SerializePayload for bool {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[*self as u8])?;
         Ok(())
@@ -4859,7 +4953,8 @@ impl<'a> NoritoDeserialize<'a> for bool {
         }
     }
 }
-impl NoritoSerialize for char {
+impl NoritoSerialize for char {}
+impl SerializePayload for char {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&(*self as u32).to_le_bytes())?;
         Ok(())
@@ -4882,7 +4977,8 @@ impl<'a> NoritoDeserialize<'a> for char {
             .ok_or_else(|| Error::Message(format!("invalid Unicode scalar value {value:#x}")))
     }
 }
-impl NoritoSerialize for () {
+impl NoritoSerialize for () {}
+impl SerializePayload for () {
     fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
         Ok(())
     }
@@ -4898,7 +4994,8 @@ impl<'a> NoritoDeserialize<'a> for () {
         // unit type has no data
     }
 }
-impl<T> NoritoSerialize for PhantomData<T> {
+impl<T> NoritoSerialize for PhantomData<T> {}
+impl<T> SerializePayload for PhantomData<T> {
     fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
         Ok(())
     }
@@ -4913,7 +5010,8 @@ impl<'a, T> DecodeFromSlice<'a> for PhantomData<T> {
         Ok((PhantomData, 0))
     }
 }
-impl NoritoSerialize for i32 {
+impl NoritoSerialize for i32 {}
+impl SerializePayload for i32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -4933,7 +5031,8 @@ impl<'a> NoritoDeserialize<'a> for i32 {
         try_read_archived_bytes(archived).map(i32::from_le_bytes)
     }
 }
-impl NoritoSerialize for u64 {
+impl NoritoSerialize for u64 {}
+impl SerializePayload for u64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -4953,7 +5052,8 @@ impl<'a> NoritoDeserialize<'a> for u64 {
         try_read_archived_bytes(archived).map(u64::from_le_bytes)
     }
 }
-impl NoritoSerialize for NonZeroU64 {
+impl NoritoSerialize for NonZeroU64 {}
+impl SerializePayload for NonZeroU64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
@@ -4976,7 +5076,8 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU64 {
         NonZeroU64::new(value).ok_or(Error::InvalidNonZero)
     }
 }
-impl NoritoSerialize for i64 {
+impl NoritoSerialize for i64 {}
+impl SerializePayload for i64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -4996,7 +5097,8 @@ impl<'a> NoritoDeserialize<'a> for i64 {
         try_read_archived_bytes(archived).map(i64::from_le_bytes)
     }
 }
-impl NoritoSerialize for usize {
+impl NoritoSerialize for usize {}
+impl SerializePayload for usize {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&(*self as u64).to_le_bytes())?;
         Ok(())
@@ -5017,7 +5119,8 @@ impl<'a> NoritoDeserialize<'a> for usize {
         usize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
 }
-impl NoritoSerialize for isize {
+impl NoritoSerialize for isize {}
+impl SerializePayload for isize {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&(*self as i64).to_le_bytes())?;
         Ok(())
@@ -5038,7 +5141,8 @@ impl<'a> NoritoDeserialize<'a> for isize {
         isize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
 }
-impl NoritoSerialize for u128 {
+impl NoritoSerialize for u128 {}
+impl SerializePayload for u128 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -5058,7 +5162,8 @@ impl<'a> NoritoDeserialize<'a> for u128 {
         try_read_archived_bytes(archived).map(u128::from_le_bytes)
     }
 }
-impl NoritoSerialize for i128 {
+impl NoritoSerialize for i128 {}
+impl SerializePayload for i128 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())
@@ -5078,7 +5183,8 @@ impl<'a> NoritoDeserialize<'a> for i128 {
         try_read_archived_bytes(archived).map(i128::from_le_bytes)
     }
 }
-impl NoritoSerialize for f32 {
+impl NoritoSerialize for f32 {}
+impl SerializePayload for f32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_bits().to_le_bytes())?;
         Ok(())
@@ -5098,7 +5204,8 @@ impl<'a> NoritoDeserialize<'a> for f32 {
         <u32 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
-impl NoritoSerialize for f64 {
+impl NoritoSerialize for f64 {}
+impl SerializePayload for f64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_bits().to_le_bytes())?;
         Ok(())
@@ -5118,7 +5225,8 @@ impl<'a> NoritoDeserialize<'a> for f64 {
         <u64 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
-impl NoritoSerialize for String {
+impl NoritoSerialize for String {}
+impl SerializePayload for String {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let bytes = self.as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
@@ -5166,6 +5274,8 @@ impl NoritoSerialize for &str {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
+}
+impl SerializePayload for &str {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let bytes = self.as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
@@ -5234,6 +5344,8 @@ impl NoritoSerialize for Cow<'_, str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
+}
+impl SerializePayload for Cow<'_, str> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let bytes = self.as_ref().as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
@@ -5261,6 +5373,8 @@ impl NoritoSerialize for Box<str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
+}
+impl SerializePayload for Box<str> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.as_ref().serialize(writer)
     }
@@ -5284,7 +5398,8 @@ impl<'a> NoritoDeserialize<'a> for Box<str> {
             .map(|s| s.into_boxed_str())
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for Box<T> {
+impl<T: NoritoSerialize> NoritoSerialize for Box<T> {}
+impl<T: SerializePayload> SerializePayload for Box<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         serialize_owned(writer, &**self)
     }
@@ -5313,7 +5428,8 @@ where
         Ok(value)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for Rc<T> {
+impl<T: NoritoSerialize> NoritoSerialize for Rc<T> {}
+impl<T: SerializePayload> SerializePayload for Rc<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         serialize_owned(writer, &**self)
     }
@@ -5342,7 +5458,8 @@ where
         Ok(value)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for Arc<T> {
+impl<T: NoritoSerialize> NoritoSerialize for Arc<T> {}
+impl<T: SerializePayload> SerializePayload for Arc<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         serialize_owned(writer, &**self)
     }
@@ -5371,7 +5488,8 @@ where
         Ok(value)
     }
 }
-impl<T: NoritoSerialize + Copy> NoritoSerialize for Cell<T> {
+impl<T: NoritoSerialize + Copy> NoritoSerialize for Cell<T> {}
+impl<T: SerializePayload + Copy> SerializePayload for Cell<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
@@ -5390,7 +5508,8 @@ impl<'a, T: NoritoDeserialize<'a> + Copy> NoritoDeserialize<'a> for Cell<T> {
         guarded_try_deserialize(|| T::try_deserialize(archived.cast())).map(Cell::new)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for RefCell<T> {
+impl<T: NoritoSerialize> NoritoSerialize for RefCell<T> {}
+impl<T: SerializePayload> SerializePayload for RefCell<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.borrow().serialize(writer)
     }
@@ -5409,7 +5528,8 @@ impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {
         guarded_try_deserialize(|| T::try_deserialize(archived.cast())).map(RefCell::new)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
+impl<T: NoritoSerialize> NoritoSerialize for Option<T> {}
+impl<T: SerializePayload> SerializePayload for Option<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         match self {
             Some(value) => {
@@ -5486,7 +5606,8 @@ where
         }
     }
 }
-impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
+impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {}
+impl<T: SerializePayload, E: SerializePayload> SerializePayload for Result<T, E> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         match self {
             Ok(value) => {
@@ -5590,7 +5711,8 @@ where
         }
     }
 }
-impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
+impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {}
+impl<T: SerializePayload, const N: usize> SerializePayload for [T; N] {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let flags = effective_layout_flags();
         for item in self {
@@ -6154,9 +6276,10 @@ pub mod stream {
         }
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {
+impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {}
+impl<T: SerializePayload> SerializePayload for VecDeque<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        encode_seq_payloads(writer, self.len(), self.iter())
+        encode_seq_payloads::<T, _>(writer, self.iter(), None)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
@@ -6187,9 +6310,10 @@ where
         Ok(deque)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {
+impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {}
+impl<T: SerializePayload> SerializePayload for LinkedList<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        encode_seq_payloads(writer, self.len(), self.iter())
+        encode_seq_payloads::<T, _>(writer, self.iter(), None)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
@@ -6220,9 +6344,10 @@ where
         Ok(list)
     }
 }
-impl<T> NoritoSerialize for BinaryHeap<T>
+impl<T> NoritoSerialize for BinaryHeap<T> where T: NoritoSerialize + Ord {}
+impl<T> SerializePayload for BinaryHeap<T>
 where
-    T: NoritoSerialize + Ord,
+    T: SerializePayload + Ord,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut items = Vec::new();
@@ -6237,7 +6362,7 @@ where
             })?;
         items.extend(self.iter());
         items.sort();
-        encode_seq_payloads(writer, items.len(), items.iter().copied())
+        encode_seq_payloads::<T, _>(writer, items.iter().copied(), None)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
@@ -6362,7 +6487,8 @@ where
         Ok(out)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
+impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {}
+impl<T: SerializePayload> SerializePayload for Vec<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if core::any::type_name::<T>() == "u8" {
             let len_u64 = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
@@ -6415,6 +6541,8 @@ fn tuple_serialization_flags() -> u8 {
 macro_rules! impl_tuple {
     ($( $name:ident $var:ident $idx:tt ),+ $(,)?) => {
         impl<$( $name: NoritoSerialize ),+> NoritoSerialize for ( $( $name, )+ ) {
+}
+impl<$( $name: SerializePayload ),+> SerializePayload for ( $( $name, )+ ) {
             fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
                 // Ensure inner element serializers observe the same layout
                 // defaults as the bare codec path (packed seq/struct and
@@ -6647,7 +6775,7 @@ impl Write for ByteSink {
         Ok(())
     }
 }
-pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
+pub(crate) fn encode_bare_with_flags<T: SerializePayload>(
     value: &T,
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
@@ -6676,7 +6804,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 /// Return the exact payload length under the active layout without allocating an output buffer.
 ///
 /// This deliberately counts a real serialization pass instead of trusting
-/// [`NoritoSerialize::encoded_len_exact`], because that method is only an optimization hint and an
+/// [`SerializePayload::encoded_len_exact`], because that method is only an optimization hint and an
 /// incorrect implementation must not understate a resource-admission bound.
 /// Length-only destinations count each nested child once, then account for those measured bytes
 /// without traversing the same child again. Actual byte destinations still perform a checked write.
@@ -6684,7 +6812,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 /// # Errors
 ///
 /// Returns the underlying serialization error.
-pub fn encoded_payload_len(value: &dyn NoritoSerialize) -> Result<usize, Error> {
+pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error> {
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(flags)?;
@@ -6720,7 +6848,7 @@ include!("core/exact_byte_vec.rs");
 ///
 /// A real serialization pass determines the complete framed length before any output allocation.
 /// The admitted frame is then reserved once and a second pass writes through a hard-cap
-/// destination. This deliberately does not trust [`NoritoSerialize::encoded_len_exact`] or capacity
+/// destination. This deliberately does not trust [`SerializePayload::encoded_len_exact`] or capacity
 /// hints: a serializer that emits a different length on the second pass is rejected and its
 /// incomplete output is discarded.
 ///

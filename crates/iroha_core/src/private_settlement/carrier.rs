@@ -15,7 +15,6 @@ use iroha_data_model::{
     nexus::PrivateSettlementCommitBundleV1,
     transaction::{Executable, SignedTransaction},
 };
-use norito::codec::Encode;
 use thiserror::Error;
 
 const COMMIT_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:commit-bundle:v1\0";
@@ -26,7 +25,10 @@ const ABORT_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
 const PREPARE_LOCK_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:prepare-lock-carrier-instruction:v1\0";
 
-fn canonical_digest_v1<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
+fn canonical_digest_v1<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Hash, norito::Error> {
     let encoded = norito::encode_canonical(value)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("canonical value is too large")))?;

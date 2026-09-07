@@ -1,5 +1,5 @@
 //! Tests for encoded_len_exact to ensure exact sizing and buffer preallocation.
-use norito::{NoritoDeserialize, NoritoSerialize, to_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, to_bytes};
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 #[test]
 fn primitive_exact_len() {

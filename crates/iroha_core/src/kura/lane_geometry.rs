@@ -50,10 +50,7 @@ use super::{
 use crate::secure_file_metadata::{self, SecureMetadata};
 #[cfg(test)]
 use crate::{
-    queue::{
-        LaneQueueReservationGroupBindingV1,
-        canonical_lane_queue_reservation_group_identity_projection,
-    },
+    queue::canonical_lane_queue_reservation_group_identity_projection,
     sumeragi::v2_core::{
         IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
         IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,

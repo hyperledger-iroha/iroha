@@ -18,7 +18,7 @@ use iroha_config::parameters::{
 };
 use iroha_data_model::NetworkId;
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 use sorafs_manifest::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1;

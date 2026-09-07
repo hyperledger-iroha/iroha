@@ -197,7 +197,7 @@ pub(crate) enum PrivateSettlementStagedLockRecordV1 {
     },
 }
 
-fn encode_private_settlement_storage_key_v1<T: Encode>(key: &T, out: &mut String) {
+fn encode_private_settlement_storage_key_v1<T: norito::NoritoSerialize>(key: &T, out: &mut String) {
     let encoded = norito::to_bytes(key).expect("fixed private-settlement keys always encode");
     json::write_json_string(&hex::encode_upper(encoded), out);
 }

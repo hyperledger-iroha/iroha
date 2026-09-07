@@ -2557,7 +2557,7 @@ enum SoracloudResponseShape<'a> {
     SecretEnvelope(Option<&'a iroha_data_model::soracloud::SecretEnvelopeV1>),
 }
 fn exact_norito_encoded_len<T: norito::core::NoritoSerialize + ?Sized>(value: &T) -> Option<usize> {
-    norito::core::NoritoSerialize::encoded_len_exact(value)
+    norito::core::SerializePayload::encoded_len_exact(value)
 }
 fn norito_len_prefixed_encoded_len(payload_bytes: usize) -> Option<usize> {
     norito::core::len_prefix_len_with_flags(payload_bytes, norito::core::default_encode_flags())

@@ -1084,13 +1084,15 @@ pub struct SettlementReceiptV1 {
     pub settlement_signature: OrderbookSignatureV1,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1120,6 +1122,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1163,6 +1167,8 @@ impl norito::core::NoritoSerialize for OrderbookSignatureSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderbookSignatureV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for OrderbookSignatureSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1215,6 +1221,8 @@ impl norito::core::NoritoSerialize for OrderRequestSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderRequestV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for OrderRequestSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1251,6 +1259,8 @@ impl norito::core::NoritoSerialize for OrderCancelSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderCancelV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for OrderCancelSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1301,6 +1311,8 @@ impl norito::core::NoritoSerialize for SettlementReceiptSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         SettlementReceiptV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for SettlementReceiptSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1926,7 +1938,7 @@ pub enum OrderbookValidationError {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use norito::core::NoritoSerialize as _;
+    use norito::core::{NoritoSerialize as _, SerializePayload as _};
     use std::collections::{BTreeMap, BTreeSet};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

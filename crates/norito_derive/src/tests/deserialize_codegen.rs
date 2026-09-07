@@ -241,7 +241,7 @@ fn ordinary_struct_fields_use_counted_length_streaming() {
         &data.fields,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(expansion.matches("write_len_prefixed(").count(), 2);
     assert!(!expansion.contains("write_len_prefixed_exact("));
     assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
@@ -273,9 +273,9 @@ fn generated_serializers_use_two_argument_field_writers_without_scratch_buffers(
                 &data.fields,
                 &input.attrs,
                 None,
-            ),
+             true),
             Data::Enum(data) => {
-                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, None)
+                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, None, true)
             }
             Data::Union(_) => unreachable!("test inputs are structs or enums"),
         });
@@ -310,7 +310,7 @@ fn packed_struct_codegen_delegates_measurement_and_streaming_to_one_owner() {
         &data.fields,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(expansion.matches("write_packed_fields(").count(), 2);
     assert_eq!(
         expansion.matches("PackedField::Value(&self.named)").count(),
@@ -345,7 +345,7 @@ fn packed_struct_descriptors_preserve_raw_arrays_and_omit_skipped_fields() {
         &data.fields,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(
         expansion.matches("PackedField::Bytes(&self.raw)").count(),
         2
@@ -374,7 +374,7 @@ fn packed_tuple_descriptors_keep_field_order() {
         &data.fields,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(
         expansion.matches("&[norito::core::PackedField::Value(&self.0),norito::core::PackedField::Bytes(&self.1),norito::core::PackedField::Value(&self.2)]").count(),
         2,
@@ -397,7 +397,7 @@ fn ordinary_enum_fields_use_counted_length_streaming() {
         data,
         &input.attrs,
         None,
-    ));
+     true));
     assert!(expansion.matches("write_len_prefixed(").count() >= 2);
     assert!(!expansion.contains("write_len_prefixed_exact("));
     assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
@@ -419,7 +419,7 @@ fn enum_byte_array_lengths_use_the_raw_wire_width() {
         data,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(
         expansion.matches("core::mem::size_of_val(field0)").count(),
         3,

@@ -14,7 +14,7 @@ use iroha_data_model::{
 };
 use iroha_macro::*;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -282,7 +282,8 @@ impl From<BlockMessage> for BlockMessageWire {
         Self::new(message)
     }
 }
-impl NoritoSerialize for BlockMessageWire {
+impl NoritoSerialize for BlockMessageWire {}
+impl SerializePayload for BlockMessageWire {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.message.ensure_live_outbound()?;
         if let Some(encoded) = self.encoded.as_ref() {

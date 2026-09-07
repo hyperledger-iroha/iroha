@@ -836,6 +836,14 @@ fn first_release_retirement_discards_unpublished_temp_for_every_fixed_pair() {
         ),
         ("certified", CERTIFIED_LANE_BLOCKS_DATA_FILE),
         (
+            "autonomous-merge-bundle",
+            AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
+        ),
+        (
+            "canonical-replica",
+            CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE,
+        ),
+        (
             "application-receipt",
             LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
         ),
@@ -901,6 +909,16 @@ fn first_release_retirement_rejects_directory_substitution_at_pair_refresh() {
             "certified",
             CERTIFIED_LANE_BLOCKS_DATA_FILE,
             "lane retirement certified lane block",
+        ),
+        (
+            "autonomous-merge-bundle",
+            AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
+            "lane retirement autonomous merge bundle",
+        ),
+        (
+            "canonical-replica",
+            CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE,
+            CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL,
         ),
         (
             "application-receipt",
@@ -1504,7 +1522,7 @@ fn canonical_sealed_reveal_block_and_current_receipt_release_applied_participant
         1,
         0,
         Hash::from(entrypoint_hash),
-        &producer,
+        vec![PeerId::new(producer.public_key().clone())],
     );
     let plan = crate::queue::RoutingPlan::native_amx(
         crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(7)),

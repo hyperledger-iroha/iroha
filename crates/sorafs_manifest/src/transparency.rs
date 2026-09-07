@@ -1729,7 +1729,10 @@ fn hash_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     hasher.update(&right);
     *hasher.finalize().as_bytes()
 }
-fn hash_norito<T: Encode>(domain: &[u8], value: &T) -> Result<[u8; 32], TransparencyLedgerError> {
+fn hash_norito<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<[u8; 32], TransparencyLedgerError> {
     let bytes =
         norito::encode_canonical(value).map_err(|_| TransparencyLedgerError::CanonicalEncode)?;
     let mut hasher = Hasher::new();

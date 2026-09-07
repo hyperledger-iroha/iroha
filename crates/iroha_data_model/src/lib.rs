@@ -406,3 +406,9 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_schema_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod generic_identity_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod concrete_identity_tests;

@@ -8,7 +8,7 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-use norito::core::NoritoSerialize as _;
+use norito::core::SerializePayload as _;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -927,13 +927,15 @@ struct PorProofSigningPayloadV1 {
     submitted_at: u64,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed string that preserves the owned `String` wire representation.
     pub(super) struct String<'a>(pub(super) &'a str);
     impl NoritoSerialize for String<'_> {
         fn schema_hash() -> [u8; 16] {
             <std::string::String>::schema_hash()
         }
+    }
+    impl SerializePayload for String<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -953,6 +955,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -972,6 +976,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::option::Option<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Option<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1016,6 +1022,8 @@ impl norito::core::NoritoSerialize for PorProofSigningPayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         PorProofSigningPayloadV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PorProofSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1353,6 +1361,8 @@ impl norito::core::NoritoSerialize for AuditVerdictSigningPayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         AuditVerdictSigningPayloadV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for AuditVerdictSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -2831,6 +2841,7 @@ pub fn decode_por_weekly_report_v1(bytes: &[u8]) -> Result<PorWeeklyReportV1, no
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
+    use norito::core::NoritoSerialize as _;
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();

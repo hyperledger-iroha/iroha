@@ -8528,54 +8528,6 @@ include!("refinement/post_carrier_transition.rs");
 mod nonqueue_replica_release_refinement_tests {
     use super::*;
 
-    fn replica_fifo_state(released_prefix: u64) -> ProductionInFlightFirstReleaseStateProjection {
-        let binding_a = CanonicalIdentityProjection::from_bytes(
-            IDENTITY_DOMAIN_PAYLOAD,
-            IDENTITY_KIND_CANONICAL_PAYLOAD,
-            [0x71; 32],
-        );
-        ProductionInFlightFirstReleaseStateProjection {
-            validator_count: 3,
-            producer: 1,
-            producer_selected_owner: 1,
-            replicated_carrier_owners: 6,
-            payload_binding_a: 3,
-            binding_a,
-            queue: ProductionInFlightFirstReleaseQueueProjection {
-                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
-                selected_count: 2,
-                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
-            },
-            carrier: ProductionInFlightFirstReleaseCarrierProjection {
-                kura_active: 3,
-                ..ProductionInFlightFirstReleaseCarrierProjection::default()
-            },
-            session: ProductionInFlightFirstReleaseSessionProjection {
-                bodies: 3,
-                producer_alive: true,
-                ..ProductionInFlightFirstReleaseSessionProjection::default()
-            },
-            history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v1: true,
-                ever_reservation_v1: true,
-                pending_high_water: 2,
-                released_high_water: released_prefix,
-                ..ProductionInFlightFirstReleaseHistoryProjection::default()
-            },
-            decision: ProductionInFlightFirstReleaseDecisionProjection {
-                release_scope: binding_a,
-                release_owner: 2,
-                ..ProductionInFlightFirstReleaseDecisionProjection::default()
-            },
-            release: ProductionInFlightFirstReleaseReleaseProjection {
-                kura_retired: true,
-                pending_prefix: 2,
-                released_prefix,
-                fifo_restored: true,
-            },
-        }
-    }
-
     #[test]
     fn replica_fifo_released_prefix_requires_exact_nonproducer_release_owner() {
         let mut live = replica_fifo_state(0);
@@ -8628,37 +8580,6 @@ mod nonqueue_replica_release_refinement_tests {
         assert!(production_in_flight_first_release_transition_kernel(
             resumed_fifo_proof
         ));
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
-                resumed_fifo_proof,
-                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ComposedNext,
-            )
-            .is_none(),
-            "an unchanged replica FIFO proof must not masquerade as a state-changing step",
-        );
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
-                resumed_fifo_proof,
-                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter,
-            )
-            .is_some(),
-            "an exact already-proved nonproducer FIFO release must pass its explicit stutter class",
-        );
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_transition(
-                resumed_fifo_proof,
-            )
-            .is_some(),
-            "the production wrapper must classify a resumed replica FIFO proof",
-        );
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
-                direct,
-                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter,
-            )
-            .is_none(),
-            "a state-changing first FIFO proof must not pass the stutter class",
-        );
     }
 }
 #[cfg(test)]

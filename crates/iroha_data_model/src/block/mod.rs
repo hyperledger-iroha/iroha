@@ -1039,7 +1039,7 @@ pub mod stream {
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
-        core::{Error as NoritoError, NoritoSerialize},
+        core::{Error as NoritoError, NoritoSerialize, SerializePayload},
     };
     use std::{num::NonZeroU64, sync::Arc};
     #[model]
@@ -1053,6 +1053,8 @@ pub mod stream {
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
         )]
         #[repr(transparent)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::block::stream::model::BlockSubscriptionRequest")]
         pub struct BlockSubscriptionRequest(pub NonZeroU64);
         /// Message sent by the stream producer containing block.
         #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
@@ -1061,6 +1063,8 @@ pub mod stream {
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
         )]
         #[repr(transparent)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::block::stream::model::BlockMessage")]
         pub struct BlockMessage(pub SignedBlock);
     }
     impl From<BlockMessage> for SignedBlock {
@@ -1073,14 +1077,24 @@ pub mod stream {
     #[derive(Debug, Clone)]
     #[repr(transparent)]
     pub struct BlockMessageSend(pub Arc<SignedBlock>);
+    impl norito::NoritoSchema for BlockMessageSend {
+        fn nominal_name() -> String {
+            "iroha_data_model::block::stream::BlockMessageSend".to_owned()
+        }
+        fn frame_name() -> String {
+            <BlockMessage as norito::NoritoSchema>::frame_name()
+        }
+    }
     impl NoritoSerialize for BlockMessageSend {
         fn schema_hash() -> [u8; 16] {
             <BlockMessage as NoritoSerialize>::schema_hash()
         }
+    }
+    impl SerializePayload for BlockMessageSend {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
             // Serialize as a BlockMessage wrapper to keep schema and layout consistent
             let msg = BlockMessage(self.0.as_ref().clone());
-            NoritoSerialize::serialize(&msg, writer)
+            SerializePayload::serialize(&msg, writer)
         }
     }
     /// Exports common structs and enums from this module.

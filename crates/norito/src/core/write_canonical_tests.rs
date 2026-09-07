@@ -33,6 +33,8 @@ struct ChangingPayload {
     second: &'static [u8],
 }
 impl NoritoSerialize for ChangingPayload {
+}
+impl SerializePayload for ChangingPayload {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let call = self.calls.get();
         self.calls.set(call + 1);
@@ -68,6 +70,8 @@ fn streamed_canonical_frame_rejects_second_pass_checksum_drift() {
 fn streamed_canonical_frame_rejects_second_pass_flag_drift() {
     struct ChangingFlags(Cell<usize>);
     impl NoritoSerialize for ChangingFlags {
+}
+impl SerializePayload for ChangingFlags {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let call = self.0.get();
             self.0.set(call + 1);

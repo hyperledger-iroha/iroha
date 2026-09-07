@@ -656,7 +656,7 @@ pub fn encode_rows_u64_str_bool_auto(rows: &[(u64, &str, bool)]) -> (u8, Vec<u8>
 
 // Bring Norito traits into scope for callers (may be unused in AoS ad-hoc paths).
 #[allow(unused_imports)]
-use crate::NoritoSerialize as _;
+use crate::SerializePayload as _;
 
 /// Tag used to mark AoS encoding inside adaptive payloads.
 pub const ADAPTIVE_TAG_AOS: u8 = 0u8;

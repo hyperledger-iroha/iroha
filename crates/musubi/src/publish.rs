@@ -4321,12 +4321,12 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-fn canonical_encoded_len<T: Encode>(value: &T) -> Result<usize, String> {
+fn canonical_encoded_len<T: norito::NoritoSerialize>(value: &T) -> Result<usize, String> {
     norito::encode_canonical(value)
         .map(|bytes| bytes.len())
         .map_err(|error| format!("canonical Norito encoding failed: {error}"))
 }
-fn ensure_release_component_budget<T: Encode>(
+fn ensure_release_component_budget<T: norito::NoritoSerialize>(
     value: &T,
     maximum: usize,
     component: &str,

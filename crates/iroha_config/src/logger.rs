@@ -1,7 +1,7 @@
 //! Configuration utils related to Logger specifically.
 pub use iroha_data_model::Level;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
@@ -38,10 +38,11 @@ impl JsonDeserialize for Format {
         })
     }
 }
-impl NoritoSerialize for Format {
+impl NoritoSerialize for Format {}
+impl SerializePayload for Format {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
-        <String as NoritoSerialize>::serialize(&text, writer)
+        <String as SerializePayload>::serialize(&text, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(self.to_string().len())
@@ -124,10 +125,11 @@ impl JsonDeserialize for Directives {
         })
     }
 }
-impl NoritoSerialize for Directives {
+impl NoritoSerialize for Directives {}
+impl SerializePayload for Directives {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
-        <String as NoritoSerialize>::serialize(&text, writer)
+        <String as SerializePayload>::serialize(&text, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(self.to_string().len())

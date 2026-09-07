@@ -390,7 +390,7 @@ fn validate_artifact_bindings(
 fn canonical_sizes(
     evidence: KagemushaHandoffEvidenceV1<'_>,
 ) -> Result<KagemushaHandoffEvidenceSizesV1, KagemushaRecursionErrorV1> {
-    fn encoded_len<T: norito::codec::Encode>(
+    fn encoded_len<T: norito::NoritoSerialize>(
         value: &T,
     ) -> Result<usize, KagemushaRecursionErrorV1> {
         norito::encode_canonical(value)

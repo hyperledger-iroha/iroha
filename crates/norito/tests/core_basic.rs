@@ -94,7 +94,8 @@ fn checksum_validation() {
 }
 #[repr(C)]
 struct A(u32, u32);
-impl NoritoSerialize for A {
+impl NoritoSerialize for A {}
+impl SerializePayload for A {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(encoder)?;
         self.1.serialize(encoder)

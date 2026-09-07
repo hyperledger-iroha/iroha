@@ -2549,7 +2549,7 @@ pub mod extractors {
         };
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
-        use norito::core::{NoritoDeserialize, NoritoSerialize};
+        use norito::core::{NoritoDeserialize, NoritoSerialize, SerializePayload};
         #[derive(
             Clone,
             Debug,

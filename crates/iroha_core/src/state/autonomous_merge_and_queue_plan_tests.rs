@@ -4044,3 +4044,68 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         "failed source construction remains fail-closed"
     );
 }
+
+#[test]
+fn pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_current_source() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let carrier_height = authority_height.checked_add(1).expect("next carrier");
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        authority_height,
+        0x6b,
+    );
+    let certificate_hash = state
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&certificate)
+        .expect("retain exact current-frontier certificate");
+    for obsolete_height in [0, authority_height] {
+        assert_eq!(
+            state
+                .classify_pending_queue_plan_admission(&certificate, obsolete_height)
+                .expect("authenticated admission survives obsolete worker")
+                .1,
+            PendingQueuePlanAdmissionDisposition::DeferredCarrier,
+        );
+        assert!(state.validate_queue_plan_admissions_for_carrier(
+            &[certificate.clone()], obsolete_height,
+        ).is_err(), "deferral must not authorize the certificate in an earlier carrier");
+        assert_eq!(
+            state
+                .kura
+                .pending_queue_plan_admission_certificate(certificate_hash)
+                .expect("inspect retained exact certificate"),
+            Some(certificate.clone())
+        );
+        assert!(
+            state
+                .classify_pending_queue_plan_admission(&[0xff], obsolete_height)
+                .is_err(),
+            "an obsolete caller does not bypass certificate authentication"
+        );
+    }
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, carrier_height)
+            .expect("current worker classifies the same certificate")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    let _ = state.lane_incarnations.write().insert(
+        LaneId::SINGLE,
+        Hash::new(b"queue-plan-deferred-carrier-replaced-incarnation"),
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, carrier_height)
+            .expect("current worker still rejects real incarnation drift")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
+    );
+}

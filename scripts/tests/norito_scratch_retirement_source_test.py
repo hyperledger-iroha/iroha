@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Fail closed on retired Norito print-only scratch targets.
+"""Check retired scratch surfaces and their retained codec regression owners.
 
-This stdlib-only guard authenticates the deleted source preimages through Git
-objects, seals the grouped-test postimage, preserves the complete Norito target
-manifest and lockfile, and requires stronger retained regression coverage. Its
-mutation tests operate only on in-memory snapshots.
+Opening Git objects remain historical evidence, tested separately. Current
+acceptance uses target registration and executable assertions, not historical
+manifest, lockfile, source hashes or item order. Rust suites and authoritative
+source/dependency budgets remain independent required checks.
 """
 
 from __future__ import annotations
@@ -15,6 +15,13 @@ import re
 import stat
 import subprocess
 import unittest
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 uses scripts/requirements.txt.
+    import tomli as tomllib
+
+from scripts import check_norito_codec_contracts as rust
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,27 +110,16 @@ GROUP_BLOB = "9c5cd30984cb13ea7a280d9bc2786a9551078a31"
 GROUP_SHA256 = "32ef1238333208aa963ef6937b41b0c8a955190619d65f1a8cd4a2b3b90a4968"
 GROUP_BYTES = 2_156
 GROUP_LINES = 68
-POST_GROUP_SHA256 = "257b6c8ac3fa8532e613436a8d34fe1e355fd62cafb6a4498d3865126041233e"
-POST_GROUP_BYTES = 1_928
-POST_GROUP_LINES = 60
 
 OPENING_MANIFEST_BLOB = "c629283d5728fec9e900563c613a7a0df4d41642"
 OPENING_MANIFEST_SHA256 = "e78ebe2ef7d33c41c39419b074dfef56a59394098e1e9c7e3ac7b0d5483d1232"
 OPENING_MANIFEST_BYTES = 4_778
 OPENING_MANIFEST_LINES = 231
-MANIFEST_BLOB = "891b8208480e0120b39f41dc6bf3186a8f4f34ff"
-MANIFEST_SHA256 = "2a38dbe53ea64e9a19d79947af8046960c0dcbbd4af0cab4c5a5e0ba915a834b"
-MANIFEST_BYTES = 4_473
-MANIFEST_LINES = 217
 
 OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
 OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 OPENING_LOCK_BYTES = 315_333
 OPENING_LOCK_LINES = 13_758
-LOCK_BLOB = "e320ffaa8af21674f079573a1aaa1a8d73185ae8"
-LOCK_SHA256 = "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
-LOCK_BYTES = 311_205
-LOCK_LINES = 13_616
 
 RETIRED_MODULE_BLOCKS = (
     '#[path = "../temp_print_nested.rs"]\nmod temp_print_nested;\n',
@@ -131,9 +127,8 @@ RETIRED_MODULE_BLOCKS = (
     '#[path = "../type_debug.rs"]\nmod type_debug;\n',
 )
 
-# Later first-release cleanup removed this independent obsolete codec target.
-# Keep the original scratch-retirement ledger above intact while accepting the
-# current, smaller grouped harness postimage.
+# The historical group removed the following independent obsolete codec target.
+# Retained modules are required to remain registered, without pinning their order.
 CURRENT_REMOVED_MODULE_BLOCKS = (
     *RETIRED_MODULE_BLOCKS,
     '#[path = "../sequential_roundtrip.rs"]\nmod sequential_roundtrip;\n',
@@ -220,15 +215,6 @@ REPLACEMENT_SOURCE_PINS = {
     ),
 }
 
-CURRENT_REPLACEMENT_SOURCE_PINS = {
-    **REPLACEMENT_SOURCE_PINS,
-    "crates/norito/tests/codec.rs": (
-        "a798fe5d104937d0da5c165879b3922f63413222",
-        "70178f9a4cd9dba93a7fdd2505bb1ed7b8745ac3b2ab250901c3b8eea597c9f7",
-        22_594,
-        651,
-    ),
-}
 
 RETIRED_IDENTIFIERS = (
     "temp_print_small3",
@@ -255,12 +241,6 @@ FUNCTION_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.MULTILINE,
 )
-TABLE_RE = re.compile(
-    r"^\[\[(?P<kind>[^\]]+)\]\]\n(?P<body>.*?)(?=^\[\[|^\[[^[]|\Z)",
-    re.MULTILINE | re.DOTALL,
-)
-FIELD_RE = re.compile(r'^([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"$', re.MULTILINE)
-FEATURE_RE = re.compile(r"^required-features\s*=\s*\[([^]]*)\]$", re.MULTILINE)
 
 
 class GuardError(AssertionError):
@@ -397,30 +377,82 @@ def _authenticate_openings() -> tuple[bytes, bytes]:
     return group, manifest
 
 
-def _expected_group(opening: bytes) -> bytes:
-    text = opening.decode("utf-8")
-    for block in CURRENT_REMOVED_MODULE_BLOCKS:
-        _require(text.count(block) == 1, "retired module opening count changed")
-        text = text.replace(block, "", 1)
-    postimage = text.encode("utf-8")
-    _require(len(postimage) == POST_GROUP_BYTES, "group postimage byte ledger changed")
-    _require(postimage.count(b"\n") == POST_GROUP_LINES, "group postimage line ledger changed")
-    _require(_sha256(postimage) == POST_GROUP_SHA256, "group postimage hash changed")
-    return postimage
+def _manifest(manifest: str) -> dict:
+    try:
+        return tomllib.loads(manifest)
+    except tomllib.TOMLDecodeError as error:
+        raise GuardError("manifest.invalid_toml") from error
 
 
 def _test_tables(manifest: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    tables = _manifest(manifest).get("test", [])
+    _require(isinstance(tables, list) and bool(tables), "targets.test_tables_missing")
     rows = []
-    for table in TABLE_RE.finditer(manifest):
-        if table.group("kind") != "test":
-            continue
-        body = table.group("body")
-        fields = dict(FIELD_RE.findall(body))
-        _require("name" in fields and "path" in fields, "test table fields changed")
-        feature_match = FEATURE_RE.search(body)
-        features = () if feature_match is None else tuple(re.findall(r'"([^"]+)"', feature_match.group(1)))
-        rows.append((fields["name"], fields["path"], features))
+    for table in tables:
+        _require(isinstance(table.get("name"), str) and isinstance(table.get("path"), str), "targets.test_fields")
+        _require(table.get("harness", True) is True and table.get("test", True) is True, "targets.test_disabled")
+        features = table.get("required-features", [])
+        _require(isinstance(features, list) and all(isinstance(item, str) for item in features), "targets.test_features")
+        rows.append((table["name"], table["path"], tuple(sorted(features))))
+    _require(len({row[0] for row in rows}) == len(rows) and len({row[1] for row in rows}) == len(rows), "targets.test_duplicate")
     return tuple(rows)
+
+
+def _module_entries(source: str) -> tuple[tuple[str, str], ...]:
+    entries = []
+    pattern = r'(?m)^((?:[ \t]*#\[[^\n]+\]\s*)*)[ \t]*mod\s+(\w+)\s*;'
+    masked = rust._mask_non_code(source)
+    for match in re.finditer(pattern, source):
+        if "mod" not in masked[match.start():match.end()]:
+            continue
+        attrs = match.group(1)
+        paths = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', attrs)
+        _require(len(paths) == 1 and not re.search(r'\b(?:cfg|cfg_attr|ignore)\b', rust.compact(attrs)), "targets.group_module_disabled")
+        entries.append((match.group(2), paths[0]))
+    _require(bool(entries) and len({name for name, _ in entries}) == len(entries), "targets.group_modules_invalid")
+    return tuple(entries)
+
+
+GROUP_ROOTS = tuple(f"crates/norito/tests/grouped/group_{index:02}.rs" for index in range(1, 7))
+REPLACEMENT_GROUPS = {
+    "crates/norito/tests/aos_ncb_more_golden.rs": GROUP_ROOTS[0],
+    "crates/norito/tests/codec.rs": GROUP_ROOTS[0],
+    "crates/norito/tests/containers_decode.rs": GROUP_ROOTS[1],
+    "crates/norito/tests/ncb_enum_iter_samples.rs": GROUP_ROOTS[3],
+}
+REPLACEMENT_ASSERTIONS = {
+    "crates/norito/tests/aos_ncb_more_golden.rs": {
+        "ncb_enum_offsets_code_delta_variant1_fixture": ("letbytes=ncb::encode_ncb_u64_enum_bool(&rows,false,false,true);", "assert_eq!(bytes,fix,"),
+        "ncb_enum_offsets_code_delta_variant2_fixture": ("letbytes=ncb::encode_ncb_u64_enum_bool(&rows,false,false,true);", "assert_eq!(bytes,fix,"),
+    },
+    "crates/norito/tests/ncb_enum_iter_samples.rs": {
+        "offsets_nested_window_fixture": ("letbytes=ncb::encode_ncb_u64_enum_bool(&rows,true,false,true);", "forbin&bytes", "assert_eq!(r#gen,hex,"),
+    },
+    "crates/norito/tests/codec.rs": {
+        "box_roundtrip": ("Box::<u32>::decode_all(&mut&bytes[..])", "Box::<String>::decode_all(&mut&bytes[..])", "assert_eq!(value,decoded);", "assert_eq!(str_box,decoded);"),
+        "vecdeque_roundtrip": ("letbytes=deque.encode();", "VecDeque::<String>::decode_all(&mut&bytes[..])", "assert_eq!(deque,decoded);"),
+        "binaryheap_roundtrip": ("letbytes=heap.encode();", "BinaryHeap::<u32>::decode_all(&mut&bytes[..])", "assert_eq!(heap.clone().into_sorted_vec(),decoded.into_sorted_vec());"),
+    },
+    "crates/norito/tests/containers_decode.rs": {
+        "vecdeque_roundtrip": ("to_bytes(&vd)", "decode_from_bytes(&bytes)", "assert_eq!(vd,out);"),
+        "binaryheap_roundtrip": ("to_bytes(&heap)", "decode_from_bytes(&bytes)", "assert_eq!(heap.into_sorted_vec(),out.into_sorted_vec());"),
+    },
+}
+REPLACEMENT_FIXTURES = {
+    "ncb_enum_offsets_code_delta_variant1_fixture": "tests/data/enum_offsets_code_delta_variant1.hex",
+    "ncb_enum_offsets_code_delta_variant2_fixture": "tests/data/enum_offsets_code_delta_variant2.hex",
+    "offsets_nested_window_fixture": "tests/data/enum_offsets_nested_window.hex",
+}
+
+
+def _replacement_test(source: str, path: str, name: str):
+    items = [item for item in rust.functions(source) if item.name == name]
+    _require(len(items) == 1, f"replacement.missing:{path}::{name}")
+    item = items[0]
+    attrs = re.search(r"((?:\s*#\[[^\n]*\])+\s*)$", source[:item.start])
+    _require(attrs is not None and rust.has_literal_syntax(attrs.group(1), "#[test]") and not re.search(r"\b(?:cfg|cfg_attr|ignore)\b", rust.compact(attrs.group(1))), f"replacement.disabled:{path}::{name}")
+    _require(not re.search(r"(?m)^#!\[cfg", rust._mask_non_code(source)), f"replacement.disabled:{path}::{name}")
+    return item
 
 
 def _example_targets() -> tuple[tuple[str, str], ...]:
@@ -438,7 +470,7 @@ def _active_consumer_hits() -> tuple[str, ...]:
     arguments = ["grep", "--untracked", "-n", "-I", "-F"]
     for identifier in RETIRED_IDENTIFIERS:
         arguments.extend(("-e", identifier))
-    arguments.extend(("--", ".", ":(exclude)status.md", ":(exclude)roadmap.md", f":(exclude){GUARD_PATH}"))
+    arguments.extend(("--", ".", ":(exclude)docs/history/**", f":(exclude){GUARD_PATH}"))
     result = _git(*arguments, check=False)
     _require(result.returncode in (0, 1), "active-consumer scan failed")
     if result.returncode == 1:
@@ -447,65 +479,73 @@ def _active_consumer_hits() -> tuple[str, ...]:
 
 
 def _snapshot() -> Snapshot:
-    paths = {GROUP_ROOT, MANIFEST, LOCKFILE, *REPLACEMENT_MARKERS}
+    manifest = _regular_bytes(MANIFEST)
+    targets = _test_tables(manifest.decode())
+    paths = {MANIFEST, *GROUP_ROOTS, *REPLACEMENT_MARKERS}
+    paths.update(f"crates/norito/{row[1]}" for row in targets)
+    paths.update(f"crates/norito/{path}" for path in REPLACEMENT_FIXTURES.values())
     files: dict[str, bytes | None] = {path: _regular_bytes(path) for path in paths}
     for pin in SOURCE_PINS:
         path = ROOT / pin.path
         files[pin.path] = _regular_bytes(pin.path) if path.exists() or path.is_symlink() else None
-    return Snapshot(
-        files=files,
-        example_targets=_example_targets(),
-        consumer_hits=_active_consumer_hits(),
-    )
+    return Snapshot(files, _example_targets(), _active_consumer_hits())
 
 
-def _validate(snapshot: Snapshot, opening_group: bytes, _opening_manifest: bytes) -> None:
+def _validate(snapshot: Snapshot, opening_group: bytes) -> None:
     for pin in SOURCE_PINS:
-        _require(snapshot.files[pin.path] is None, f"retired source resurrected: {pin.path}")
-
-    group = snapshot.files[GROUP_ROOT]
-    _require(group is not None, "grouped test root is missing")
-    _require(group == _expected_group(opening_group), "grouped test root postimage drifted")
-    _require(_sha256(group) == POST_GROUP_SHA256, "grouped test root hash drifted")
-    _require(len(re.findall(rb"(?m)^mod [A-Za-z_][A-Za-z0-9_]*;$", group)) == 29, "grouped module ledger changed")
+        _require(snapshot.files[pin.path] is None, f"retired.source:{pin.path}")
+    _require(not snapshot.consumer_hits, "retired.active_consumer")
+    names = [name for name, _ in snapshot.example_targets]
+    _require(len(names) == len(set(names)), "targets.example_duplicate")
+    _require(not set(names).intersection(RETIRED_IDENTIFIERS), "retired.example_target")
 
     manifest = snapshot.files[MANIFEST]
-    _require(manifest is not None, "Norito manifest is missing")
-    _require(len(manifest) == MANIFEST_BYTES, "Norito manifest byte count changed")
-    _require(manifest.count(b"\n") == MANIFEST_LINES, "Norito manifest line count changed")
-    _require(_sha256(manifest) == MANIFEST_SHA256, "Norito manifest content changed")
-    _require(manifest == _git_blob(MANIFEST_BLOB), "Norito manifest differs from current authority")
-    manifest_text = manifest.decode("utf-8")
-    _require(len(re.findall(r"^autotests\s*=\s*false$", manifest_text, re.MULTILINE)) == 1, "autotests=false contract changed")
-    _require(not re.search(r"^autoexamples\s*=", manifest_text, re.MULTILINE), "autoexample discovery contract changed")
-    _require(_test_tables(manifest_text) == EXPECTED_TEST_TABLES, "explicit test target ledger changed")
-    _require(
-        snapshot.example_targets == EXPECTED_EXAMPLE_TARGETS,
-        "autoexample target ledger changed",
-    )
+    _require(manifest is not None, "manifest.missing")
+    document = _manifest(manifest.decode())
+    package = document.get("package", {})
+    _require(package.get("autotests") is False, "targets.autotests_must_be_disabled")
+    _require(package.get("autoexamples", True) is True, "targets.autoexamples_must_be_enabled")
+    criterion = document.get("dev-dependencies", {}).get("criterion", {})
+    _require(isinstance(criterion, dict) and criterion.get("workspace") is True, "manifest.criterion_bench_dependency")
+    tables = _test_tables(manifest.decode())
+    required = (*EXPECTED_TEST_TABLES, ("json_object_key_allocations", "tests/json_object_key_allocations.rs", ("json",)))
+    _require(set(required).issubset(tables), "targets.required_test_registration")
+    for name, path, _features in tables:
+        _require(Path(path).is_relative_to("tests") and ".." not in Path(path).parts, "targets.test_path")
+        _require(snapshot.files.get(f"crates/norito/{path}") is not None, f"targets.test_source:{name}")
+    for table in document.get("example", []):
+        _require(table.get("name") not in RETIRED_IDENTIFIERS, "retired.example_target")
+    _require(set(EXPECTED_EXAMPLE_TARGETS).issubset(snapshot.example_targets), "targets.retained_example_missing")
 
-    lock = snapshot.files[LOCKFILE]
-    _require(lock is not None, "Cargo.lock is missing")
-    _require(len(lock) == LOCK_BYTES, "Cargo.lock byte count changed")
-    _require(lock.count(b"\n") == LOCK_LINES, "Cargo.lock line count changed")
-    _require(_sha256(lock) == LOCK_SHA256, "Cargo.lock hash changed")
-    _require(lock == _git_blob(LOCK_BLOB), "Cargo.lock differs from current authority")
+    groups = {}
+    for path in GROUP_ROOTS:
+        source = snapshot.files[path]
+        _require(source is not None, f"targets.group_missing:{path}")
+        _require(not re.search(r"(?m)^#!\[cfg", rust._mask_non_code(source.decode())), f"targets.group_disabled:{path}")
+        groups[path] = _module_entries(source.decode())
+    current = [entry for entries in groups.values() for entry in entries]
+    _require(len(current) == len({name for name, _ in current}) == len({path for _, path in current}), "targets.group_duplicate")
+    retired_modules = {Path(pin.path).stem for pin in SOURCE_PINS}
+    retired_modules.add("sequential_roundtrip")
+    required_modules = [entry for entry in _module_entries(opening_group.decode()) if entry[0] not in retired_modules]
+    _require(all(entry in current for entry in required_modules), "targets.retained_group_module_missing")
+    _require(not any(name in retired_modules for name, _ in current), "retired.group_module")
+    for path, group in REPLACEMENT_GROUPS.items():
+        entry = (Path(path).stem, "../" + Path(path).name)
+        _require(entry in groups[group], f"replacement.registration:{path}")
 
-    for path, markers in REPLACEMENT_MARKERS.items():
-        data = snapshot.files[path]
-        _require(data is not None, f"replacement source is missing: {path}")
-        blob, sha256, byte_count, line_count = CURRENT_REPLACEMENT_SOURCE_PINS[path]
-        _require(len(data) == byte_count, f"replacement source byte count changed: {path}")
-        _require(
-            data.count(b"\n") == line_count,
-            f"replacement source line count changed: {path}",
-        )
-        _require(_sha256(data) == sha256, f"replacement source content changed: {path}")
-        _require(data == _git_blob(blob), f"replacement source differs from opening: {path}")
-        source = data.decode("utf-8")
-        for marker, count in markers:
-            _require(source.count(marker) == count, f"replacement marker changed in {path}: {marker}")
-    _require(not snapshot.consumer_hits, f"active retired-surface consumer found: {snapshot.consumer_hits}")
+    for path, contracts in REPLACEMENT_ASSERTIONS.items():
+        source = snapshot.files[path]
+        _require(source is not None, f"replacement.source:{path}")
+        text = source.decode()
+        for name, assertions in contracts.items():
+            item = _replacement_test(text, path, name)
+            _require(all(re.search(r"(?<![\w])" + re.escape(assertion), item.code) for assertion in assertions), f"replacement.assertions:{path}::{name}")
+            if name in REPLACEMENT_FIXTURES:
+                fixture = REPLACEMENT_FIXTURES[name]
+                _require(rust.has_literal_syntax(item.raw_body, ('read_hex_fixture' if name.startswith('ncb_enum_') else '.join') + '("' + fixture + '")'), f"replacement.fixture:{name}")
+                payload = snapshot.files.get("crates/norito/" + fixture)
+                _require(payload is not None and re.fullmatch(rb"[0-9a-fA-F\s]+", payload) is not None and bool(bytes.fromhex(payload.decode())), f"replacement.fixture_data:{name}")
 
 
 def _mutate(snapshot: Snapshot, path: str, data: bytes | None) -> Snapshot:
@@ -519,7 +559,7 @@ def _mutate(snapshot: Snapshot, path: str, data: bytes | None) -> Snapshot:
 
 
 class NoritoScratchRetirementSourceTest(unittest.TestCase):
-    """Authenticate the retirement and prove representative mutations fail."""
+    """Each negative first proves the actual current-source baseline passes."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -527,202 +567,104 @@ class NoritoScratchRetirementSourceTest(unittest.TestCase):
         cls.snapshot = _snapshot()
 
     def validate(self, snapshot: Snapshot) -> None:
-        _validate(snapshot, self.opening_group, self.opening_manifest)
+        _validate(snapshot, self.opening_group)
+
+    def assert_rejected(self, changed: Snapshot, diagnostic: str) -> None:
+        self.validate(self.snapshot)
+        self.assertNotEqual(changed, self.snapshot, "mutation must change the input")
+        with self.assertRaises(GuardError) as raised:
+            self.validate(changed)
+        self.assertEqual(str(raised.exception), diagnostic)
+
+    def changed(self, path: str, old: bytes, new: bytes) -> Snapshot:
+        source = self.snapshot.files[path]
+        self.assertIsNotNone(source)
+        self.assertIn(old, source, "mutation target must exist")
+        return _mutate(self.snapshot, path, source.replace(old, new, 1))
 
     def test_retirement_contract(self) -> None:
         self.validate(self.snapshot)
 
-    def test_mutation_deleted_source_resurrection_fails(self) -> None:
-        mutated = _mutate(self.snapshot, SOURCE_PINS[0].path, b"#[test]\nfn resurrected() {}\n")
-        with self.assertRaisesRegex(GuardError, "retired source resurrected"):
-            self.validate(mutated)
+    def test_historical_preimages_remain_authenticated(self) -> None:
+        self.assertEqual(_authenticate_openings(), (self.opening_group, self.opening_manifest))
 
-    def test_mutation_module_resurrection_fails(self) -> None:
+    def test_retired_surfaces_rejected(self) -> None:
+        self.assert_rejected(_mutate(self.snapshot, SOURCE_PINS[0].path, b"#[test]\nfn restored() {}\n"), f"retired.source:{SOURCE_PINS[0].path}")
+        self.assert_rejected(Snapshot(self.snapshot.files, self.snapshot.example_targets, ("README.md:1:repro_vecdeque",)), "retired.active_consumer")
+        self.assert_rejected(Snapshot(self.snapshot.files, (*self.snapshot.example_targets, ("repro_vecdeque", "crates/norito/examples/repro_vecdeque/main.rs")), ()), "retired.example_target")
         group = self.snapshot.files[GROUP_ROOT]
-        assert group is not None
-        mutated = _mutate(self.snapshot, GROUP_ROOT, group + RETIRED_MODULE_BLOCKS[0].encode())
-        with self.assertRaisesRegex(GuardError, "grouped test root"):
-            self.validate(mutated)
+        self.assert_rejected(_mutate(self.snapshot, GROUP_ROOT, group + RETIRED_MODULE_BLOCKS[0].encode()), "retired.group_module")
 
-    def test_mutation_group_order_fails(self) -> None:
+    def test_target_registration_mutations_rejected(self) -> None:
+        cases = (
+            (b"autotests = false", b"autotests = true", "targets.autotests_must_be_disabled"),
+            (b"autotests = false", b"autotests = false\nautoexamples = false # disabled", "targets.autoexamples_must_be_enabled"),
+            (b'name = "norito_group_05"', b'name = "unregistered_group"', "targets.required_test_registration"),
+            (b'name = "norito_group_05"', b'name = "norito_group_05"\nharness = false', "targets.test_disabled"),
+            (b"criterion = { workspace = true }\n", b"", "manifest.criterion_bench_dependency"),
+            (b'name = "json_object_key_allocations"', b'name = "removed_allocation_contract"', "targets.required_test_registration"),
+        )
+        for old, new, diagnostic in cases:
+            with self.subTest(diagnostic=diagnostic):
+                self.assert_rejected(self.changed(MANIFEST, old, new), diagnostic)
+        self.assert_rejected(self.changed(GROUP_ROOT, b"mod transport_capabilities;", b"mod lost_transport_capabilities;"), "targets.retained_group_module_missing")
+        path = "crates/norito/tests/containers_decode.rs"
+        group = REPLACEMENT_GROUPS[path]
+        self.assert_rejected(self.changed(group, b'#[path = "../containers_decode.rs"]\nmod containers_decode;\n', b""), f"replacement.registration:{path}")
+        self.assert_rejected(self.changed(group, b'mod containers_decode;', b'#[cfg(any())]\nmod containers_decode;'), "targets.group_module_disabled")
+
+    def test_group_roots_and_unique_module_ownership_are_enforced(self) -> None:
+        path = GROUP_ROOTS[0]
+        source = self.snapshot.files[path]
+        self.assert_rejected(_mutate(self.snapshot, path, b"#![cfg(any())]\n" + source), f"targets.group_disabled:{path}")
+        self.assert_rejected(_mutate(self.snapshot, path, source + b'#[path = "../codec.rs"]\nmod duplicate_codec;\n'), "targets.group_duplicate")
+
+    def test_replacement_tests_and_assertions_cannot_be_disabled(self) -> None:
+        for path, contracts in REPLACEMENT_ASSERTIONS.items():
+            for name in contracts:
+                old = f"#[test]\nfn {name}".encode()
+                for replacement in (f"fn {name}", f"#[test]\n#[ignore]\nfn {name}", f"#[test]\n#[cfg(any())]\nfn {name}"):
+                    with self.subTest(path=path, name=name, replacement=replacement):
+                        self.assert_rejected(self.changed(path, old, replacement.encode()), f"replacement.disabled:{path}::{name}")
+        path = "crates/norito/tests/aos_ncb_more_golden.rs"
+        name = "ncb_enum_offsets_code_delta_variant1_fixture"
+        self.assert_rejected(self.changed(path, f"fn {name}()".encode(), b"fn removed_fixture()"), f"replacement.missing:{path}::{name}")
+        for number in (1, 2):
+            name = f"ncb_enum_offsets_code_delta_variant{number}_fixture"
+            old = f'assert_eq!(bytes, fix, "offsets+code-delta variant{number} bytes mismatch");'.encode()
+            self.assert_rejected(self.changed(path, old, b"/* " + old + b" */"), f"replacement.assertions:{path}::{name}")
+        for path, contracts in REPLACEMENT_ASSERTIONS.items():
+            for name in contracts:
+                source = self.snapshot.files[path].decode()
+                item = _replacement_test(source, path, name)
+                body = item.raw_body
+                self.assertIn("assert_eq!", body)
+                changed = source[:item.opening + 1] + body.replace("assert_eq!", "debug_assert_eq!") + source[item.end:]
+                self.assert_rejected(_mutate(self.snapshot, path, changed.encode()), f"replacement.assertions:{path}::{name}")
+
+    def test_fixture_disconnection_rejected(self) -> None:
+        path = "crates/norito/tests/aos_ncb_more_golden.rs"
+        name = "ncb_enum_offsets_code_delta_variant1_fixture"
+        old = REPLACEMENT_FIXTURES[name].encode()
+        self.assert_rejected(self.changed(path, old, b"tests/data/wrong.hex"), f"replacement.fixture:{name}")
+        source = self.snapshot.files[path]
+        call = b'read_hex_fixture("' + old + b'")'
+        self.assert_rejected(_mutate(self.snapshot, path, source.replace(call, b'read_hex_fixture("tests/data/wrong.hex") /* ' + call + b' */', 1)), f"replacement.fixture:{name}")
+        self.assert_rejected(_mutate(self.snapshot, "crates/norito/" + old.decode(), b"not hex"), f"replacement.fixture_data:{name}")
+
+    def test_unrelated_growth_and_module_order_are_not_historical_pins(self) -> None:
+        self.validate(self.snapshot)
+        manifest = self.snapshot.files[MANIFEST]
+        changed = _mutate(self.snapshot, MANIFEST, manifest + b'\n[package.metadata.retirement_test]\nnote = "unrelated package metadata"\n')
+        self.assertNotEqual(changed, self.snapshot)
+        self.validate(changed)
         group = self.snapshot.files[GROUP_ROOT]
-        assert group is not None
-        mutated = _mutate(
-            self.snapshot,
-            GROUP_ROOT,
-            group.replace(b"mod transport_capabilities;", b"mod z_transport_capabilities;", 1),
-        )
-        with self.assertRaisesRegex(GuardError, "grouped test root"):
-            self.validate(mutated)
-
-    def test_mutation_commented_autoexamples_disable_fails(self) -> None:
-        manifest = self.snapshot.files[MANIFEST]
-        assert manifest is not None
-        mutated = _mutate(
-            self.snapshot,
-            MANIFEST,
-            manifest.replace(
-                b"autotests = false\n",
-                b"autotests = false\nautoexamples = false # drift\n",
-                1,
-            ),
-        )
-        with self.assertRaisesRegex(GuardError, "Norito manifest"):
-            self.validate(mutated)
-
-    def test_mutation_test_target_fails(self) -> None:
-        manifest = self.snapshot.files[MANIFEST]
-        assert manifest is not None
-        mutated = _mutate(
-            self.snapshot,
-            MANIFEST,
-            manifest.replace(b'name = "norito_group_05"', b'name = "norito_group_05_drift"', 1),
-        )
-        with self.assertRaisesRegex(GuardError, "Norito manifest"):
-            self.validate(mutated)
-
-    def test_mutation_dependency_drift_fails(self) -> None:
-        manifest = self.snapshot.files[MANIFEST]
-        assert manifest is not None
-        mutated = _mutate(
-            self.snapshot,
-            MANIFEST,
-            manifest.replace(b"criterion = { workspace = true }\n", b"", 1),
-        )
-        with self.assertRaisesRegex(GuardError, "Norito manifest"):
-            self.validate(mutated)
-
-    def test_mutation_lock_fails(self) -> None:
-        lock = self.snapshot.files[LOCKFILE]
-        assert lock is not None
-        mutated = _mutate(self.snapshot, LOCKFILE, lock + b"# drift\n")
-        with self.assertRaisesRegex(GuardError, "Cargo.lock"):
-            self.validate(mutated)
-
-    def test_mutation_active_reference_fails(self) -> None:
-        mutated = Snapshot(
-            files=dict(self.snapshot.files),
-            example_targets=self.snapshot.example_targets,
-            consumer_hits=("README.md:1:cargo run -p norito --example repro_vecdeque",),
-        )
-        with self.assertRaisesRegex(GuardError, "active retired-surface consumer"):
-            self.validate(mutated)
-
-    def test_mutation_replacement_marker_fails(self) -> None:
-        path = "crates/norito/tests/aos_ncb_more_golden.rs"
-        source = self.snapshot.files[path]
-        assert source is not None
-        mutated = _mutate(
-            self.snapshot,
-            path,
-            source.replace(
-                b"fn ncb_enum_offsets_code_delta_variant1_fixture()",
-                b"fn removed_variant1_fixture()",
-                1,
-            ),
-        )
-        with self.assertRaisesRegex(GuardError, "replacement source"):
-            self.validate(mutated)
-
-    def test_mutation_replacement_test_attribute_removed_fails(self) -> None:
-        path = "crates/norito/tests/aos_ncb_more_golden.rs"
-        source = self.snapshot.files[path]
-        assert source is not None
-        mutated = _mutate(
-            self.snapshot,
-            path,
-            source.replace(
-                b"#[test]\nfn ncb_enum_offsets_code_delta_variant1_fixture()",
-                b"fn ncb_enum_offsets_code_delta_variant1_fixture()",
-                1,
-            ),
-        )
-        with self.assertRaisesRegex(GuardError, "replacement source"):
-            self.validate(mutated)
-
-    def test_mutation_replacement_test_ignore_added_fails(self) -> None:
-        path = "crates/norito/tests/aos_ncb_more_golden.rs"
-        source = self.snapshot.files[path]
-        assert source is not None
-        mutated = _mutate(
-            self.snapshot,
-            path,
-            source.replace(
-                b"#[test]\nfn ncb_enum_offsets_code_delta_variant1_fixture()",
-                b"#[test]\n#[ignore]\nfn ncb_enum_offsets_code_delta_variant1_fixture()",
-                1,
-            ),
-        )
-        with self.assertRaisesRegex(GuardError, "replacement source"):
-            self.validate(mutated)
-
-    def test_mutation_replacement_test_false_cfg_added_fails(self) -> None:
-        path = "crates/norito/tests/aos_ncb_more_golden.rs"
-        source = self.snapshot.files[path]
-        assert source is not None
-        mutated = _mutate(
-            self.snapshot,
-            path,
-            source.replace(
-                b"#[test]\nfn ncb_enum_offsets_code_delta_variant2_fixture()",
-                b"#[test]\n#[cfg(any())]\nfn ncb_enum_offsets_code_delta_variant2_fixture()",
-                1,
-            ),
-        )
-        with self.assertRaisesRegex(GuardError, "replacement source"):
-            self.validate(mutated)
-
-    def test_mutation_variant_assertions_removed_fails(self) -> None:
-        path = "crates/norito/tests/aos_ncb_more_golden.rs"
-        source = self.snapshot.files[path]
-        assert source is not None
-        mutated_source = source.replace(
-            b'    assert_eq!(bytes, fix, "offsets+code-delta variant1 bytes mismatch");\n',
-            b"",
-            1,
-        ).replace(
-            b'    assert_eq!(bytes, fix, "offsets+code-delta variant2 bytes mismatch");\n',
-            b"",
-            1,
-        )
-        mutated = _mutate(self.snapshot, path, mutated_source)
-        with self.assertRaisesRegex(GuardError, "replacement source"):
-            self.validate(mutated)
-
-    def test_mutation_extra_example_fails(self) -> None:
-        mutated = Snapshot(
-            files=dict(self.snapshot.files),
-            example_targets=tuple(
-                sorted(
-                    (
-                        *self.snapshot.example_targets,
-                        ("extra_example", "crates/norito/examples/extra_example.rs"),
-                    )
-                )
-            ),
-            consumer_hits=self.snapshot.consumer_hits,
-        )
-        with self.assertRaisesRegex(GuardError, "autoexample target ledger"):
-            self.validate(mutated)
-
-    def test_mutation_nested_retired_example_resurrection_fails(self) -> None:
-        mutated = Snapshot(
-            files=dict(self.snapshot.files),
-            example_targets=tuple(
-                sorted(
-                    (
-                        *self.snapshot.example_targets,
-                        (
-                            "repro_vecdeque",
-                            "crates/norito/examples/repro_vecdeque/main.rs",
-                        ),
-                    )
-                )
-            ),
-            consumer_hits=self.snapshot.consumer_hits,
-        )
-        with self.assertRaisesRegex(GuardError, "autoexample target ledger"):
-            self.validate(mutated)
+        first = b'#[path = "../decode_sequence_limits.rs"]\nmod decode_sequence_limits;\n'
+        self.assertIn(first, group)
+        self.validate(_mutate(self.snapshot, GROUP_ROOT, group.replace(first, b"", 1) + first))
+        added = Snapshot(self.snapshot.files, (*self.snapshot.example_targets, ("new_example", "crates/norito/examples/new_example.rs")), ())
+        self.assertNotEqual(added, self.snapshot)
+        self.validate(added)
 
 
 if __name__ == "__main__":

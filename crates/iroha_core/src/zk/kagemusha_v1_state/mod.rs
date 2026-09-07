@@ -5016,7 +5016,7 @@ fn validate_peer_payment_against_context<R: KagemushaRecursiveVerifierV1>(
         .map_err(KagemushaStateErrorV1::ProofRejected)
 }
 
-fn canonical_sha256_digest<T: Encode>(
+fn canonical_sha256_digest<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {
@@ -5038,7 +5038,7 @@ fn canonical_sha256_digest<T: Encode>(
     Ok(hasher.finalize().into())
 }
 
-fn canonical_poseidon_digest<T: Encode>(
+fn canonical_poseidon_digest<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {

@@ -15,7 +15,7 @@
 
 use fastpq_isi::{FASTPQ_FINAL_V1, GoldilocksDigest384V1 as Digest};
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
 use rayon::prelude::*;
 
 use super::{

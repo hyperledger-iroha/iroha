@@ -266,15 +266,16 @@ impl Name {
         self.0.as_ref().eq_ignore_ascii_case("genesis")
     }
 }
-impl norito::core::NoritoSerialize for Name {
+impl norito::core::NoritoSerialize for Name {}
+impl norito::core::SerializePayload for Name {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for Name {

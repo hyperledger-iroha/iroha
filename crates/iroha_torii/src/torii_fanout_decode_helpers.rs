@@ -715,7 +715,16 @@ fn query_memory_geometry(
     // When the configured body is larger than the aggregate pool can cover,
     // the phase-derived query-body limit shrinks while the general Torii body
     // limit remains unchanged.
+    // Even a one-byte ingress limit needs the canonical encoder's minimum
+    // allocation and its retained candidate overhead. Only the ingress cap
+    // follows max_content_bytes; a complete response phase cannot shrink below
+    // that allocation floor.
+    let minimum_candidate_phase_bytes = usize::try_from(
+        iroha_core::smartcontracts::isi::query::canonical_query_candidate_allocation_bytes(1)?,
+    )
+    .ok()?;
     let desired_fanout_working_set = max_content_bytes
+        .max(minimum_candidate_phase_bytes)
         .checked_mul(QUERY_FANOUT_PREBODY_UNITS)
         .and_then(|bytes| bytes.checked_add(query_fanout_fixed_overhead_bytes()?));
     let fanout_working_set_bytes = desired_fanout_working_set

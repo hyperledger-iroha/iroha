@@ -9279,7 +9279,7 @@ pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     }
     Ok(())
 }
-fn encode_storage_key<T: Encode>(value: &T, out: &mut String) {
+fn encode_storage_key<T: norito::NoritoSerialize>(value: &T, out: &mut String) {
     let encoded = norito::to_bytes(value).expect("fixed privacy storage keys always encode");
     json::write_json_string(&hex::encode_upper(encoded), out);
 }

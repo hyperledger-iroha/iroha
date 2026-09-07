@@ -19,7 +19,7 @@ use iroha_data_model::{
         },
     },
 };
-use norito::codec::Encode as NoritoEncode;
+use norito::codec::Encode as _;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, MODERATION_PRIVACY_MAX_METRICS_V1,
@@ -5082,7 +5082,7 @@ fn validate_adapter_source_entry(
     )?;
     Ok(entry)
 }
-fn canonical_payload_digest<T: NoritoEncode>(
+fn canonical_payload_digest<T: norito::NoritoSerialize>(
     payload_kind: &'static str,
     value: &T,
 ) -> Result<[u8; 32], TransparencySourceEntryAdapterError> {

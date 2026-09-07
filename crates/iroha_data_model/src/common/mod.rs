@@ -111,14 +111,19 @@ where
     {
         <T as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl<T> norito::core::SerializePayload for Owned<T>
+where
+    T: norito::core::NoritoSerialize,
+{
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        <T as norito::core::NoritoSerialize>::serialize(&self.0, writer)
+        <T as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <T as norito::core::NoritoSerialize>::encoded_len_hint(&self.0)
+        <T as norito::core::SerializePayload>::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <T as norito::core::NoritoSerialize>::encoded_len_exact(&self.0)
+        <T as norito::core::SerializePayload>::encoded_len_exact(&self.0)
     }
 }
 impl<'de, T> norito::core::NoritoDeserialize<'de> for Owned<T>
