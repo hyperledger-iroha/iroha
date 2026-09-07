@@ -91,17 +91,15 @@ pub(super) fn validate_semantic_release_lock(
     Ok(())
 }
 struct SemanticReleaseSource<'a>(&'a MusubiReleaseManifestV1);
-impl norito::core::NoritoSerialize for SemanticReleaseSource<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <MusubiSemanticReleaseManifestV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
+
+impl norito::core::SerializePayload for SemanticReleaseSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
                 "borrowed Musubi semantic release packed struct",
             ));
         }
-        let fields: [&dyn norito::core::NoritoSerialize; 8] = [
+        let fields: [&dyn norito::core::SerializePayload; 8] = [
             &self.0.release,
             &self.0.edition,
             &self.0.abi,
@@ -120,7 +118,7 @@ impl norito::core::NoritoSerialize for SemanticReleaseSource<'_> {
         if norito::core::use_packed_struct() {
             return None;
         }
-        let fields: [&dyn norito::core::NoritoSerialize; 8] = [
+        let fields: [&dyn norito::core::SerializePayload; 8] = [
             &self.0.release,
             &self.0.edition,
             &self.0.abi,

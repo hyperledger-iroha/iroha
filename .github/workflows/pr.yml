@@ -289,7 +289,7 @@ jobs:
             scripts.tests.ivm_vector_metal_compaction_source_test \
             scripts.tests.kotodama_ir_compaction_source_test \
             scripts.tests.kotodama_typed_case_registry_source_test \
-            scripts.tests.norito_columnar_derive_compaction_source_test \
+            scripts.tests.norito_codec_contracts_test \
             scripts.tests.norito_scratch_retirement_source_test \
             scripts.tests.obsolete_developer_test_retirement_source_test \
             scripts.tests.shared_proc_macro_emitter_source_test

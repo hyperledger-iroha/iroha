@@ -8,6 +8,7 @@ labelled active or release-ready; it never attests the current candidate.
 | Capture | Source and navigation |
 | --- | --- |
 | [2026-09-06](2026-09-06/index.md) | Exact dirty working copies, with dated subsystem pages, source hashes, reversible links and occurrence/order metadata. |
+| [2026-09-07 Norito helper compaction](2026-09-07/norito-helper-compaction.json) | Exact retired source guard and original measurements; known preimages are verifiable, while missing postimage identities remain unverified. Current codec contracts use `scripts/check_norito_codec_contracts.py`; source-size budgets remain separate. |
 
 The [current roadmap coverage map](current-roadmap-coverage.json) accounts for
 every original roadmap area using stable current outcome IDs. It is maintained

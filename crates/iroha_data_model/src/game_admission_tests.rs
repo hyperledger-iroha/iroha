@@ -107,47 +107,47 @@ fn compact_admission_json_rejects_omitted_authorization_vectors_and_mutable_reco
 
 #[test]
 fn ambiguous_typed_nft_identities_are_rejected_before_admission() {
+    use crate::game_resources::identity_test_support::assert_ambiguous_domain_label_rejected;
     use crate::{domain::DomainId, nft::NftId};
-    let first = NftId::new(
-        DomainId::try_new("art.gallery", "universal").unwrap(),
-        "kit".parse().unwrap(),
-    );
-    let second = NftId::new(
-        DomainId::try_new("art", "gallery.universal").unwrap(),
-        "kit".parse().unwrap(),
-    );
-    assert_ne!(first, second);
-    assert_ne!(first.encode(), second.encode());
-    assert_eq!(first.to_string(), second.to_string());
-    assert!(first.to_string().len() < GAME_RESOURCE_MAX_NFT_ID_BYTES_V1);
-    for nft_id in [first, second] {
-        assert_eq!(
-            NftId::decode(&mut nft_id.encode().as_slice()).unwrap(),
-            nft_id
+
+    assert!("kit$art.gallery.universal".parse::<NftId>().is_err());
+    for (domain, dataspace, label) in [
+        ("art-gallery", "universal", "art-gallery"),
+        ("art", "gallery-universal", "gallery-universal"),
+    ] {
+        // Ambiguous components are rejected before a typed NFT can exist.
+        assert!(DomainId::try_new(domain.replace('-', "."), dataspace.replace('-', ".")).is_err());
+        let nft_id = NftId::new(
+            DomainId::try_new(domain, dataspace).unwrap(),
+            "kit".parse().unwrap(),
         );
-        assert!(validate_game_nft_identity_v1(&nft_id).is_err());
+        validate_game_nft_identity_v1(&nft_id).unwrap();
+        assert_ambiguous_domain_label_rejected(&nft_id, label);
         let mut wager = body();
         wager.wagers[0].nft_id = nft_id.clone();
-        assert!(wager.validate().is_err());
+        wager.validate().unwrap();
+        assert_ambiguous_domain_label_rejected(&wager, label);
         let mut resource = body();
         resource.resources[0].nft_id = nft_id.clone();
-        assert!(resource.validate().is_err());
+        resource.validate().unwrap();
+        assert_ambiguous_domain_label_rejected(&resource, label);
         let clause = GameResourceReservationClauseV1 {
             nft_id: nft_id.clone(),
             expected_metadata_hash: Hash::new(b"metadata"),
             role_id: Hash::new(b"role"),
             policy: GameResourceReturnPolicyV1::ReturnToOriginalOwnerAtTerminal,
         };
-        assert!(validate_resource_clauses_v1(&[clause.clone()]).is_err());
-        assert!(
-            validate_resource_requirements_v1(&[GameResourceRequirementV1 {
-                nft_id,
-                expected_metadata_hash: clause.expected_metadata_hash,
-                role_id: clause.role_id,
-                policy: clause.policy
-            }])
-            .is_err()
-        );
+        let clauses = vec![clause.clone()];
+        validate_resource_clauses_v1(&clauses).unwrap();
+        assert_ambiguous_domain_label_rejected(&clauses, label);
+        let requirements = vec![GameResourceRequirementV1 {
+            nft_id,
+            expected_metadata_hash: clause.expected_metadata_hash,
+            role_id: clause.role_id,
+            policy: clause.policy,
+        }];
+        validate_resource_requirements_v1(&requirements).unwrap();
+        assert_ambiguous_domain_label_rejected(&requirements, label);
     }
     let control = NftId::new(
         DomainId::try_new("art", "universal").unwrap(),

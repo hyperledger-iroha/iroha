@@ -1,7 +1,7 @@
 //! Canonical Goldilocks scalar arithmetic and degree-four extension for FASTPQ FRI.
 
 use fastpq_isi::GoldilocksDigest384V1;
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
 
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
@@ -147,7 +147,8 @@ impl GoldilocksFp4V1 {
     }
 }
 
-impl NoritoSerialize for GoldilocksFp4V1 {
+impl NoritoSerialize for GoldilocksFp4V1 {}
+impl SerializePayload for GoldilocksFp4V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         writer.write_all(&self.to_le_bytes())?;
         Ok(())

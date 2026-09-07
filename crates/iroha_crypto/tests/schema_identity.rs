@@ -2,7 +2,9 @@
 
 use iroha_crypto::{Hash, HashOf, Signature, SignatureOf};
 use norito::schema::identity::frame_hash;
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, core::Header, json};
+use norito::{
+    NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload, core::Header, json,
+};
 
 #[derive(NoritoSchema)]
 #[norito_schema(name = "iroha_crypto_group_01::schema_identity::OriginalMarker")]

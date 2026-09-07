@@ -2985,6 +2985,11 @@ pub enum PendingQueuePlanAdmissionDisposition {
     ///
     /// Callers must retain the bounded durable certificate and reclassify it after catch-up.
     Future,
+    /// The requested carrier is already committed in this coherent State view.
+    ///
+    /// The caller must advance its carrier and reclassify; an obsolete consensus worker
+    /// cannot use its own height to reject or retire a newly admitted certificate.
+    DeferredCarrier,
     /// A different well-formed immutable marker already owns this source identity.
     DefinitiveConflict,
     /// The certificate is authentic but its history, lifecycle, or authority context is stale.
@@ -35093,7 +35098,12 @@ impl State {
                                 .to_owned(),
                         )
                     })?;
-                    if admission
+                    if carrier_height <= committed_height {
+                        // Admission can finish after State publishes H but before the H worker
+                        // hands off to H + 1. Its old carrier is not evidence that the exact
+                        // new certificate is stale; retaining it is the only safe disposition.
+                        PendingQueuePlanAdmissionDisposition::DeferredCarrier
+                    } else if admission
                         .certificate
                         .binding
                         .admission_context
@@ -35247,7 +35257,8 @@ impl State {
                 }
                 PendingQueuePlanAdmissionDisposition::ExactPending
                 | PendingQueuePlanAdmissionDisposition::EligibleAbsent
-                | PendingQueuePlanAdmissionDisposition::Future => {}
+                | PendingQueuePlanAdmissionDisposition::Future
+                | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
             }
 
             let persistence_result = if let Some(certificate) = exact_existing.as_ref() {

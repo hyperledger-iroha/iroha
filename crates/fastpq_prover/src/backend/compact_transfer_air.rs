@@ -22,7 +22,7 @@
 //! and does not replace the production verifier's mandatory replay.
 
 use fastpq_isi::FASTPQ_FINAL_V1;
-use norito::{NoritoSerialize, codec::Encode as NoritoEncode};
+use norito::{NoritoSerialize, SerializePayload, codec::Encode as NoritoEncode};
 
 use super::{
     FriDomain, GOLDILOCKS_MODULUS,

@@ -14,7 +14,7 @@ use ivm::{
     syscalls as ivm_sys,
 };
 use mv::storage::StorageReadOnly;
-use norito::NoritoSerialize;
+use norito::{NoritoSerialize, SerializePayload};
 fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode payload");
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH);

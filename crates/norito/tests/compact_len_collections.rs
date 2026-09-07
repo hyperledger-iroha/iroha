@@ -1,6 +1,6 @@
 //! Compact length coverage for core collection serializers.
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self, DecodeFlagsGuard, header_flags},
 };
 use std::{

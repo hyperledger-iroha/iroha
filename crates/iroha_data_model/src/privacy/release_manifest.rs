@@ -771,7 +771,10 @@ fn valid_release_text(value: &str) -> bool {
         && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
-fn digest_canonical<T: Encode>(domain: &[u8], value: &T) -> Result<[u8; 32], norito::Error> {
+fn digest_canonical<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<[u8; 32], norito::Error> {
     let encoded = norito::encode_canonical(value)?;
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -784,7 +787,10 @@ fn digest_canonical<T: Encode>(domain: &[u8], value: &T) -> Result<[u8; 32], nor
     Ok(hasher.finalize().into())
 }
 
-fn signing_bytes<T: Encode>(domain: &[u8], value: &T) -> Result<Vec<u8>, norito::Error> {
+fn signing_bytes<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Vec<u8>, norito::Error> {
     let encoded = norito::encode_canonical(value)?;
     let mut bytes = Vec::with_capacity(domain.len() + 8 + encoded.len());
     bytes.extend_from_slice(domain);

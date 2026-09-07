@@ -158,30 +158,20 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
                 .all(|pair| pair[0].checked_add(1) == Some(pair[1])),
         "Native AMX evidence fixture heights must be a non-zero contiguous suffix"
     );
-    let lane_incarnation = Hash::new(
-        format!(
-            "kura-lane-incarnation:{}:{}",
-            entry.lane_id.as_u32(),
-            entry.dataspace_id.as_u64()
-        )
-        .as_bytes(),
-    );
     if entry.lane_id == LaneId::SINGLE {
-        let configured_catalog_hash = kura
-            .configured_lane_catalog_baseline()
-            .expect("read Native AMX fixture configured-catalog baseline")
-            .expect("Native AMX fixture uses an authenticated configured catalog");
-        // Match production State initialization: durably bind the configured primary geometry
-        // before its incarnation marker or any Native AMX evidence is published.
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            entry,
-            lane_incarnation,
-            configured_catalog_hash,
-        )
-        .expect("bind Native AMX fixture configured-primary geometry");
+        // Preserve the authoritative incarnation when State has already initialized Kura.
+        establish_dummy_store_primary_anchor(kura);
     } else {
         // Secondary-lane callers establish the catalog geometry before using this fixture.
-        kura.install_lane_incarnation_marker_for_test(entry, lane_incarnation, 0)
+        let lane_incarnation = Hash::new(
+            format!(
+                "kura-lane-incarnation:{}:{}",
+                entry.lane_id.as_u32(),
+                entry.dataspace_id.as_u64()
+            )
+            .as_bytes(),
+        );
+        kura.install_lane_incarnation_marker_if_missing_for_test(entry, lane_incarnation, 0)
             .expect("install active Native AMX participant incarnation");
     }
     let block = store_dummy_block_arcs(kura, 1)
@@ -210,6 +200,12 @@ fn install_native_amx_evidence_fixture_at_block(
     >,
 ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
     let application_block_height = block.header().height().get();
+    let lane_incarnation = {
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        kura.active_lane_incarnation_marker(entry)
+            .expect("Native AMX fixture requires its durably bound lane geometry")
+            .0
+    };
     let executed_block_wire = block
         .encode_wire()
         .expect("encode exact result-bearing application block wire");
@@ -229,10 +225,7 @@ fn install_native_amx_evidence_fixture_at_block(
             participant_height,
         );
         let mut proposal = session.proposal;
-        assert_eq!(
-            proposal.descriptor.lane_incarnation, lane_incarnation,
-            "Native AMX proposal fixture must use the geometry bound before evidence publication"
-        );
+        proposal.descriptor.lane_incarnation = lane_incarnation;
         proposal.descriptor.proposal_height = application_block_height;
         if let Some(predecessor) = proposals.last().or(previous_proposal) {
             proposal.descriptor.previous_lane_block_height =
@@ -2135,7 +2128,24 @@ fn native_amx_latest_strict_read_defers_authenticated_pending_tip_metadata() {
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("active primary route");
+        let established_incarnation = {
+            let _geometry_guard = kura.lane_geometry_lock.lock();
+            kura.active_lane_incarnation_marker(&entry)
+                .expect("State established the authoritative primary incarnation")
+        };
         let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        {
+            let _geometry_guard = kura.lane_geometry_lock.lock();
+            assert_eq!(
+                kura.active_lane_incarnation_marker(&entry)
+                    .expect("fixture preserves the authoritative primary incarnation"),
+                established_incarnation,
+            );
+        }
+        assert_eq!(
+            receipt.participant_proposal.descriptor.lane_incarnation,
+            established_incarnation.0,
+        );
         kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
             .expect("publish exact Native latest pointer");
         kura.remove_commit_manifest_without_binding_for_tests(1)

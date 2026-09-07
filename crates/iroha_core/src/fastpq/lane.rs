@@ -748,6 +748,8 @@ mod tests {
             air_composition_root: zero,
             lde_root: zero,
             lde_domain_size: 0,
+            lookup_grand_product: 15,
+            lookup_challenge: 16,
             alphas: Vec::new(),
             betas: Vec::new(),
             fri_layers: Vec::new(),

@@ -3,6 +3,9 @@
 //! The checkpoint deliberately excludes payload bytes, staging paths, source URLs, credentials, and
 //! signer material. It retains the immutable ledger binding, source-delivery crash state, and the
 //! exact signed completion transaction required for reconciliation.
+
+mod completion_codec;
+
 use crate::provider_ingest_runtime::{
     ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
@@ -1279,37 +1282,6 @@ impl std::ops::Deref for BoxedStoredCompletionDeliveryV1 {
 impl std::ops::DerefMut for BoxedStoredCompletionDeliveryV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.as_mut()
-    }
-}
-impl norito::core::NoritoSerialize for BoxedStoredCompletionDeliveryV1 {
-    fn schema_hash() -> [u8; 16] {
-        <StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(self.0.as_ref(), writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(self.0.as_ref())
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(self.0.as_ref())
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1 {
-    fn schema_hash() -> [u8; 16] {
-        <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()
-    }
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("boxed provider-ingest completion decode")
-    }
-    fn try_deserialize(
-        archived: &'a norito::core::Archived<Self>,
-    ) -> Result<Self, norito::core::Error> {
-        let completion =
-            <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::try_deserialize(
-                archived.cast::<StoredCompletionDeliveryV1>(),
-            )?;
-        Ok(Self::new(completion))
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]

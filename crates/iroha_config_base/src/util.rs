@@ -3,7 +3,7 @@ use derive_more::Display;
 use drop_bomb::DropBomb;
 use error_stack::Report;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::time::Duration;
@@ -41,10 +41,11 @@ impl From<Duration> for DurationMs {
         Self(value)
     }
 }
-impl NoritoSerialize for DurationMs {
+impl NoritoSerialize for DurationMs {}
+impl SerializePayload for DurationMs {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let millis = self.to_millis()?;
-        <u64 as NoritoSerialize>::serialize(&millis, writer)
+        <u64 as SerializePayload>::serialize(&millis, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(U64_BYTES)
@@ -112,7 +113,8 @@ impl core::str::FromStr for Bytes {
         Ok(Self(value))
     }
 }
-impl NoritoSerialize for Bytes {
+impl NoritoSerialize for Bytes {}
+impl SerializePayload for Bytes {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }

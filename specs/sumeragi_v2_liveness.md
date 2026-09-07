@@ -1048,6 +1048,14 @@ hash-addressed claim. Missing or substituted bytes and live actor tickets remain
 owned. Releasing QueuePlan output does not schedule a Kura replica-advert
 refresh.
 
+A QueuePlan admission may become durable after State commits height H while the
+consensus adapter for H still owns its last scheduled reconciliation. Classification
+uses one coherent State view and reports `DeferredCarrier` for an absent registry
+entry when that adapter's requested carrier is already committed. The old worker
+retains the certificate and queue claim without staging or forwarding it; its obsolete
+height cannot authorize a stale-claim tombstone. The successor reclassifies the exact
+bytes, including canonical predecessor, incarnation and authority checks.
+
 A WAL-recovered Decision fetch retains its original signed request, quorum
 certificate, height context, and response verifier, but reconstructs delivery
 destinations from the bounded current configured-peer snapshot. The frozen
@@ -1073,6 +1081,15 @@ signature or wait for unrelated FIFO eviction. Exact same-signature
 retransmissions still return the byte-identical cached response. A change to
 any authenticated unsigned field in the same logical slot retains the conflict
 rejection instead of multiplying cached entries or canonical-history reads.
+
+Exact Kura-backed lane-certificate replies remain available after an autonomous
+slot has been economically applied and its predecessor is behind the replicated
+frontier. Recovery authenticates the exact applied proposal and its canonical
+finalized public carrier; it retains the complete Prepare/Commit response and
+its authenticated reply-route ownership across a later global decision or
+rollover. The fresh-voting predecessor predicate still rejects an applied slot.
+Ordinary or unfinalized proposals do not gain the public autonomous exception,
+and a different descriptor or incarnation cannot select the stored certificate.
 
 For current-height output, global V2 traffic validates its protocol version and
 binds to the exact finality artifact. Winning lane output requires its exact

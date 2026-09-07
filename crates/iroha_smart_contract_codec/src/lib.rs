@@ -5,7 +5,7 @@
 //! Norito-encoded payloads without duplicating pointer-handling logic.
 #![allow(unsafe_code)]
 use core::{convert::TryInto, mem, ops::RangeFrom};
-use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, decode_from_bytes, to_bytes};
 /// Encode the given value with a `usize` length prefix.
 ///
 /// The returned allocation owns the encoded bytes and is suitable for passing across the IVM FFI

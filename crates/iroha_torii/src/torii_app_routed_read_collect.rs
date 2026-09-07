@@ -1,4 +1,40 @@
 // Bounded collection and decode helpers for application routed reads.
+/// Retain a fixed aggregate failure instead of a skipped route's transport body.
+///
+/// A proxied response owns its memory reservation until its body is dropped.
+/// Keeping that response while fetching the next route can exhaust the same
+/// one-slot proxy pool indefinitely. Skipped-route diagnostics are recorded by
+/// the caller before this boundary; upstream bodies, headers, extensions and
+/// their reservations are discarded without polling or copying them.
+#[cfg(feature = "app_api")]
+fn summarize_skipped_torii_route_response(response: Response) -> Response {
+    let (status, code, message) = if torii_response_has_reject_code(&response, "permission_denied") {
+        (
+            StatusCode::FORBIDDEN,
+            "permission_denied",
+            "dataspace access is denied",
+        )
+    } else if response.status() == StatusCode::NOT_FOUND {
+        (
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no dataspace returned a matching result",
+        )
+    } else if torii_response_has_reject_code(&response, "route_unavailable") {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "authoritative dataspace route is unavailable",
+        )
+    } else {
+        // Errors which stop collection, including capacity, authorization and
+        // malformed-response failures, must never become skippable failures.
+        return response;
+    };
+    drop(response);
+    torii_proxy_error_response(status, code, message)
+}
+
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct ToriiFanoutJsonPayloads {
@@ -34,12 +70,12 @@ where
         let response = fetch(*route).await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_json_body_value(response, &mut budget).await {
@@ -92,12 +128,12 @@ where
         let response = fetch(*route).await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_json_body_value(response, &mut budget).await {
@@ -150,12 +186,12 @@ where
         let response = fetch(*route).await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_json_body_value(response, &mut budget).await {
@@ -216,7 +252,7 @@ where
                 if route_succeeded {
                     return Err(with_torii_fanout_headers(response, diagnostics));
                 }
-                last_not_found = Some(response);
+                last_not_found = Some(summarize_skipped_torii_route_response(response));
                 break;
             }
             if torii_response_has_reject_code(&response, "route_unavailable") {
@@ -224,7 +260,7 @@ where
                 if route_succeeded {
                     return Err(with_torii_fanout_headers(response, diagnostics));
                 }
-                last_route_unavailable = Some(response);
+                last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
                 break;
             }
             let payload = match torii_json_body_value(response, &mut budget).await {
@@ -315,17 +351,17 @@ where
         let response = fetch(*route).await;
         if torii_response_has_reject_code(&response, "permission_denied") {
             diagnostics.record_denied();
-            last_permission_denied = Some(response);
+            last_permission_denied = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_json_body_value(response, &mut budget).await {
@@ -468,17 +504,17 @@ where
         let response = fetch(route.route).await;
         if torii_response_has_reject_code(&response, "permission_denied") {
             diagnostics.record_denied();
-            last_permission_denied = Some(response);
+            last_permission_denied = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_json_body_value(response, &mut budget).await {

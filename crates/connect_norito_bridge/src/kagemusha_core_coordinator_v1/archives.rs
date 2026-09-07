@@ -10,7 +10,7 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderWalletContextV1,
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 

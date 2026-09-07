@@ -57,7 +57,10 @@ fn zero_hash_v1() -> Hash {
     Hash::prehashed([0; Hash::LENGTH])
 }
 
-fn canonical_digest_v1<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
+fn canonical_digest_v1<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Hash, norito::Error> {
     let encoded = norito::encode_canonical(value)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("canonical value is too large")))?;

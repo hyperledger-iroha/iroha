@@ -6823,32 +6823,46 @@ impl Actor {
         caps.with_label_values(&["Other"])
             .set(iroha_p2p::network::cap_violations_other());
         // Reconnect-success export remains pending a dedicated metrics counter.
+        // Kura append precedes State publication. Classify only one captured
+        // applied prefix, so all block and transaction counters exclude a
+        // durably stored block whose state transition is still in flight.
+        let applied_height = self.state.committed_height();
+        if applied_height == 0 {
+            return;
+        }
         let mut last_reported_block = {
             let mut lock = self.last_reported_block.write().await;
             if lock.is_none() {
                 *lock = self.seed_last_reported_block();
             }
-            if let Some(mut latest) = lock.take() {
-                // Catch up if commit notifications were missed: walk forward until the
-                // latest persisted block and refresh the cursor.
-                loop {
-                    let Some(next_index) = latest.height.checked_add(1).and_then(NonZeroUsize::new)
-                    else {
-                        break;
-                    };
-                    let Some(next_block) = self.kura.get_block(next_index) else {
-                        break;
-                    };
-                    let header = next_block.header();
-                    latest = BlockCommitReport::new(&header, &self.time_source);
-                }
-                *lock = Some(latest);
-            }
-            let Some(value) = *lock else {
-                // wait until genesis
+            let Some(mut latest) = *lock else {
                 return;
             };
-            value
+            if latest.height > applied_height {
+                let index =
+                    NonZeroUsize::new(applied_height).expect("the applied prefix contains genesis");
+                let Some(block) = self.kura.get_block(index) else {
+                    return;
+                };
+                latest = BlockCommitReport::new(&block.header(), &self.time_source);
+            }
+            // Recover missed notifications only through the applied prefix.
+            while latest.height < applied_height {
+                let Some(next_index) = latest.height.checked_add(1).and_then(NonZeroUsize::new)
+                else {
+                    break;
+                };
+                let Some(next_block) = self.kura.get_block(next_index) else {
+                    break;
+                };
+                latest = BlockCommitReport::new(&next_block.header(), &self.time_source);
+            }
+            // Keep a notification for an as-yet unpublished block, including
+            // its original observation time, for the next successful refresh.
+            if lock.is_none_or(|reported| reported.height <= latest.height) {
+                *lock = Some(latest);
+            }
+            latest
         };
         let start_index = self.last_sync_block;
         {
@@ -10859,6 +10873,80 @@ mod tests {
         peers_tx.send(peers).unwrap();
         let metrics = telemetry.metrics().await;
         assert_eq!(metrics.connected_peers.get(), 0);
+    }
+    #[tokio::test]
+    async fn metrics_sync_excludes_unpublished_kura_blocks_and_catches_up_once() {
+        for already_applied in [false, true] {
+            for report_before_publication in [false, true] {
+                let sut = SystemUnderTest::new();
+                if already_applied {
+                    sut.commit_block(sut.create_block());
+                }
+                sut.force_sync().await;
+                let metrics = &sut.telemetry.metrics;
+                let old_height = metrics.block_height.get();
+                let old_non_empty = metrics.block_height_non_empty.get();
+                let old_accepted = metrics.txs.with_label_values(&["accepted"]).get();
+                let old_rejected = metrics.txs.with_label_values(&["rejected"]).get();
+                let old_total = metrics.txs.with_label_values(&["total"]).get();
+                let old_observed = metrics.last_block_committed_at_ms.get();
+                assert_eq!(old_height, u64::from(already_applied));
+
+                let candidate = sut.create_block();
+                let mut state_block = sut.state.block(candidate.header());
+                let committed = candidate
+                    .validate_and_record_transactions(&mut state_block)
+                    .unpack(|_| {})
+                    .commit(&sut.topology)
+                    .unpack(|_| {})
+                    .expect("fixture block has its required signatures");
+                let external_count = committed.as_ref().external_transactions().len() as u64;
+                sut.kura
+                    .store_block(committed.clone())
+                    .expect("durably append before publishing the state transition");
+                sut.mock_time_handle.advance(Duration::from_millis(100));
+                if report_before_publication {
+                    sut.report_commit_block(&committed.as_ref().header()).await;
+                }
+                sut.force_sync().await;
+                assert_eq!(sut.state.committed_height() as u64, old_height);
+                assert_eq!(metrics.block_height.get(), old_height);
+                assert_eq!(metrics.block_height_non_empty.get(), old_non_empty);
+                assert_eq!(
+                    metrics.txs.with_label_values(&["accepted"]).get(),
+                    old_accepted
+                );
+                assert_eq!(
+                    metrics.txs.with_label_values(&["rejected"]).get(),
+                    old_rejected
+                );
+                assert_eq!(metrics.txs.with_label_values(&["total"]).get(), old_total);
+                assert_eq!(metrics.last_block_committed_at_ms.get(), old_observed);
+
+                let _events = state_block
+                    .apply_without_execution(&committed, sut.topology.as_ref().to_owned());
+                state_block
+                    .commit()
+                    .expect("publish the exact persisted block");
+                sut.force_sync().await;
+                assert_eq!(metrics.block_height.get(), old_height + 1);
+                assert_eq!(metrics.block_height_non_empty.get(), old_non_empty + 1);
+                assert_eq!(
+                    metrics.txs.with_label_values(&["total"]).get(),
+                    old_total + external_count
+                );
+                let accepted = metrics.txs.with_label_values(&["accepted"]).get();
+                let rejected = metrics.txs.with_label_values(&["rejected"]).get();
+                assert_eq!(accepted + rejected, old_total + external_count);
+                let observed = metrics.last_block_committed_at_ms.get();
+                sut.force_sync().await;
+                assert_eq!(metrics.block_height.get(), old_height + 1);
+                assert_eq!(metrics.block_height_non_empty.get(), old_non_empty + 1);
+                assert_eq!(metrics.txs.with_label_values(&["accepted"]).get(), accepted);
+                assert_eq!(metrics.txs.with_label_values(&["rejected"]).get(), rejected);
+                assert_eq!(metrics.last_block_committed_at_ms.get(), observed);
+            }
+        }
     }
     #[tokio::test]
     async fn commit_blocks() {

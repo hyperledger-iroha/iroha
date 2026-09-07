@@ -3154,7 +3154,9 @@ mod tests {
         empty_multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
         assert_eq!(
             empty_multisig.verify_signature(),
-            Err(iroha_data_model::transaction::TransactionSignatureError::UnexpectedMultisigSignatures)
+            Err(
+                iroha_data_model::transaction::signed::TransactionSignatureError::UnexpectedMultisigSignatures
+            )
         );
         assert!(matches!(
             forwarder.store_signed_transaction(

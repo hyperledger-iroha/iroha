@@ -644,7 +644,8 @@ impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
 }
 /// Archived representation of [`SignatureOf`].
 pub type ArchivedSignatureOf<T> = norito::core::Archived<SignatureOf<T>>;
-impl ncore::NoritoSerialize for Signature {
+impl ncore::NoritoSerialize for Signature {}
+impl ncore::SerializePayload for Signature {
     fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
         self.payload.serialize(writer)
     }
@@ -691,16 +692,17 @@ impl<T: norito::NoritoSchema> norito::NoritoSchema for SignatureOf<T> {
         )
     }
 }
-impl<T> norito::core::NoritoSerialize for SignatureOf<T> {
+impl<T> norito::core::NoritoSerialize for SignatureOf<T> {}
+impl<T> norito::core::SerializePayload for SignatureOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         // Delegate to inner Signature so SignatureOf has identical on-wire bytes.
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {

@@ -83,8 +83,11 @@ INFLIGHT_LAYOUT_REQUIRED_ACTIONS = (
     "RestoreReleasedFifo",
     "ForgetReservationRelease",
     "RepairPostCarrierEvidence",
+    "ObserveReplicaQueueRelease",
 )
 INFLIGHT_COMPOSED_TLA_ALIGNMENT_TOKENS = (
+    'ObserveReplicaQueueRelease(disposition) ==\n  /\\ disposition \\in ReplicaQueueReleaseStates\n  /\\ decision.releaseOwner \\in Validators \\ {Producer}\n  /\\ queue.plan = "SelectedConjunction"\n  /\\ queue.reservation = "Live"\n  /\\ release.kuraRetired\n  /\\ release.pendingPrefix = queue.selectedCount\n  /\\ release.releasedPrefix = 0\n  /\\ ~release.fifoRestored\n  /\\ queue\' = [queue EXCEPT !.reservation = disposition]\n  /\\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision,\n                 release>>',
+    '  \\/ \\E disposition \\in ReplicaQueueReleaseStates:\n       ObserveReplicaQueueRelease(disposition)',
     "Its three-validator states embed into the 1..128-validator fixed-width\n"
     "Rust/Verus `ProductionInFlightFirstReleaseStateProjection` and transition\n"
     "kernel.",

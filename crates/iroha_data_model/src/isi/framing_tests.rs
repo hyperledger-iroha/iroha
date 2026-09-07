@@ -5,8 +5,8 @@ use std::{cell::Cell, sync::Arc};
 use iroha_primitives::const_vec::ConstVec;
 use norito::core::{
     Archived, DecodeFlagsGuard, Encoder, Error, Header, NoritoDeserialize, NoritoSerialize,
-    encoded_payload_len, from_bytes, serialize_to_buffer, supported_header_flags, to_bytes,
-    validate_header_flags,
+    SerializePayload, encoded_payload_len, from_bytes, serialize_to_buffer, supported_header_flags,
+    to_bytes, validate_header_flags,
 };
 
 use super::{INSTRUCTION_REGISTRY_OVERRIDE, InstructionBox, InstructionRegistry};
@@ -26,7 +26,8 @@ impl NoritoSerialize for CountedInstruction {
     fn schema_hash() -> [u8; 16] {
         <u8 as NoritoSerialize>::schema_hash()
     }
-
+}
+impl SerializePayload for CountedInstruction {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         SERIALIZE_VISITS.with(|visits| visits.set(visits.get() + 1));
         self.0.serialize(writer)
@@ -80,7 +81,7 @@ fn instruction_box_and_const_vec_measure_each_instruction_once() {
         let _flags = DecodeFlagsGuard::enter(flags);
         let boxed = InstructionBox(Box::new(CountedInstruction(0xa5)));
         let sequence = ConstVec::from(vec![boxed.clone()]);
-        let cases: [(&dyn NoritoSerialize, usize); 2] = [(&boxed, 2), (&sequence, 3)];
+        let cases: [(&dyn SerializePayload, usize); 2] = [(&boxed, 2), (&sequence, 3)];
         for (value, output_visits) in cases {
             SERIALIZE_VISITS.with(|visits| visits.set(0));
             let length = encoded_payload_len(value).expect("measure instruction payload");

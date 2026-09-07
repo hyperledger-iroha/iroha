@@ -13,7 +13,7 @@
 //! proof/decoder budgets, authenticated caller and aggregate soundness argument.
 //! The 136-query profile and production replay/default limits are unchanged.
 
-use norito::{NoritoSerialize, codec::Encode};
+use norito::{NoritoSerialize, SerializePayload, codec::Encode};
 
 use super::{
     compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},

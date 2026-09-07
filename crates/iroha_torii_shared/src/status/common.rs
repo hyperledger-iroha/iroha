@@ -20,10 +20,11 @@ impl norito::core::NoritoSerialize for Uptime {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::Uptime")
     }
-
+}
+impl norito::core::SerializePayload for Uptime {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let pair = (self.0.as_secs(), self.0.subsec_nanos());
-        norito::core::NoritoSerialize::serialize(&pair, writer)
+        norito::core::SerializePayload::serialize(&pair, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for Uptime {

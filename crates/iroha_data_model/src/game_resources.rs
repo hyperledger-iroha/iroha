@@ -117,7 +117,8 @@ record! {
 }
 
 /// Require a bounded NFT identity with exactly one lossless canonical text/JSON representation.
-/// Typed domain components containing dots otherwise create ambiguous, unparseable displays.
+/// Domain construction and decoding enforce label boundaries; game admission also checks
+/// the complete NFT spelling and its byte bound.
 pub fn validate_game_nft_identity_v1(nft: &NftId) -> Result<(), &'static str> {
     let literal = nft.to_string();
     if literal.len() > GAME_RESOURCE_MAX_NFT_ID_BYTES_V1 {
@@ -300,6 +301,10 @@ impl GameResourceReservationSetV1 {
 }
 
 #[cfg(test)]
+#[path = "game_nft_identity_fixture.rs"]
+pub(crate) mod identity_test_support;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
@@ -376,13 +381,25 @@ mod tests {
     }
     #[test]
     fn retained_resource_geometry_rejects_ambiguous_typed_nft_identity() {
-        for (domain, dataspace) in [("art.gallery", "universal"), ("art", "gallery.universal")] {
-            let mut invalid = retained();
-            invalid.records[0].nft_id = NftId::new(
+        use identity_test_support::assert_ambiguous_domain_label_rejected;
+        for (domain, dataspace, label) in [
+            ("art-gallery", "universal", "art-gallery"),
+            ("art", "gallery-universal", "gallery-universal"),
+        ] {
+            assert!(
+                crate::domain::DomainId::try_new(
+                    domain.replace('-', "."),
+                    dataspace.replace('-', ".")
+                )
+                .is_err()
+            );
+            let mut canonical = retained();
+            canonical.records[0].nft_id = NftId::new(
                 crate::domain::DomainId::try_new(domain, dataspace).unwrap(),
                 "kit".parse().unwrap(),
             );
-            assert!(invalid.validate().is_err());
+            canonical.validate().unwrap();
+            assert_ambiguous_domain_label_rejected(&canonical, label);
         }
         let mut control = retained();
         control.records[0].nft_id = NftId::new(

@@ -13,7 +13,7 @@ use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as ncore, Archived},
 };
 use std::{
@@ -390,12 +390,13 @@ fn visit_lower_hex_byte(
     visitor(unsafe { core::str::from_utf8_unchecked(&encoded) })
 }
 
-impl NoritoSerialize for AccountAddress {
+impl NoritoSerialize for AccountAddress {}
+impl SerializePayload for AccountAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let canonical = self
             .canonical_bytes()
             .map_err(account_address_norito_error)?;
-        <Vec<u8> as NoritoSerialize>::serialize(&canonical, writer)
+        <Vec<u8> as SerializePayload>::serialize(&canonical, writer)
     }
 }
 impl<'de> NoritoDeserialize<'de> for AccountAddress {

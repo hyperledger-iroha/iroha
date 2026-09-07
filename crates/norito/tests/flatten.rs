@@ -1,5 +1,5 @@
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as norito_core, DecodeFlagsGuard, DecodeFromSlice, header_flags},
 };
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]

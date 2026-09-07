@@ -360,12 +360,13 @@ impl GoldilocksFp4V1 {
         [self.c0, self.c1, self.c2, self.c3]
     }
 }
-impl norito::NoritoSerialize for GoldilocksFp4V1 {
+impl norito::NoritoSerialize for GoldilocksFp4V1 {}
+impl norito::SerializePayload for GoldilocksFp4V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         let value = fastpq_prover::GoldilocksFp4V1::new(self.coefficients()).ok_or_else(|| {
             norito::Error::Message("non-canonical GoldilocksFp4V1 coefficient".into())
         })?;
-        norito::NoritoSerialize::serialize(&value, writer)
+        norito::SerializePayload::serialize(&value, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {

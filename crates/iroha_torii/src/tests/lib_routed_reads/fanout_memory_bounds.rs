@@ -703,8 +703,25 @@ fn skewed_query_memory_pool_cannot_raise_ingress_above_fanout_or_content_cap() {
         .expect("large aggregate and minimum content geometry should fit");
     let fanout = QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
         .expect("derived fanout geometry should fit");
-    assert!(geometry.ingress.body_bytes <= max_content);
+    assert_eq!(geometry.ingress.body_bytes, max_content);
     assert!(geometry.ingress.body_bytes <= fanout.route_body_bytes);
+    let minimum_candidate_bytes = usize::try_from(
+        iroha_core::smartcontracts::isi::query::canonical_query_candidate_allocation_bytes(1)
+            .expect("minimum canonical candidate allocation"),
+    )
+    .expect("minimum candidate allocation fits usize");
+    assert!(fanout.route_body_bytes >= minimum_candidate_bytes);
+    assert!(fanout.candidate_allocation_bytes <= fanout.route_body_bytes);
+    assert!(fanout.phases_fit());
+    assert!(
+        QueryFanoutMemoryEnvelope::with_phase_bytes(
+            geometry.fanout_working_set_bytes,
+            0,
+            minimum_candidate_bytes - 1,
+        )
+        .is_err(),
+        "one byte below the real canonical allocation floor must still fail"
+    );
 }
 #[test]
 fn fanout_decode_limits_use_the_reserved_allocation_phase() {
@@ -801,6 +818,8 @@ fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation()
         payload: [u8; 32],
     }
     impl norito::core::NoritoSerialize for BadExact<'_> {
+}
+impl norito::core::SerializePayload for BadExact<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1083,10 +1102,11 @@ async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() 
 }
 #[tokio::test]
 async fn incompatible_response_diagnostic_does_not_format_hostile_payload() {
+    let marker = "hostile-query-payload-canary";
     let hostile = iroha_data_model::query::QueryResponse::Iterable(
         iroha_data_model::query::QueryOutput::new(
             iroha_data_model::query::QueryOutputBatchBoxTuple::from_batch(
-                iroha_data_model::query::QueryOutputBatchBox::String(vec!["x".repeat(32 * 1024)]),
+                iroha_data_model::query::QueryOutputBatchBox::String(vec![marker.repeat(2048)]),
             ),
             0,
             None,
@@ -1102,7 +1122,17 @@ async fn incompatible_response_diagnostic_does_not_format_hostile_payload() {
         .await
         .expect("fixed mismatch diagnostic must stay small");
     assert!(bytes.len() < 512);
-    assert!(!bytes.as_ref().contains(&b'x'));
+    assert!(
+        !bytes
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes())
+    );
+    let error: ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("fixed error envelope");
+    assert_eq!(error.code(), "query_conflict");
+    assert_eq!(
+        error.message(),
+        "routed query returned an incompatible response variant; expected a singular query output"
+    );
 }
 #[tokio::test]
 async fn canonical_fanout_error_does_not_format_hostile_conversion_payload() {

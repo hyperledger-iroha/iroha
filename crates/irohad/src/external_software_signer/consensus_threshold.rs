@@ -40,7 +40,7 @@ use iroha_data_model::{
     NetworkId,
     consensus::{GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureV1},
 };
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload};
 use std::{fmt, io::Read as _, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 

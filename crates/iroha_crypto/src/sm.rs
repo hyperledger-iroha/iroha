@@ -1541,7 +1541,8 @@ impl JsonDeserialize for Sm3Digest {
         Ok(Self(bytes))
     }
 }
-impl norito::core::NoritoSerialize for Sm3Digest {
+impl norito::core::NoritoSerialize for Sm3Digest {}
+impl norito::core::SerializePayload for Sm3Digest {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())

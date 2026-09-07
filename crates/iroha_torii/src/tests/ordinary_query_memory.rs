@@ -16,8 +16,8 @@ mod ordinary_query_memory_tests {
             defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),
         )
         .expect("default query geometry");
-        let pool = ByteWeightedMemoryPool::new(geometry.fanout_pool_bytes)
-            .expect("default weighted pool");
+        let pool =
+            ByteWeightedMemoryPool::new(geometry.fanout_pool_bytes).expect("default weighted pool");
         (geometry, pool)
     }
     fn default_policy(
@@ -512,7 +512,12 @@ mod ordinary_query_memory_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn proof_query_rejects_oversized_base64_before_versioned_decode() {
-        let envelope = QueryFanoutMemoryEnvelope::with_phase_bytes(64_000_000, 0, 1_024)
+        let phase_bytes = usize::try_from(
+            iroha_core::smartcontracts::isi::query::canonical_query_candidate_allocation_bytes(1)
+                .expect("minimum canonical candidate allocation"),
+        )
+        .expect("minimum phase fits usize");
+        let envelope = QueryFanoutMemoryEnvelope::with_phase_bytes(64_000_000, 0, phase_bytes)
             .expect("small proof request envelope");
         let dto = crate::routing::ProofFindByIdQueryDto {
             signed_query_b64: "A"
@@ -528,10 +533,15 @@ mod ordinary_query_memory_tests {
     async fn proof_query_rejects_output_above_singular_frame_limit() {
         let (app, authority, record, _) = proof_query_fixture(0xD3, 4 * 1_024);
         let reservation = try_acquire_query_fanout_memory(&app).expect("proof memory lane");
+        let phase_bytes = usize::try_from(
+            iroha_core::smartcontracts::isi::query::canonical_query_candidate_allocation_bytes(1)
+                .expect("minimum canonical candidate allocation"),
+        )
+        .expect("minimum phase fits usize");
         let envelope = QueryFanoutMemoryEnvelope::with_phase_bytes(
             app.query_fanout_working_set_bytes,
             0,
-            1_024,
+            phase_bytes,
         )
         .expect("small singular output phase fits the full reservation");
         assert!(

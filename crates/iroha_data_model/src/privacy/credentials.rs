@@ -1854,18 +1854,20 @@ impl From<PrivacyX509KeyUsageRequirementV1> for bool {
         requirement.is_required()
     }
 }
-impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {fn schema_hash() -> [u8; 16] {
         <bool as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PrivacyX509KeyUsageRequirementV1 {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyX509KeyUsageRequirementV1 {

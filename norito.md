@@ -8,6 +8,12 @@ Norito's first-release Rust implementation targets `std` only. There is no
 WASM/no-`std` codec branch, panic containment is always active at fallible
 decode boundaries, and build features do not weaken those safety rules.
 
+Rust bare payload writers use the object-safe `SerializePayload` contract.
+`NoritoSerialize` adds typed frame ownership. Borrowed field adapters can
+implement or derive `SerializePayload` without acquiring a root-frame identity;
+generic frame writers require `NoritoSerialize` explicitly. This separation
+does not change the V1 header, payload layout, checksum or signed bytes.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -134,6 +140,14 @@ Actual frame output still computes and checks length, checksum, and finalized
 flags across its two passes. The tuple prefix runs in the enclosing layout
 context. `ConstVec` retains individually framed byte elements and its packed
 table/payload bound; `SmallVec` retains fixed-width element length prefixes.
+
+`Metadata` projects borrowed entry views into the same element-sequence writer
+as `ConstVec`, preserving its sequence-of-tuples layout without collecting entries.
+The writer derives cardinality from a cloneable exact-size iterator and checks
+the number of elements yielded during measurement and emission. Packed Metadata
+also enforces the configured archive limit over its offset table plus payload
+(excluding the sequence count), rejecting an oversized table before allocation
+and an oversized payload total before writing offsets or payloads.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.

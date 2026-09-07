@@ -269,9 +269,7 @@ target-codex-run*/
 /tmp*
 tmp/*
 *.tmp
-security_*
-!crates/iroha_core/src/execution_proofs/v2/SECURITY_REVIEW.md
-!circuits/sccp/vendor/golang.org/x/sys/windows/security_windows.go
+/security_*
 _apalache-out*
 .tlacache/
 

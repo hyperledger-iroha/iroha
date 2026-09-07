@@ -113,7 +113,7 @@ use ivm::{
 use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize,
-    core::{DecodeFromSlice, Header, NoritoSerialize},
+    core::{DecodeFromSlice, Header, NoritoSerialize, SerializePayload},
     json,
     streaming::CapabilityFlags,
 };
@@ -8118,7 +8118,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let payload_len = NoritoSerialize::encoded_len_exact(value)?;
+        let payload_len = SerializePayload::encoded_len_exact(value)?;
         let header_len = Header::SIZE;
         let align = norito::core::archived_payload_align::<T>();
         let padding = if align <= 1 {

@@ -27695,7 +27695,7 @@ impl Kura {
     }
     fn autonomous_lifecycle_payload_custody_evidence_hash(
         domain: &[u8],
-        evidence: &impl Encode,
+        evidence: &impl norito::NoritoSerialize,
     ) -> Result<Hash> {
         let encoded = norito::encode_canonical(evidence).map_err(Error::NoritoFrame)?;
         Ok(Hash::new_from_chunks(&[domain, &encoded]))

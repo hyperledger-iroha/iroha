@@ -526,6 +526,131 @@ def _production_trace_unique_function(
     return item
 
 
+def _production_trace_first_release_identity_contract(
+    model_payload: bytes,
+    owner_source: str,
+    operational_source: str,
+    verus_source: str,
+) -> tuple[list[str], Any | None]:
+    """Bind the single identity declaration and every consumer to actual TLA bytes."""
+    errors: list[str] = []
+    name = "production_in_flight_first_release_source_identity_body"
+    declarations = rust_macro_items(owner_source, name)
+    if len(declarations) != 1:
+        return ["first-release source identity requires one canonical declaration"], None
+    declaration = declarations[0]
+    if declaration.brace_context or declaration.delimiter_context or any(
+        "cfg" in rust_code_tokens(attribute) or "cfg_attr" in rust_code_tokens(attribute)
+        for attribute in (*declaration.attributes, *declaration.ancestor_inner_attributes)
+    ):
+        errors.append("first-release source identity declaration must be unconditional")
+    digest = _sha256_bytes(model_payload)
+    words = [digest[index:index + 16] for index in range(0, 64, 16)]
+    expected_declaration = (
+        f"macro_rules! {name} {{ () => {{ ProductionDigest256Projection {{ "
+        + " ".join(f"word{index}: 0x{word}u64," for index, word in enumerate(words))
+        + " } }; }"
+    )
+    if rust_code_tokens(declaration.source) != rust_code_tokens(expected_declaration):
+        errors.append("first-release source identity differs from actual TLA bytes")
+    for role, source in (("production", operational_source), ("Verus", verus_source)):
+        if rust_macro_items(source, name):
+            errors.append(f"first-release source identity is redeclared in {role}")
+    if "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256" in rust_code_tokens(
+        operational_source
+    ):
+        errors.append("first-release source identity retains a duplicate operational constant")
+    constructors = rust_items(
+        operational_source, "production_in_flight_first_release_transition_witness_v1"
+    )
+    if len(constructors) != 1 or _token_sequence_count(
+        rust_code_tokens(constructors[0].source),
+        rust_code_tokens(f"source_identity: {name}!()"),
+    ) != 1:
+        errors.append("first-release witness constructor is disconnected from its identity owner")
+    bindings = rust_macro_items(
+        owner_source, "production_in_flight_first_release_witness_binding_body"
+    )
+    expected_binding = (
+        "macro_rules! production_in_flight_first_release_witness_binding_body { "
+        "($projection:expr, $witness:expr) => {{ $witness.schema_version == 1u16 "
+        "&& $witness.action == $projection.action && $witness.actor == $projection.actor "
+        "&& $witness.target == $projection.target "
+        + " ".join(
+            f"&& $witness.source_identity.word{index} == {name}!().word{index}"
+            for index in range(4)
+        )
+        + " }}; }"
+    )
+    if len(bindings) != 1 or rust_code_tokens(bindings[0].source) != rust_code_tokens(
+        expected_binding
+    ):
+        errors.append("first-release witness binding is disconnected from its identity owner")
+    theorems = rust_items(
+        verus_source, "production_in_flight_first_release_witness_refines_named_next"
+    )
+    if len(theorems) != 1:
+        errors.append("first-release source identity requires its Verus theorem")
+    else:
+        theorem = rust_code_tokens(theorems[0].source)
+        for index in range(4):
+            required = rust_code_tokens(
+                f"witness.source_identity.word{index} == {name}!().word{index}"
+            )
+            if _token_sequence_count(theorem, required) != 1:
+                errors.append(f"first-release Verus source identity word {index} is disconnected")
+    return errors, declaration
+
+
+def _production_trace_first_release_dispatch_arms(source: str) -> dict[str, int]:
+    """Count the one action dispatch chain separately from shared payload custody."""
+    tokens = rust_code_tokens(source)
+    activate = "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA"
+    first = "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1"
+    guard = rust_code_tokens(
+        f"if projection.action == refinement_tag_value!({activate}) {{ "
+        "after.payload_binding_a == (before.payload_binding_a | projection.actor) "
+        "} else { after.payload_binding_a == before.payload_binding_a }"
+    )
+    prefix = rust_code_tokens("if projection.action == refinement_tag_value!(")
+    first_header = (*prefix, first, ")", "{")
+    starts = [i for i in range(len(tokens)) if tokens[i:i + len(first_header)] == first_header]
+    if len(starts) != 1:
+        raise ValueError("first-release dispatch requires one SelectQueuePlanV1 entry")
+    cursor = starts[0]
+    if _token_sequence_count(tokens[:cursor], guard) != 1:
+        raise ValueError("first-release dispatch lost its exact payload-custody guard")
+
+    def close_body(opening: int) -> int:
+        depth = 1
+        for index in range(opening + 1, len(tokens)):
+            depth += (tokens[index] == "{") - (tokens[index] == "}")
+            if depth == 0:
+                return index
+        raise ValueError("first-release dispatch has an unclosed action body")
+
+    counts: dict[str, int] = {}
+    while True:
+        if tokens[cursor:cursor + len(prefix)] != prefix:
+            raise ValueError("first-release dispatch has a noncanonical action condition")
+        tag_index = cursor + len(prefix)
+        tag = tokens[tag_index]
+        if tokens[tag_index + 1:tag_index + 3] != (")", "{"):
+            raise ValueError("first-release dispatch has a noncanonical action condition")
+        counts[tag] = counts.get(tag, 0) + 1
+        cursor = close_body(tag_index + 2) + 1
+        if tokens[cursor:cursor + 2] == ("else", "if"):
+            cursor += 1
+            continue
+        if tokens[cursor:cursor + 4] != ("else", "{", "false", "}"):
+            raise ValueError("first-release dispatch must reject unknown actions")
+        break
+    expected = {tag for _, tag, _ in PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS}
+    if set(counts) != expected or any(count != 1 for count in counts.values()):
+        raise ValueError("first-release dispatch must contain each canonical action exactly once")
+    return counts
+
+
 def _production_trace_extraction_source_snapshot(
     *, root_dir: Path = ROOT_DIR, formal_dir: Path = FORMAL_DIR
 ) -> dict[str, Any]:
@@ -745,19 +870,22 @@ def _production_trace_extraction_source_snapshot(
         errors.append(
             "production operational-correspondence mapping contains a duplicate Rust action tag"
         )
-    if set(mapped_discriminants) != set(range(1, 28)) or len(
+    if set(mapped_discriminants) != set(range(1, 29)) or len(
         set(mapped_discriminants)
     ) != len(mapped_discriminants):
         errors.append(
             "production operational-correspondence mapping must use each V1 "
-            "discriminant from 1 through 27 exactly once"
+            "discriminant from 1 through 28 exactly once"
         )
 
     core_statements = rust_top_level_statements(core_source)
     action_mapping_entries: list[dict[str, Any]] = []
-    transition_macro_tokens = (
-        () if len(transition_macros) != 1 else rust_code_tokens(transition_macros[0].source)
-    )
+    dispatch_arms = None
+    if len(transition_macros) == 1:
+        try:
+            dispatch_arms = _production_trace_first_release_dispatch_arms(transition_macros[0].source)
+        except ValueError as error:
+            errors.append(str(error))
     for model_action, action_tag, discriminant in action_mappings:
         expected_statement = rust_code_tokens(
             f"pub(crate) const {action_tag}: u8 = {discriminant};"
@@ -767,15 +895,14 @@ def _production_trace_extraction_source_snapshot(
             for statement in core_statements
             if statement.tokens == expected_statement
         ]
-        kernel_occurrences = _token_sequence_count(
-            transition_macro_tokens,
-            rust_code_tokens(f"refinement_tag_value!({action_tag})"),
-        )
+        kernel_occurrences = 0 if dispatch_arms is None else dispatch_arms.get(action_tag, 0)
         if len(matching_statements) != 1:
             errors.append(
                 "production operational-correspondence action tag definition "
                 f"is missing or ambiguous for {model_action}: {action_tag}={discriminant}"
             )
+            continue
+        if dispatch_arms is None:
             continue
         if kernel_occurrences != 1:
             errors.append(
@@ -812,6 +939,7 @@ def _production_trace_extraction_source_snapshot(
         "production_in_flight_first_release_local_kura_rehydration_rejects_volatile_drift",
         "production_in_flight_first_release_local_kura_rehydration_rejects_terminal_state",
         "production_in_flight_first_release_terminal_owner_is_exclusive",
+        "production_in_flight_first_release_replica_queue_observation_is_exact",
     ):
         item = _production_trace_unique_function(
             root_dir=root_dir,
@@ -993,7 +1121,7 @@ def _production_trace_extraction_source_snapshot(
             "target: projection.target",
             "before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before)",
             "after_state_digest: production_in_flight_first_release_state_digest_v1(projection.after)",
-            "source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256",
+            "source_identity: production_in_flight_first_release_source_identity_body!()",
         ),
         "authenticate_production_in_flight_first_release_transition_witness_v1": (
             "refinement::production_in_flight_first_release_transition_kernel(projection)",
@@ -1098,23 +1226,32 @@ def _production_trace_extraction_source_snapshot(
 
     operational_statements = rust_top_level_statements(operational_source)
     model_source_identity = _sha256_bytes(model_payload)
-    identity_words = [
-        model_source_identity[offset : offset + 16]
-        for offset in range(0, 64, 16)
-    ]
-    identity_literals = [
-        "0x" + "_".join(word[index : index + 4] for index in range(0, 16, 4))
-        for word in identity_words
-    ]
+    identity_relative = (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
+    )
+    _identity_path, identity_source = _read_reviewed_rust_source(
+        root_dir, identity_relative, errors, "canonical first-release source identity"
+    )
+    _verus_identity_path, verus_identity_source = _read_reviewed_rust_source(
+        root_dir, verus_relative, errors, "Verus first-release identity consumer"
+    )
+    identity_errors, identity_declaration = _production_trace_first_release_identity_contract(
+        model_payload, identity_source, operational_source, verus_identity_source
+    )
+    errors.extend(identity_errors)
+    identity_entry = None
+    if identity_declaration is not None:
+        identity_entry = _production_trace_rust_item_entry(
+            path=identity_relative,
+            kind="macro",
+            symbol="production_in_flight_first_release_source_identity_body",
+            item=identity_declaration,
+        )
+        core_items.append(identity_entry)
+        production_items.append(identity_entry)
     expected_operational_statements = {
         "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION": rust_code_tokens(
             "pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: u16 = 1;"
-        ),
-        "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256": rust_code_tokens(
-            "pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256: "
-            "ProductionDigest256Projection = ProductionDigest256Projection { "
-            f"word0: {identity_literals[0]}, word1: {identity_literals[1]}, "
-            f"word2: {identity_literals[2]}, word3: {identity_literals[3]}, }};"
         ),
     }
     for symbol, expected_tokens in expected_operational_statements.items():
@@ -1178,9 +1315,7 @@ def _production_trace_extraction_source_snapshot(
         "witness_schema_version": operational_by_symbol.get(
             "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION"
         ),
-        "model_source_identity": operational_by_symbol.get(
-            "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256"
-        ),
+        "model_source_identity": identity_entry,
         "shared_transition_kernel": core_by_symbol.get(
             "production_in_flight_first_release_transition_kernel"
         ),

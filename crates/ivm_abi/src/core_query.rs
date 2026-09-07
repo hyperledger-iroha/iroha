@@ -8,7 +8,7 @@ use iroha_data_model::prelude::{
     Quantity,
 };
 use norito::{
-    Decode, Encode, NoritoDeserialize, NoritoSerialize,
+    Decode, Encode, NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as ncore, DecodeFromSlice},
 };
 use std::fmt;
@@ -68,7 +68,8 @@ impl TryFrom<u64> for CoreQueryEntityTagV1 {
         }
     }
 }
-impl NoritoSerialize for CoreQueryEntityTagV1 {
+impl NoritoSerialize for CoreQueryEntityTagV1 {}
+impl SerializePayload for CoreQueryEntityTagV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.as_u64().serialize(writer)
     }
@@ -163,7 +164,8 @@ impl From<QuantityV1> for Numeric {
         value.into_numeric()
     }
 }
-impl NoritoSerialize for QuantityV1 {
+impl NoritoSerialize for QuantityV1 {}
+impl SerializePayload for QuantityV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
@@ -270,7 +272,8 @@ impl CoreQueryProjectionV1 for NftView {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueryPageItemsV1<T>(Vec<T>);
-impl<T: NoritoSerialize> NoritoSerialize for QueryPageItemsV1<T> {
+impl<T: NoritoSerialize> NoritoSerialize for QueryPageItemsV1<T> {}
+impl<T: NoritoSerialize> SerializePayload for QueryPageItemsV1<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
@@ -319,7 +322,8 @@ where
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NonNegativeOffsetV1(i64);
-impl NoritoSerialize for NonNegativeOffsetV1 {
+impl NoritoSerialize for NonNegativeOffsetV1 {}
+impl SerializePayload for NonNegativeOffsetV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }

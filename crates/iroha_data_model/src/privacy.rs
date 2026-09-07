@@ -579,7 +579,8 @@ impl Default for PrivacyProofWireMagicV1 {
     }
 }
 
-impl norito::core::NoritoSerialize for PrivacyProofWireMagicV1 {
+impl norito::core::NoritoSerialize for PrivacyProofWireMagicV1 {}
+impl norito::core::SerializePayload for PrivacyProofWireMagicV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
@@ -720,7 +721,8 @@ impl AsRef<[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1]> for GoldilocksDigest
     }
 }
 
-impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {
+impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {}
+impl norito::core::SerializePayload for GoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
@@ -860,11 +862,13 @@ macro_rules! define_zk_ace_digest384 {
         }
 
         impl norito::core::NoritoSerialize for $name {
+}
+impl norito::core::SerializePayload for $name {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
-                norito::core::NoritoSerialize::serialize(&self.0, writer)
+                norito::core::SerializePayload::serialize(&self.0, writer)
             }
 
             fn encoded_len_hint(&self) -> Option<usize> {
@@ -1005,9 +1009,10 @@ impl Default for PrivacyExact12CatalogCommitmentV1 {
     }
 }
 
-impl norito::core::NoritoSerialize for PrivacyExact12CatalogCommitmentV1 {
+impl norito::core::NoritoSerialize for PrivacyExact12CatalogCommitmentV1 {}
+impl norito::core::SerializePayload for PrivacyExact12CatalogCommitmentV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {

@@ -89,6 +89,11 @@ PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS = (
         "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
         24,
     ),
+    (
+        "ObserveReplicaQueueRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE",
+        28,
+    ),
 )
 
 def _retained_effect_frontier_adapter_contracts(
@@ -532,7 +537,8 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "delete_completed_autonomous_lifecycle_bootstrap",
                 "read_autonomous_lifecycle_cursor",
                 "cursor_read.cursor() != Some(&authority.bootstrap.body.live_activate)",
-                "lane_block_application_receipt_available",
+                "read_lane_application_receipt",
+            "receipt.proposal == payload.origin_proposal",
                 "consume_autonomous_lifecycle_bootstrap_completion_fence",
                 "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
                 "AutonomousLifecycleBootstrapCompletionOutcome::Completed",
@@ -547,7 +553,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "delete_completed_autonomous_lifecycle_bootstrap",
                 "let cursor_read = self.read_autonomous_lifecycle_cursor",
                 "if cursor_read.cursor() != Some(&authority.bootstrap.body.live_activate)",
-                "self.lane_block_application_receipt_available(&payload.origin_proposal)",
+                'receipt_terminal |= self.read_lane_application_receipt(payload.origin_proposal.descriptor.lane_id, payload.origin_proposal.descriptor.lane_block_height,)? .is_some_and(|receipt| receipt.proposal == payload.origin_proposal)',
                 "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence)",
                 "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
                 "AutonomousLifecycleBootstrapCompletionOutcome::Completed",
@@ -1256,7 +1262,9 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "additional_tokens": (
             "AutonomousLanePayloadFanoutAuthorization",
             "reservation_authorization.facts",
-            "current_autonomous_lane_payload",
+            "read_current_autonomous_lane_payload",
+            'kura.read_current_autonomous_lane_payload(descriptor.lane_id, descriptor.lane_block_height, expected_network_id, expected_epoch,).map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?',
+            "if durable_payload != *payload { return Err",
             "lane_queue_reservation_group_binding_from_ordered_keys",
             "canonical_lane_queue_reservation_group_identity_projection",
             "check_production_in_flight_first_release_fanout_from_producer_transition",
@@ -1365,7 +1373,9 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "additional_tokens": (
             "AutonomousLanePayloadFanoutAuthorization",
             "reservation_authorization.facts",
-            "current_autonomous_lane_payload",
+            "read_current_autonomous_lane_payload",
+            'kura.read_current_autonomous_lane_payload(descriptor.lane_id, descriptor.lane_block_height, expected_network_id, expected_epoch,).map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?',
+            "if durable_payload != *payload { return Err",
             "lane_queue_reservation_group_binding_from_ordered_keys",
             "canonical_lane_queue_reservation_group_identity_projection",
             "check_production_in_flight_first_release_fanout_from_producer_transition",
@@ -1474,7 +1484,9 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "additional_tokens": (
             "AutonomousLanePayloadFanoutAuthorization",
             "reservation_authorization.facts",
-            "current_autonomous_lane_payload",
+            "read_current_autonomous_lane_payload",
+            'kura.read_current_autonomous_lane_payload(descriptor.lane_id, descriptor.lane_block_height, expected_network_id, expected_epoch,).map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?',
+            "if durable_payload != *payload { return Err",
             "lane_queue_reservation_group_binding_from_ordered_keys",
             "canonical_lane_queue_reservation_group_identity_projection",
             "check_production_in_flight_first_release_fanout_from_producer_transition",
@@ -1587,9 +1599,15 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "checked_transition_count": 1,
         "additional_tokens": (
             "validate_certified_lane_block_artifact",
-            "read_certified_lane_block_artifact",
-            "current_autonomous_lane_payload",
-            "read_autonomous_lane_block_artifact",
+            "read_lane_completion_certificate",
+            "kura.read_lane_completion_certificate(descriptor.lane_id, descriptor.lane_block_height).map_err(|error| V2LaneWorkError::Persistence(error.to_string()))? != Some(certified)",
+            "read_current_autonomous_lane_payload",
+            'kura.read_current_autonomous_lane_payload(descriptor.lane_id, descriptor.lane_block_height, expected_network_id, expected_epoch,).map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?',
+            "if durable_payload != *payload { return Err",
+            "read_current_autonomous_lane_block_artifact",
+            "kura.read_current_autonomous_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height, expected_network_id, expected_epoch,).map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
+            "durable_autonomous.executable_payload != *payload",
+            "is_none_or(|certificate| certificate.certificate != *prepare_qc)",
             "signers_bitmap",
             "lane_queue_reservation_group_binding_from_ordered_keys",
             "canonical_lane_queue_reservation_group_identity_projection",
@@ -2473,6 +2491,194 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             ),
         },
     },
+    {'id': 'replica_queue_disposition_observation',
+     'path': 'crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs',
+     'impl': None,
+     'symbol': 'check_production_in_flight_first_release_observe_replica_queue_release_transition',
+     'model_actions': ('ObserveReplicaQueueRelease',),
+     'action_tags': ('IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE',),
+     'checked_transition_count': 1,
+     'additional_tokens': ('let mut after = before',
+                           'after.queue.reservation_state = if exact_ordinary_fifo_preserved { '
+                           'IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED } else { '
+                           'IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT }',
+                           'check_derived_production_in_flight_first_release_transition(IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE, '
+                           '0, if exact_ordinary_fifo_preserved { 1 } else { 0 }, before, after,)'),
+     'checked_transition_source': {'path': 'crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs',
+                                   'impl': None,
+                                   'symbol': 'check_derived_production_in_flight_first_release_transition',
+                                   'required_tokens': ('check_production_in_flight_first_release_transition',
+                                                       'ProductionInFlightFirstReleaseTransitionProjection'),
+                                   'ordered_tokens': ('check_production_in_flight_first_release_transition',
+                                                      'ProductionInFlightFirstReleaseTransitionProjection '
+                                                      '{',
+                                                      'action,',
+                                                      'actor,',
+                                                      'target,',
+                                                      'before,',
+                                                      'after,'),
+                                   'transition_projection_count': 2},
+     'supporting_sources': ({'path': 'crates/iroha_core/src/sumeragi/v2_core.rs',
+                             'impl': None,
+                             'symbol': 'check_production_in_flight_first_release_observe_replica_queue_release_transition',
+                             'required_tokens': ('witness_derived_first_release_transition(refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(before, '
+                                                 'exact_ordinary_fifo_preserved,)?,)',
+                                                 'before: '
+                                                 'ProductionInFlightFirstReleaseStateProjection',
+                                                 'exact_ordinary_fifo_preserved: bool'),
+                             'ordered_tokens': (),
+                             'role': 'source-bound production observation wrapper'},
+                            {'path': 'crates/iroha_core/src/sumeragi/v2_core.rs',
+                             'impl': None,
+                             'symbol': 'witness_derived_first_release_transition',
+                             'required_tokens': ('check_production_in_flight_first_release_transition(checked.into_projection())',),
+                             'ordered_tokens': (),
+                             'role': 'production witness handoff'},
+                            {'path': 'crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs',
+                             'impl': 'AutonomousLaneReleaseProjectionContext',
+                             'symbol': 'observe_replica_queue_release_transition',
+                             'required_tokens': ('canonical_lane_queue_reservation_group_identity_projection(self.reservation_group)',
+                                                 'self.state(binding_a, '
+                                                 'IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE, true, '
+                                                 'self.reservation_group.reservation_count, 0,)',
+                                                 'check_production_in_flight_first_release_observe_replica_queue_release_transition(before, '
+                                                 'exact_ordinary_fifo_preserved,)'),
+                             'ordered_tokens': (),
+                             'role': 'signed replica claim-prefix projection'},
+                            {'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': "<'queue> AutonomousLaneReplicaQueueDispositionAuthorization<'queue>",
+                             'symbol': 'consume_for_kura',
+                             'required_tokens': ('let expected_cursor = expected_cursor_read.cursor()?',
+                                                 'LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor',
+                                                 'self.cursor != *expected_cursor',
+                                                 'self.reservation_group != '
+                                                 'expected_lifecycle.reservation_group',
+                                                 'self.ordered_keys != expected_lifecycle.ordered_keys',
+                                                 'expected_lifecycle.local_actor == '
+                                                 'expected_lifecycle.producer',
+                                                 '_reservation_transition: self.reservation_transition',
+                                                 'AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(fence)',
+                                                 'AutonomousLaneReplicaQueueDisposition::StrictQueueAbsent(fence)'),
+                             'ordered_tokens': (),
+                             'role': 'move-only exact cursor and ordered-group Queue fence'},
+                            {'path': 'crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs',
+                             'impl': None,
+                             'symbol': 'production_in_flight_first_release_replica_queue_observation_is_exact',
+                             'required_tokens': ('projection.action == '
+                                                 'refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE)',
+                                                 'production_in_flight_first_release_transition_kernel(projection)',
+                                                 'projection.actor == 0u128',
+                                                 'projection.target <= 1u128',
+                                                 'projection.before.decision.release_owner != '
+                                                 'projection.before.producer',
+                                                 'projection.before.release.kura_retired',
+                                                 'projection.before.release.pending_prefix == '
+                                                 'projection.before.queue.selected_count',
+                                                 'projection.before.release.released_prefix == 0u64',
+                                                 '!projection.before.release.fifo_restored',
+                                                 'projection.after.queue.reservation_state == if '
+                                                 'projection.target == 0u128 { '
+                                                 'refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT) '
+                                                 '} else { '
+                                                 'refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED) '
+                                                 '}',
+                                                 'projection.after.release.fifo_restored == '
+                                                 'projection.before.release.fifo_restored',
+                                                 'reveal(production_in_flight_first_release_transition_kernel)'),
+                             'ordered_tokens': (),
+                             'role': 'exact replica Queue observation theorem'}),
+     'authorization_source': {'path': 'crates/iroha_core/src/queue.rs',
+                              'impl': 'Queue',
+                              'symbol': 'authorize_autonomous_lane_replica_queue_disposition_with_gate',
+                              'required_tokens': ('LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor',
+                                                  'lifecycle.local_actor == lifecycle.producer',
+                                                  'self.lane_reservation_transition_lock.lock()',
+                                                  'self.wait_for_durability_transitions(&transition_hashes)',
+                                                  'self.push_remove_lock.lock()',
+                                                  'begin_durability_transition_locked(transition_hashes)',
+                                                  'store.ensure_no_conflict(key)?',
+                                                  'store.ensure_not_release_prepared(key)?',
+                                                  'preflight_committed_replica_owner_locked',
+                                                  'canonical_queue_hash_terminal_owner_mask_locked',
+                                                  'if owner_mask != 0',
+                                                  'disposition.is_some_and(|existing| existing != '
+                                                  'observed)',
+                                                  'replica_group_has_byte_exact_ordinary_fifo_ownership_locked(ordered_keys)',
+                                                  'preflight_lane_reservation_plan_journal(&journal_preflight)?',
+                                                  'Ok(AutonomousLaneReplicaQueueDispositionAuthorization '
+                                                  '{ cursor: cursor.clone(), reservation_group, '
+                                                  'ordered_keys: ordered_keys.to_vec(), disposition, '
+                                                  'reservation_transition, })'),
+                              'ordered_tokens': ('let reservation_group = lifecycle.reservation_group',
+                                                 'self.lane_reservation_transition_lock.lock()',
+                                                 'let mut queue_guard = self.push_remove_lock.lock()',
+                                                 'begin_durability_transition_locked(transition_hashes)',
+                                                 'for key in ordered_keys',
+                                                 'if disposition == '
+                                                 'AutonomousLaneReplicaQueueDispositionKind::ExactOrdinaryFifo',
+                                                 'drop(store); drop(queue_guard);',
+                                                 'self.preflight_lane_reservation_plan_journal(&journal_preflight)?',
+                                                 'Ok(AutonomousLaneReplicaQueueDispositionAuthorization '
+                                                 '{')},
+     'checked_transition_consumer': {'path': 'crates/iroha_core/src/kura/autonomous_release_authority.rs',
+                                     'impl': 'Kura',
+                                     'symbol': 'retire_autonomous_lane_slot_with_replica_queue_disposition',
+                                     'required_tokens': ('authorization.consume_for_kura(&cursor_read, '
+                                                         '&barrier.ordered_keys)',
+                                                         'let (exact_ordinary_fifo_preserved, '
+                                                         'source_disposition, _queue_fence) = match '
+                                                         'disposition',
+                                                         'if durable_cursor != expected_cursor',
+                                                         'context.actor != durable_local_actor',
+                                                         'context.reservation_group != '
+                                                         'durable_cursor.binding().reservation_group_binding()',
+                                                         'if pending_prefix != selected_count || '
+                                                         'released_prefix > pending_prefix',
+                                                         'if exact_attempt_is_current && '
+                                                         'released_prefix == 0',
+                                                         'observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)',
+                                                         'if observed.after.queue.reservation_state != '
+                                                         'expected_reservation_state',
+                                                         'context.replica_queue_release_state(exact_ordinary_fifo_preserved, '
+                                                         'released_prefix)',
+                                                         '!production_in_flight_first_release_state_kernel(recovered)',
+                                                         'recovered.release.released_prefix != '
+                                                         'released_prefix'),
+                                     'ordered_tokens': ('authorization.consume_for_kura(&cursor_read, '
+                                                        '&barrier.ordered_keys)',
+                                                        'let (exact_ordinary_fifo_preserved, '
+                                                        'source_disposition, _queue_fence) = match '
+                                                        'disposition',
+                                                        'let _prune_guard = self.prune_lock.lock()',
+                                                        'if durable_cursor != expected_cursor',
+                                                        'persist_autonomous_lane_slot_retirement_for_replica_locked',
+                                                        'prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked',
+                                                        'if exact_attempt_is_current && '
+                                                        'released_prefix == 0',
+                                                        'observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)',
+                                                        'into_projection()',
+                                                        'if observed.after.queue.reservation_state != '
+                                                        'expected_reservation_state',
+                                                        'finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked')},
+     'commit_sink': {'path': 'crates/iroha_core/src/kura/autonomous_release_authority.rs',
+                     'impl': 'Kura',
+                     'symbol': 'retire_autonomous_lane_slot_with_replica_queue_disposition',
+                     'required_tokens': ('require_autonomous_lane_entrypoint_claims_released_for_replica_locked',
+                                         'AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition',
+                                         'context.replica_queue_terminal_state(exact_ordinary_fifo_preserved)',
+                                         '!production_in_flight_first_release_state_kernel(terminal)',
+                                         'production_in_flight_first_release_terminal_owner(terminal).is_none()',
+                                         'persist_autonomous_lifecycle_replica_terminal_outcome_complete_locked',
+                                         'complete_autonomous_lane_entrypoint_claims_released_for_replica_locked'),
+                     'ordered_tokens': ('require_autonomous_lane_entrypoint_claims_released_for_replica_locked',
+                                        'let source = '
+                                        'AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition',
+                                        'autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked',
+                                        'let terminal = '
+                                        'context.replica_queue_terminal_state(exact_ordinary_fifo_preserved)',
+                                        'persist_autonomous_lifecycle_replica_terminal_outcome_complete_locked',
+                                        'complete_autonomous_lane_entrypoint_claims_released_for_replica_locked',
+                                        'Ok(source_disposition)')}},
 )
 
 # Full startup lifecycle extraction. The journal-replay portion remains a
@@ -2849,7 +3055,8 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "delete_completed_autonomous_lifecycle_bootstrap",
             "read_autonomous_lifecycle_cursor",
             "cursor_read.cursor() != Some(&authority.bootstrap.body.live_activate)",
-            "lane_block_application_receipt_available",
+            "read_lane_application_receipt",
+            "receipt.proposal == payload.origin_proposal",
             "consume_autonomous_lifecycle_bootstrap_completion_fence",
             "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
             "AutonomousLifecycleBootstrapCompletionOutcome::Completed",
@@ -2864,7 +3071,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "delete_completed_autonomous_lifecycle_bootstrap",
             "let cursor_read = self.read_autonomous_lifecycle_cursor",
             "if cursor_read.cursor() != Some(&authority.bootstrap.body.live_activate)",
-            "self.lane_block_application_receipt_available(&payload.origin_proposal)",
+            'receipt_terminal |= self.read_lane_application_receipt(payload.origin_proposal.descriptor.lane_id, payload.origin_proposal.descriptor.lane_block_height,)? .is_some_and(|receipt| receipt.proposal == payload.origin_proposal)',
             "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence)",
             "AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal",
             "AutonomousLifecycleBootstrapCompletionOutcome::Completed",

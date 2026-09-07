@@ -16,7 +16,7 @@ use norito::{
     Decode, Encode,
     core::{
         Archived, DecodeFromSlice, DecodeLimits, Error as NoritoError, NoritoDeserialize,
-        NoritoSerialize, serialize_to_buffer,
+        NoritoSerialize, SerializePayload, serialize_to_buffer,
     },
 };
 use std::io::Write;
@@ -1147,7 +1147,8 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         .map(|decoded| decoded.value)
         .ok_or(NoritoError::LengthMismatch)
 }
-impl NoritoSerialize for EmbeddedStateFieldDescriptor {
+impl NoritoSerialize for EmbeddedStateFieldDescriptor {}
+impl SerializePayload for EmbeddedStateFieldDescriptor {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_field_payload(self)?;
         encoded.serialize(writer)
@@ -1173,6 +1174,8 @@ impl NoritoSerialize for EmbeddedStateType {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
     }
+}
+impl SerializePayload for EmbeddedStateType {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_type_payload(self)?;
         encoded.serialize(writer)

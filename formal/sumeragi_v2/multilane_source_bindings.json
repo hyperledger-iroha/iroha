@@ -756,7 +756,8 @@
       "CompleteReservationRelease",
       "RestoreReleasedFifo",
       "ForgetReservationRelease",
-      "RepairPostCarrierEvidence"
+      "RepairPostCarrierEvidence",
+      "ObserveReplicaQueueRelease"
     ],
     "required_invariants": [
       "FirstReleaseTypeInvariant",

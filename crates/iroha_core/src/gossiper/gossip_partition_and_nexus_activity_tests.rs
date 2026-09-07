@@ -249,11 +249,11 @@ fn gossip_transaction_len_hints_include_admission_suffix() {
         "wire includes the admission suffix"
     );
     assert_eq!(
-        ncore::NoritoSerialize::encoded_len_hint(&tx),
+        ncore::SerializePayload::encoded_len_hint(&tx),
         Some(wire_len)
     );
     assert_eq!(
-        ncore::NoritoSerialize::encoded_len_exact(&tx),
+        ncore::SerializePayload::encoded_len_exact(&tx),
         Some(wire_len)
     );
 }
@@ -339,7 +339,7 @@ fn transaction_gossip_encoded_len_exact_matches_encode() {
     };
     let encoded = message.encode();
     assert_eq!(
-        ncore::NoritoSerialize::encoded_len_exact(&message),
+        ncore::SerializePayload::encoded_len_exact(&message),
         Some(encoded.len())
     );
 }

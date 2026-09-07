@@ -70,7 +70,7 @@ use iroha_data_model::{
         },
     },
 };
-use norito::core::NoritoSerialize;
+use norito::core::{NoritoSerialize, SerializePayload};
 use sorafs_node::reputation::{
     ReputationFinalizedIdentityV1,
     runtime::{

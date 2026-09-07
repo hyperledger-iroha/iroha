@@ -1645,7 +1645,8 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         norito::json::from_str(&canonical_json)
     }
 }
-impl norito::NoritoSerialize for ProofAttachment {
+impl norito::NoritoSerialize for ProofAttachment {}
+impl norito::SerializePayload for ProofAttachment {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::write_len_prefixed(writer, &self.backend)?;
         ncore::write_len_prefixed(writer, &self.proof)?;
@@ -1887,7 +1888,7 @@ impl ProofAttachmentList {
         // make the authoritative pass allocate far beyond this list's 8 MiB
         // ceiling. A value at or below the ceiling is never admitted from the
         // hint: the real counting serializer below remains authoritative.
-        let hinted_payload_len = norito::NoritoSerialize::encoded_len_exact(self)
+        let hinted_payload_len = norito::SerializePayload::encoded_len_exact(self)
             .ok_or(ProofAttachmentListError::CanonicalEncodingFailed)?;
         let hinted_frame_len = Self::canonical_frame_len_from_payload_len(hinted_payload_len)
             .ok_or(ProofAttachmentListError::CanonicalEncodingFailed)?;
@@ -1997,21 +1998,22 @@ impl TryFrom<Vec<ProofAttachment>> for ProofAttachmentList {
         Ok(list)
     }
 }
-impl norito::NoritoSerialize for ProofAttachmentList {
+impl norito::NoritoSerialize for ProofAttachmentList {}
+impl norito::SerializePayload for ProofAttachmentList {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let field_len = norito::NoritoSerialize::encoded_len_exact(&self.0)
+        let field_len = norito::SerializePayload::encoded_len_exact(&self.0)
             .ok_or(ncore::Error::LengthMismatch)?;
         ncore::write_len(
             writer,
             u64::try_from(field_len).map_err(|_| ncore::Error::LengthMismatch)?,
         )?;
-        norito::NoritoSerialize::serialize(&self.0, writer)
+        norito::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        let field_len = norito::NoritoSerialize::encoded_len_exact(&self.0)?;
+        let field_len = norito::SerializePayload::encoded_len_exact(&self.0)?;
         ncore::len_prefix_len(field_len).checked_add(field_len)
     }
 }
@@ -2790,7 +2792,7 @@ mod tests {
             ncore::encoded_frame_len(&list).expect("authoritative counting serialization"),
             before.len()
         );
-        let hinted_payload = norito::NoritoSerialize::encoded_len_exact(&list)
+        let hinted_payload = norito::SerializePayload::encoded_len_exact(&list)
             .expect("bounded list exposes an exact serialization hint");
         assert_eq!(
             ProofAttachmentList::canonical_frame_len_from_payload_len(hinted_payload)

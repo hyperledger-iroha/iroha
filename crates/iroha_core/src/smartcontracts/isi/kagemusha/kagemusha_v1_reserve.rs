@@ -2183,7 +2183,7 @@ fn validate_mint_finality_attachment(
     Ok(())
 }
 
-fn canonical_wire_digest<T: Encode>(
+fn canonical_wire_digest<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaReserveErrorV1> {

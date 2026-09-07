@@ -255,3 +255,55 @@ fn assert_in_flight_first_release_stutter_constructors_are_exact(
         "post-carrier repair must reject a non-stutter after-state"
     );
 }
+
+/// Canonical nonproducer FIFO release state shared by pure and node witness tests.
+#[cfg(test)]
+pub(crate) fn replica_fifo_state(
+    released_prefix: u64,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    let binding_a = CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_KIND_CANONICAL_PAYLOAD,
+        [0x71; 32],
+    );
+    ProductionInFlightFirstReleaseStateProjection {
+        validator_count: 3,
+        producer: 1,
+        producer_selected_owner: 1,
+        replicated_carrier_owners: 6,
+        payload_binding_a: 3,
+        binding_a,
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            selected_count: 2,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection {
+            kura_active: 3,
+            ..ProductionInFlightFirstReleaseCarrierProjection::default()
+        },
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: 3,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection {
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
+            pending_high_water: 2,
+            released_high_water: released_prefix,
+            ..ProductionInFlightFirstReleaseHistoryProjection::default()
+        },
+        decision: ProductionInFlightFirstReleaseDecisionProjection {
+            release_scope: binding_a,
+            release_owner: 2,
+            ..ProductionInFlightFirstReleaseDecisionProjection::default()
+        },
+        release: ProductionInFlightFirstReleaseReleaseProjection {
+            kura_retired: true,
+            pending_prefix: 2,
+            released_prefix,
+            fifo_restored: true,
+        },
+    }
+}

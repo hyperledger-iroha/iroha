@@ -3536,21 +3536,8 @@ fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_abse
             .expect("temporary-transition authorization worker panicked");
     });
 
-    let replica_fee_hold = || FeeAdmissionReservation {
-        program_revision: None,
-        beneficiary: AccountId::new(ALICE_KEYPAIR.public_key().clone()),
-        asset_charges: BTreeMap::new(),
-        window_charges: BTreeMap::new(),
-        relay_lease_charges: BTreeMap::new(),
-        asset_remaining: BTreeMap::new(),
-        window_remaining: BTreeMap::new(),
-        relay_lease_remaining: BTreeMap::new(),
-    };
-    queue
-        .fee_admission_reservations
-        .lock()
-        .reserve(fifo_keys[0].entrypoint_hash, replica_fee_hold())
-        .expect("install exact FIFO fee-admission hold");
+    // The startup observation above already retained this exact fee hold.
+    // The live observation must preserve its beneficiary, charges and capacity.
     let fifo_with_fee = queue
         .authorize_autonomous_lane_replica_queue_disposition(&fifo_cursor, fifo_keys)
         .expect("exact FIFO replica may retain its canonical-cleanup fee hold")
@@ -3561,13 +3548,24 @@ fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_abse
         AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(_)
     ));
     drop(fifo_with_fee);
-    assert!(
-        queue
-            .fee_admission_reservations
-            .lock()
-            .live_by_entrypoint
-            .contains_key(&fifo_keys[0].entrypoint_hash),
-        "replica FIFO observation must preserve the fee hold for canonical cleanup"
+    let retained = queue
+        .fee_admission_reservations
+        .lock()
+        .live_by_entrypoint
+        .get(&fifo_keys[0].entrypoint_hash)
+        .cloned()
+        .expect("replica FIFO observation preserves its hold for canonical cleanup");
+    let expected = fee_reservation();
+    assert_eq!(retained.program_revision, expected.program_revision);
+    assert_eq!(retained.beneficiary, expected.beneficiary);
+    assert_eq!(retained.asset_charges, expected.asset_charges);
+    assert_eq!(retained.window_charges, expected.window_charges);
+    assert_eq!(retained.relay_lease_charges, expected.relay_lease_charges);
+    assert_eq!(retained.asset_remaining, expected.asset_remaining);
+    assert_eq!(retained.window_remaining, expected.window_remaining);
+    assert_eq!(
+        retained.relay_lease_remaining,
+        expected.relay_lease_remaining
     );
     queue
         .fee_admission_reservations
@@ -3577,7 +3575,7 @@ fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_abse
     queue
         .fee_admission_reservations
         .lock()
-        .reserve(absent_keys[0].entrypoint_hash, replica_fee_hold())
+        .reserve(absent_keys[0].entrypoint_hash, fee_reservation())
         .expect("install orphaned strict-absence fee-admission hold");
     assert!(matches!(
         queue.authorize_autonomous_lane_replica_queue_disposition(&absent_cursor, absent_keys),

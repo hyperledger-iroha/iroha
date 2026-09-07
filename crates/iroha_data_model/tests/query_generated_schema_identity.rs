@@ -38,7 +38,7 @@ use iroha_data_model::{
     },
 };
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 

@@ -45,6 +45,8 @@ mod model {
     #[getset(get = "pub")]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::trigger::model::model::TriggerId")]
     pub struct TriggerId {
         /// Name given to trigger by its creator.
         pub name: Name,
@@ -95,10 +97,8 @@ mod candidate {
         pub action: action::Action,
     }
     struct BorrowedValue<'a, T>(&'a T);
-    impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for BorrowedValue<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            T::schema_hash()
-        }
+
+    impl<T: norito::core::SerializePayload> norito::core::SerializePayload for BorrowedValue<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -112,7 +112,7 @@ mod candidate {
             self.0.encoded_len_exact()
         }
     }
-    #[derive(norito::derive::NoritoSerialize)]
+    #[derive(norito::derive::SerializePayload)]
     struct TriggerCandidateRef<'a> {
         id: BorrowedValue<'a, TriggerId>,
         action: BorrowedValue<'a, action::Action>,
@@ -140,18 +140,19 @@ mod candidate {
             candidate.into_trigger()
         }
     }
-    impl norito::core::NoritoSerialize for Trigger {
+    impl norito::core::NoritoSerialize for Trigger {}
+    impl norito::core::SerializePayload for Trigger {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
-            norito::core::NoritoSerialize::serialize(&TriggerCandidateRef::from(self), writer)
+            norito::core::SerializePayload::serialize(&TriggerCandidateRef::from(self), writer)
         }
         fn encoded_len_hint(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_hint(&TriggerCandidateRef::from(self))
+            norito::core::SerializePayload::encoded_len_hint(&TriggerCandidateRef::from(self))
         }
         fn encoded_len_exact(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_exact(&TriggerCandidateRef::from(self))
+            norito::core::SerializePayload::encoded_len_exact(&TriggerCandidateRef::from(self))
         }
     }
     #[cfg(test)]
@@ -195,7 +196,7 @@ mod candidate {
                 .expect("serialize borrowed trigger candidate");
             assert_eq!(borrowed_bytes, owned_bytes);
             assert_eq!(
-                norito::core::NoritoSerialize::encoded_len_exact(&borrowed),
+                norito::core::SerializePayload::encoded_len_exact(&borrowed),
                 Some(owned_bytes.len())
             );
         }
@@ -339,6 +340,8 @@ pub mod action {
         /// Core definition of a trigger action, including the executable, firing policy, and persistent storage.
         #[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::trigger::model::action::model::Action")]
         pub struct Action {
             /// The executable linked to this trigger.
             pub executable: Executable,
@@ -973,10 +976,8 @@ pub mod action {
             pub metadata: Metadata,
         }
         struct BorrowedValue<'a, T>(&'a T);
-        impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for BorrowedValue<'_, T> {
-            fn schema_hash() -> [u8; 16] {
-                T::schema_hash()
-            }
+
+        impl<T: norito::core::SerializePayload> norito::core::SerializePayload for BorrowedValue<'_, T> {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
@@ -990,7 +991,7 @@ pub mod action {
                 self.0.encoded_len_exact()
             }
         }
-        #[derive(norito::derive::NoritoSerialize)]
+        #[derive(norito::derive::SerializePayload)]
         struct ActionCandidateRef<'a> {
             executable: BorrowedValue<'a, Executable>,
             repeats: Repeats,
@@ -1049,7 +1050,8 @@ pub mod action {
                     .map_err(|error| norito::core::Error::Message(error.to_string()))
             }
         }
-        impl norito::core::NoritoSerialize for Action {
+        impl norito::core::NoritoSerialize for Action {}
+        impl norito::core::SerializePayload for Action {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
@@ -1062,10 +1064,10 @@ pub mod action {
                     retry_policy: self.retry_policy,
                     metadata: BorrowedValue(&self.metadata),
                 };
-                norito::core::NoritoSerialize::serialize(&candidate, writer)
+                norito::core::SerializePayload::serialize(&candidate, writer)
             }
             fn encoded_len_hint(&self) -> Option<usize> {
-                norito::core::NoritoSerialize::encoded_len_hint(&ActionCandidateRef {
+                norito::core::SerializePayload::encoded_len_hint(&ActionCandidateRef {
                     executable: BorrowedValue(&self.executable),
                     repeats: self.repeats,
                     authority: BorrowedValue(&self.authority),
@@ -1075,7 +1077,7 @@ pub mod action {
                 })
             }
             fn encoded_len_exact(&self) -> Option<usize> {
-                norito::core::NoritoSerialize::encoded_len_exact(&ActionCandidateRef {
+                norito::core::SerializePayload::encoded_len_exact(&ActionCandidateRef {
                     executable: BorrowedValue(&self.executable),
                     repeats: self.repeats,
                     authority: BorrowedValue(&self.authority),
@@ -1130,7 +1132,7 @@ pub mod action {
                     .expect("serialize borrowed action candidate");
                 assert_eq!(borrowed_bytes, owned_bytes);
                 assert_eq!(
-                    norito::core::NoritoSerialize::encoded_len_exact(&borrowed),
+                    norito::core::SerializePayload::encoded_len_exact(&borrowed),
                     Some(owned_bytes.len())
                 );
             }

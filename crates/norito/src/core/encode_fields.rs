@@ -1,7 +1,7 @@
 //! Measurement and emission of packed struct fields.
 
 use super::{
-    Encoder, Error, NoritoSerialize, encoded_payload_len, mark_field_bitset_used_if_encoding,
+    Encoder, Error, SerializePayload, encoded_payload_len, mark_field_bitset_used_if_encoding,
     write_counted_payload, write_len_header, write_packed_offset_table,
 };
 
@@ -10,7 +10,7 @@ use super::{
 #[derive(Clone, Copy)]
 pub enum PackedField<'a> {
     /// A value encoded with its own canonical serializer.
-    Value(&'a dyn NoritoSerialize),
+    Value(&'a dyn SerializePayload),
     /// A byte array encoded directly, without the generic array codec's framing.
     Bytes(&'a [u8]),
 }
@@ -84,6 +84,7 @@ pub fn write_packed_fields(
 
 #[cfg(test)]
 mod tests {
+    use crate::NoritoSerialize;
     use std::cell::Cell;
 
     use super::*;
@@ -97,7 +98,8 @@ mod tests {
         bytes: &'a [u8],
     }
 
-    impl NoritoSerialize for CountedValue<'_> {
+    impl NoritoSerialize for CountedValue<'_> {}
+    impl SerializePayload for CountedValue<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.visits.set(self.visits.get() + 1);
             writer.write_all(self.bytes)?;
@@ -118,7 +120,8 @@ mod tests {
         bitset: Option<&'a [u8]>,
     }
 
-    impl NoritoSerialize for Record<'_> {
+    impl NoritoSerialize for Record<'_> {}
+    impl SerializePayload for Record<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             write_packed_fields(writer, self.fields, self.bitset)
         }
@@ -229,7 +232,8 @@ mod tests {
 
     struct FailingValue;
 
-    impl NoritoSerialize for FailingValue {
+    impl NoritoSerialize for FailingValue {}
+    impl SerializePayload for FailingValue {
         fn serialize(&self, _writer: &mut Encoder<'_>) -> Result<(), Error> {
             Err(Error::NonCanonicalEncoding)
         }
@@ -260,7 +264,8 @@ mod tests {
         grows: bool,
     }
 
-    impl NoritoSerialize for ChangingValue {
+    impl NoritoSerialize for ChangingValue {}
+    impl SerializePayload for ChangingValue {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let first = self.visits.replace(self.visits.get() + 1) == 0;
             writer.write_all(if first == self.grows { &[1] } else { &[1, 2] })?;

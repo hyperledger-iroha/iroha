@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Leaf<'a>(&'a AtomicUsize);
 
-impl NoritoSerialize for Leaf<'_> {
+impl NoritoSerialize for Leaf<'_> {}
+impl SerializePayload for Leaf<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);
         writer.write_all(&[0xAB])?;
@@ -71,10 +72,10 @@ fn counting_preserves_box_rc_arc_and_array_layouts() {
         let arc = Arc::new(Leaf(&calls));
         let array = [Leaf(&calls), Leaf(&calls)];
         for (value, leaves) in [
-            (&boxed as &dyn NoritoSerialize, 1),
-            (&rc as &dyn NoritoSerialize, 1),
-            (&arc as &dyn NoritoSerialize, 1),
-            (&array as &dyn NoritoSerialize, 2),
+            (&boxed as &dyn SerializePayload, 1),
+            (&rc as &dyn SerializePayload, 1),
+            (&arc as &dyn SerializePayload, 1),
+            (&array as &dyn SerializePayload, 2),
         ] {
             calls.store(0, Ordering::Relaxed);
             let measured = encoded_payload_len(value).unwrap();
@@ -89,7 +90,8 @@ fn counting_preserves_box_rc_arc_and_array_layouts() {
 #[test]
 fn counting_never_trusts_public_exact_writer_lengths() {
     struct FalseLength;
-    impl NoritoSerialize for FalseLength {
+    impl NoritoSerialize for FalseLength {}
+    impl SerializePayload for FalseLength {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             serialize_to_writer_exact(&0x1234_u16, writer, 1)
         }
@@ -103,7 +105,8 @@ fn counting_never_trusts_public_exact_writer_lengths() {
 #[test]
 fn nested_buffer_and_checksum_writers_still_receive_real_bytes() {
     struct InnerDigest;
-    impl NoritoSerialize for InnerDigest {
+    impl NoritoSerialize for InnerDigest {}
+    impl SerializePayload for InnerDigest {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let mut inner = Vec::new();
             serialize_to_buffer(&Some(0x1234_u16), &mut inner)?;
@@ -130,7 +133,8 @@ fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
         values: Vec<Vec<u16>>,
     }
     struct NestedFrame(Inner);
-    impl NoritoSerialize for NestedFrame {
+    impl NoritoSerialize for NestedFrame {}
+    impl SerializePayload for NestedFrame {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             // The inner frame's first pass computes its CRC through a writer
             // over io::sink(), even when this outer destination only counts.
@@ -165,7 +169,8 @@ fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
 #[test]
 fn counting_propagates_child_errors_and_restores_context() {
     struct Fails;
-    impl NoritoSerialize for Fails {
+    impl NoritoSerialize for Fails {}
+    impl SerializePayload for Fails {
         fn serialize(&self, _: &mut Encoder<'_>) -> Result<(), Error> {
             Err(Error::NonCanonicalEncoding)
         }
@@ -173,9 +178,9 @@ fn counting_propagates_child_errors_and_restores_context() {
     for flags in layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
         for value in [
-            &Some(Fails) as &dyn NoritoSerialize,
-            &vec![Fails] as &dyn NoritoSerialize,
-            &BTreeMap::from([(0_u8, Fails)]) as &dyn NoritoSerialize,
+            &Some(Fails) as &dyn SerializePayload,
+            &vec![Fails] as &dyn SerializePayload,
+            &BTreeMap::from([(0_u8, Fails)]) as &dyn SerializePayload,
         ] {
             assert!(matches!(
                 encoded_payload_len(value),
@@ -206,11 +211,12 @@ fn element_sequence_bound_includes_offsets_and_rejects_before_the_table() {
     let items = [1_u16, 2, 3];
     let limit = 4 * 8 + 3 * 2;
     let mut bytes = Vec::new();
-    write_element_sequence(&mut Encoder::for_buffer(&mut bytes), &items, limit).unwrap();
+    write_element_sequence::<u16, _>(&mut Encoder::for_buffer(&mut bytes), items.iter(), limit)
+        .unwrap();
     assert_eq!(bytes.len(), 8 + usize::try_from(limit).unwrap());
     let mut rejected = Vec::new();
     assert!(matches!(
-        write_element_sequence(&mut Encoder::for_buffer(&mut rejected), &items, limit - 1),
+        write_element_sequence::<u16, _>(&mut Encoder::for_buffer(&mut rejected), items.iter(), limit - 1),
         Err(Error::ArchiveLengthExceeded { length, limit: bound })
             if length == limit && bound == limit - 1
     ));
@@ -224,7 +230,11 @@ fn element_sequence_rejects_oversized_offset_tables_before_visiting_elements() {
     let items = [Leaf(&calls)];
     let mut bytes = Vec::new();
     assert!(matches!(
-        write_element_sequence(&mut Encoder::for_buffer(&mut bytes), &items, 15),
+        write_element_sequence::<Leaf<'_>, _>(
+            &mut Encoder::for_buffer(&mut bytes),
+            items.iter(),
+            15
+        ),
         Err(Error::ArchiveLengthExceeded {
             length: 16,
             limit: 15
@@ -239,7 +249,8 @@ fn element_sequence_keeps_individually_framed_bytes_in_every_layout() {
     for flags in layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
-        write_element_sequence(&mut Encoder::for_buffer(&mut bytes), &[0xAB_u8], u64::MAX).unwrap();
+        write_element_sequence::<u8, _>(&mut Encoder::for_buffer(&mut bytes), [0xAB_u8], u64::MAX)
+            .unwrap();
         let mut expected = 1_u64.to_le_bytes().to_vec();
         if use_packed_seq() {
             expected.extend_from_slice(&0_u64.to_le_bytes());

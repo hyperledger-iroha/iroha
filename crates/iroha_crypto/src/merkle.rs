@@ -276,20 +276,21 @@ merkle_schema_identity! {
     MerkleProof => "iroha_crypto::merkle::MerkleProof",
     CompactMerkleProof => "iroha_crypto::merkle::CompactMerkleProof",
 }
-impl<T> norito::core::NoritoSerialize for MerkleTree<T> {
+impl<T> norito::core::NoritoSerialize for MerkleTree<T> {}
+impl<T> norito::core::SerializePayload for MerkleTree<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (hash_scheme, leaves) = self
             .serialized_parts()
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-        norito::core::NoritoSerialize::serialize(&(hash_scheme, leaves), writer)
+        norito::core::SerializePayload::serialize(&(hash_scheme, leaves), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let (hash_scheme, leaves) = self.serialized_parts().ok()?;
-        norito::core::NoritoSerialize::encoded_len_hint(&(hash_scheme, leaves))
+        norito::core::SerializePayload::encoded_len_hint(&(hash_scheme, leaves))
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let (hash_scheme, leaves) = self.serialized_parts().ok()?;
-        norito::core::NoritoSerialize::encoded_len_exact(&(hash_scheme, leaves))
+        norito::core::SerializePayload::encoded_len_exact(&(hash_scheme, leaves))
     }
 }
 // -------------------------------
@@ -511,32 +512,34 @@ impl<T> MerkleTree<T> {
     }
 }
 struct NoritoRef<'a, T>(&'a T);
-impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for NoritoRef<'_, T> {
+
+impl<T: norito::core::SerializePayload> norito::core::SerializePayload for NoritoRef<'_, T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(self.0, writer)
+        norito::core::SerializePayload::serialize(self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(self.0)
+        norito::core::SerializePayload::encoded_len_hint(self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(self.0)
+        norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
-impl<T> norito::core::NoritoSerialize for MerkleProof<T> {
+impl<T> norito::core::NoritoSerialize for MerkleProof<T> {}
+impl<T> norito::core::SerializePayload for MerkleProof<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(
+        norito::core::SerializePayload::serialize(
             &(NoritoRef(&self.leaf_index), NoritoRef(&self.audit_path)),
             writer,
         )
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&(
+        norito::core::SerializePayload::encoded_len_hint(&(
             NoritoRef(&self.leaf_index),
             NoritoRef(&self.audit_path),
         ))
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&(
+        norito::core::SerializePayload::encoded_len_exact(&(
             NoritoRef(&self.leaf_index),
             NoritoRef(&self.audit_path),
         ))
@@ -1882,12 +1885,12 @@ mod tests {
                 .expect("serialize historical owned Merkle-proof tuple");
             assert_eq!(actual, expected, "wire changed for flags 0x{flags:02x}");
             assert_eq!(
-                norito::core::NoritoSerialize::encoded_len_hint(&proof),
+                norito::core::SerializePayload::encoded_len_hint(&proof),
                 Some(actual.len()),
                 "hint differs from payload for flags 0x{flags:02x}"
             );
             assert_eq!(
-                norito::core::NoritoSerialize::encoded_len_exact(&proof),
+                norito::core::SerializePayload::encoded_len_exact(&proof),
                 Some(actual.len()),
                 "exact length differs from payload for flags 0x{flags:02x}"
             );
@@ -2161,6 +2164,8 @@ mod tests {
             fn schema_hash() -> [u8; 16] {
                 <MerkleProof<()> as norito::core::NoritoSerialize>::schema_hash()
             }
+        }
+        impl norito::core::SerializePayload for MalformedMerkleProof {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
