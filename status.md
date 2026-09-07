@@ -16,6 +16,21 @@ counts, plans, dates, and former policies do not attest the current candidate.
 
 ## Current implementation and local evidence
 
+Core validation retains its staged state on the heap through event delivery;
+the former stack-overflow regression and all 163 block-validation tests pass on
+the default thread stack, including explicit fixture cadence enforcement.
+Asset registration now uses the signed owning domain
+for authorization, with positive and alias/foreign-domain negative coverage.
+Admission and block fixtures use current signature policy, authenticated
+four-validator contexts, genesis asset incarnations and explicit contract
+lifecycle state. Removed test-only Soracloud callbacks no longer make block
+execution depend on a local mailbox runtime; the shipping mailbox admission
+gate still rejects execution without consensus reexecution. All 387 distinct
+focused regressions pass, including admission, block execution, fees and proof
+accounting. Daemon, Kagami and test-network consumer checks, formatting, codec
+guards and historical-archive verification pass. Full Core/workspace and network
+execution remain unverified by this scoped run.
+
 The merge resolves all 104 conflicted paths around the validated seven-field
 Native AMX participant control, shared Torii configuration DTO, Kotlin-owned
 Java API and explicit Norito identities. FASTPQ retains the exact-integer and

@@ -72,10 +72,11 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    let created_domain_id = DomainId::try_new("fee-created", "universal").unwrap();
-    let create_domain = Register::domain(Domain::new(created_domain_id.clone()));
-    let fail_instruction =
-        Unregister::domain(DomainId::try_new("missing-domain", "universal").unwrap());
+    finalize_test_genesis_assets(&state, &latest_signed);
+    let marker: Name = "rejected_batch_business_effect".parse().expect("metadata key");
+    let business_effect = SetKeyValue::account(payer_id.clone(), marker.clone(), Json::from(true));
+    let missing_domain_id = DomainId::try_new("missing-domain", "universal").unwrap();
+    let fail_instruction = Unregister::domain(missing_domain_id.clone());
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -89,7 +90,7 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     let tx = builder
         .with_executable(Executable::Batch(
             vec![
-                ExecutableBatchItem::Instruction(create_domain.into()),
+                ExecutableBatchItem::Instruction(business_effect.into()),
                 ExecutableBatchItem::Instruction(fail_instruction.into()),
             ]
             .into(),
@@ -122,9 +123,21 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         .errors()
         .next()
         .map(|(_, err)| format!("{err:?}"));
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("batch rejection");
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::Find(
+                    iroha_data_model::query::error::FindError::Domain(domain)
+                )
+            )) if domain == &missing_domain_id
+        ),
+        "the second instruction must reject after the account metadata mutation: {rejection:?}"
+    );
     let assets = state_block.world.assets();
     let payer_balance = assets
-        .get(&AssetId::of(asset_definition_id.clone(), payer_id))
+        .get(&AssetId::of(asset_definition_id.clone(), payer_id.clone()))
         .expect("payer balance exists")
         .0
         .to_string();
@@ -139,8 +152,14 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     );
     assert_eq!(sink_balance, "0");
     assert!(
-        state_block.world.domain(&created_domain_id).is_err(),
-        "failed transaction state changes must still be rolled back"
+        state_block
+            .world
+            .account(&payer_id)
+            .expect("payer account")
+            .metadata()
+            .get(&marker)
+            .is_none(),
+        "the successful business mutation must roll back after the second instruction fails"
     );
 }
 #[test]
@@ -213,6 +232,18 @@ ledger::account::set_detail(
     world
         .contract_instances
         .insert(contract_address.clone(), code_hash);
+    world.contract_subject_bindings.insert(
+        contract_address.clone(),
+        crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+            &contract_address,
+            payer_id.clone(),
+        )
+        .with_active_code_hash(code_hash),
+    );
+    world.contract_subject_addresses.insert(
+        contract_address.subject_id(),
+        contract_address.clone(),
+    );
     let entrypoint_permission: Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: contract_address.clone(),
@@ -248,6 +279,7 @@ ledger::account::set_detail(
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    finalize_test_genesis_assets(&state, &latest_signed);
     let invocation = iroha_data_model::transaction::executable::ContractInvocation {
         contract_address,
         expected_code_hash: code_hash,

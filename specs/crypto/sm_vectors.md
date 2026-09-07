@@ -149,7 +149,7 @@ distinguishing identifier.
 - Cross-SDK consumption:
   - `fixtures/sm/sm2_fixture.json` now exposes a `vectors` array. The Rust crypto regression suite (`crates/iroha_crypto/tests/sm2_fixture_vectors.rs`), Rust client helpers (`crates/iroha/src/sm.rs`), Python bindings (`python/iroha_python/tests/test_crypto.py`), and JavaScript SDK (`javascript/iroha_js/test/crypto.sm2.fixture.test.js`) all parse these fixtures.
   - `crates/iroha/tests/sm_signing.rs` exercises deterministic signing and verifies that the on-chain multihash/multicodec outputs match the fixture.
-  - Admission-time regression suites (`crates/iroha_core/tests/admission_batching.rs`) assert SM2 payloads are rejected unless `allowed_signing` includes `sm2` *and* `default_hash` is `sm3-256`, covering the configuration constraints end-to-end.
+  - Admission regressions (`crates/iroha_core/src/block/valid/admission_batching.rs`) exercise production stateless validation with ordinary post-genesis transactions. They admit valid SM2 signatures under the configured algorithm and curve policy and assert the exact algorithm-policy rejection when SM2 is disabled.
 - 追加カバレッジ: 異常系（無効な曲線、異常な `r/s`、`distid` 改ざん）は `crates/iroha_crypto/tests/sm2_fuzz.rs` の property テストで網羅済みです。Annex Example 1 の正規ベクトルは `sm_known_answers.toml` に多言語対応の multicodec 形式で引き続き提供しています。
 - Rust code now exposes `Sm2PublicKey::compute_z` so ZA fixtures can be generated programmatically; see `sm2_compute_z_matches_annex_example` for the Annex D regression.
 

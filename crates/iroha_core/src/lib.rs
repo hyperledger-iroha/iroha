@@ -1319,9 +1319,6 @@ pub mod prelude {
 #[cfg(test)]
 extern crate self as iroha_core;
 #[cfg(test)]
-#[path = "../tests/admission_batching.rs"]
-mod admission_batching_tests;
-#[cfg(test)]
 #[path = "../tests/adversarial_block_rejections.rs"]
 mod adversarial_block_rejections_tests;
 #[cfg(test)]
