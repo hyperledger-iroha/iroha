@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "c97cb21de7e1d8ac2134df9ffc02c51282d51a5c4bae03d8cf3f044ed5a23825"
+        "e9d14ff4c001fc37cf1a71ef24e065d50d0a058581bad92b3656bd0ec5900d94"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 526
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 527
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 531
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 532
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "15f6b8abd9f1f0afb270d4f457318baf4d5dca5f21e238e9689004a180f0c654"
+        "d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -247,7 +247,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 881
-    assert receipt_module._G_UNIT_TEST_COUNT == 526
+    assert receipt_module._G_UNIT_TEST_COUNT == 531
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 881
     receipt_module_counts = {
         module_name: count
@@ -271,7 +271,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 526
+        == 531
     )
 
 @pytest.mark.parametrize(

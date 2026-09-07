@@ -6098,6 +6098,7 @@ mod detached_transaction_scaffold_tests {
         assert!(inspect_detached_transaction_scaffold(b"not norito").is_err());
         assert!(inspect_detached_transaction_scaffold(&[]).is_err());
     }
+    #[test]
     fn inspector_rejects_genesis_domain() {
         let keypair = fixture_keypair(0x39);
         let authority = AccountId::new(keypair.public_key().clone());

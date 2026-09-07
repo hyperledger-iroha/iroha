@@ -4,7 +4,7 @@ use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{
         prelude::*,
         query::parameters::Pagination,
@@ -45,7 +45,7 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
             None,
         )
     });
-    client.submit_blocking(
+    client.submit(
         create_asset,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -71,14 +71,21 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
             &mint_not_existed_asset
         };
         let instructions: Vec<InstructionBox> = vec![mint_asset.clone().into()];
-        let transaction = client.build_transaction(
-            instructions,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
-        let _ = client.submit_transaction_blocking(&transaction);
+        let transaction = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    instructions,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
+        let _ = client.submit_transaction_and_wait(&transaction);
     }
     let transactions = client
+        .client()
         .query(FindTransactions::new())
         .with_pagination(Pagination::new(Some(nonzero!(5_u64)), 1))
         .execute_all()?
@@ -154,6 +161,7 @@ async fn submit_entrypoint_maybe_rejected(
         let response = http
             .post(
                 client
+                    .client()
                     .torii_url
                     .join("/v1/pipeline/transaction-entrypoints")?,
             )
@@ -198,6 +206,7 @@ async fn submit_entrypoint_once_maybe_rejected(
     let response = http
         .post(
             client
+                .client()
                 .torii_url
                 .join("/v1/pipeline/transaction-entrypoints")?,
         )
@@ -257,9 +266,10 @@ async fn wait_for_entrypoint_applied(
     let mut last_status = None;
     while Instant::now() < deadline {
         let poll_client = client.clone();
-        let status =
-            tokio::task::spawn_blocking(move || poll_client.get_transaction_status_response(hash))
-                .await??;
+        let status = tokio::task::spawn_blocking(move || {
+            poll_client.client().get_transaction_status_response(hash)
+        })
+        .await??;
         if let Some(status) = status {
             let kind = status.status.kind.clone();
             if kind == "Applied" {
@@ -286,9 +296,10 @@ async fn wait_for_entrypoint_rejected(
     let mut last_status = None;
     while Instant::now() < deadline {
         let poll_client = client.clone();
-        let status =
-            tokio::task::spawn_blocking(move || poll_client.get_transaction_status_response(hash))
-                .await??;
+        let status = tokio::task::spawn_blocking(move || {
+            poll_client.client().get_transaction_status_response(hash)
+        })
+        .await??;
         if let Some(status) = status {
             let kind = status.status.kind.clone();
             if kind == "Rejected" {
@@ -340,7 +351,7 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
     let mut last_tick_error = None;
     loop {
         let status_client = client.clone();
-        let blocks = tokio::task::spawn_blocking(move || status_client.get_status())
+        let blocks = tokio::task::spawn_blocking(move || status_client.client().get_status())
             .await??
             .blocks;
         if blocks >= target {
@@ -380,28 +391,30 @@ fn sealed_entrypoints_for_instructions(
     reveal_deadline_height: u64,
 ) -> (Hash, TransactionEntrypoint, TransactionEntrypoint) {
     let inner_tx = TransactionBuilder::new(
-        client.network_id,
-        client.account.clone(),
+        client.client().network_id,
+        client.client().account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(instructions)
-    .sign(client.key_pair.private_key());
+    .sign(client.client().key_pair.private_key());
     let commitment_hash = compute_sealed_transaction_commitment(
-        &client.network_id,
+        &client.client().network_id,
         &inner_tx,
         salt,
         reveal_deadline_height,
     );
     let commitment_payload = SealedTransactionCommitmentPayload::new(
-        client.network_id,
-        client.account.clone(),
+        client.client().network_id,
+        client.client().account.clone(),
         commitment_hash,
         reveal_after_height,
         reveal_deadline_height,
         None,
     );
-    let commitment =
-        SignedSealedTransactionCommitment::sign(commitment_payload, client.key_pair.private_key());
+    let commitment = SignedSealedTransactionCommitment::sign(
+        commitment_payload,
+        client.client().key_pair.private_key(),
+    );
     let reveal = SealedTransactionReveal::new(commitment_hash, inner_tx, salt);
     (
         commitment_hash,
@@ -411,15 +424,17 @@ fn sealed_entrypoints_for_instructions(
 }
 fn account_has_metadata(client: &Client, key: &Name) -> Result<bool> {
     let account = client
+        .client()
         .query(FindAccounts)
         .execute_all()?
         .into_iter()
-        .find(|account| account.id() == &client.account)
-        .ok_or_else(|| eyre!("test account {} was not found", client.account))?;
+        .find(|account| account.id() == &client.client().account)
+        .ok_or_else(|| eyre!("test account {} was not found", client.client().account))?;
     Ok(account.metadata().contains(key))
 }
 fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     Ok(client
+        .client()
         .query_single(FindAssetById {
             id: asset_id.clone(),
         })?
@@ -479,38 +494,40 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     };
     let client = network.client();
     let http = integration_tests::http::client();
-    let starting_height = client.get_status()?.blocks;
+    let starting_height = client.client().get_status()?.blocks;
     let reveal_after_height = starting_height + 2;
     let reveal_deadline_height = starting_height + 100;
     let marker = "sealed_reveal_marker".parse::<Name>()?;
     let inner_tx = TransactionBuilder::new(
-        client.network_id,
-        client.account.clone(),
+        client.client().network_id,
+        client.client().account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([SetKeyValue::account(
-        client.account.clone(),
+        client.client().account.clone(),
         marker,
         Json::new("revealed"),
     )])
-    .sign(client.key_pair.private_key());
+    .sign(client.client().key_pair.private_key());
     let salt = [0xC3; 32];
     let commitment_hash = compute_sealed_transaction_commitment(
-        &client.network_id,
+        &client.client().network_id,
         &inner_tx,
         salt,
         reveal_deadline_height,
     );
     let commitment_payload = SealedTransactionCommitmentPayload::new(
-        client.network_id,
-        client.account.clone(),
+        client.client().network_id,
+        client.client().account.clone(),
         commitment_hash,
         reveal_after_height,
         reveal_deadline_height,
         None,
     );
-    let commitment =
-        SignedSealedTransactionCommitment::sign(commitment_payload, client.key_pair.private_key());
+    let commitment = SignedSealedTransactionCommitment::sign(
+        commitment_payload,
+        client.client().key_pair.private_key(),
+    );
     let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(commitment);
     let commitment_entrypoint_hash = submit_entrypoint(
         &http,
@@ -536,7 +553,7 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
         network.sync_timeout().max(Duration::from_secs(60)),
     )
     .await?;
-    let detail_url = client.torii_url.join(&format!(
+    let detail_url = client.client().torii_url.join(&format!(
         "/v1/explorer/transactions/{reveal_entrypoint_hash}"
     ))?;
     let response = http
@@ -585,8 +602,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         DomainId::try_new("wonderland", "universal")?,
         "sealeddupmint".parse()?,
     );
-    let asset_id = AssetId::new(asset_definition_id.clone(), client.account.clone());
-    client.submit_blocking(
+    let asset_id = AssetId::new(asset_definition_id.clone(), client.client().account.clone());
+    client.submit(
         Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id.clone(),
             "sealeddupmint".to_owned(),
@@ -595,7 +612,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         )),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let starting_height = client.get_status()?.blocks;
+    let starting_height = client.client().get_status()?.blocks;
     let reveal_after_height = starting_height + 3;
     let reveal_deadline_height = starting_height + 30;
     let timeout = network.sync_timeout();
@@ -610,7 +627,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
             &client,
             vec![
                 SetKeyValue::account(
-                    client.account.clone(),
+                    client.client().account.clone(),
                     marker.clone(),
                     Json::new(format!("batch-{idx}")),
                 )
@@ -641,7 +658,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         &client,
         vec![
             SetKeyValue::account(
-                client.account.clone(),
+                client.client().account.clone(),
                 expired_marker.clone(),
                 Json::new("expired"),
             )

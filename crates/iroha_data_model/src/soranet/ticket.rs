@@ -133,8 +133,7 @@ pub struct TicketEnvelopeV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: Digest32,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::ticket::TicketSignaturePayloadV1")]
 struct TicketSignaturePayloadV1 {
     body: TicketBodyV1,

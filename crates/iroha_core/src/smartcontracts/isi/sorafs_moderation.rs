@@ -5255,7 +5255,7 @@ fn query_moderation_event_page(
         }
         let (position, resolved) = read_event_sequence(state_ro, current_sequence, previous, 0)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            .checked_add(norito::canonical_frame_len(&resolved).map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to size committed moderation event: {error}"
                 ))
@@ -5289,7 +5289,7 @@ fn query_moderation_event_page(
         has_more,
         next_after,
     };
-    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size committed moderation event page: {error}"
         ))
@@ -6129,7 +6129,7 @@ fn query_moderation_snapshot(
     let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
         MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
     );
-    let encoded_len = norito::core::encoded_frame_len(&snapshot).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(&snapshot).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size finalized moderation snapshot: {error}"
         ))
@@ -6920,6 +6920,14 @@ mod tests {
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::encode_canonical(value).expect("encode canonical fixture")
     }
+    fn parameter_error_message(error: &InstructionExecutionError) -> &str {
+        match error {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("expected typed smart-contract parameter rejection, got {other:?}"),
+        }
+    }
     fn encode_alternate_layout<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -7081,6 +7089,9 @@ mod tests {
     ) -> Result<(), InstructionExecutionError> {
         let mut block = state.block(header(height, now));
         let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(iroha_crypto::Hash::new(
+            [height.to_le_bytes(), now.to_le_bytes()].concat(),
+        ));
         operation(&mut transaction)?;
         transaction.apply();
         block
@@ -7334,7 +7345,7 @@ mod tests {
             SetSorafsModerationPolicy::new(policy()).execute(&manager_id, transaction)
         })
         .expect("activate PoP registry and moderation policy");
-        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, 1_000_000)));
+        state.push_block_hash_for_testing(header(1, 1_000_000).hash());
     }
     fn panel_intake(
         appellant: &KeyPair,
@@ -7428,7 +7439,7 @@ mod tests {
             let result = transact(&mut self.state, height, now, operation);
             if result.is_ok() {
                 self.state
-                    .push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(height, now)));
+                    .push_block_hash_for_testing(header(height, now).hash());
                 self.next_height += 1;
             }
             result
@@ -7662,9 +7673,8 @@ mod tests {
                 .err()
                 .expect("alternate-layout moderation payload must fail");
         assert!(
-            error
-                .to_string()
-                .contains("payload is not exact canonical Norito"),
+            parameter_error_message(&error)
+                .contains("moderation commit is not exact canonical Norito"),
             "unexpected alternate-layout rejection: {error:?}"
         );
     }
@@ -7713,8 +7723,7 @@ mod tests {
             .err()
             .expect("alternate-layout moderation membership proof must fail");
         assert!(
-            error
-                .to_string()
+            parameter_error_message(&error)
                 .contains("membership proof is not exact canonical Norito"),
             "unexpected alternate-layout proof rejection: {error:?}"
         );
@@ -8060,7 +8069,7 @@ mod tests {
                 seed_activated_case(transaction, &manager_id, spec.clone(), case_policy.clone())
             })
             .expect("activate policy and open case");
-            state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
+            state.push_block_hash_for_testing(header(1, OPENED_AT).hash());
             Self {
                 manager,
                 jurors,
@@ -8087,7 +8096,7 @@ mod tests {
             let result = transact(&mut self.state, height, now, operation);
             if result.is_ok() {
                 self.state
-                    .push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(height, now)));
+                    .push_block_hash_for_testing(header(height, now).hash());
                 self.next_height += 1;
             }
             result
@@ -8315,7 +8324,7 @@ mod tests {
             })
             .expect_err("one tick after the deadline must reject");
         assert!(
-            error.to_string().contains("challenge phase is closed"),
+            parameter_error_message(&error).contains("challenge phase is closed"),
             "unexpected deadline error: {error}"
         );
         assert_eq!(
@@ -9324,7 +9333,7 @@ mod tests {
             })
             .expect_err("the second expiry refund destination is deliberately missing");
         assert!(
-            error.to_string().contains(&second_challenger.to_string()),
+            matches!(&error, InstructionExecutionError::Find(FindError::Account(missing)) if missing == &second_challenger),
             "unexpected later-expiry failure: {error}"
         );
         assert_eq!(
@@ -9561,13 +9570,27 @@ mod tests {
             ModerationOutcomeKindV1::Decided(SoraFsModerationVoteChoice::Uphold)
         );
         assert_eq!(outcome.votes_total, 1);
-        assert_eq!(outcome.no_show_count, 0);
+        assert_eq!(outcome.no_show_count, 2);
+        for index in [1, 2] {
+            let no_show = FindSorafsModerationNoShow::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                fixture.juror_id(index),
+            )
+            .execute(&fixture.state.view())
+            .expect("absent juror retains ordinary no-show penalty");
+            assert_eq!(no_show.kind, ModerationNoShowKindV1::MissingCommit);
+            assert_eq!(
+                no_show.penalty_points,
+                policy().missing_commit_penalty_points
+            );
+        }
         assert_eq!(
             FindSorafsModerationStatus
                 .execute(&fixture.state.view())
                 .unwrap()
                 .no_shows,
-            0
+            2
         );
     }
     #[test]
@@ -10022,7 +10045,7 @@ mod tests {
             })
             .expect_err("slash destination disappears only after refund admission");
         assert!(
-            error.to_string().contains(&slash_receiver.to_string()),
+            matches!(&error, InstructionExecutionError::Find(FindError::Account(missing)) if missing == &slash_receiver),
             "unexpected slash-leg failure: {error}"
         );
         assert_eq!(
@@ -10098,7 +10121,7 @@ mod tests {
             })
             .unwrap();
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&reveal0)).execute(&juror0, transaction)
             })
             .unwrap();
@@ -10121,7 +10144,7 @@ mod tests {
                 .is_err()
         );
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })

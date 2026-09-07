@@ -2300,21 +2300,7 @@ impl Write for BoundedWriter {
 mod tests {
     use super::*;
     use crate::workspace::load_workspace;
-    use iroha::{
-        crypto::{Algorithm, Hash, HashOf, KeyPair},
-        musubi_runtime::{
-            AuthenticatedMusubiPublicationRuntimeClientV1,
-            InMemoryMusubiPublicationServiceJournalV1, MusubiProviderReadbackBackendV1,
-            MusubiProviderReadbackRequestV1, MusubiProviderReadbackResponseV1,
-            MusubiPublicationPrivateServiceV1, MusubiPublicationServiceBackendErrorV1,
-            MusubiPublicationServiceConfigurationV1, MusubiPublicationServiceJournalBindingV1,
-            MusubiPublicationSystemClockV1, MusubiSeedIngressBackendV1, MusubiSeedIngressCarPlanV1,
-            MusubiSeedIngressStageRequestV1, MusubiStorageCoordinationBackendV1,
-            MusubiStorageCoordinationRequestV1, MusubiStorageCoordinationResponseV1,
-            SoftwareMusubiPublicationRuntimeAuthorizationSignerV1,
-            SoftwareMusubiSeedIngressReceiptSignerV1,
-        },
-    };
+    use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
         account::AccountId,
@@ -2328,6 +2314,17 @@ mod tests {
         },
         nexus::DataSpaceId,
         sorafs::capacity::ProviderId,
+    };
+    use iroha_musubi_service::{
+        AuthenticatedMusubiPublicationRuntimeClientV1, InMemoryMusubiPublicationServiceJournalV1,
+        MusubiProviderReadbackBackendV1, MusubiProviderReadbackRequestV1,
+        MusubiProviderReadbackResponseV1, MusubiPublicationPrivateServiceV1,
+        MusubiPublicationServiceBackendErrorV1, MusubiPublicationServiceConfigurationV1,
+        MusubiPublicationServiceJournalBindingV1, MusubiPublicationSystemClockV1,
+        MusubiSeedIngressBackendV1, MusubiSeedIngressCarPlanV1, MusubiSeedIngressStageRequestV1,
+        MusubiStorageCoordinationBackendV1, MusubiStorageCoordinationRequestV1,
+        MusubiStorageCoordinationResponseV1, SoftwareMusubiPublicationRuntimeAuthorizationSignerV1,
+        SoftwareMusubiSeedIngressReceiptSignerV1,
     };
     use std::{
         fs,
@@ -3112,7 +3109,7 @@ exports = []
             plan.files.len(),
             source_file_count + mandatory_bundle_paths.len()
         );
-        let wire_plan = iroha::musubi_runtime::MusubiSeedIngressCarPlanV1::from_car_build_plan(
+        let wire_plan = iroha_musubi_service::MusubiSeedIngressCarPlanV1::from_car_build_plan(
             plan,
             &commitment,
         )

@@ -21,7 +21,12 @@ const SIGNING_DOMAIN: &[u8] = b"sorafs.proof_token.sign.v1";
 const MAX_ENTRY_IDS: usize = 32;
 const MAX_ENTRY_LEN: usize = 255;
 const FLAG_HAS_EXPIRY: u8 = 0x01;
-const PROOF_TOKEN_SIGNATURE_PLACEHOLDER: [u8; SIGNATURE_LENGTH] = [0xA6; SIGNATURE_LENGTH];
+// Canonical compressed Ed25519 basepoint R and scalar S = 1. This temporary
+// value is replaced with the issuer signature before mint returns a token.
+const PROOF_TOKEN_SIGNATURE_PLACEHOLDER: [u8; SIGNATURE_LENGTH] = hex_literal::hex!(
+    "5866666666666666666666666666666666666666666666666666666666666666
+     0100000000000000000000000000000000000000000000000000000000000000"
+);
 /// Secret used to derive the blinded digest portion of a token body.
 #[derive(Clone)]
 pub struct ProofTokenDigestKey(Zeroizing<[u8; 32]>);
@@ -770,6 +775,10 @@ mod tests {
             expires_at: None,
         };
         let token = ProofToken::mint(&mut rng, &digest_key, &signing, &params).unwrap();
+        assert_ne!(
+            token.signature.to_bytes(),
+            PROOF_TOKEN_SIGNATURE_PLACEHOLDER
+        );
         let encoded = token.encode();
         let decoded = ProofToken::decode(&encoded).unwrap();
         assert_eq!(token, decoded);

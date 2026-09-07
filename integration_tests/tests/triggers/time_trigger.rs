@@ -4,7 +4,7 @@ use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
 use iroha_primitives::json::Json;
@@ -51,18 +51,20 @@ async fn submit_with_context(
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<()> {
-    let mut client = leader_client_for_submit(network, client).await;
-    client.transaction_status_timeout =
-        effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
-    client.transaction_ttl = Some(effective_transaction_ttl(
-        client.transaction_ttl,
-        network.sync_timeout(),
-    ));
+    let client = leader_client_for_submit(network, client).await;
+    let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout =
+            effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
+        client.transaction_ttl = Some(effective_transaction_ttl(
+            client.transaction_ttl,
+            network.sync_timeout(),
+        ));
+    });
     let instruction = instruction.into();
     let context = context.to_string();
     spawn_blocking(move || {
         client
-            .submit_blocking(
+            .submit(
                 instruction,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -77,17 +79,19 @@ async fn submit_all_with_context(
     instructions: Vec<InstructionBox>,
     context: &str,
 ) -> Result<()> {
-    let mut client = leader_client_for_submit(network, client).await;
-    client.transaction_status_timeout =
-        effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
-    client.transaction_ttl = Some(effective_transaction_ttl(
-        client.transaction_ttl,
-        network.sync_timeout(),
-    ));
+    let client = leader_client_for_submit(network, client).await;
+    let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout =
+            effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
+        client.transaction_ttl = Some(effective_transaction_ttl(
+            client.transaction_ttl,
+            network.sync_timeout(),
+        ));
+    });
     let context = context.to_string();
     spawn_blocking(move || {
         client
-            .submit_all_blocking(
+            .submit_all(
                 instructions,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -100,7 +104,12 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
     let peer_count = network.peers().len();
     let (status, sumeragi) = spawn_blocking({
         let client = probe.clone();
-        move || (client.get_status(), client.get_sumeragi_status())
+        move || {
+            (
+                client.client().get_status(),
+                client.client().get_sumeragi_status(),
+            )
+        }
     })
     .await
     .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
@@ -512,11 +521,15 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             let count: u64 = spawn_blocking({
                 let client = test_client.clone();
                 move || {
-                    client.query(FindNfts::new()).execute_all().map(|nfts| {
-                        nfts.into_iter()
-                            .filter(|nft| nft.owned_by() == &account_id_clone)
-                            .count()
-                    })
+                    client
+                        .client()
+                        .query(FindNfts::new())
+                        .execute_all()
+                        .map(|nfts| {
+                            nfts.into_iter()
+                                .filter(|nft| nft.owned_by() == &account_id_clone)
+                                .count()
+                        })
                 }
             })
             .await??
@@ -574,11 +587,15 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                     let count: u64 = spawn_blocking({
                         let client = test_client.clone();
                         move || {
-                            client.query(FindNfts::new()).execute_all().map(|nfts| {
-                                nfts.into_iter()
-                                    .filter(|nft| nft.owned_by() == &account_id_clone)
-                                    .count()
-                            })
+                            client
+                                .client()
+                                .query(FindNfts::new())
+                                .execute_all()
+                                .map(|nfts| {
+                                    nfts.into_iter()
+                                        .filter(|nft| nft.owned_by() == &account_id_clone)
+                                        .count()
+                                })
                         }
                     })
                     .await??

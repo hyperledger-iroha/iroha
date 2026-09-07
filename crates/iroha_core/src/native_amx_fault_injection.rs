@@ -343,7 +343,8 @@ mod tests {
     }
     #[test]
     fn parser_rejects_unknown_fields_and_noncanonical_source() {
-        let valid = command(1, NativeAmxFaultPhase::BeforeWorldCommit, [7; 32]);
+        let source_id = [0xAB; 32];
+        let valid = command(1, NativeAmxFaultPhase::BeforeWorldCommit, source_id);
         assert!(parse_command(&valid).is_ok());
         let mut value: Value = norito::json::from_slice(&valid).expect("parse valid command");
         value
@@ -358,7 +359,7 @@ mod tests {
             .remove("extra");
         value.as_object_mut().expect("command object").insert(
             "source_id".to_owned(),
-            Value::from(hex::encode_upper([7; 32])),
+            Value::from(hex::encode_upper(source_id)),
         );
         let uppercase = norito::json::to_json(&value).expect("encode uppercase source");
         assert!(parse_command(uppercase.as_bytes()).is_err());

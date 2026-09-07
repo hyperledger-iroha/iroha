@@ -4,7 +4,8 @@ use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, TxConfirmationStatus},
+    blocking::Client,
+    client::TxConfirmationStatus,
     crypto::Hash,
     data_model::{
         HasMetadata, Level, NetworkId,
@@ -1787,9 +1788,9 @@ fn scale_in_transition_quorum_satisfied(
         || peers_since_cycle_start.is_some_and(|peers| peers >= quorum_required)
 }
 fn peer_client_with_timeout(peer: &NetworkPeer) -> Client {
-    let mut client = peer.client();
-    client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
-    client
+    integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+        client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
+    })
 }
 #[derive(Clone, Debug)]
 struct LaneStatusSnapshot {
@@ -1994,7 +1995,10 @@ fn fetch_lane_validator_snapshot(
     lane_id: u32,
     current_height: u64,
 ) -> Option<LaneValidatorSnapshot> {
-    match client.get_public_lane_validators(LaneId::new(lane_id)) {
+    match client
+        .client()
+        .get_public_lane_validators(LaneId::new(lane_id))
+    {
         Ok(payload) => decode_lane_validator_snapshot(&payload, lane_id, current_height),
         Err(err) => {
             let message = err.to_string();
@@ -2023,6 +2027,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
         .map(|(index, peer)| {
             let client = peer_client_with_timeout(peer);
             let status = client
+                .client()
                 .get_status()
                 .map_err(|err| eyre!("fetch peer {index} status failed: {err}"))?;
             let lanes = status
@@ -2034,7 +2039,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let sumeragi_status = client.get_sumeragi_diagnostics().ok();
+            let sumeragi_status = client.client().get_sumeragi_diagnostics().ok();
             let lane_commitments = sumeragi_status
                 .as_ref()
                 .map(|sumeragi_status| {
@@ -3791,7 +3796,7 @@ fn wait_for_chain_progress_with_heartbeat(
                     ));
                     continue;
                 };
-                match client.get_transaction_status(sample.hash) {
+                match client.client().get_transaction_status(sample.hash) {
                     Ok(Some(status)) => {
                         let observation = format!(
                             "client {} tx {} => {status:?}",
@@ -4783,11 +4788,20 @@ fn build_transaction_for_legacy_default_shard(
     );
     (0_u64..4_096)
         .find_map(|nonce| {
-            let transaction = client.build_transaction(
-                [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
+            let transaction = {
+                let account = client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             let hash = transaction.hash();
             let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
             shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
@@ -5222,7 +5236,7 @@ fn wait_for_certified_elastic_lane(
         last_observed = 0;
         last_errors.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_sumeragi_diagnostics() {
+            match client.client().get_sumeragi_diagnostics() {
                 Ok(status)
                     if status.committed_lane_blocks.iter().any(|block| {
                         block.lane_id == lane_id
@@ -5265,7 +5279,7 @@ fn wait_for_certified_elastic_lane_incarnation(
         last_stale.clear();
         last_errors.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_sumeragi_diagnostics() {
+            match client.client().get_sumeragi_diagnostics() {
                 Ok(status) => {
                     let lane_rows = status
                         .committed_lane_blocks
@@ -5673,6 +5687,7 @@ fn query_committed_transaction(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<Option<CommittedTransaction>> {
     Ok(client
+        .client()
         .query(FindTransactions::new())
         .execute_all()?
         .into_iter()
@@ -5702,7 +5717,7 @@ fn query_merge_carrier(
     client: &Client,
     entry: &MergeLedgerEntry,
 ) -> Result<(SignedBlock, Vec<SignedBlock>)> {
-    let blocks = client.query(FindBlocks).execute_all()?;
+    let blocks = client.client().query(FindBlocks).execute_all()?;
     let carrier = blocks
         .iter()
         .find(|block| {
@@ -5924,7 +5939,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
             && quorum_required == TOTAL_PEERS - 1,
         "four-peer release gate requires an exact three-validator quorum"
     );
-    let initial_height = submitters[0].get_status()?.blocks;
+    let initial_height = submitters[0].client().get_status()?.blocks;
     restart_four_peer_validator(
         &network,
         &runtime,
@@ -6068,7 +6083,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &archive_a_paths[RECREATION_RESTART_PEER],
         &marker_b,
     )?;
-    let recreation_height = submitters[0].get_status()?.blocks;
+    let recreation_height = submitters[0].client().get_status()?.blocks;
     restart_four_peer_validator(
         &network,
         &runtime,
@@ -6109,7 +6124,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         quorum_required,
         STRICT_SCALE_OUT_WAIT_TIMEOUT,
     )?;
-    let pre_second_fault_height = submitters[0].get_status()?.blocks;
+    let pre_second_fault_height = submitters[0].client().get_status()?.blocks;
     restart_four_peer_validator(
         &network,
         &runtime,
@@ -6262,7 +6277,9 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
                 && merge_entrypoint_occurrences(peer, autonomous_b.entrypoint_hash)? == 1,
             "peer {index} lost or duplicated autonomous work across A/B/A lifecycle recovery"
         );
-        let diagnostics = peer_client_with_timeout(peer).get_sumeragi_diagnostics()?;
+        let diagnostics = peer_client_with_timeout(peer)
+            .client()
+            .get_sumeragi_diagnostics()?;
         ensure!(
             diagnostics
                 .committed_lane_blocks
@@ -6398,15 +6415,24 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
     let (target, marker_value) = (0_u64..512)
         .find_map(|nonce| {
             let marker_value = Json::new(format!("certified-merge-{nonce}"));
-            let transaction = submitter.build_transaction(
-                [SetKeyValue::account(
-                    ALICE_ID.clone(),
-                    marker_key.clone(),
-                    marker_value.clone(),
-                )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
+            let transaction = {
+                let account = submitter.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [SetKeyValue::account(
+                            ALICE_ID.clone(),
+                            marker_key.clone(),
+                            marker_value.clone(),
+                        )],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             let hash = transaction.hash();
             let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
             shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
@@ -6422,7 +6448,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
             .into(),
         EventFilterBox::Pipeline(MergeLedgerEventFilter::default().into()),
     ];
-    let mut events = rt.block_on(submitter.listen_for_events_async(filters))?;
+    let mut events = rt.block_on(submitter.client().listen_for_events(filters))?;
     let submitted_hash = submitter.submit_transaction(&target)?;
     ensure!(
         submitted_hash == target_hash,
@@ -6694,7 +6720,9 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         !committed.verify_certified_merge_inclusion_in_block(other_block),
         "transaction proof verified against another canonical block"
     );
-    let alice = submitter.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+    let alice = submitter
+        .client()
+        .query_single(FindAccountById::new(ALICE_ID.clone()))?;
     ensure!(
         alice.metadata().get(&marker_key) == Some(&marker_value),
         "merge execution was not applied to WSV"
@@ -6731,7 +6759,9 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         recovered == committed,
         "lagging peer reconstructed different transaction proof material"
     );
-    let recovered_alice = recovered_client.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+    let recovered_alice = recovered_client
+        .client()
+        .query_single(FindAccountById::new(ALICE_ID.clone()))?;
     ensure!(
         recovered_alice.metadata().get(&marker_key) == Some(&marker_value),
         "lagging peer did not replay certified WSV effects"
@@ -6954,10 +6984,11 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
     )?;
     let post_close_hash = post_close_transaction.hash();
     let post_close_entrypoint = post_close_transaction.hash_as_entrypoint();
-    let mut post_close_events = rt
-        .block_on(submitter.listen_for_events_async([
-            TransactionEventFilter::default().for_hash(post_close_hash),
-        ]))?;
+    let mut post_close_events = rt.block_on(
+        submitter
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(post_close_hash)]),
+    )?;
     ensure!(
         submitter.submit_transaction(&post_close_transaction)? == post_close_hash,
         "Torii returned another post-close transaction hash"

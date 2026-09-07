@@ -300,7 +300,7 @@ require_exact_token \
   "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=526"
+  "readonly expected_multilane_focus_test_count=531"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=106"
@@ -347,7 +347,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 526"
+  "_G_UNIT_TEST_COUNT = 531"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -1669,7 +1669,7 @@ if source_sealed_positions != sorted(source_sealed_positions):
     )
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 320,
+    "required_multilane_core_focus_tests": 325,
     "required_multilane_queue_journal_focus_tests": 143,
     "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
@@ -1713,9 +1713,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 526 or len(set(all_focus_entries)) != 526:
+if len(all_focus_entries) != 531 or len(set(all_focus_entries)) != 531:
     reject(
-        "multilane focus-test arrays must contain 526 globally distinct tests; "
+        "multilane focus-test arrays must contain 531 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -1725,7 +1725,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        320,
+        325,
         "--lib",
     ),
     (
@@ -1797,7 +1797,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 526 count is not published exactly once")
+        reject("G-UNIT expected 531 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -2972,4 +2972,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] ${canonical_corridor_leg_count} corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across ${canonical_production_module_count} modules, exact 526/526 G-UNIT (320 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, one sealed-child BPNG native bootstrap gate, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] ${canonical_corridor_leg_count} corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across ${canonical_production_module_count} modules, exact 531/531 G-UNIT (325 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, one sealed-child BPNG native bootstrap gate, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

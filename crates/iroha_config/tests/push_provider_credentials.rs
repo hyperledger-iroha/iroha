@@ -75,14 +75,17 @@ fn zero_valued_push_limits_are_rejected_by_the_schema() {
         let report = format!("{error:?}");
         assert!(report.contains(field), "{report}");
     }
-    let json = canonical_push_json("").replacen(
+    let canonical = canonical_push_json("");
+    norito::json::from_json::<ToriiPush>(&canonical)
+        .expect("nonzero JSON push limits must validate");
+    let json = canonical.replacen(
         "\"max_topics_per_device\": 32",
         "\"max_topics_per_device\": 0",
         1,
     );
     let error = norito::json::from_json::<ToriiPush>(&json)
         .expect_err("zero JSON topic limit must not be normalized");
-    assert!(error.to_string().contains("max_topics_per_device"));
+    assert_eq!(error.to_string(), "expected non-zero usize");
 }
 
 #[test]
@@ -161,7 +164,7 @@ fn ram_lfe_optional_table_rejects_redundant_enable_switch() {
         .read_and_complete::<UserConfig>()
         .expect_err("presence of the optional RAM-LFE table is the only enable switch");
     let report = format!("{error:?}");
-    assert!(report.contains("unknown parameter"), "{report}");
+    assert!(report.contains("unknown field `enabled`"), "{report}");
     assert!(report.contains("enabled"), "{report}");
 }
 

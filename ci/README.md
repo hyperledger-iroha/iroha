@@ -186,9 +186,9 @@ Six fast, read-only checks keep structural and provisioning debt from returning:
   reports are descriptive. `--write-baseline` only reduces or removes existing
   exceptions and refuses new oversized files or exception growth. Source is
   counted with UTF-8 `splitlines()` and the reviewed exclusions; moving or
-  leaving a file unstaged does not hide it from measurement. The prior global
-  line objective is retained in `ci/build_efficiency_provenance.json` under
-  `historical_source_budget`, with its original commit and measurements.
+  leaving a file unstaged does not hide it from measurement. Historical Rust
+  line counts remain recorded on the pinned lineage commits, without carrying
+  the retired global objective into active provenance policy.
 - `python3 scripts/check_compile_time_table_assets.py` verifies the exact size
   and SHA-256 of the versioned binary tables decoded into Rust constants,
   reconstructs every removed declaration from its pinned Git preimage, rejects

@@ -18,17 +18,17 @@ fn canonical_guest_executor_upgrade_works() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let initial_data_model = client.query_single(FindExecutorDataModel)?;
+    let initial_data_model = client.client().query_single(FindExecutorDataModel)?;
     let upgrade = Upgrade::new(Executor::new(IvmBytecode::from_compiled(
         CANONICAL_EXECUTOR.to_vec(),
     )));
-    client.submit_blocking(upgrade, FeePaymentIntent::authority(Vec::new(), None))?;
-    client.submit_blocking(
+    client.submit(upgrade, FeePaymentIntent::authority(Vec::new(), None))?;
+    client.submit(
         Log::new(Level::INFO, "canonical executor is active".to_owned()),
         FeePaymentIntent::authority(Vec::new(), None),
     )?;
     assert_eq!(
-        client.query_single(FindExecutorDataModel)?,
+        client.client().query_single(FindExecutorDataModel)?,
         initial_data_model,
         "a unit migration result must retain the current executor data model"
     );

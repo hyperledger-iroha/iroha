@@ -93,7 +93,7 @@ impl<'a> SnsApi<'a> {
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()?;
+            .send_blocking()?;
         ensure_status(&response, StatusCode::OK, "unexpected SNS policy response")?;
         Ok(norito::json::from_slice(response.body())?)
     }
@@ -117,7 +117,7 @@ impl<'a> SnsApi<'a> {
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()
+            .send_blocking()
     }
     fn decode_name_response(response: &Response<Vec<u8>>) -> Result<NameRecordV1> {
         ensure_status(

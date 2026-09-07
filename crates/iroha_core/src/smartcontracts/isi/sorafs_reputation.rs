@@ -2499,7 +2499,7 @@ fn query_event_page(
             .map_err(query_failure)?;
         let position = ReputationQueryEventPosition::from(&record);
         let resolved = into_finalized_event(state_ro, record)?;
-        let resolved_bytes = norito::core::encoded_frame_len(&resolved).map_err(|error| {
+        let resolved_bytes = norito::canonical_frame_len(&resolved).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size finalized reputation event: {error}"
             ))
@@ -2542,7 +2542,7 @@ fn query_event_page(
     };
     page.validate_after(query.after)
         .map_err(|error| QueryExecutionFail::Conversion(error.to_string()))?;
-    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
         QueryExecutionFail::Conversion(format!("failed to size reputation event page: {error}"))
     })?;
     if encoded_len > page_bytes_limit {
@@ -2589,11 +2589,11 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
         account::Account,
-        block::{BlockHeader, BlockSignature, SignedBlock},
+        block::{BlockHeader, builder::BlockBuilder},
         events::data::DataEvent,
         metadata::Metadata,
         permission::Permissions,
@@ -2754,7 +2754,7 @@ mod tests {
     ) -> Result<(), InstructionExecutionError> {
         let header = BlockHeader::new(
             height.try_into().expect("nonzero height"),
-            None,
+            state.view().latest_block_hash(),
             None,
             None,
             timestamp_ms,
@@ -2768,12 +2768,11 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("commit reputation test block");
         let block_signer = keypair(0xFE);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(block_signer.private_key(), header.hash())
-                .expect("sign reputation Kura fixture block"),
-        );
-        let signed_block = SignedBlock::presigned(signature, header, Vec::new());
+        // The overlay above applies the fixture operation directly. Its empty persisted
+        // block still needs an explicit execution result before Kura can index it.
+        let signed_block = BlockBuilder::new(header)
+            .try_build_with_signature(0, block_signer.private_key())
+            .expect("build executed reputation Kura fixture block");
         let block_hash = signed_block.hash();
         state
             .kura()
@@ -3696,7 +3695,9 @@ mod tests {
         let error = SetSorafsReputationJournalAuthorityPolicy::new(over_limit)
             .execute(&authority, &mut transaction)
             .expect_err("policy revision beyond the hard history bound must fail");
-        assert!(error.to_string().contains("exceeds the V1 history bound"));
+        assert!(
+            matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("exceeds the V1 history bound"))
+        );
         assert!(
             read_reputation_authority_policy_history(
                 transaction.world(),
@@ -4020,7 +4021,9 @@ mod tests {
         let replay_error = AppendSorafsStreamTokenReputationJournalEntry::new(first.clone())
             .execute(&other, &mut transaction)
             .expect_err("another authority cannot replay the event");
-        assert!(replay_error.to_string().contains("replay authority"));
+        assert!(
+            matches!(&replay_error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("replay authority"))
+        );
         let second = token_entry(&authority, provider_id, policy_digest, 0x51);
         AppendSorafsStreamTokenReputationJournalEntry::new(second)
             .execute(&authority, &mut transaction)

@@ -4,7 +4,7 @@ use eyre::{WrapErr, ensure, eyre};
 use futures_util::StreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::events::{
         EventBox,
         pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -50,10 +50,11 @@ fn build_log_transaction(network_id: NetworkId, prefix: &str, index: usize) -> S
 async fn warmup_queries(clients: &[Client], warmup_samples: usize) -> eyre::Result<()> {
     for index in 0..warmup_samples {
         let client = clients[index % clients.len()].clone();
-        let params = tokio::task::spawn_blocking(move || client.query_single(FindParameters))
-            .await
-            .wrap_err("query warmup worker panicked")?
-            .wrap_err("query warmup worker failed")?;
+        let params =
+            tokio::task::spawn_blocking(move || client.client().query_single(FindParameters))
+                .await
+                .wrap_err("query warmup worker panicked")?
+                .wrap_err("query warmup worker failed")?;
         std::hint::black_box(params);
     }
     Ok(())
@@ -74,7 +75,7 @@ async fn run_query_profile(
             let client = clients[(next + offset) % clients.len()].clone();
             handles.push(tokio::task::spawn_blocking(move || {
                 let start = Instant::now();
-                let params = client.query_single(FindParameters)?;
+                let params = client.client().query_single(FindParameters)?;
                 std::hint::black_box(params);
                 Ok::<Duration, eyre::Report>(start.elapsed())
             }));
@@ -153,7 +154,9 @@ async fn measure_submit_to_commit(
     let hash = transaction.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
-        client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        client
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .wrap_err("timed out opening transaction event stream")?

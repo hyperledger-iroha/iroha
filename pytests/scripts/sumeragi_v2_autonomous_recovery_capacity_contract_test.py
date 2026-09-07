@@ -70,6 +70,7 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
                 target = root / source_relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
+            self.assertEqual(self.checker.validate_repository(root), [], "copied canonical baseline must pass before mutation")
             target = root / relative
             source = target.read_text(encoding="utf-8")
             parts = source.split(old)
@@ -260,6 +261,15 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             ".latest_execution_entry(&historical_execution_identities)?",
             "exact_incomplete_carrier_reservation_rebuild",
         )
+        for old, new in (
+            (".union(&inventory.terminal_outcome_identities)", ".intersection(&inventory.terminal_outcome_identities)"),
+            ("!inventory\n                            .complete_terminal_outcome_identities", "inventory\n                            .complete_terminal_outcome_identities"),
+        ):
+            with self.subTest(mutation=old):
+                self.assert_source_mutation_rejected(
+                    "crates/iroha_core/src/kura/lane_artifact_budget.rs", old, new,
+                    "exact_incomplete_carrier_reservation_rebuild",
+                )
 
     def test_startup_carriers_cannot_be_reauthenticated_under_sidecar_locks(
         self,
@@ -370,10 +380,20 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
     def test_lane_history_compaction_cannot_count_recovered_temp_twice(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/lane_history_compaction.rs",
-            "            let before = Self::sidecar_tracked_bytes(&data_path, &index_path)?;",
+            "            let before = Self::sidecar_tracked_bytes(data_path, index_path)?;",
             "            let before = before_recovery;",
             "lane_history_compaction_recovery_before_capacity",
         )
+        for old, new in (
+            ("map(|bytes| peak.max(bytes))", "map(|bytes| peak.min(bytes))"),
+            ("                required_heights,\n                kind,", "                &empty_required_heights,\n                kind,"),
+            ("&terminal_references.receipt_heights", "&empty_required_heights"),
+        ):
+            with self.subTest(mutation=old):
+                self.assert_source_mutation_rejected(
+                    "crates/iroha_core/src/kura/lane_history_compaction.rs", old, new,
+                    "lane_history_compaction_recovery_before_capacity",
+                )
 
     def test_prune_peak_cannot_drop_pipeline_sidecar_rewrite(self) -> None:
         self.assert_source_mutation_rejected(
@@ -495,6 +515,18 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "self.validate_debug_bytes_after_append(",
             "debug_append_capacity_preflight_order",
         )
+        for old, new in (
+            ("let additional_identities = usize::from(creates_lifecycle_identity);", "let additional_identities = 0;"),
+            ("            0,\n            additional_identities,\n            additional_identities,", "            1,\n            additional_identities,\n            additional_identities,"),
+            (".checked_add(additional_missing_terminal_identities)", ".checked_add(0)"),
+            (".checked_add(additional_incomplete_terminal_identities)", ".checked_add(0)"),
+            (".checked_add(additional_unreserved_stable_bytes)", ".checked_add(0)"),
+        ):
+            with self.subTest(mutation=old):
+                self.assert_source_mutation_rejected(
+                    "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs", old, new,
+                    "debug_append_carrier_reservation_gate",
+                )
 
     def test_debug_restart_accounting_cannot_drop_bound_file_length(self) -> None:
         self.assert_source_mutation_rejected(

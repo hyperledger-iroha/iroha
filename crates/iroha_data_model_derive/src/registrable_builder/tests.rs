@@ -6,9 +6,10 @@ use syn::{DeriveInput, Item, Meta, Path, Token, parse_quote, punctuated::Punctua
 
 use crate::EmitterExt;
 
-use super::{child_schema_name, impl_registrable_builder};
+use super::impl_registrable_builder;
+use crate::utils::required_child_schema_name;
 
-fn parent(attributes: proc_macro2::TokenStream) -> DeriveInput {
+fn parent(attributes: &proc_macro2::TokenStream) -> DeriveInput {
     syn::parse2(quote! {
         #attributes
         struct Asset {
@@ -20,13 +21,18 @@ fn parent(attributes: proc_macro2::TokenStream) -> DeriveInput {
 
 #[test]
 fn child_identity_is_an_explicit_literal() {
-    let input = parent(quote! {
+    let input = parent(&quote! {
         #[registrable_builder(schema_name = "captured::private_model::NewAsset")]
     });
     assert_eq!(
-        child_schema_name(&input)
-            .expect("explicit identity")
-            .value(),
+        required_child_schema_name(
+            &input,
+            "registrable_builder",
+            "RegistrableBuilder",
+            "registration builder"
+        )
+        .expect("explicit identity")
+        .value(),
         "captured::private_model::NewAsset"
     );
 }
@@ -34,28 +40,38 @@ fn child_identity_is_an_explicit_literal() {
 #[test]
 fn missing_child_identity_has_no_inference_fallback() {
     for input in [
-        parent(quote! {}),
-        parent(quote! { #[registrable_builder()] }),
-        parent(quote! { #[norito_schema(name = "parent::Asset")] }),
+        parent(&quote! {}),
+        parent(&quote! { #[registrable_builder()] }),
+        parent(&quote! { #[norito_schema(name = "parent::Asset")] }),
     ] {
         assert!(
-            child_schema_name(&input)
-                .expect_err("child identity required")
-                .to_string()
-                .contains("RegistrableBuilder requires")
+            required_child_schema_name(
+                &input,
+                "registrable_builder",
+                "RegistrableBuilder",
+                "registration builder"
+            )
+            .expect_err("child identity required")
+            .to_string()
+            .contains("RegistrableBuilder requires")
         );
     }
 }
 
 #[test]
 fn duplicate_identity_keys_are_rejected() {
-    let input = parent(quote! {
+    let input = parent(&quote! {
         #[registrable_builder(schema_name = "same", schema_name = "same")]
     });
     assert_eq!(
-        child_schema_name(&input)
-            .expect_err("duplicate key")
-            .to_string(),
+        required_child_schema_name(
+            &input,
+            "registrable_builder",
+            "RegistrableBuilder",
+            "registration builder"
+        )
+        .expect_err("duplicate key")
+        .to_string(),
         "duplicate registration builder schema_name"
     );
 }
@@ -73,9 +89,14 @@ fn duplicate_identity_declarations_are_rejected_even_when_empty() {
         },
     ] {
         assert_eq!(
-            child_schema_name(&parent(attributes))
-                .expect_err("one declaration")
-                .to_string(),
+            required_child_schema_name(
+                &parent(&attributes),
+                "registrable_builder",
+                "RegistrableBuilder",
+                "registration builder"
+            )
+            .expect_err("one declaration")
+            .to_string(),
             "duplicate registration builder identity declaration"
         );
     }
@@ -91,12 +112,17 @@ fn invalid_literal_contents_are_rejected() {
         "nul\0byte",
         "del\u{7f}",
     ] {
-        let input = parent(quote! { #[registrable_builder(schema_name = #value)] });
+        let input = parent(&quote! { #[registrable_builder(schema_name = #value)] });
         assert!(
-            child_schema_name(&input)
-                .expect_err("invalid identity literal")
-                .to_string()
-                .contains("without surrounding whitespace or control characters")
+            required_child_schema_name(
+                &input,
+                "registrable_builder",
+                "RegistrableBuilder",
+                "registration builder"
+            )
+            .expect_err("invalid identity literal")
+            .to_string()
+            .contains("without surrounding whitespace or control characters")
         );
     }
 }
@@ -111,7 +137,15 @@ fn nonliteral_or_unknown_metadata_is_rejected() {
         quote! { #[registrable_builder(default = None)] },
         quote! { #[registrable_builder(schema_name = "valid", unexpected = true)] },
     ] {
-        assert!(child_schema_name(&parent(attributes)).is_err());
+        assert!(
+            required_child_schema_name(
+                &parent(&attributes),
+                "registrable_builder",
+                "RegistrableBuilder",
+                "registration builder"
+            )
+            .is_err()
+        );
     }
 }
 
@@ -190,7 +224,7 @@ fn expansion_declares_only_the_child_identity_and_preserves_builder_fields() {
 
 #[test]
 fn invalid_identity_emits_only_a_diagnostic() {
-    let input = parent(quote! {});
+    let input = parent(&quote! {});
     let mut emitter = Emitter::new();
     let generated = impl_registrable_builder(&mut emitter, &input);
     assert!(generated.is_empty());

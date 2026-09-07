@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-06.
+Last updated: 2026-09-07.
 
 Iroha 3 is under active first-release implementation and qualification. The
 working tree is not a signed release candidate, and the release is not qualified.
@@ -16,6 +16,15 @@ counts, plans, dates, and former policies do not attest the current candidate.
 
 ## Current implementation and local evidence
 
+Kaigi's final scalar/identity/retained-participation model passes 33 tests, and
+the authorization/usage circuit library passes 20 tests with real proofs and
+every public-row mutation. Retired circuit/seed/artifact-hint interfaces are
+removed. Kotlin/Java pass 22 focused cases, Python 51, and 15 canonical Rust wire
+vectors plus three scalar-negative archives pass. Mandatory host authorization,
+leave/rejoin, usage and storage reservations await the shared Core verification
+build; final SDK artifacts, relay transport and deployment remain unqualified.
+See the [current privacy evidence](specs/privacy_first_release_closure.md).
+
 Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
 Source inspection confirms substantial implementation beyond the original plan;
 fresh qualification remains open. The unmerged index entries have been resolved;
@@ -26,8 +35,9 @@ consumers of Kotlin. Both migrated Java release runners pass (59 diagnostics and
 6 grouped tests); 10 affected legacy settlement/onboarding checks also pass. Four private-invocation layout tests and 55 formal-launcher/artifact-retention
 tests pass. QueuePlan's source ledger/startup controls pass 85 cases plus five
 semantic checks. Six finite TLC models, 106 multilane mutations and 22 in-flight
-mutations pass with fresh retained raw traces; five Apalache bounds pass and the
-in-flight 18-step run is pending.
+mutations pass with fresh retained raw traces; five Apalache bounds pass. The
+original 18-step run ended without a terminal result at state 13. A separate
+fresh 18-step attempt has passed typechecking; that bound remains unqualified.
 JS/Python settlement ownership and exact TWAP checks pass 63/65 grouped tests
 and 152 related Python tests; Kotlin retains signed Numeric and bounded Quantity
 semantics. Rust completion cleanup and crash/classifier regressions await the
@@ -35,8 +45,19 @@ shared build queue. Current cohort source-closure and receipt checks pass 23/7.
 Public-certificate source controls pass 19 cases. A subsequent recovery fix stages
 the complete bounded proposal set before eviction and prevents completed historical
 source resurrection; its four new cache tests and updated hydration regressions
-await Rust execution. G-UNIT now registers 526 tests; production remains 881 across
-43 modules. New recovery source controls and full integration remain in progress.
+await Rust execution. G-UNIT now registers 531 tests; production remains 881 across
+43 modules. Before the terminal-replay changes, the pinned Python environment passed 84 recovery-owner
+controls and 114 persistent recovery-cut checks, including that component's full
+source integration. Terminal votes/QCs now require full authentication before a
+read-only duplicate result; bounded cache retirement checks exact application
+before fresh signing and preserves separate output owners. Five new cache tests
+and the real merge fixture await Rust execution. The fixture now includes a
+second real application and older-receipt replay with a stable Kura-local key.
+Terminal source controls pass 63 cases and a fresh baseline; current inventory
+checks pass 84 cases, and the capacity contract passes 33 tests plus ten subcases.
+The broader source check failed with 77 errors. Two obsolete hydration clauses
+now use the canonical atomic-batch contract; its positive and reordered-batch
+negative checks pass. Full source and runtime qualification remain open.
 All 17 Swift wire fixture tests pass in
 an isolated source build after bounding vector allocations; the complete SDK
 gate still needs its real bridge artifact. The broad receipt/bootstrap selection
@@ -44,17 +65,25 @@ finishes with 555 passes and one cache parent-change rejection; that case passes
 on isolated retry. Source-contract reconciliation, a settled full receipt run,
 fixture regeneration and full release qualification remain open.
 
+Torii's router regenerates the canonical OpenAPI bundle on the ordinary runtime
+stack; four exact Rust authority/authentication checks, tracked metadata
+verification and all 145 Node tooling tests are recorded as passing.
+
 | Area | Observed evidence | Practical limit |
 | --- | --- | --- |
 | Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. Apple duplicate archive ownership is corrected and three target link controls pass; the fresh full XCFramework build is running; complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
-| SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact circuit checkpoint identity, complete breaker transaction readbacks, and SCCP builder Git/verifier/attribute isolation. All 191 SCCP Rust tests (35 TON native), 9 Core TON breaker tests, the new model regression, 42 TON contract tests, focused Go tests/compile checks, and Core/Torii production library compilation pass; authenticated StateInit regenerated. Combined builder/golden/release/corridor tests: 377 passed, 28 external-evidence/validator-dependent skips. All 8 R1CS identities are current and bound to checked definition/dependency sources. | Full Core/workspace and Torii runtime tests are unclaimed. Dependent release artifacts require regeneration and independent qualification against refreshed circuit identities. |
-| Rust SDK dependency separation | Relay accounting moved to `soranet_incentives`; SoraNet policies and shared defaults have one `iroha_service_model` owner. SDK/config/CAR/orchestrator/CLI production library and binary checks pass after the policy and logging migration. | Storage orchestration and telemetry remain SDK dependencies; Musubi service ownership, immutable client contexts, asynchronous transport and consumer migration are incomplete. |
+| SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact checkpoint identity, complete breaker readbacks, builder Git/verifier/attribute isolation, and canonical wire identifiers across Rust/SDKs, circuits and contracts. Earlier focused Rust/Core/model/production compile checks pass. Fresh validation: 459 Python tests with zero skips, 45 TON contract tests, authenticated StateInit write/check, and pinned EVM/TRON compiler plus EVM runtime smoke pass. Rust validator suites pass 22/27 tests, and the compiled Rust wire fixture passes. Policy/proof negatives have positive controls and precise rejection checks. All 8 R1CS identities are freshly measured, with a verified source closure and no pending profiles. | Full Core/workspace and Torii runtime tests are unclaimed. Production keys/proofs, trusted release signatures and authenticated deployment readbacks remain separate release artifacts. |
+| Rust SDK dependency separation | Relay accounting moved to `soranet_incentives`; SoraNet policies and shared defaults have one `iroha_service_model` owner. Archive construction, filesystem persistence, orchestrated fetch and DA workflows now live in `iroha_storage_client`. The shipping SDK graph has 28 local packages, 87 external packages and 268 required edges; its boundary checks pass without node, CAR or orchestrator dependencies. Storage-client tests pass 41 cases. Protocol capability probes are isolated per context and shared by clones. Immutable account/operator transaction contexts, signed multisig submission and the explicit blocking runtime pass eight focused tests. CLI-owned queue/witness paths preserve source-relative resolution and scoped authority binding; 15 SDK and 13 CLI config/authentication tests pass. All development binaries and integration-library tests compile; the three development-bin suites pass 40 tests. AccountTransactionDraft and AccountClient::prepare_transaction/sign_transaction now replace all generic helpers and the quote-and-sign composite, with crate-level typed errors; ten focused tests preserve exact bytes, defaults, attachments and context isolation. SDK examples and all CLI/Musubi/Izanami/test-network and integration test targets compile. Four specialized SoraFS wrappers are removed; five focused tests preserve exact instructions, moderation TTL and invariant checks. | The base Client still has mutable fields; remaining specialized preparation APIs, non-transaction error shapes, synchronous capabilities, broader operator families and complete consumer migration remain unfinished. |
 | Configuration and status HTTP contracts | Shared configuration DTOs have 22 wire tests, 3 node conversion tests and 14 Core runtime tests. Shared status preserves 32 captured named DTO frames/hashes/JSON; 93 telemetry tests pass. Core, SDK/CLI, test-network, schema generation, Mochi and grouped consumers compile. | Named records are qualified by focused fixtures; arbitrary generic-envelope schema identity is not yet cut over or fully qualified. |
 | Core integration fixtures | The `core_api` harness compiles after all 21 identified fixture errors were repaired through canonical APIs. | The new four-validator configuration startup/restart/readback/isolation scenario has not run against rebuilt binaries. Compilation is not runtime evidence. |
 | Torii evidence API | Grouped telemetry harness compiles. All 3 evidence runtime tests pass, including genuine four-validator BLS proof-of-possession/signature material and tamper rejection. | These tests do not qualify the full node consensus/release corridor. |
-| Atomic private settlement | Audited-input Core selection: 140 pass, three fail, two proofs ignored; its native-owner full three-output proof passes. The exact model binary passes 28 tests. Two stale test expectations are corrected; continuation exposed a raw SHA/hash-wrapper mismatch corrected with an exact 32-byte field. Earlier daemon and 28 integration preflights pass. | Source changed during compilation. Exact-byte and continuation corrections need a fresh combined run; ten-run network, leakage, benchmark, independent audit and release qualification remain open. See [the protocol](specs/private_settlement.md). |
-| Norito schema preparation | Canonical identity kernel, derive support, primitive/crypto declarations and strict UI tests pass. All 19 planned base-model declarations preserve 189 captured frames, signatures, JSON, storage keys and schema output in two tests passing before/after declarations. | Active codecs remain unchanged. Complete declaration coverage, atomic cutover and model moves remain pending; see [the identity contract](specs/norito_schema_identity.md). |
-| Norito migration capture | Eight probe-generator, 17 driver and 32 syntax/context-graph tests pass. Controlled crypto/model captures pass 206/6,112 probes. Another 108 crypto declarations pass nine module suites and seven existing wire/identity golden tests. | The reviewed 1,771-declaration model batch is applied; its fixture suites await qualification. Generic, local, generated and other feature selections remain incomplete. Shipping codecs are unchanged. |
+| Atomic private settlement | Explicit client-context harness migration preserves existing assertions; feature-enabled target compiles, 29 local Rust preflights pass (5 network/proof/helper tests ignored), and 21 Python harness contracts pass. Historical combined selection passes 281 (Core 224/model 56/configuration 1), scoped shared API 14; all 80 named prerequisites executed. | Compile/preflights retain unchanged scoped inputs. Generated capture obstruction is resolved with diagnostics preserved, but two complete source captures differ; the prerequisite guard refused before Cargo. Historical source drift remains unqualified. Current native/IVM/PQ full proofs, ten fresh 16-process N=3 successes, faults, leakage, benchmarks, independent audit and release evidence remain open. See [the protocol](specs/private_settlement.md). |
+| Norito schema preparation | Canonical identity kernel, derive support, primitive/crypto declarations and strict UI tests pass. All 19 planned base-model declarations preserve 189 captured frames, signatures, JSON, storage keys and schema output. All 25 generated event sets preserve 225 captured frames and 75 JSON values; 12 enclosing event enums preserve their identities. Another 17 Musubi generated types preserve 196 frames across 49 values; 16 governance hash wrappers preserve 256 frames and 64 JSON values. Another 127 generated queries preserve 684 frames across 171 payloads, and 62 privacy/spentness carriers preserve 992 frames across 248 payloads. The complete model group_02 harness passes 178 tests (two fixture writers ignored), including all 28 query tests. The derive suites pass 48 tests, strict Clippy and the executable EventSet documentation example. | Active codecs remain unchanged. Complete declaration coverage, atomic cutover and model moves remain pending; see [the identity contract](specs/norito_schema_identity.md). |
+| Norito migration capture | Eight probe-generator, 17 driver and 32 syntax/context-graph tests pass. Controlled crypto/model captures pass 206/6,112 probes. Another 108 crypto declarations pass nine module suites and seven existing wire/identity golden tests. The reviewed 1,771-declaration model batch preserves every pre-capture identity and its 110 owner-scoped fixture tests pass on the sealed post-declaration harness. Native AMX participant finality now uses a finite `NativeAmxParticipantSettlement` wire record; canonical Rust, Python, JavaScript, Kotlin and Swift fixtures use its domain-separated typed hash and reject the removed recursive field. Norito encoding also returns a typed nesting error before recursive user values can exhaust the native stack. | Generic, local, remaining generated families and other feature selections remain incomplete. The complete local model-library result is recorded below; other feature selections and release qualification remain open. |
+| Instruction identity and registry | All 12 generated instruction enums preserve 57 variants and 228 complete frames. Twelve Nexus records preserve another 120 frames across 24 populated values. All 12 generated instruction-box types preserve 68 variants, 340 frames and 68 JSON carriers. All 292 `isi!` declarations now require captured identities; 325 new tests preserve 357 values and 1,428 frames across 322 concrete types. The additional 12 generic argument markers pass their direct identity test. Both finite Native AMX settlement regressions pass again on the default stack. | The complete model run includes the new declaration selection with no instruction failures. Active codec cutover, wider model/feature coverage and release qualification remain open. |
+| AMX wire and recovery | Finite AMX settlements roundtrip, bind ordered sources and reject the removed recursive binary layout across six layouts. All ten FHE schema tests pass with the owning 48-byte challenge, 57-field profile and typed hash marker. After the tuple/metadata correction, the rebuilt Core passes all 60 AMX recovery tests plus authenticated primary restore on one artifact, with the default stack and all 2,417 recorded inputs unchanged. | Core retains 193 warnings and its FastPQ dependency reports 23. Full workspace, strict Core lint, four-validator and native SDK qualification remain open. See the [scoped implementation evidence](specs/first_release_architecture_redesign.md). |
+| Storage identities and layout | The complete revised model library passes 3,446 tests on the default stack, with six fixture generators ignored and all 1,000 recorded inputs unchanged. Seven common-module tests preserve 432 storage frames. Three dedicated metadata tests prove scratch allocations are independent of payload size and preserve exact wire bytes. All 1,246 Norito tests pass (one generator ignored), strict Norito-library Clippy passes, and block-signature wire/allocation checks pass. | Strict model Clippy reports 129 diagnostics; its dependency-inclusive attempt also fails on six dependency errors. Explicit Norito JSON object-key contracts are active; complete consumer and feature coverage still needs qualification. Physical model extraction and release qualification remain open. |
+| Account fee quoting | One typed async account operation handles direct signatures and complete multisig witnesses; old raw and witness-specific public quote methods are removed. Focused authorization, bounds, response-binding, blocking and fee-error suites pass. Every CLI and integration test target compiles. | Unified SDK errors, canonical local builders, remaining async capability migration and four-validator runtime qualification remain open. |
 | CLI ownership | `iroha app sorafs toolkit compile` owns compiler behavior; archive packing owns its CLI module. Toolkit 10 tests and governance audit 7 tests pass. | Remaining standalone storage CLI/runtime extraction and all downstream release checks remain open. |
 | Kotlin/JVM | Local `connect_norito_bridge` and `kotlin-fixture-gen` dev builds pass. The latest complete `core-jvm` checkpoint, before the CUDA JNI migration, passes **1,295 XML-counted tests, 0 failures, 0 errors, 0 skips**, with the explicit rebuilt JNI directory and fixture generator. Reflection guard passes. | This is local host execution, not Android, physical-device, signed native-artifact, or release-provenance qualification. |
 | JVM transport | Kotlin owns OkHttp HTTP/SSE and Netty WebSockets, with explicit resource lifetimes, one-shot upgrades, bounded messages/queues and cancellation during handshake/read/reconnect. All 72 focused tests pass and are included in the full JVM run. | Java transport implementation retirement and Android/native packaging remain open. |
@@ -68,7 +97,13 @@ fixture regeneration and full release qualification remain open.
 | Verified Nearby messages | Kotlin session owns typed IPM1 seal/open, profile binding and temporary-byte lifecycle. Seven adversarial Kotlin tests and four Java consumer tests pass in the full JVM suite; both duplicate Java Nearby facades are removed. | Host transport/shape checks do not qualify physical Android radio/device behavior or offline-money proofs. |
 | CI and evidence routing | Binary-free and binary-consuming Rust lanes are classified before builds; focused router tests pass. All 70 combined archive/release-contract tests pass. Archive reconstruction and 300-line current-view limits are now in the PR classification gate; 27 router tests and configured workflow lint pass. | The selected jobs and full release aggregation still need execution on CI infrastructure and the final candidate. |
 
-Musubi ownership preparation passes 4 filesystem and 31 dependency-guard tests. Consolidated CAR validation passes 20 tests; all 76 SDK Musubi tests preserve 102 complete golden frames and exact signed transcripts. The repaired complete SDK library suite passes **809 tests, zero failures or ignored tests**; its raw DA digest correction also passes eight owning-model tests. Service extraction remains incomplete.
+Musubi service extraction now owns publication, the durable clock and replay
+journal. Its focused suite passes 74 of 76 tests. Direct moved records retain
+their captured frame identities; the two remaining golden tests expose nine
+generic `Vec`, `Option`, `HashOf` and `SignatureOf` roots whose active identity
+still contains the physical Rust path. Fixing those headers requires the
+documented atomic Norito typed-identity cutover; no alternate hashes, path
+registry or rewritten goldens are accepted.
 
 These are scoped working-tree checkpoints. They do not imply that workspace
 build/tests, strict all-target Clippy, all SDK platforms, or release workflows
@@ -80,20 +115,33 @@ SoraFS goal execution is tracked in the [V1 implementation goals](specs/sorafs/v
 The initial release-hardening slice fixes signing-output directory substitution,
 checks the source seal before Cargo metadata, and restores native mobile CI with
 mandatory per-task execution evidence. The combined script/contract selection
-passes 714 tests. The complete manifest library rerun passed 891 tests with no
-failures or ignored tests. The focused Core security run passed 11 of 15
-tests; registry-label and bootstrap-state fixture corrections await a fresh
-Core binary. The canonical account binding passes its model regression and three
+passes 714 tests. The complete manifest library rerun passed 893 tests with no
+failures or ignored tests. The fresh captured Core security run passes all
+15 tests with no failures or ignored tests, covering permission payload binding,
+registry replay/revocation and account-bound PoP proofs. The full captured Core
+SoraFS selection reports 275 passes and 113 failures; fixture context/hash and
+canonical byte-counting corrections await the coordinated rebuild; all 17
+Norito canonical-codec regressions pass. The canonical account
+binding passes its model regression and three
 node authorization tests; Torii passes three binding, three OpenAPI and three
 query-filter tests. The validator CLI passes 56 tests, fixture generator 12 and
 Python fixture checker 30. Both Kotlin/Java-source PoP tests pass with a fresh
 native bridge and no skipped tests. Signed-manifest qualification requires independently
 authenticated source files; signed-state/receipt verification passes 11 tests,
-and seven actual CLI process checks pass over simulated signed inputs. Python
-gate integration remains pending. The four-peer repair target
-compiles; all 23 custody-verifier, 26 operation/control/recovery and three bounded
-credential-reader tests pass. Network execution and production hardware/state
-adapter integration remain pending. Native CI execution,
+and seven actual CLI process checks pass over simulated signed inputs. The Python
+receipt/source/builder/checker/runner selection passes 360 tests. All 34 signer
+operation/producer/journal tests and three bounded credential-reader tests pass.
+The first four-peer repair runs exposed test-stack and host disk-budget startup
+failures. The corrected async-account/resource harness compiles, but execution
+rejects the older daemon’s different genesis policy hash and exposes a remaining
+blocking status poll inside Tokio. Matched daemon/harness rebuilds and polling
+correction are pending; ledger runtime and hardware/state adapters remain open.
+The broader changing-tree Python baseline reports 3,371 passes and 60 failures.
+Current provider/rollout source contracts pass 409 tests with three failures.
+The Apple path-resolution failure is now corrected; automation plus that guard
+passes 623 tests. Two genuine unfinished-source inventories remain, and packaging
+still rejects the changed source and bootstrap seals.
+Native CI execution,
 the source seal, HSM custody and production qualification remain open. See the
 [current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-06-execution-checkpoint).
 

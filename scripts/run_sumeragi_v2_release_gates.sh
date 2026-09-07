@@ -1651,7 +1651,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 526/526 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 531/531 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -3125,6 +3125,11 @@ required_multilane_core_focus_tests=(
   lane_consensus::tests::recovered_proposal_batch_preserves_required_history_and_commit_evidence
   lane_consensus::tests::recovered_proposal_batch_preflights_later_quorum_before_any_eviction
   lane_consensus::tests::recovered_proposal_batch_rejects_required_union_over_capacity
+  lane_consensus::tests::applied_proposal_retirement_preserves_unselected_evidence_and_capacity
+  lane_consensus::tests::applied_proposal_retirement_preflights_all_selected_quorums
+  lane_consensus::tests::applied_proposal_retirement_revalidates_orphan_commit_lock_quorums
+  lane_consensus::tests::applied_proposal_retirement_rejects_invalid_or_conflicting_target_sets
+  lane_consensus::tests::retained_vote_body_inventory_covers_partial_owners_without_mutation
   block::valid::tests::autonomous_anchor_admission_uses_lane_slot_author_not_global_leader
   kura::tests::autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes
   sumeragi::v2_candidate::tests::autonomous_anchors_validate_without_ordinary_candidates
@@ -3428,7 +3433,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=526
+readonly expected_multilane_focus_test_count=531
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -3558,7 +3563,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 526-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 531-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3666,8 +3671,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 527 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 526 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 532 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 531 focused tests" >&2
     exit 1
   fi
 fi

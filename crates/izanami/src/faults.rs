@@ -687,12 +687,12 @@ pub trait FaultClient: Clone + Send + Sync + 'static {
     where
         I: Into<InstructionBox>;
 }
-impl FaultClient for iroha::client::Client {
+impl FaultClient for iroha::blocking::Client {
     fn submit_instruction<I>(&self, instruction: I) -> Result<()>
     where
         I: Into<InstructionBox>,
     {
-        self.submit_blocking(
+        self.submit(
             instruction,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -732,7 +732,7 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
 }
 impl FaultPeer for NetworkPeer {
-    type Client = iroha::client::Client;
+    type Client = iroha::blocking::Client;
     fn mnemonic(&self) -> &str {
         self.mnemonic()
     }

@@ -7,10 +7,6 @@ use iroha_data_model::kagemusha::{
 };
 use norito::codec::Encode;
 
-use crate::zk::kagemusha_v1_recursion::{
-    KagemushaReceiveFoldCreditV1, KagemushaReplayInsertWitnessV1,
-};
-
 use super::{
     ConsumedCreditInsertWitnessV1, CreditIdV1, DigestV1, KagemushaGuardBundleVerifierV1,
     KagemushaHistoryAbortOutcomeV1, KagemushaHistoryCommitOutcomeV1,
@@ -71,25 +67,6 @@ impl PeerCreditFoldInputV1 {
             receiver_binding_digest: self.receiver_binding_digest,
             payment_output_digest: self.payment_output_digest,
             envelope_digest: self.envelope_digest,
-        }
-    }
-
-    /// Convert the checked host input into the private recursive-relation credit.
-    pub(crate) fn relation_credit(&self) -> KagemushaReceiveFoldCreditV1 {
-        KagemushaReceiveFoldCreditV1 {
-            amount: self.amount,
-            credit_id: self.credit_id.0,
-            recipient_lane_id: self.recipient_lane_id,
-            incoming_proof_binding_digest: self.incoming_proof_binding_digest,
-            request_digest: self.request_digest,
-            prepared_transfer_digest: self.prepared_transfer_digest,
-            transition_nullifier: self.transition_nullifier,
-            recipient_encryption_key: self.recipient_encryption_key,
-            ciphertext_commitment: self.ciphertext_commitment,
-            credit_opening: self.credit_opening,
-            receiver_binding_digest: self.receiver_binding_digest,
-            payment_output_digest: self.payment_output_digest,
-            replay_insert: KagemushaReplayInsertWitnessV1::from(&self.replay_insert_witness),
         }
     }
 }

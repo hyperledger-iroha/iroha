@@ -1,11 +1,12 @@
 use super::*;
 use crate::kaigi::{
     KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
-    KaigiRelayManifest, KaigiRelayRegistration, NewKaigi,
+    KaigiRelayManifest, KaigiRelayRegistration, NewKaigi, scalar::KaigiAuthorizationScalarV1,
 };
 use iroha_crypto::Hash;
 isi! {
     /// Create a new Kaigi session anchored to a domain.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::CreateKaigi")]
     pub struct CreateKaigi {
         /// Template describing the call to create.
         pub call: NewKaigi,
@@ -22,6 +23,7 @@ isi! {
 }
 isi! {
     /// Add a participant to an active Kaigi.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::JoinKaigi")]
     pub struct JoinKaigi {
         /// Identifier of the call to join.
         pub call_id: KaigiId,
@@ -39,28 +41,30 @@ isi! {
     }
 }
 isi! {
-    /// Remove a participant from an active transparent Kaigi.
+    /// Remove a participant from an active Kaigi.
     ///
-    /// Privacy-mode departure is off-chain only in V1, so native execution rejects
-    /// every privacy artifact on this instruction.
+    /// Private departure proves the stored commitment opening against the current
+    /// roster, original account and ledger-owned participation sequence.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::LeaveKaigi")]
     pub struct LeaveKaigi {
         /// Identifier of the call to leave.
         pub call_id: KaigiId,
         /// Account leaving the call.
         pub participant: AccountId,
-    /// Reserved privacy-leave commitment; native V1 execution requires `None`.
+    /// Stored participant commitment, required for private leave.
     pub commitment: Option<KaigiParticipantCommitment>,
-    /// Reserved privacy-leave nullifier; native V1 execution requires `None`.
+    /// Leave-action nullifier, required for private leave.
     pub nullifier: Option<KaigiParticipantNullifier>,
-    /// Reserved privacy-leave roster root; native V1 execution requires `None`.
+    /// Current roster root, required for private leave.
     pub roster_root: Option<Hash>,
-    /// Reserved privacy-leave proof; native V1 execution requires `None`.
+    /// Canonical authorization proof, required for private leave.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Option<Vec<u8>>,
     }
 }
 isi! {
     /// Conclude an active Kaigi.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::EndKaigi")]
     pub struct EndKaigi {
         /// Identifier of the call to end.
         pub call_id: KaigiId,
@@ -82,6 +86,7 @@ isi! {
 }
 isi! {
     /// Record usage metrics for a Kaigi segment.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::RecordKaigiUsage")]
     pub struct RecordKaigiUsage {
     /// Identifier of the call to update.
     pub call_id: KaigiId,
@@ -90,7 +95,7 @@ isi! {
     /// Gas billed for this segment (as computed off-ledger).
     pub billed_gas: u64,
     /// Commitment to the usage tuple (privacy mode only).
-    pub usage_commitment: Option<Hash>,
+    pub usage_commitment: Option<KaigiAuthorizationScalarV1>,
     /// Proof binding the commitment to the supplied usage tuple (required in privacy mode).
     ///
     /// The V1 statement does not attest an encrypted-log payload.
@@ -100,6 +105,7 @@ isi! {
 }
 isi! {
     /// Update the relay manifest advertised for a Kaigi session.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest")]
     pub struct SetKaigiRelayManifest {
         /// Identifier of the call to update.
         pub call_id: KaigiId,
@@ -112,6 +118,7 @@ isi! {
 isi! {
     /// Register or update a Kaigi relay in the governance domain selected by
     /// its live domain-qualified primary account alias.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::RegisterKaigiRelay")]
     pub struct RegisterKaigiRelay {
         /// Registration payload describing the relay capabilities.
         pub relay: KaigiRelayRegistration,
@@ -125,6 +132,7 @@ isi! {
     /// manifest admission; existing manifests remain self-contained and retain
     /// their pinned descriptor until the host refreshes or ends the call, or
     /// until the manifest expires.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::UnregisterKaigiRelay")]
     pub struct UnregisterKaigiRelay {
         /// Relay account whose descriptor should be removed.
         pub relay_id: AccountId,
@@ -132,6 +140,7 @@ isi! {
 }
 isi! {
     /// Report the observed health for a relay participating in a Kaigi session.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth")]
     pub struct ReportKaigiRelayHealth {
         /// Identifier of the call where the relay was observed.
         pub call_id: KaigiId,
@@ -219,7 +228,7 @@ impl_kaigi_decode_from_slice!(RecordKaigiUsage {
     call_id: KaigiId,
     duration_ms: u64,
     billed_gas: u64,
-    usage_commitment: Option<Hash>,
+    usage_commitment: Option<KaigiAuthorizationScalarV1>,
     proof: Option<Vec<u8>>,
 });
 impl_kaigi_decode_from_slice!(SetKaigiRelayManifest {
@@ -263,16 +272,19 @@ mod tests {
             Name::from_str("standup").expect("call name"),
         )
     }
+    fn test_scalar(byte: u8) -> KaigiAuthorizationScalarV1 {
+        let mut bytes = [0; 32];
+        bytes[0] = byte;
+        KaigiAuthorizationScalarV1::from_le_bytes(bytes).unwrap()
+    }
     fn participant_commitment(byte: u8) -> KaigiParticipantCommitment {
         KaigiParticipantCommitment {
-            commitment: Hash::new([byte; 32]),
-            alias_tag: Some(format!("participant-{byte}")),
+            commitment: test_scalar(byte),
         }
     }
     fn participant_nullifier(byte: u8) -> KaigiParticipantNullifier {
         KaigiParticipantNullifier {
-            digest: Hash::new([byte; 32]),
-            issued_at_ms: 1_700_000_000 + u64::from(byte),
+            digest: test_scalar(byte),
         }
     }
     fn relay_manifest() -> KaigiRelayManifest {
@@ -387,7 +399,7 @@ mod tests {
             call_id: call_id.clone(),
             duration_ms: 60_000,
             billed_gas: 15,
-            usage_commitment: Some(Hash::new("kaigi-usage")),
+            usage_commitment: Some(test_scalar(7)),
             proof: Some(vec![0x10, 0x11]),
         });
         assert_slice_roundtrip(SetKaigiRelayManifest {

@@ -1,144 +1,51 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
-private const val JOIN_KAIGI_ACTION = "JoinKaigi"
-private val JOIN_KAIGI_ARGUMENTS = setOf(
-    "action",
-    "call.domain_id",
-    "call.call_name",
-    "participant",
-    "commitment.commitment",
-    "commitment.alias_tag",
-    "nullifier.digest",
-    "nullifier.issued_at_ms",
-    "roster_root",
-    "proof",
-)
-
-/** Typed representation of a `JoinKaigi` instruction. */
-class JoinKaigiInstruction(
+/** Canonical V1 `JoinKaigi` wire instruction; private authorization is verified against ledger state. */
+class JoinKaigiInstruction @JvmOverloads constructor(
     @JvmField val callId: KaigiInstructionUtils.CallId,
     @JvmField val participant: String,
-    commitment: String? = null,
-    @JvmField val commitmentAliasTag: String? = null,
-    nullifierDigest: String? = null,
-    @JvmField val nullifierIssuedAtMs: Long? = null,
+    @JvmField val commitment: KaigiAuthorizationScalarV1? = null,
+    @JvmField val nullifierDigest: KaigiAuthorizationScalarV1? = null,
     rosterRoot: String? = null,
     @JvmField val proofBase64: String? = null,
-) : InstructionTemplate {
-
-    @JvmField val commitment: String? = KaigiInstructionUtils.canonicalizeOptionalHash(commitment)
-    @JvmField val nullifierDigest: String? = KaigiInstructionUtils.canonicalizeOptionalHash(nullifierDigest)
-    @JvmField val rosterRoot: String? = KaigiInstructionUtils.canonicalizeOptionalHash(rosterRoot)
+) : KaigiWireInstructionV1 {
+    @JvmField val rosterRoot: String? = rosterRoot?.let(KaigiInstructionUtils::canonicalRosterRoot)
 
     init {
         require(participant.isNotBlank()) { "participant must not be blank" }
-        require(commitmentAliasTag == null) {
-            "commitment aliasTag is off-chain only and must be omitted"
-        }
-        require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
-            "nullifier issuedAtMs is off-chain only and must be zero when provided"
-        }
-        require(nullifierIssuedAtMs == null || nullifierDigest != null) {
-            "nullifier issuedAtMs requires nullifier digest"
-        }
-        if (proofBase64 != null) {
-            KaigiInstructionUtils.requireBase64(proofBase64, "proof")
-        }
+        KaigiInstructionUtils.requireAuthorizationArtifacts(commitment, nullifierDigest, this.rosterRoot, proofBase64)
     }
 
     override val kind: InstructionKind = InstructionKind.CUSTOM
-
     override val arguments: Map<String, String> by lazy {
-        KaigiInstructionUtils.immutableArguments(canonicalArguments())
+        KaigiInstructionUtils.immutableArguments(buildMap {
+        put("action", "JoinKaigi")
+        KaigiInstructionUtils.appendCallId(callId, this, "call")
+        put("participant", participant)
+        commitment?.let { put("commitment.commitment", it.toHex()) }
+        nullifierDigest?.let { put("nullifier.digest", it.toHex()) }
+        this@JoinKaigiInstruction.rosterRoot?.let { put("roster_root", it) }
+        proofBase64?.let { put("proof", it) }
+        })
     }
 
-    private fun canonicalArguments(): Map<String, String> {
-        val args = linkedMapOf<String, String>()
-        args["action"] = JOIN_KAIGI_ACTION
-        KaigiInstructionUtils.appendCallId(callId, args, "call")
-        args["participant"] = participant
-        if (commitment != null) {
-            args["commitment.commitment"] = commitment
-        }
-        if (nullifierDigest != null) {
-            args["nullifier.digest"] = nullifierDigest
-            if (nullifierIssuedAtMs != null) {
-                args["nullifier.issued_at_ms"] = java.lang.Long.toUnsignedString(nullifierIssuedAtMs)
-            }
-        }
-        if (rosterRoot != null) {
-            args["roster_root"] = rosterRoot
-        }
-        if (proofBase64 != null) {
-            args["proof"] = proofBase64
-        }
-        return args
-    }
-
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is JoinKaigiInstruction) return false
-        return callId == other.callId
-            && participant == other.participant
-            && commitment == other.commitment
-            && commitmentAliasTag == other.commitmentAliasTag
-            && nullifierDigest == other.nullifierDigest
-            && nullifierIssuedAtMs == other.nullifierIssuedAtMs
-            && rosterRoot == other.rosterRoot
-            && proofBase64 == other.proofBase64
-    }
-
-    override fun hashCode(): Int {
-        var result = callId.hashCode()
-        result = 31 * result + participant.hashCode()
-        result = 31 * result + (commitment?.hashCode() ?: 0)
-        result = 31 * result + (commitmentAliasTag?.hashCode() ?: 0)
-        result = 31 * result + (nullifierDigest?.hashCode() ?: 0)
-        result = 31 * result + (nullifierIssuedAtMs?.hashCode() ?: 0)
-        result = 31 * result + (rosterRoot?.hashCode() ?: 0)
-        result = 31 * result + (proofBase64?.hashCode() ?: 0)
-        return result
-    }
+    override fun equals(other: Any?): Boolean = other is JoinKaigiInstruction && arguments == other.arguments
+    override fun hashCode(): Int = arguments.hashCode()
 
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): JoinKaigiInstruction {
-            KaigiInstructionUtils.requireKnownArguments(arguments, JOIN_KAIGI_ARGUMENTS)
-            KaigiInstructionUtils.requireAction(arguments, JOIN_KAIGI_ACTION)
-            val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
-            val participant = KaigiInstructionUtils.require(arguments, "participant")
-
-            val commitmentValue = arguments["commitment.commitment"]
-                ?.let(KaigiInstructionUtils::canonicalizeHash)
-            require(arguments["commitment.alias_tag"] == null) {
-                "commitment aliasTag is off-chain only and must be omitted"
-            }
-
-            val nullifier = arguments["nullifier.digest"]
-                ?.let(KaigiInstructionUtils::canonicalizeHash)
-            val parsedNullifierIssuedAt = KaigiInstructionUtils.parseOptionalUnsignedLong(
-                arguments["nullifier.issued_at_ms"],
-                "nullifier.issued_at_ms",
-            )
-            require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
-                "nullifier issuedAtMs is off-chain only and must be zero when provided"
-            }
-            require(parsedNullifierIssuedAt == null || nullifier != null) {
-                "nullifier issuedAtMs requires nullifier digest"
-            }
-            val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
-
-            val proof = arguments["proof"]
-
+            KaigiInstructionUtils.requireKnownArguments(arguments, setOf(
+                "action", "call.domain_id", "call.call_name", "participant", "commitment.commitment", "nullifier.digest", "roster_root", "proof",
+            ))
+            KaigiInstructionUtils.requireAction(arguments, "JoinKaigi")
             return JoinKaigiInstruction(
-                callId = callId,
-                participant = participant,
-                commitment = commitmentValue,
-                commitmentAliasTag = null,
-                nullifierDigest = nullifier,
-                nullifierIssuedAtMs = nullifierIssuedAt,
-                rosterRoot = arguments["roster_root"]?.let(KaigiInstructionUtils::canonicalizeHash),
-                proofBase64 = proof,
+                callId = KaigiInstructionUtils.parseCallId(arguments, "call"),
+                participant = KaigiInstructionUtils.require(arguments, "participant"),
+                commitment = arguments["commitment.commitment"]?.let(KaigiAuthorizationScalarV1::fromArgument),
+                nullifierDigest = arguments["nullifier.digest"]?.let(KaigiAuthorizationScalarV1::fromArgument),
+                rosterRoot = arguments["roster_root"],
+                proofBase64 = arguments["proof"],
             )
         }
     }

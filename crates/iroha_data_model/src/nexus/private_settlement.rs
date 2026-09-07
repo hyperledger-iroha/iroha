@@ -5121,7 +5121,7 @@ pub enum PrivateSettlementValidationError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -5370,7 +5370,7 @@ mod tests {
         }
     }
 
-    fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
+    pub(crate) fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
         let mut manifest = manifest(count);
         let deltas = (0..count)
             .map(|index| measured_delta(&manifest, index))

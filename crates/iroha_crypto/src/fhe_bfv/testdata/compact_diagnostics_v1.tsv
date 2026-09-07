@@ -267,26 +267,26 @@ iroha-bfv-diagnostics-v1
 265	S	placeholder	S	direct bounded-noise bootstrap refresh must reject placeholder public-key digest metadata
 266	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bounded bootstrap transcript validation must reject inert zero_refresh material
 267	S	zero_refresh must match round_refreshes[0]	S	direct bounded-noise bootstrap refresh must reject zero_refresh drift before applying a round
-268	S	duplicate round refresh ciphertext	S	RNS bounded-noise bootstrap refresh must reject aliased refresh material before applying rounds
-269	S	duplicate round refresh ciphertext	S	bounded-noise bootstrap bound helper must reject aliased refresh material before returning diagnostics
+268	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
+269	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
 270	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bounded key-owner refresh diagnostics must reject inert zero_refresh material
 271	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	direct bounded-noise bootstrap refresh must reject inert zero_refresh material
 272	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bounded-noise bootstrap bound helper must reject inert zero_refresh material
-273	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	RNS bounded-noise bootstrap refresh must reject inert per-round refresh material
-274	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	bounded-noise bootstrap bound helper must reject inert per-round refresh material
+273	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	material validation rejects inert surplus refresh ciphertexts independently of the supported-round metadata guard
+274	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	material validation rejects inert surplus refresh ciphertexts independently of the supported-round metadata guard
 275	S	must not be empty	S	exact keygen must reject seed metadata before seeded capacity
 276	S	exceeds plaintext modulus	S	exact encryption must reject plaintext metadata before seeded capacity
 277	S	must not be empty	S	exact encryption must reject seed metadata before seeded capacity
 278	S	all zero	S	exact bootstrap refresh construction must reject inert public-key material
 279	S	all zero	S	bounded bootstrap refresh construction must reject inert public-key material
 280	S	refresh-round residual budget	S	exact refresh capacity must reject overbudget advertised rounds
-281	S	refresh-round residual budget	S	exact bootstrap key construction must reject overbudget round capacity before deriving refresh masks
-282	S	refresh-round residual budget	S	exact transcript validation must reject overbudget advertised round capacity before refresh-entry drift
-283	S	refresh-round residual budget	S	exact refresh execution must reject overbudget advertised round capacity before using key material
+281	S	max_refresh_rounds exceeds the supported limit 1	S	exact bootstrap key construction must reject unsupported round capacity before deriving refresh masks
+282	S	max_refresh_rounds exceeds the supported limit 1	S	exact transcript validation must reject unsupported advertised round capacity before refresh-entry drift
+283	S	max_refresh_rounds exceeds the supported limit 1	S	exact refresh execution must reject unsupported advertised round capacity before using key material
 284	S	refresh-round noise budget	S	bounded refresh capacity must reject overbudget advertised rounds
-285	S	refresh-round noise budget	S	bounded bootstrap key construction must reject overbudget round capacity before deriving refresh masks
-286	S	refresh-round noise budget	S	bounded transcript validation must reject overbudget advertised round capacity before refresh-entry drift
-287	S	refresh-round noise budget	S	bounded refresh execution must reject overbudget advertised round capacity before using key material
+285	S	max_refresh_rounds exceeds the supported limit 1	S	bounded bootstrap key construction must reject unsupported round capacity before deriving refresh masks
+286	S	max_refresh_rounds exceeds the supported limit 1	S	bounded transcript validation must reject unsupported advertised round capacity before refresh-entry drift
+287	S	max_refresh_rounds exceeds the supported limit 1	S	bounded refresh execution must reject unsupported advertised round capacity before using key material
 288	S	exceeds plaintext modulus	S	exact encryption must reject public plaintext before public-key shape
 289	S	must not be empty	S	exact encryption must reject seed metadata before public-key shape
 290	S	all zero	S	exact encryption must reject inert all-zero public-key material
@@ -297,8 +297,8 @@ iroha-bfv-diagnostics-v1
 295	S	b component	S	bounded encryption must reject inert zero-b public-key components
 296	S	identifier input exceeds	S	identifier encryption must reject public input length before public-key shape
 297	S	must not be empty	S	identifier encryption must reject seed metadata before public-key shape
-298	S	max_input_bytes must be at least 1	S	identifier public parameters must reject envelope metadata before public-key shape
-299	S	max_input_bytes must be at least 1	S	identifier encryption must reject envelope metadata before public-key shape
+298	S	max_input_bytes must be exactly 63	S	identifier public parameters must reject envelope metadata before public-key shape
+299	S	max_input_bytes must be exactly 63	S	identifier encryption must reject envelope metadata before public-key shape
 300	S	automorphism power	S	exact Galois keygen must reject public automorphism metadata before secret-key shape
 301	S	must not be empty	S	exact Galois keygen must reject seed metadata before secret-key shape
 302	S	automorphism power	S	bounded Galois keygen must reject public automorphism metadata before secret-key shape
@@ -416,11 +416,11 @@ iroha-bfv-diagnostics-v1
 414	S	zero_refresh must match round_refreshes[0]	S	bootstrap refresh summaries must reject noncanonical zero_refresh drift before digesting
 415	S	zero_refresh must match round_refreshes[0]	S	exact bootstrap proof statements must reject noncanonical zero_refresh drift
 416	S	zero_refresh must match round_refreshes[0]	S	bounded bootstrap proof statements must reject noncanonical zero_refresh drift
-417	S	duplicate round refresh ciphertext	S	bootstrap refresh summaries must reject aliased per-round refresh material before digesting
+417	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
 418	S	deterministic encrypted-zero transcript	S	bounded transcript validation must reject exact refresh masks
 419	S	deterministic encrypted-zero transcript	S	bounded transcript digesting must reject exact refresh masks
 420	S	deterministic encrypted-zero transcript	S	bounded transcript-bound proof statements must reject exact refresh masks
-421	S	round_refreshes[1]	S	exact transcript proof statements must reject reordered refresh rounds before digesting
+421	S	zero_refresh does not match deterministic	S	exact transcript proof statements must reject tampered supported refresh material before digesting
 422	S	canonical v1 bytes	S	circuit material byte admission must reject compressed Norito framing
 423	S	canonical v1 bytes	S	circuit material byte digesting must reject compressed Norito framing
 424	S	canonical v1 bytes	S	circuit material byte digest helper must reject compressed Norito framing before hashing
@@ -1012,7 +1012,7 @@ iroha-bfv-diagnostics-v1
 1010	S	all zero	S	bounded transcript validation must reject inert public-key material
 1011	S	all zero	S	bounded transcript digest must reject inert public-key material
 1012	S	must not be empty	S	transcript metadata must still preflight before public-key shape
-1013	S	round_refreshes[1]	S	bounded transcript proof statements must reject reordered refresh rounds before digesting
+1013	S	zero_refresh does not match deterministic	S	bounded transcript proof statements must reject tampered supported refresh material before digesting
 1014	S	exceeds plaintext modulus	S	exact scalar add must reject public scalar before ciphertext shape
 1015	S	exceeds plaintext modulus	S	exact scalar multiply must reject public scalar before ciphertext shape
 1016	S	exceeds plaintext modulus	S	exact plaintext-polynomial multiply must reject public plaintext before ciphertext shape
@@ -1035,12 +1035,12 @@ iroha-bfv-diagnostics-v1
 1033	S	exceeds plaintext modulus	S	registered bounded affine execution must reject public circuit metadata before ciphertext shape
 1034	S	placeholder	S	direct bootstrap refresh must reject placeholder public-key digest metadata
 1035	S	zero_refresh must match round_refreshes[0]	S	direct bootstrap refresh must reject zero_refresh drift before applying a round
-1036	S	duplicate round refresh ciphertext	S	multi-round bootstrap refresh must reject aliased refresh material before applying rounds
-1037	S	duplicate round refresh ciphertext	S	bootstrap refresh bound helper must reject aliased refresh material before returning diagnostics
+1036	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
+1037	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
 1038	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	key-owner refresh diagnostics must reject inert zero_refresh material
 1039	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	direct bootstrap refresh must reject inert zero_refresh material before applying a round
 1040	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bootstrap refresh bound helper must reject inert zero_refresh material
-1041	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	multi-round bootstrap refresh must reject inert per-round refresh material
+1041	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	material validation rejects inert surplus refresh ciphertexts independently of the supported-round metadata guard
 1042	S	max_refresh_rounds to 0	S	full-bootstrap admission must reject refresh material inherited from refresh-only keys
 1043	S	canonical v1 bytes	S	evaluation-key bundle byte admission must reject compressed Norito framing
 1044	S	canonical v1 bytes	S	evaluation-key bundle byte digesting must reject compressed Norito framing
@@ -1190,7 +1190,7 @@ iroha-bfv-diagnostics-v1
 1188	S	bootstrap refresh round index 1	S	registered bounded bootstrap must reject round index before key shape
 1189	S	bootstrap refresh rounds 2	S	registered bounded multi-round bootstrap must reject round count before key shape
 1190	S	zero_refresh must match round_refreshes[0]	S	RNS exact bootstrap refresh must reject zero_refresh drift before applying a round
-1191	S	duplicate round refresh ciphertext	S	registered RNS exact bootstrap refresh must reject aliased refresh material before applying rounds
+1191	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
 1192	S	rotation key zero_refresh must not be an all-zero ciphertext	S	key-owner rotation diagnostics must reject inert zero_refresh material
 1193	S	rotation key zero_refresh must not be an all-zero ciphertext	S	direct outer-slot rotation must reject inert zero_refresh material before applying refresh
 1194	S	rotation key zero_refresh must not be an all-zero ciphertext	S	outer-slot rotation residual bounds must reject inert zero_refresh material
@@ -1265,7 +1265,7 @@ iroha-bfv-diagnostics-v1
 1263	S	all-zero refresh ciphertext	S	evaluation-key bundle digesting must reject inert all-zero bootstrap zero_refresh descriptors
 1264	S	all-zero refresh ciphertext	S	evaluation-key bundle digesting must reject inert all-zero bootstrap round refresh masks
 1265	S	zero_refresh must match round_refreshes[0]	S	evaluation-key bundle digest refresh preflight must reject zero_refresh drift directly
-1266	S	duplicate round refresh ciphertext	S	evaluation-key bundle digest refresh preflight must reject duplicate per-round refresh material directly
+1266	S	duplicate round refresh ciphertext	S	material validation rejects duplicate surplus refresh ciphertexts independently of the supported-round metadata guard
 1267	S	centered scale-round source-chain	S	full-bootstrap material must reject stale centered scale-round source-chain digests
 1268	S	centered scale-round source-chain	S	proof-key artifact envelopes must reject stale centered source-chain digests
 1269	S	centered scale-round source-chain	S	release-audit evidence must reject stale nested proof-profile source-chain digests

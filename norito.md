@@ -88,6 +88,10 @@ truth for compact per-value lengths; decoders must not infer compactness from
 the version or from payload heuristics. Fixed-width per-value prefixes are a
 distinct advertised V1 mode when a caller explicitly encodes with
 `flags = 0x00`.
+Nested tuple and metadata-entry serializers inherit that exact selection.
+They do not merge defaults into an active layout: changing length formats
+after an enclosing field has been written would make the frame internally
+inconsistent. Defaults apply only when no layout context is active.
 
 ## Length Prefixes
 
@@ -143,6 +147,27 @@ layout:
   hashes, and emitted bytes must remain identical. Native helper waits are
   bounded before CPU fallback.
 
+### Counted length framing and encode depth
+
+Every length-delimited field is sized by running its serializer against a
+counting sink. Norito then emits that measured length and constrains the output
+pass to the same byte count. `encoded_len_hint` and `encoded_len_exact` are
+optional diagnostics; canonical encoding never trusts them for framing,
+admission, or buffer reservation. This prevents a recursive or incorrect
+length oracle from exhausting the stack, forcing a payload-sized speculative
+allocation, or understating the bytes accepted by the output pass.
+
+Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
+`encode_canonical`, including for resource admission and length-prefixed hashes.
+Both ignore ambient layout guards and restore the caller's guard on return.
+The lower-level `core::encoded_frame_len` follows the active layout, matching
+the corresponding layout-aware encoder.
+
+Derive-generated serializers and length diagnostics also enforce
+`MAX_VALUE_NESTING_DEPTH`. Recursive in-memory values therefore return a
+typed `NestingDepthExceeded` error through fallible encoding APIs before native
+stack exhaustion. The guard changes no accepted wire bytes or field ordering.
+
 ### Decode-scoped resource limits
 
 Archive byte limits do not bound collection reservations: an eight-byte
@@ -168,6 +193,12 @@ temporary storage and returns typed resource-limit errors on violation.
 Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
+
+Derived packed structures validate the complete boundary after their declared
+fields, for both offset tables and field-bitset layouts. A valid checksum does
+not make trailing bytes part of a structure. Explicit prefix-field decoding
+reports only the bytes belonging to that field so the enclosing decoder can
+read its following fields.
 
 Nested decode scopes may tighten but never relax an outer budget. Binary value
 decoding is sequential in V1, so its budget counters stay in the calling decode
@@ -586,10 +617,10 @@ An entrypoint value schema is limited to 256 nodes and aggregate depth 256.
 `EntrypointValueTypeV1` validates the complete tape during binary and JSON
 deserialization, so truncated trees, trailing trees, over-limit depths, and
 otherwise invalid schemas are never returned as decoded values.
-The dynamic JSON `Value` parser permits 257 structural levels: the extra level
-covers the required outer entrypoint parameter object around a value at
-the full V1 type depth. Recursively owned typed JSON decoders retain their
-independent 256-level guard.
+The logical 256-level schema remains flat on wire and therefore does not consume
+one JSON parser frame per logical type level. The dynamic JSON `Value` parser
+admits 33 structural levels, including one boundary-envelope level, while
+recursively owned typed JSON decoders enforce the codec's 32-level limit.
 The built-in `QueryPage<View>` product uses the canonical nominal schema name
 `QueryPage`; its `items` list child is followed by the exact `View`
 specialization, so
@@ -646,6 +677,20 @@ Maps encode deterministically with the same active layout flags:
   offsets are monotonic with the first offset 0.
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
+
+JSON objects have a separate key contract. `JsonObjectKey` supplies canonical,
+unquoted text; the map writer adds quotes and applies the same escaping as JSON
+strings. `JsonObjectKeyOwned` parses that text directly when decoding. Numeric
+and boolean keys therefore use quoted decimal and `true`/`false` spellings.
+Byte-array keys use uppercase hexadecimal. Arbitrary JSON values, optional
+values, tuples, and collections are not object keys; their ordinary value
+serializers cannot establish an unambiguous key identity.
+
+Bounded writers visit key text through the checked contract, including through
+borrowed keys, and stop on the first conversion or output-limit error. Streaming
+formatters must preserve that error even if a formatter ignores a failed write.
+Key decoders retain duplicate-key rejection and the active decode resource
+limits. This JSON contract does not change the binary map layout above.
 
 ## MerkleTree Derived-Cache Encoding
 

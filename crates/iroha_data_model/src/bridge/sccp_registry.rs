@@ -572,7 +572,9 @@ impl SccpGroth16Bls12381IcV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381VerifyingKeyV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381VerifyingKeyV1"
+)]
 pub struct SccpGroth16Bls12381VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -663,7 +665,9 @@ pub fn sccp_groth16_bls12381_verifying_key_hash_v1(
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254SemanticCircuitV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254SemanticCircuitV1"
+)]
 pub struct SccpGroth16Bn254SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -686,7 +690,9 @@ pub struct SccpGroth16Bn254SemanticCircuitV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381SemanticCircuitV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381SemanticCircuitV1"
+)]
 pub struct SccpGroth16Bls12381SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -956,7 +962,9 @@ impl SccpPortableVerifyingKeyRefV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraOutboundExecutionPolicyV1")]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpSoraOutboundExecutionPolicyV1"
+)]
 pub struct SccpSoraOutboundExecutionPolicyV1 {
     /// Policy schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -3280,8 +3288,6 @@ mod tests {
         TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
     }
     use norito::codec::DecodeAll as _;
-    const SIGNATORY: &str =
-        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     fn word_u64(value: u64) -> [u8; 32] {
         let mut word = [0; 32];
         word[24..].copy_from_slice(&value.to_be_bytes());
@@ -3893,7 +3899,7 @@ mod tests {
         .expect("valid exact TRON route");
         assert_eq!(
             route_hash,
-            hex32("95c70a2f7b0125ae8c2d765a537d8ff9f7b4a903a13a96488bf5b33d88aec29c")
+            hex32("6b237ceca900d81735f4c4cb72257d0d8b225c5d39ee2ff6a40414b9077479cf")
         );
         let changed_cap = SccpTronDestinationDeploymentV1 {
             max_wrapped_supply: deployment.max_wrapped_supply - 1,
@@ -5127,7 +5133,7 @@ mod tests {
             sccp_evm_destination_binding_hash_v1(lane().source, &baseline).expect("binding");
         assert_eq!(
             baseline_binding,
-            hex32("de9694e4eb5557c90e5aeb435435742a99aa334f83e41d2840b783b7d7c4ff0b")
+            hex32("0822a77973c618db69c82e50668670823f7b39eba240103833dc9e500f3811fc")
         );
         let baseline_route = SccpDestinationDeploymentV1::Evm(baseline)
             .route_configuration_hash(
@@ -5202,7 +5208,7 @@ mod tests {
                 .expect("TRON binding");
         assert_eq!(
             baseline_tron_binding,
-            hex32("ea8702cd8d7fbd36037ae5dd5c16ed45a831c53b3428aff2f8b4a5ef3ea29307")
+            hex32("e3a973b02a7e233698bd146af095dfb83f00438ee35d2a32d686fdc75ce8e5ec")
         );
         let baseline_tron_route = SccpDestinationDeploymentV1::Tron(baseline_tron)
             .route_configuration_hash(

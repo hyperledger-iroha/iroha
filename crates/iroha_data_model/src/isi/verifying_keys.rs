@@ -2,6 +2,7 @@ use super::*;
 use crate::proof::{VerifyingKeyId, VerifyingKeyRecord};
 isi! {
     /// Register a new verifying key record into the WSV.
+    #[norito_schema(name = "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey")]
     pub struct RegisterVerifyingKey {
         /// Identifier of the verifying key (backend + name).
         pub id: VerifyingKeyId,
@@ -14,6 +15,7 @@ isi! {
     ///
     /// The record remains bound to its originally registered circuit identifier.
     /// Register a distinct [`VerifyingKeyId`] when introducing a different circuit.
+    #[norito_schema(name = "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey")]
     pub struct UpdateVerifyingKey {
         /// Identifier of the verifying key to update.
         pub id: VerifyingKeyId,

@@ -29,9 +29,18 @@ use std::{collections::BTreeSet, fmt, str::FromStr, string::String, vec::Vec};
 
 /// Voting mode for a referendum.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::VotingMode")]
 pub enum VotingMode {
     /// Zero-knowledge voting flow (default ballot type).
@@ -104,8 +113,7 @@ impl fmt::Display for HashParseError {
 }
 impl std::error::Error for HashParseError {}
 const HASH_WIRE_VERSION_V1: u16 = 1;
-#[derive(Clone, Copy, Debug, Encode, Decode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::HashWire32")]
 struct HashWire32 {
     version: u16,
@@ -156,10 +164,23 @@ fn decode_lowercase_hex_array<const N: usize>(input: &str) -> Result<[u8; N], Ha
     decode_hex_array(input)
 }
 macro_rules! define_hash32_newtype {
-    ($name:ident, $doc:literal) => {
+    ($name:ident, $schema_name:literal, $doc:literal) => {
         #[doc = $doc]
+        /// JSON values and object keys use exactly 64 lowercase hexadecimal digits.
         #[repr(transparent)]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            IntoSchema,
+            norito::NoritoSchema,
+        )]
+        #[norito_schema(name = $schema_name)]
         pub struct $name([u8; 32]);
         impl $name {
             /// Number of bytes in the encoded hash.
@@ -263,6 +284,27 @@ macro_rules! define_hash32_newtype {
                 Self::from_hex_str(&buf).map_err(|err| json::Error::Message(format!("{err}")))
             }
         }
+        #[cfg(feature = "json")]
+        impl json::JsonObjectKey for $name {
+            fn visit_json_key_text<E>(
+                &self,
+                mut visitor: impl FnMut(&str) -> Result<(), E>,
+            ) -> Result<(), E> {
+                visitor(&self.to_hex())
+            }
+        }
+        #[cfg(feature = "json")]
+        impl json::JsonObjectKeyOwned for $name {
+            fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+                if key.len() != Self::LENGTH * 2 {
+                    return Err(json::Error::Message(
+                        "governance hash key must contain exactly 64 lowercase hex digits"
+                            .to_owned(),
+                    ));
+                }
+                Self::from_hex_str(key).map_err(|err| json::Error::Message(err.to_string()))
+            }
+        }
         impl FromStr for $name {
             type Err = HashParseError;
             fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -273,50 +315,62 @@ macro_rules! define_hash32_newtype {
 }
 define_hash32_newtype!(
     ContractCodeHash,
+    "iroha_data_model::parliament_types::ContractCodeHash",
     "Blake2b-32 hash identifying a contract bytecode artifact."
 );
 define_hash32_newtype!(
     ContractAbiHash,
+    "iroha_data_model::parliament_types::ContractAbiHash",
     "Blake2b-32 hash describing the ABI surface of a contract."
 );
 define_hash32_newtype!(
     AgendaItemId,
+    "iroha_data_model::parliament_types::AgendaItemId",
     "Immutable content identifier for an admitted Parliament agenda item."
 );
 define_hash32_newtype!(
     DraftId,
+    "iroha_data_model::parliament_types::DraftId",
     "Immutable content identifier for a deliberative Parliament draft."
 );
 define_hash32_newtype!(
     ProposalContentId,
+    "iroha_data_model::parliament_types::ProposalContentId",
     "Immutable identifier for proposal content shared by every retry attempt."
 );
 define_hash32_newtype!(
     GovernanceAttemptId,
+    "iroha_data_model::parliament_types::GovernanceAttemptId",
     "Identifier for one retryable end-to-end governance attempt."
 );
 define_hash32_newtype!(
     BodyInstanceId,
+    "iroha_data_model::parliament_types::BodyInstanceId",
     "Identifier for one sealed Parliament body instance."
 );
 define_hash32_newtype!(
     BodyElectionAttemptId,
+    "iroha_data_model::parliament_types::BodyElectionAttemptId",
     "Identifier for one retryable Parliament body-election attempt."
 );
 define_hash32_newtype!(
     AssignmentId,
+    "iroha_data_model::parliament_types::AssignmentId",
     "Identifier for one deterministic Parliament service assignment."
 );
 define_hash32_newtype!(
     SortitionRequestId,
+    "iroha_data_model::parliament_types::SortitionRequestId",
     "Identifier for one immutable future-pulse sortition request."
 );
 define_hash32_newtype!(
     BallotAttemptId,
+    "iroha_data_model::parliament_types::BallotAttemptId",
     "Identifier for one retryable hidden Parliament ballot attempt."
 );
 define_hash32_newtype!(
     BeaconSessionId,
+    "iroha_data_model::parliament_types::BeaconSessionId",
     "Stable network-scoped identifier for the logical Parliament beacon."
 );
 impl BeaconSessionId {
@@ -339,24 +393,40 @@ impl BeaconSessionId {
 }
 define_hash32_newtype!(
     BeaconPulseId,
+    "iroha_data_model::parliament_types::BeaconPulseId",
     "Identifier for one finalized threshold-beacon pulse."
 );
 define_hash32_newtype!(
     TleSessionId,
+    "iroha_data_model::parliament_types::TleSessionId",
     "Identifier for one ballot-specific threshold timelock-encryption session."
 );
 define_hash32_newtype!(
     TleKeySessionId,
+    "iroha_data_model::parliament_types::TleKeySessionId",
     "Identifier for one finalized threshold-BLS key session dedicated to TLE releases."
 );
 define_hash32_newtype!(
     GovernanceCertificateId,
+    "iroha_data_model::parliament_types::GovernanceCertificateId",
     "Content identifier for one finalized V1 governance certificate."
 );
 
 /// ABI version targeted by the contract manifest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::parliament_types::AbiVersion")]
 pub struct AbiVersion(u16);
 impl AbiVersion {
@@ -528,7 +598,9 @@ pub struct DeactivateContractGovernanceActionV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::OfferContractOwnershipGovernanceActionV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::OfferContractOwnershipGovernanceActionV1"
+)]
 pub struct OfferContractOwnershipGovernanceActionV1 {
     /// Proposed account owner.
     pub new_owner: AccountId,
@@ -541,7 +613,9 @@ pub struct OfferContractOwnershipGovernanceActionV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1"
+)]
 pub struct CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
     /// Exact proposal content identifier retained by the hold being reviewed.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -651,7 +725,9 @@ pub struct ContractEmergencyHoldProposalV1 {
     )
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceActionV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceActionV1"
+)]
 pub enum GlobalDataTriggerPermissionGovernanceActionV1 {
     /// Grant the capability to the exact account.
     #[codec(index = 0)]
@@ -668,7 +744,9 @@ pub enum GlobalDataTriggerPermissionGovernanceActionV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceProposalV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceProposalV1"
+)]
 pub struct GlobalDataTriggerPermissionGovernanceProposalV1 {
     /// Exact account whose capability is granted or revoked.
     pub authority: AccountId,
@@ -779,8 +857,7 @@ pub struct AtWindow {
     pub upper: u64,
 }
 /// Governance parameters (subset) — see gov.md for full spec.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::GovernanceParameters")]
 pub struct GovernanceParameters {
     /// Asset used to denominate voting power.
@@ -851,8 +928,7 @@ impl JsonDeserialize for ProposalId {
     }
 }
 /// Minimal referendum status enumeration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ReferendumStatus")]
 pub enum ReferendumStatus {
     /// Referendum has been submitted but not yet opened for voting.
@@ -871,8 +947,7 @@ pub enum ReferendumStatus {
     Expired,
 }
 /// Referendum shell (subset of fields).
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::Referendum")]
 pub struct Referendum {
     /// Deterministic identifier derived from the referendum preimage.
@@ -893,8 +968,7 @@ pub struct Referendum {
     pub schedule: Option<AtWindow>,
 }
 /// Voter choice variants.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::VoteChoice")]
 pub enum VoteChoice {
     /// Support the referendum (Aye).
@@ -905,8 +979,7 @@ pub enum VoteChoice {
     Abstain,
 }
 /// Vote shell (conviction index is abstract for now).
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::Vote")]
 pub struct Vote {
     /// Referendum being voted on.
@@ -919,10 +992,21 @@ pub struct Vote {
     pub choice: VoteChoice,
 }
 /// Parliament governance body identifiers.
+/// JSON values and object keys use the same canonical kebab-case body names.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBody")]
 pub enum ParliamentBody {
     /// Rules Committee — intake and rulebook gate.
@@ -971,9 +1055,9 @@ pub const PARLIAMENT_BODIES_V1: [ParliamentBody; 10] = [
     ParliamentBody::ConfirmationJury,
 ];
 #[cfg(feature = "json")]
-impl json::JsonSerialize for ParliamentBody {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
+impl ParliamentBody {
+    fn json_label(&self) -> &'static str {
+        match self {
             ParliamentBody::RulesCommittee => "rules-committee",
             ParliamentBody::AgendaCouncil => "agenda-council",
             ParliamentBody::InterestPanel => "interest-panel",
@@ -984,33 +1068,10 @@ impl json::JsonSerialize for ParliamentBody {
             ParliamentBody::OversightCommittee => "oversight-committee",
             ParliamentBody::PolicyJury => "policy-jury",
             ParliamentBody::ConfirmationJury => "confirmation-jury",
-        };
-        json::write_json_string(label, out);
+        }
     }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn json::JsonWriteSink,
-    ) -> Result<(), json::BoundedJsonError> {
-        let label = match self {
-            ParliamentBody::RulesCommittee => "rules-committee",
-            ParliamentBody::AgendaCouncil => "agenda-council",
-            ParliamentBody::InterestPanel => "interest-panel",
-            ParliamentBody::ReviewPanel => "review-panel",
-            ParliamentBody::CoordinationCouncil => "coordination-council",
-            ParliamentBody::MpcCommittee => "mpc-committee",
-            ParliamentBody::FmaCommittee => "fma-committee",
-            ParliamentBody::OversightCommittee => "oversight-committee",
-            ParliamentBody::PolicyJury => "policy-jury",
-            ParliamentBody::ConfirmationJury => "confirmation-jury",
-        };
-        json::write_json_string_to(label, out)
-    }
-}
-#[cfg(feature = "json")]
-impl json::JsonDeserialize for ParliamentBody {
-    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
+    fn parse_json_label(value: &str) -> Result<Self, json::Error> {
+        match value {
             "rules-committee" => Ok(ParliamentBody::RulesCommittee),
             "agenda-council" => Ok(ParliamentBody::AgendaCouncil),
             "interest-panel" => Ok(ParliamentBody::InterestPanel),
@@ -1025,6 +1086,39 @@ impl json::JsonDeserialize for ParliamentBody {
                 field: other.to_owned(),
             }),
         }
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonSerialize for ParliamentBody {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(self.json_label(), out);
+    }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.json_label(), out)
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonDeserialize for ParliamentBody {
+    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
+        Self::parse_json_label(&parser.parse_string()?)
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKey for ParliamentBody {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.json_label())
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKeyOwned for ParliamentBody {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        Self::parse_json_label(key)
     }
 }
 /// Closed V1 governance risk classification.
@@ -1177,8 +1271,7 @@ pub struct GovernanceAttemptV1 {
     pub status: GovernanceAttemptStatusV1,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::GovernanceAttemptIdPreimageV1")]
 struct GovernanceAttemptIdPreimageV1 {
     proposal_content_id: ProposalContentId,
@@ -1267,8 +1360,7 @@ pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) ->
     u64::from(max_corpus_entries).div_ceil(chunk_records)
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ParliamentCandidateRootPreimageV1")]
 struct ParliamentCandidateRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -1412,8 +1504,7 @@ pub struct SortitionRequestV1 {
     pub beacon_session_id: BeaconSessionId,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::SortitionRequestIdPreimageV1")]
 struct SortitionRequestIdPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -1705,8 +1796,7 @@ pub struct BodyElectionAttemptV1 {
     pub status: BodyElectionAttemptStatusV1,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::BodyElectionAttemptIdPreimageV1")]
 struct BodyElectionAttemptIdPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -1873,8 +1963,7 @@ pub struct ParliamentBodyInstanceV1 {
     pub status: BodyInstanceStatusV1,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::BodyInstanceIdPreimageV1")]
 struct BodyInstanceIdPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
@@ -1895,8 +1984,7 @@ impl BodyInstanceId {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::AssignmentIdPreimageV1")]
 struct AssignmentIdPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
@@ -1929,9 +2017,10 @@ pub struct ParliamentSeatAssignmentV1 {
     pub member: AccountId,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentAssignmentPlanRootPreimageV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::ParliamentAssignmentPlanRootPreimageV1"
+)]
 struct ParliamentAssignmentPlanRootPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
     primary: Vec<ParliamentSeatAssignmentV1>,
@@ -1963,8 +2052,7 @@ pub fn parliament_assignment_plan_root_v1(
     )
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ParliamentRosterRootPreimageV1")]
 struct ParliamentRosterRootPreimageV1 {
     election_attempt_id: BodyElectionAttemptId,
@@ -2139,8 +2227,7 @@ impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotFailureRootPreimageV1")]
 struct ParliamentBallotFailureRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -2190,8 +2277,7 @@ pub struct ParliamentBallotAttemptV1 {
     pub status: BallotAttemptStatusV1,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::BallotAttemptIdPreimageV1")]
 struct BallotAttemptIdPreimageV1 {
     body_instance_id: BodyInstanceId,
@@ -2212,9 +2298,10 @@ impl BallotAttemptId {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotParticipantHashPreimageV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::ParliamentBallotParticipantHashPreimageV1"
+)]
 struct ParliamentBallotParticipantHashPreimageV1 {
     ballot_attempt_id: BallotAttemptId,
     member: AccountId,
@@ -2240,8 +2327,7 @@ pub fn parliament_ballot_participant_hash_v1(
     )
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::TleSessionIdPreimageV1")]
 struct TleSessionIdPreimageV1 {
     ballot_attempt_id: BallotAttemptId,
@@ -2453,8 +2539,7 @@ impl ParliamentAggregateTallyV1 {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ParliamentBallotResultRootPreimageV1")]
 struct ParliamentBallotResultRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -2495,9 +2580,10 @@ pub fn parliament_ballot_result_root_v1(
     )
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentPublicFindingEndorsementRootPreimageV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::ParliamentPublicFindingEndorsementRootPreimageV1"
+)]
 struct ParliamentPublicFindingEndorsementRootPreimageV1 {
     governance_attempt_id: GovernanceAttemptId,
     body_instance_id: BodyInstanceId,
@@ -2648,7 +2734,9 @@ pub struct ParliamentBallotCertificateBindingV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentPublicFindingCertificateBindingV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::ParliamentPublicFindingCertificateBindingV1"
+)]
 pub struct ParliamentPublicFindingCertificateBindingV1 {
     /// Root of the strict assignment-id sequence endorsing the accepted result root.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -3157,9 +3245,10 @@ impl GovernanceCertificateId {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_types::ParliamentExecutionFailureRootPreimageV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::parliament_types::ParliamentExecutionFailureRootPreimageV1"
+)]
 struct ParliamentExecutionFailureRootPreimageV1 {
     certificate: GovernanceCertificateV1,
     enactment_height: u64,
@@ -3365,8 +3454,7 @@ impl ProposalKind {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::GovernanceSubjectPreimageV1")]
 enum GovernanceSubjectPreimageV1 {
     #[codec(index = 0)]

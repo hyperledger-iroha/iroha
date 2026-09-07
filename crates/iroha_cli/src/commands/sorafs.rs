@@ -16,9 +16,9 @@ use eyre::{Result, WrapErr, eyre};
 use hex::{decode, decode_to_slice, encode};
 use iroha::{
     client::{
-        Client, SorafsAliasListFilter, SorafsAppealFinanceReadbackFilter,
-        SorafsBillingAcknowledgementProof, SorafsBillingStatementListFilter,
-        SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, SorafsHedgingProjectionFilter,
+        AccountTransactionDraft, Client, SORAFS_MODERATION_TRANSACTION_TTL, SorafsAliasListFilter,
+        SorafsAppealFinanceReadbackFilter, SorafsBillingAcknowledgementProof,
+        SorafsBillingStatementListFilter, SorafsHedgingProjectionFilter,
         SorafsModerationBallotEventsFilter, SorafsModerationBallotsFilter,
         SorafsModerationModelRegistryFilter, SorafsModerationQuarantineFilter,
         SorafsModerationQuarantineObjectStoreRequest, SorafsModerationQuarantineReleaseRequest,
@@ -80,6 +80,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy, WriteModeHint};
+use iroha_storage_client::client::{
+    SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, StorageClient,
+};
 use iroha_torii_shared::configuration::SoranetHandshakeSummary;
 use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1;
 use norito::json::{Map, Number, Value};
@@ -4552,7 +4555,7 @@ impl Run for FetchArgs {
         let client = context.client_from_config();
         let runtime = Runtime::new().wrap_err("failed to create Tokio runtime")?;
         let session = runtime
-            .block_on(client.sorafs_fetch_via_gateway(
+            .block_on(StorageClient::new(&client).sorafs_fetch_via_gateway(
                 &plan,
                 gateway_config,
                 provider_inputs,
@@ -8815,6 +8818,22 @@ fn moderation_commit_reveal_juror_list<'a>(
         })
         .collect()
 }
+fn build_moderation_transaction(
+    client: &Client,
+    instruction: impl Into<InstructionBox>,
+) -> Result<SignedTransaction> {
+    let account = client.account_client()?;
+    let payload = account.prepare_transaction(
+        AccountTransactionDraft::new(
+            [instruction.into()],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
+        .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
+    )?;
+    Ok(account.sign_transaction(payload)?)
+}
+
 fn build_moderation_commit_transaction(
     client: &Client,
     commit: &SoraFsModerationBallotCommitV1,
@@ -8833,8 +8852,7 @@ fn build_moderation_commit_transaction(
         ));
     }
     let payload = norito::to_bytes(commit).wrap_err("encode canonical moderation commit")?;
-    client
-        .try_build_sorafs_moderation_transaction(SubmitSorafsModerationCommit::new(payload))
+    build_moderation_transaction(client, SubmitSorafsModerationCommit::new(payload))
         .wrap_err("build caller-signed native moderation commit transaction")
 }
 fn build_moderation_reveal_transaction(
@@ -8855,8 +8873,7 @@ fn build_moderation_reveal_transaction(
         ));
     }
     let payload = norito::to_bytes(reveal).wrap_err("encode canonical moderation reveal")?;
-    client
-        .try_build_sorafs_moderation_transaction(SubmitSorafsModerationReveal::new(payload))
+    build_moderation_transaction(client, SubmitSorafsModerationReveal::new(payload))
         .wrap_err("build caller-signed native moderation reveal transaction")
 }
 fn build_moderation_finalization_transaction(
@@ -8864,12 +8881,11 @@ fn build_moderation_finalization_transaction(
     case_id: impl Into<String>,
     round_id: impl Into<String>,
 ) -> Result<SignedTransaction> {
-    client
-        .try_build_sorafs_moderation_transaction(FinalizeSorafsModerationCase::new(
-            case_id.into(),
-            round_id.into(),
-        ))
-        .wrap_err("build governed native moderation finalization transaction")
+    build_moderation_transaction(
+        client,
+        FinalizeSorafsModerationCase::new(case_id.into(), round_id.into()),
+    )
+    .wrap_err("build governed native moderation finalization transaction")
 }
 fn render_moderation_transaction_hash<C: RunContext>(
     context: &mut C,
@@ -10249,13 +10265,17 @@ fn build_repair_action_transaction(
 ) -> Result<SignedTransaction> {
     let instruction =
         ApplySorafsRepairTaskAction::new(ticket_id.0.clone(), expected_revision, action);
-    client
-        .try_build_transaction_from_items(
-            [instruction],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
-        .wrap_err("failed to build caller-signed native SoraFS repair transaction")
+    {
+        let account = client.account_client()?;
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("failed to build caller-signed native SoraFS repair transaction")
 }
 fn render_repair_transaction_hash<C: RunContext>(
     context: &mut C,
@@ -12538,7 +12558,8 @@ impl Run for PinRegisterArgs {
             .as_ref()
             .map(|hex| parse_hex_array::<32>(hex, "successor_of"))
             .transpose()?;
-        let client = context.client_from_config();
+        let client = iroha::blocking::Client::new(context.config().clone())
+            .wrap_err("failed to initialize blocking SoraFS client")?;
         let alias_ref = alias_inputs.as_ref().map(|alias| SorafsPinAlias {
             namespace: alias.namespace.as_str(),
             name: alias.name.as_str(),
@@ -17086,8 +17107,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                 transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
-                connect_queue_root: config::default_connect_queue_root(),
-                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

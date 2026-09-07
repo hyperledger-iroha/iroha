@@ -41,7 +41,7 @@ impl State {
     /// merge-log/carrier receipt or the replicated per-incarnation WSV frontier.
     /// Malformed replicated marker bytes fail closed even if local Kura happens
     /// to contain a receipt.
-    fn certified_autonomous_lane_block_is_globally_applied_cached(
+    pub(crate) fn certified_autonomous_lane_block_is_globally_applied_cached(
         &self,
         proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {

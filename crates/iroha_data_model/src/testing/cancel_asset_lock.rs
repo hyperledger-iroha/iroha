@@ -21,19 +21,18 @@ const MAX_OUTPUT_PATH_BYTES: usize = 4 << 10;
 const MAX_OUTPUT_PATH_COMPONENTS: usize = 64;
 const MAX_TEMP_ATTEMPTS: u64 = 32;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-#[derive(norito::derive::NoritoSerialize)]
-#[derive(norito::NoritoSchema)]
+#[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::testing::cancel_asset_lock::LegacyCancelAssetLock")]
 struct LegacyCancelAssetLock {
     escrow_id: EscrowId,
 }
-#[derive(norito::derive::NoritoSerialize)]
-#[derive(norito::NoritoSchema)]
+#[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::testing::cancel_asset_lock::RetiredNestedEscrowId")]
 struct RetiredNestedEscrowId(Hash);
-#[derive(norito::derive::NoritoSerialize)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::testing::cancel_asset_lock::RetiredNestedCancelAssetLock")]
+#[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::testing::cancel_asset_lock::RetiredNestedCancelAssetLock"
+)]
 struct RetiredNestedCancelAssetLock {
     escrow_id: RetiredNestedEscrowId,
     expected_remaining_amount: Quantity,

@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.tx.norito
 
+import org.hyperledger.iroha.sdk.core.model.instructions.KaigiWirePayloadEncoderV1
+
 import java.math.BigInteger
 import java.util.LinkedHashMap
 import java.util.Optional
@@ -560,6 +562,7 @@ internal class TransactionPayloadAdapter private constructor(
                 require(isWirePayloadCandidate(payload.wireName, payload.payloadBytes)) {
                     "Wire payload must include a valid Norito header"
                 }
+                KaigiWirePayloadEncoderV1.requireCanonicalIfKnown(payload.wireName, payload.payloadBytes)
                 encodeSizedField(encoder, STRING_ADAPTER, payload.wireName)
                 encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, payload.payloadBytes)
                 return
@@ -1423,6 +1426,7 @@ internal class TransactionPayloadAdapter private constructor(
                 val wirePayload = decodeSizedField(wireDecoder, RAW_BYTE_VEC_ADAPTER)
                 if (wireDecoder.remaining() != 0) return null
                 if (!isWirePayloadCandidate(wireName, wirePayload)) return null
+                KaigiWirePayloadEncoderV1.requireCanonicalIfKnown(wireName, wirePayload)
                 InstructionBox.fromWirePayload(wireName, wirePayload)
             } catch (_: IllegalArgumentException) {
                 null

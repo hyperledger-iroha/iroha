@@ -2612,7 +2612,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "c97cb21de7e1d8ac2134df9ffc02c51282d51a5c4bae03d8cf3f044ed5a23825"
+    "e9d14ff4c001fc37cf1a71ef24e065d50d0a058581bad92b3656bd0ec5900d94"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2623,10 +2623,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 526
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 527
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 531
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 532
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "15f6b8abd9f1f0afb270d4f457318baf4d5dca5f21e238e9689004a180f0c654"
+    "d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2696,6 +2696,15 @@ _PRODUCTION_LANE_RECOVERY_CACHE_ITEM_SHA256 = {
     "insert_recovered_proposals": "d6dba6556eaf78980000a00a38e2efc41fe87aac2f3bdeb0626677884bb8f3f2",
     "preflight_trusted_proposal_replacement": "521b66525b3a19a6464e484c81b16f9afe865053ba779527eed29cc6cb0e48f8",
     "insert_trusted_proposal_replacing_uncommitted_conflict": "88253c470c7d00e0c0ae0e17c78b4b0143b083a00e54e9b2db52434881ef2453",
+}
+_PRODUCTION_TERMINAL_LANE_ITEM_SHA256 = {
+    "validate_terminal_autonomous_availability": "98375f790b5b28adef571a5e85521a555a40b5a7b1547834a4e5d96a88860c1c",
+    "validate_terminal_autonomous_vote": "59fd4fc9cf8b3e68bd08f45530106f384f63c4ca55aae83f435dbecd93ae3097",
+    "validate_terminal_autonomous_qc": "4868a5cda0cfd9deb257b53fb0e88feb4090557b32350f23d93f121f46ce44dc",
+    "V2LaneWorkAdapter::retire_applied_autonomous_sessions": "fa85a04b0bae5d4af30d096dd6ed7a402eae8507a1adf11d55278020b4fc3516",
+    "LaneBlockSessionCache::retained_vote_bodies": "41a3819825f8a9dd22ae06965bc668858139f008bec1b0649d00cd3b51e2a307",
+    "LaneBlockSessionCache::preflight_canonical_evidence": "5dc4a01f143db878457bf3467c1f9452ac5523d6289647d7659c61512511721f",
+    "LaneBlockSessionCache::retire_applied_proposals": "4b2604c5d6bd7be393f0ce540ea3641e03c7997e8fe46f99b838af4dfcdd169d",
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
     "4acdfce3df1deeb4551dab6bc612bc1090168cd7724148c89d562ebf9e168390"
@@ -4054,6 +4063,19 @@ self.validate_merge_candidate_for_active_round(&candidate, parent_header, active
         lane_path,
         validation_item,
         """
+#[cfg(test)]
+self.merge_candidate_validation_checks.set(
+    self.merge_candidate_validation_checks.get().saturating_add(1),
+);
+if candidate.execution_batch.is_none() {
+""",
+        "merge validation accounting must remain test-only before the unchanged live validator dispatch",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        validation_item,
+        """
 if candidate.execution_batch.is_none() {
     return self
         .state
@@ -4251,6 +4273,135 @@ execution_candidate.or_else(|| {
         errors,
     )
 
+    refresh_item = items.get("refresh_merge_candidates")
+    refresh_authority_clauses = (
+        ("""
+self.queue_plan_admission_handoff_retry_required = false;
+if !self.voting_enabled {
+    self.merge_entries.clear();
+    self.merge_claims.clear();
+    self.validated_merge_execution_candidate = None;
+    return Ok(());
+}
+let carrier_protected = self
+    .retained_merge_carrier_state
+    .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
+if self.globally_locked_body.is_some() || carrier_protected {
+    self.merge_entries.clear();
+    self.merge_claims.clear();
+    self.validated_merge_execution_candidate = None;
+    return Ok(());
+}
+self.merge_entries.retain(|key, _| key.view == active_view);
+self.merge_claims.retain(|(_, view, _), _| *view == active_view);
+if self.pre_apply_unlocked_merge_view() != Some(active_view)
+    || !self.merge_parent_frontier_is_exact()
+{
+    self.validated_merge_execution_candidate = None;
+    return Ok(());
+}
+let Some(expected_parent) = self.context.parent_commit_qc.as_ref()
+    .map(|qc| qc.subject.block_hash)
+    .or_else(|| {
+        self.context.snapshot_bootstrap.as_ref()
+            .map(|anchor| anchor.snapshot_block_hash)
+    })
+else {
+    self.validated_merge_execution_candidate = None;
+    return Ok(());
+};
+let Some(parent_header) = self.state.latest_block_header_fast() else {
+    self.validated_merge_execution_candidate = None;
+    return Ok(());
+};
+if parent_header.hash() != expected_parent
+    || parent_header.height().get().checked_add(1) != Some(self.context.height)
+{
+    self.validated_merge_execution_candidate = None;
+    return Ok(());
+}
+""", "persisted merge reuse must follow exact voting, unlocked-view, and durable-parent authority"),
+        ("""
+let mut persisted_entries = self.merge_entries.iter().filter_map(|(key, pending)| {
+    let PendingMergeStage::Persisted(entry) = &pending.stage else {
+        return None;
+    };
+    Some((*key, entry))
+});
+if let Some((key, entry)) = persisted_entries.next() {
+    if persisted_entries.next().is_some() {
+        return Err(V2LaneWorkError::SigningGuard(
+            "one global round retained multiple persisted merge candidates".to_owned(),
+        ));
+    }
+    let candidate = crate::merge::MergeLedgerCandidate::from(entry);
+    let candidate_bytes = candidate.canonical_bytes();
+    let signing_context = MergeSigningContextV1 {
+        epoch_id: candidate.epoch_id,
+        view: candidate.view,
+        carrier_height: candidate.carrier_height,
+        parent_hash: candidate.carrier_parent_hash,
+        validator_set_hash,
+    };
+    let authorized = signing_guard.authorized_candidate(&signing_context)
+        .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+    let expected_digest = crate::merge::merge_qc_message_digest(
+        &self.context.network_id,
+        &candidate,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash,
+    );
+    if key.epoch_id != expected_epoch
+        || key.view != active_view
+        || candidate.epoch_id != key.epoch_id
+        || candidate.view != key.view
+        || candidate.carrier_height != self.context.height
+        || candidate.carrier_parent_hash != expected_parent
+        || key.digest != expected_digest
+        || entry.merge_qc.epoch_id != key.epoch_id
+        || entry.merge_qc.view != key.view
+        || entry.merge_qc.message_digest != key.digest
+        || authorized != Some((key.digest, candidate, candidate_bytes))
+    {
+        return Err(V2LaneWorkError::SigningGuard(
+            "persisted merge candidate contradicts its exact global-round authority"
+                .to_owned(),
+        ));
+    }
+    return Ok(());
+}
+""", "persisted merge reuse must reject competing owners and bind the full candidate, QC, and durable signing bytes"),
+        ("""
+let authorized_candidate = signing_guard.authorized_candidate(&signing_context)
+    .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+""", "unpersisted merge candidate reconstruction must follow authenticated persisted-owner reuse"),
+    )
+    for clause, purpose in refresh_authority_clauses:
+        _require_rust_token_sequence(lane_path, refresh_item, clause, purpose, errors)
+    if refresh_item is not None:
+        positions = [
+            _token_sequence_positions(rust_code_tokens(refresh_item.source), rust_code_tokens(clause))
+            for clause, _purpose in refresh_authority_clauses
+        ]
+        if not all(len(found) == 1 for found in positions) or [
+            found[0] for found in positions if found
+        ] != sorted(found[0] for found in positions if found):
+            errors.append(
+                f"{lane_path}:{refresh_item.line}: persisted merge reuse must authenticate "
+                "current authority before its terminal return and before candidate reconstruction"
+            )
+    _require_rust_token_sequence(
+        lane_path,
+        refresh_item,
+        """
+PendingMergeStage::Collecting(_)
+| PendingMergeStage::Certified(_)
+| PendingMergeStage::Persisted(_) => None,
+""",
+        "persisted merge owners must never reenter collecting candidate reconstruction",
+        errors,
+    )
+
     _require_rust_token_sequence(
         lane_path,
         items.get("mark_global_body_locked"),
@@ -4313,7 +4464,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "1747e8032e4ceb6f2c71a1411f7688c42792eda0e5f8b64ddbdc76c516baed60",
-    "V2LaneWorkAdapter::persist_anchored_sessions": "ff777d58fc49a028cffd61866dbfd59e2f352fd10028e8b372f126dd8a420eb8",
+    "V2LaneWorkAdapter::persist_anchored_sessions": "6763560f161f68dd9b8bfc7be066fb6cbb121ef2f9333483a5c2e328ea12f68d",
     "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "9a40579664a5c2306d65100830e7d247a7d89b3c301492d99a635951b4ecaa56",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
@@ -4889,7 +5040,7 @@ _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256 = {
         "3225baa482525897247541b84e14644ef34b81984195a1976c28c58561c38b1c"
     ),
     "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast": (
-        "21363eceed13f14853d3355754f9294f911e539111f8eea8478ff9e1495d6f6c"
+        "3f980d359d08ed1a285baceb24108f493e4e42a887d7f6c24e702e9d2f17eea2"
     ),
 }
 

@@ -160,6 +160,8 @@ mod model {
     #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::asset::definition::model::AssetDefinition")]
     pub struct AssetDefinition {
         /// An Identification of the [`AssetDefinition`].
         pub id: AssetDefinitionId,

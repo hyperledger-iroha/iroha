@@ -2859,6 +2859,39 @@ impl LaneBlockSessionCache {
             )
             .collect()
     }
+    /// Project one exact vote body per retained session in stable key order.
+    ///
+    /// This includes proposal-only and proposal-less vote/QC owners so callers
+    /// can resolve their actual global carrier heights without scanning history.
+    /// Orphan signer locks have no vote body; [`Self::rollover_slots`] includes
+    /// their coordinates for independent durable-proposal lookup.
+    pub(crate) fn retained_vote_bodies(&self) -> Vec<LaneBlockVoteBodyV1> {
+        self.sessions
+            .values()
+            .filter_map(|session| {
+                session
+                    .proposal
+                    .as_ref()
+                    .map(|proposal| proposal.vote_body(CertPhase::Prepare))
+                    .or_else(|| session.prepare_qc.as_ref().map(|qc| qc.body.clone()))
+                    .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.clone()))
+                    .or_else(|| {
+                        session
+                            .prepare_votes
+                            .values()
+                            .next()
+                            .map(|vote| vote.body.clone())
+                    })
+                    .or_else(|| {
+                        session
+                            .commit_votes
+                            .values()
+                            .next()
+                            .map(|vote| vote.body.clone())
+                    })
+            })
+            .collect()
+    }
     /// Return proposal hashes that still have replay ownership in the cache.
     pub(crate) fn rollover_proposal_hashes(&self) -> BTreeSet<Hash> {
         self.sessions
@@ -3410,6 +3443,155 @@ impl LaneBlockSessionCache {
         self.rebuild_indices_after_session_retain();
         before.saturating_sub(self.sessions.len())
     }
+    /// Reject quorum evidence conflicting with each selected canonical slot.
+    ///
+    /// The caller owns slot selection. Both rollover and applied retirement use
+    /// this complete, read-only preflight before changing sessions or locks.
+    fn preflight_canonical_evidence<'a>(
+        &self,
+        canonical_proposal: impl Fn(LaneBlockCommitSlotKey) -> Option<&'a LaneBlockProposalV1>,
+    ) -> Result<(), LaneBlockSessionError> {
+        // A drained session can leave independent signer locks behind. Only
+        // exact-route signers from the canonical committee contribute a quorum.
+        let mut conflicting_lock_quorums =
+            BTreeMap::<(LaneBlockCommitSlotKey, Hash), BTreeSet<PeerId>>::new();
+        for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {
+            let Some(canonical) = canonical_proposal(*slot) else {
+                continue;
+            };
+            let descriptor = &canonical.descriptor;
+            if descriptor.lane_id != slot.lane_id
+                || descriptor.dataspace_id != slot.dataspace_id
+                || descriptor.lane_incarnation != slot.lane_incarnation
+                || descriptor.lane_block_height != slot.lane_block_height
+                || canonical.proposal_hash == *locked_proposal_hash
+                || descriptor.validator_set.binary_search(signer).is_err()
+            {
+                continue;
+            }
+            conflicting_lock_quorums
+                .entry((*slot, *locked_proposal_hash))
+                .or_default()
+                .insert(signer.clone());
+        }
+        if conflicting_lock_quorums.iter().any(|((slot, _), signers)| {
+            canonical_proposal(*slot).is_some_and(|canonical| {
+                usize::try_from(canonical.descriptor.min_quorum)
+                    .is_ok_and(|quorum| signers.len() >= quorum)
+            })
+        }) {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+        for (key, session) in &self.sessions {
+            let slot = LaneBlockCommitSlotKey {
+                lane_id: key.lane_id,
+                dataspace_id: key.dataspace_id,
+                lane_incarnation: key.lane_incarnation,
+                lane_block_height: key.lane_block_height,
+            };
+            let Some(canonical) = canonical_proposal(slot) else {
+                continue;
+            };
+            let proposal_conflicts = session
+                .proposal
+                .as_ref()
+                .is_some_and(|proposal| !proposal.same_consensus_identity(canonical));
+            let certified_body_conflicts = session
+                .prepare_qc
+                .as_ref()
+                .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err())
+                || session
+                    .commit_qc
+                    .as_ref()
+                    .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err());
+            if session_has_quorum_certificate(session)
+                && (LaneBlockSessionKey::from_proposal(canonical) != *key
+                    || proposal_conflicts
+                    || certified_body_conflicts)
+            {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+        }
+        Ok(())
+    }
+    /// Retire cache evidence for exact canonically applied proposals.
+    ///
+    /// The caller must authenticate each canonical proposal and its economic
+    /// application before calling. This operation validates the complete input
+    /// set and rejects conflicting quorum evidence before any mutation. Only
+    /// selected lane/dataspace/incarnation/height slots and their signer locks
+    /// are retired; unresolved and unselected owners retain their exact state,
+    /// recency, and capacity. The result counts removed sessions plus locks.
+    pub(crate) fn retire_applied_proposals(
+        &mut self,
+        proposals: &[LaneBlockProposalV1],
+    ) -> Result<usize, LaneBlockSessionError> {
+        let mut canonical = BTreeMap::new();
+        for proposal in proposals {
+            validate_lane_block_proposal(proposal)
+                .map_err(LaneBlockSessionError::InvalidProposal)?;
+            let descriptor = &proposal.descriptor;
+            let slot = LaneBlockCommitSlotKey {
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                lane_incarnation: descriptor.lane_incarnation,
+                lane_block_height: descriptor.lane_block_height,
+            };
+            if canonical
+                .insert(slot, proposal)
+                .is_some_and(|existing| existing != proposal)
+            {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+        }
+        if canonical.is_empty() {
+            return Ok(0);
+        }
+        self.preflight_canonical_evidence(|slot| canonical.get(&slot).copied())?;
+        let before = self
+            .sessions
+            .len()
+            .saturating_add(self.commit_vote_locks.len());
+        self.sessions.retain(|key, _| {
+            !canonical.contains_key(&LaneBlockCommitSlotKey {
+                lane_id: key.lane_id,
+                dataspace_id: key.dataspace_id,
+                lane_incarnation: key.lane_incarnation,
+                lane_block_height: key.lane_block_height,
+            })
+        });
+        self.commit_vote_locks
+            .retain(|(slot, _), _| !canonical.contains_key(slot));
+        self.slot_proposals.retain(|slot, _| {
+            !canonical.contains_key(&LaneBlockCommitSlotKey {
+                lane_id: slot.lane_id,
+                dataspace_id: slot.dataspace_id,
+                lane_incarnation: slot.lane_incarnation,
+                lane_block_height: slot.lane_block_height,
+            })
+        });
+        let retained_sessions = &self.sessions;
+        self.order.retain(|key| retained_sessions.contains_key(key));
+        // Preserve the selected owner of every unrelated shared-payload claim.
+        // A complete rebuild could move that claim between retained views.
+        self.entrypoint_claims
+            .retain(|_, key| retained_sessions.contains_key(key));
+        for (key, session) in retained_sessions {
+            let Some(proposal) = &session.proposal else {
+                continue;
+            };
+            for entrypoint_hash in &proposal.descriptor.accepted_transaction_hashes {
+                self.entrypoint_claims
+                    .entry(*entrypoint_hash)
+                    .or_insert(*key);
+            }
+        }
+        let after = self
+            .sessions
+            .len()
+            .saturating_add(self.commit_vote_locks.len());
+        Ok(before.saturating_sub(after))
+    }
     /// Retain only exact, canonical, unfinalized evidence across a global-height rollover.
     ///
     /// `canonical_proposal` resolves the one Kura-anchored proposal for a lane-local
@@ -3503,15 +3685,7 @@ impl LaneBlockSessionCache {
                 },
             )
             .collect::<BTreeMap<_, _>>();
-        // A committed session may already have left the replay map while its
-        // independent signer locks remain. Reconstruct enough of that durable
-        // safety evidence to reject a conflicting canonical identity before
-        // pruning, normalizing, or publishing any cache state. Counting only
-        // signers in the canonical committee prevents stale or foreign-route
-        // locks from manufacturing a conflict for this slot.
-        let mut conflicting_lock_quorums =
-            BTreeMap::<(LaneBlockCommitSlotKey, Hash), BTreeSet<PeerId>>::new();
-        for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {
+        self.preflight_canonical_evidence(|slot| {
             let evidence_slot = (
                 slot.lane_id,
                 slot.dataspace_id,
@@ -3519,40 +3693,12 @@ impl LaneBlockSessionCache {
                 slot.lane_block_height,
             );
             if active_slots.get(&evidence_slot) != Some(&true) {
-                continue;
+                return None;
             }
-            let Some(canonical) = canonical_proposals
-                .get(&(slot.lane_id, slot.lane_block_height))
-                .and_then(Option::as_ref)
-            else {
-                continue;
-            };
-            let descriptor = &canonical.descriptor;
-            if descriptor.lane_id != slot.lane_id
-                || descriptor.dataspace_id != slot.dataspace_id
-                || descriptor.lane_incarnation != slot.lane_incarnation
-                || descriptor.lane_block_height != slot.lane_block_height
-                || canonical.proposal_hash == *locked_proposal_hash
-                || descriptor.validator_set.binary_search(signer).is_err()
-            {
-                continue;
-            }
-            conflicting_lock_quorums
-                .entry((*slot, *locked_proposal_hash))
-                .or_default()
-                .insert(signer.clone());
-        }
-        if conflicting_lock_quorums.iter().any(|((slot, _), signers)| {
             canonical_proposals
                 .get(&(slot.lane_id, slot.lane_block_height))
                 .and_then(Option::as_ref)
-                .is_some_and(|canonical| {
-                    usize::try_from(canonical.descriptor.min_quorum)
-                        .is_ok_and(|quorum| signers.len() >= quorum)
-                })
-        }) {
-            return Err(LaneBlockSessionError::ConflictingProposal);
-        }
+        })?;
         let mut retained_sessions = BTreeMap::new();
         for (key, session) in &self.sessions {
             let evidence_slot = (
@@ -3575,19 +3721,6 @@ impl LaneBlockSessionCache {
                 .proposal
                 .as_ref()
                 .is_some_and(|proposal| !proposal.same_consensus_identity(canonical));
-            let certified_body_conflicts = session
-                .prepare_qc
-                .as_ref()
-                .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err())
-                || session
-                    .commit_qc
-                    .as_ref()
-                    .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err());
-            if session_has_quorum_certificate(session)
-                && (canonical_key != *key || proposal_conflicts || certified_body_conflicts)
-            {
-                return Err(LaneBlockSessionError::ConflictingProposal);
-            }
             if unfinalized_slots.get(&evidence_slot) != Some(&true) {
                 continue;
             }
@@ -4555,7 +4688,13 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
         })
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
 }
-fn validate_vote_matches_proposal(
+/// Match a vote to the exact proposal and authenticate paired READY committee PoPs.
+///
+/// Callers must separately validate the lane vote's BLS signature and require
+/// the READY body expected from the exact executable payload. This helper binds
+/// the vote body and signer to the proposal, and validates any paired READY
+/// signature, proposal fields, complete validator roster, and proofs of possession.
+pub(crate) fn validate_vote_matches_proposal(
     vote: &LaneBlockVoteV1,
     proposal: &LaneBlockProposalV1,
 ) -> Result<(), LaneBlockSessionError> {

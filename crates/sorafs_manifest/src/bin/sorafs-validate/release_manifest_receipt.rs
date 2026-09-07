@@ -132,36 +132,91 @@ pub(super) fn run(args: &[String]) -> Result<ExitCode, CliError> {
     let binding = &custody.statement().binding;
     let completion = verified.completion();
     let SignerPurposeBindingV1::ReleaseManifest { deployment_id } = &binding.purpose else {
-        return Err(CliError::Validation("verified release receipt purpose is inconsistent".into()));
+        return Err(CliError::Validation(
+            "verified release receipt purpose is inconsistent".into(),
+        ));
     };
     let fields = [
-        ("schema", json::Value::from("sorafs.release_manifest_receipt_verification.v1")),
+        (
+            "schema",
+            json::Value::from("sorafs.release_manifest_receipt_verification.v1"),
+        ),
         ("status", json::Value::from("verified")),
-        ("manifest_sha256", json::Value::from(hex::encode(sha256(&manifest)))),
+        (
+            "manifest_sha256",
+            json::Value::from(hex::encode(sha256(&manifest))),
+        ),
         ("manifest_size", json::Value::from(manifest.len() as u64)),
-        ("signature_sha256", json::Value::from(hex::encode(sha256(&signature)))),
-        ("public_key_fingerprint_sha256", json::Value::from(hex::encode(sha256(public_key)))),
-        ("signer_policy_sha256", json::Value::from(hex::encode(expected.policy_sha256))),
-        ("custody_trust_sha256", json::Value::from(hex::encode(expected.trust_sha256))),
-        ("completed_operation_state_sha256", json::Value::from(hex::encode(sha256(&state)))),
-        ("operation_receipt_sha256", json::Value::from(hex::encode(sha256(&receipt)))),
-        ("operation_id", json::Value::from(hex::encode(completion.operation_id))),
-        ("custody_record_digest", json::Value::from(hex::encode(custody.record_digest()))),
-        ("policy_digest", json::Value::from(hex::encode(binding.policy_digest))),
+        (
+            "signature_sha256",
+            json::Value::from(hex::encode(sha256(&signature))),
+        ),
+        (
+            "public_key_fingerprint_sha256",
+            json::Value::from(hex::encode(sha256(public_key))),
+        ),
+        (
+            "signer_policy_sha256",
+            json::Value::from(hex::encode(expected.policy_sha256)),
+        ),
+        (
+            "custody_trust_sha256",
+            json::Value::from(hex::encode(expected.trust_sha256)),
+        ),
+        (
+            "completed_operation_state_sha256",
+            json::Value::from(hex::encode(sha256(&state))),
+        ),
+        (
+            "operation_receipt_sha256",
+            json::Value::from(hex::encode(sha256(&receipt))),
+        ),
+        (
+            "operation_id",
+            json::Value::from(hex::encode(completion.operation_id)),
+        ),
+        (
+            "custody_record_digest",
+            json::Value::from(hex::encode(custody.record_digest())),
+        ),
+        (
+            "policy_digest",
+            json::Value::from(hex::encode(binding.policy_digest)),
+        ),
         ("key_revision", json::Value::from(binding.key_revision)),
-        ("policy_revision", json::Value::from(binding.policy_revision)),
+        (
+            "policy_revision",
+            json::Value::from(binding.policy_revision),
+        ),
         ("service_id", json::Value::from(binding.service_id.clone())),
-        ("administrator_id", json::Value::from(binding.administrator_id.clone())),
+        (
+            "administrator_id",
+            json::Value::from(binding.administrator_id.clone()),
+        ),
         ("role", json::Value::from(binding.role.as_str())),
         ("backend", json::Value::from("hardware")),
         ("deployment_id", json::Value::from(deployment_id.clone())),
         ("chain_id", json::Value::from(binding.chain_id.clone())),
-        ("network_id", json::Value::from(hex::encode(binding.network_id))),
-        ("finalized_height", json::Value::from(completion.anchor.height)),
-        ("finalized_block_hash", json::Value::from(hex::encode(completion.anchor.block_hash))),
+        (
+            "network_id",
+            json::Value::from(hex::encode(binding.network_id)),
+        ),
+        (
+            "finalized_height",
+            json::Value::from(completion.anchor.height),
+        ),
+        (
+            "finalized_block_hash",
+            json::Value::from(hex::encode(completion.anchor.block_hash)),
+        ),
         ("verified_at_unix_ms", json::Value::from(now_unix_ms)),
     ];
-    let result = json::Value::Object(fields.into_iter().map(|(key, value)| (key.to_owned(), value)).collect());
+    let result = json::Value::Object(
+        fields
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    );
     println!(
         "{}",
         json::to_string(&result).map_err(|_| CliError::Internal(

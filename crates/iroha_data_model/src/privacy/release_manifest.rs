@@ -120,7 +120,9 @@ pub const fn privacy_exact12_release_proof_artifact_count_v1(
     norito(tag = "kind", content = "value", deny_unknown_fields)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseExecutableKindV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseExecutableKindV1"
+)]
 pub enum PrivacyReleaseExecutableKindV1 {
     /// Native executable or library package.
     #[cfg_attr(feature = "json", norito(rename = "binary"))]
@@ -196,7 +198,9 @@ impl PrivacyReleaseSdkConsumerV1 {
     norito(tag = "backend", content = "value", deny_unknown_fields)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseHardwareBackendV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseHardwareBackendV1"
+)]
 pub enum PrivacyReleaseHardwareBackendV1 {
     /// Portable scalar implementation.
     #[cfg_attr(feature = "json", norito(rename = "scalar"))]
@@ -279,7 +283,9 @@ impl PrivacyReleaseAuditClassV1 {
     norito(tag = "role", content = "value", deny_unknown_fields)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSignatureRoleV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSignatureRoleV1"
+)]
 pub enum PrivacyReleaseSignatureRoleV1 {
     /// Release engineering owner.
     #[cfg_attr(feature = "json", norito(rename = "release_engineering"))]
@@ -318,7 +324,9 @@ impl PrivacyReleaseSignatureRoleV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSourceIdentityV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSourceIdentityV1"
+)]
 pub struct PrivacyReleaseSourceIdentityV1 {
     /// Digest of the exact source tree.
     pub source_tree_digest: PrivacyReleaseArtifactDigestV1,
@@ -337,7 +345,9 @@ pub struct PrivacyReleaseSourceIdentityV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseExecutableArtifactV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseExecutableArtifactV1"
+)]
 pub struct PrivacyReleaseExecutableArtifactV1 {
     /// Closed artifact kind.
     pub kind: PrivacyReleaseExecutableKindV1,
@@ -352,7 +362,9 @@ pub struct PrivacyReleaseExecutableArtifactV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseProtocolBindingV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseProtocolBindingV1"
+)]
 pub struct PrivacyReleaseProtocolBindingV1 {
     /// Exact protocol in catalog order.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -406,7 +418,9 @@ pub struct PrivacyReleaseStageReceiptV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseProofArtifactV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseProofArtifactV1"
+)]
 pub struct PrivacyReleaseProofArtifactV1 {
     /// Protocol covered by this proof artifact.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -452,7 +466,9 @@ pub struct PrivacyReleaseSdkPackageV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseHardwareResultV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseHardwareResultV1"
+)]
 pub struct PrivacyReleaseHardwareResultV1 {
     /// Closed backend identity.
     pub backend: PrivacyReleaseHardwareBackendV1,
@@ -473,7 +489,9 @@ pub struct PrivacyReleaseHardwareResultV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyAcceptedMediumDispositionV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyAcceptedMediumDispositionV1"
+)]
 pub struct PrivacyAcceptedMediumDispositionV1 {
     /// Immutable finding digest.
     pub finding_digest: PrivacyReleaseArtifactDigestV1,
@@ -531,7 +549,10 @@ pub struct PrivacyReleaseSignatureV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyExact12ReleaseManifestV1", frame = "iroha.privacy.exact12-release-manifest.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyExact12ReleaseManifestV1",
+    frame = "iroha.privacy.exact12-release-manifest.v1"
+)]
 pub struct PrivacyExact12ReleaseManifestV1 {
     /// Exact manifest version.
     pub version: u16,
@@ -576,7 +597,9 @@ pub struct PrivacyExact12ReleaseManifestV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1"
+)]
 pub struct PrivacyDeploymentActivationV1 {
     /// Protocol in canonical catalog order.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -589,7 +612,9 @@ pub struct PrivacyDeploymentActivationV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorCanaryV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorCanaryV1"
+)]
 pub struct PrivacyDeploymentValidatorCanaryV1 {
     /// Canonical zero-based validator seat.
     pub validator_index: u16,
@@ -618,7 +643,9 @@ pub struct PrivacyDeploymentValidatorCanaryV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorSignatureV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorSignatureV1"
+)]
 pub struct PrivacyDeploymentValidatorSignatureV1 {
     /// Signer's canonical validator seat.
     pub validator_index: u16,
@@ -632,7 +659,10 @@ pub struct PrivacyDeploymentValidatorSignatureV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyExact12DeploymentQualificationV1", frame = "iroha.privacy.exact12-deployment-qualification.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyExact12DeploymentQualificationV1",
+    frame = "iroha.privacy.exact12-deployment-qualification.v1"
+)]
 pub struct PrivacyExact12DeploymentQualificationV1 {
     /// Exact qualification version.
     pub version: u16,
@@ -677,7 +707,10 @@ pub struct PrivacyExact12DeploymentQualificationV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyExact12QualificationRecordV1", frame = "iroha.privacy.exact12-qualification-record.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::PrivacyExact12QualificationRecordV1",
+    frame = "iroha.privacy.exact12-qualification-record.v1"
+)]
 pub struct PrivacyExact12QualificationRecordV1 {
     /// Full portable release manifest, including all twelve claims and artifacts.
     pub release_manifest: PrivacyExact12ReleaseManifestV1,
@@ -697,16 +730,14 @@ impl PartialOrd for PrivacyExact12QualificationRecordV1 {
     }
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::ReleaseSignaturePayloadV1")]
 struct ReleaseSignaturePayloadV1 {
     role: PrivacyReleaseSignatureRoleV1,
     manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::AuditSignaturePayloadV1")]
 struct AuditSignaturePayloadV1 {
     audit_class: PrivacyReleaseAuditClassV1,
@@ -716,17 +747,17 @@ struct AuditSignaturePayloadV1 {
     open_high_findings: u16,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::release_manifest::MediumDispositionSignaturePayloadV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::privacy::release_manifest::MediumDispositionSignaturePayloadV1"
+)]
 struct MediumDispositionSignaturePayloadV1 {
     finding_digest: PrivacyReleaseArtifactDigestV1,
     disposition_digest: PrivacyReleaseArtifactDigestV1,
     release_artifact_set_digest: PrivacyReleaseArtifactDigestV1,
 }
 
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::DeploymentSignaturePayloadV1")]
 struct DeploymentSignaturePayloadV1 {
     validator_index: u16,

@@ -1302,7 +1302,7 @@ fn struct_serialize_calls(
                 }
             } else {
                 quote! {
-                    norito::core::write_len_prefixed_exact(
+                    norito::core::write_len_prefixed(
                         writer,
                         &self.#member,
                         &mut __norito_tmp,
@@ -1410,16 +1410,19 @@ fn derive_struct_serialize(
                 #schema_hash_body
             }
             fn encoded_len_hint(&self) -> Option<usize> {
+                let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 let mut __sum: usize = 0;
                 #len_hint_body
                 Some(__sum)
             }
             fn encoded_len_exact(&self) -> Option<usize> {
+                let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 let mut __sum: usize = 0;
                 #len_exact_body
                 Some(__sum)
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
+                let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
                 use norito::core::WriteBytesExt;
                 if !#has_flatten_fields && norito::core::use_packed_struct() {
                     if #field_bitset_enabled {
@@ -1459,8 +1462,7 @@ fn derive_struct_serialize(
                         Ok(())
                     }
                 } else {
-                    // Single-pass per-field into stack-backed buffer to avoid extra
-                    // allocations and a second encode pass.
+                    // Count each field before streaming it into its declared frame.
                     let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                     #(#serialize_calls)*
                     Ok(())
@@ -1888,7 +1890,11 @@ fn derive_struct_deserialize(
                                 let mut __data_off = 0usize;
                                 let mut __sz_i = 0usize;
                                 // Initialize fields in order
-                                Self { #(#packed_named_inits_hybrid),* }
+                                let __value = Self { #(#packed_named_inits_hybrid),* };
+                                __o = __o.checked_add(__data_off)
+                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
+                                __value
                             } else {
                                 // Read the advertised offset-table layout.
                                 let (
@@ -1921,6 +1927,7 @@ fn derive_struct_deserialize(
                                     .checked_add(__packed_data_len_local)
                                     .and_then(|v| v.checked_add(__packed_tail_len_local))
                                     .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
                                 __value
                             }
                         } else {
@@ -2089,6 +2096,9 @@ fn derive_struct_deserialize(
                                 let mut __data_off = 0usize;
                                 let mut __sz_i = 0usize;
                                 #(#packed_unnamed_stmts_hybrid)*
+                                __o = __o.checked_add(__data_off)
+                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
                                 Self( #(#vars),* )
                             } else {
                                 let (
@@ -2121,6 +2131,7 @@ fn derive_struct_deserialize(
                                     .checked_add(__packed_data_len_local)
                                     .and_then(|v| v.checked_add(__packed_tail_len_local))
                                     .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
                                 Self( #(#vars),* )
                             }
                         } else {
@@ -2235,7 +2246,7 @@ fn derive_enum_serialize(
                                         if __norito_packed {
                                             norito::core::NoritoSerialize::serialize(#b, writer)?;
                                         } else {
-                                            norito::core::write_len_prefixed_exact(
+                                            norito::core::write_len_prefixed(
                                                 writer,
                                                 #b,
                                                 &mut __norito_tmp,
@@ -2246,7 +2257,7 @@ fn derive_enum_serialize(
                             } else {
                                 quote! {
                                     // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                    norito::core::write_len_prefixed_exact(
+                                    norito::core::write_len_prefixed(
                                         writer,
                                         #b,
                                         &mut __norito_tmp,
@@ -2328,7 +2339,7 @@ fn derive_enum_serialize(
                                 if __norito_packed {
                                     norito::core::NoritoSerialize::serialize(#name, writer)?;
                                 } else {
-                                    norito::core::write_len_prefixed_exact(
+                                    norito::core::write_len_prefixed(
                                         writer,
                                         #name,
                                         &mut __norito_tmp,
@@ -2340,7 +2351,7 @@ fn derive_enum_serialize(
                         // Non self-delimiting, non-fixed: always write an outer length header
                         // for named enum fields (both in packed and non-packed modes).
                         quote! {
-                            norito::core::write_len_prefixed_exact(
+                            norito::core::write_len_prefixed(
                                 writer,
                                 #name,
                                 &mut __norito_tmp,
@@ -2427,12 +2438,15 @@ fn derive_enum_serialize(
                 #schema_hash_body
             }
             fn encoded_len_hint(&self) -> Option<usize> {
+                let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 match self { #( #hint_arms ),* }
             }
             fn encoded_len_exact(&self) -> Option<usize> {
+                let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 match self { #( #exact_arms ),* }
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
+                let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
                 use norito::core::WriteBytesExt;
                 match self {
                     #(#arms),*

@@ -10,7 +10,7 @@ export {
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,
-  buildKaigiRosterJoinProof,
+  buildKaigiAuthorizationProofV1,
   deriveConfidentialDiversifierV2,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,

@@ -4,8 +4,9 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     block::consensus::{
-        LaneBlockCommitment, LaneBlockProposalV1, NativeAmxAttestationBodyV2,
-        NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+        LaneBlockProposalV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
+        NativeAmxLegRecordV2, NativeAmxParticipantSettlement, NativeAmxPhase, NativeAmxReceipt,
+        compute_native_amx_participant_settlement_hash,
     },
     block::consensus_v2::{ConsensusRound, HeightContextId},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
@@ -95,7 +96,7 @@ pub(crate) fn native_amx_participant_application_role(
     let prepare = &leg.prepare_qc.body;
     let commit = &leg.commit_qc.body;
     let settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
             .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
     if descriptor.lane_id != leg.lane_id
         || descriptor.dataspace_id != leg.dataspace_id
@@ -124,8 +125,8 @@ pub(crate) fn native_amx_participant_application_role(
         || leg.participant_settlement.dataspace_id != descriptor.dataspace_id
         || leg.participant_settlement.lane_incarnation != descriptor.lane_incarnation
         || leg.participant_settlement.block_height != descriptor.lane_block_height
-        || Hash::from(settlement_hash) != prepare.participant_settlement_commitment
-        || Hash::from(settlement_hash) != commit.participant_settlement_commitment
+        || settlement_hash != prepare.participant_settlement_commitment
+        || settlement_hash != commit.participant_settlement_commitment
         || prepare.coordinator_lane_id != receipt.lane_id
         || commit.coordinator_lane_id != receipt.lane_id
         || prepare.coordinator_dataspace_id != receipt.dataspace_id
@@ -246,7 +247,7 @@ impl NativeAmxSigningSlotV3 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxSigningSlotClaimV3 {
     participant_proposal_hash: Hash,
-    participant_settlement_commitment: Hash,
+    participant_settlement_commitment: HashOf<NativeAmxParticipantSettlement>,
 }
 impl NativeAmxSigningSlotClaimV3 {
     fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
@@ -1875,16 +1876,22 @@ impl NativeAmxSigningGuard {
         self.limits.max_records.get()
     }
     #[cfg(test)]
-    pub(crate) fn remove_one_record_for_test(&self) {
-        let path = self
-            .inner
-            .lock()
+    /// Remove a retained Commit record or Prepare quarantine anchor to model durable-file loss.
+    pub(crate) fn remove_one_retained_journal_file_for_test(&self) {
+        let inner = self.inner.lock();
+        let path = inner
             .record_identities
             .values()
             .next()
             .map(|(path, _)| path.clone())
-            .expect("test signing guard has a retained record");
-        std::fs::remove_file(path).expect("remove one retained signing record for test");
+            .unwrap_or_else(|| {
+                assert!(
+                    inner.anchor.last_prepare_view.is_some(),
+                    "test signing guard has a retained Prepare quarantine anchor"
+                );
+                Self::anchor_path(&self.directory)
+            });
+        std::fs::remove_file(path).expect("remove one retained signing journal file for test");
     }
 }
 #[cfg(any(unix, test))]
@@ -2587,7 +2594,7 @@ pub struct NativeAmxAttestationRequestV2 {
     /// Exact control-only participant proposal whose result is supplied by the coordinator.
     pub participant_proposal: LaneBlockProposalV1,
     /// Deterministic participant-local settlement committed by that proposal.
-    pub participant_settlement: LaneBlockCommitment,
+    pub participant_settlement: NativeAmxParticipantSettlement,
 }
 /// Failure while validating a full-plan native AMX attestation request.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -2713,7 +2720,7 @@ impl NativeAmxAttestationRequestV2 {
             .map_err(|_| NativeAmxRequestError::InvalidParticipantProposal)?;
         let participant_descriptor = &self.participant_proposal.descriptor;
         let settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(&self.participant_settlement)
+            compute_native_amx_participant_settlement_hash(&self.participant_settlement)
                 .map_err(|_| NativeAmxRequestError::ParticipantProposalMismatch)?;
         let participant_is_coordinator_route = body.participant_lane_id == body.coordinator_lane_id
             && body.participant_dataspace_id == body.coordinator_dataspace_id;
@@ -2801,9 +2808,8 @@ impl NativeAmxAttestationRequestV2 {
             || !self.participant_settlement.total_xor_variance.is_zero()
             || self.participant_settlement.swap_metadata.is_some()
             || !self.participant_settlement.nexus_fee_receipts.is_empty()
-            || !self.participant_settlement.native_amx_receipts.is_empty()
             || !settlement_sources_are_canonical
-            || Hash::from(settlement_hash) != body.participant_settlement_commitment
+            || settlement_hash != body.participant_settlement_commitment
         {
             return Err(NativeAmxRequestError::ParticipantProposalMismatch);
         }
@@ -3231,11 +3237,9 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                 participant_settlement: leg.participant_settlement.clone(),
             };
             if participant_request.validate_plan_binding().is_err()
-                || iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-                    .ok()
+                || compute_native_amx_participant_settlement_hash(&leg.participant_settlement).ok()
                     != Some(leg.participant_settlement_hash)
-                || Hash::from(leg.participant_settlement_hash)
-                    != prepare.body.participant_settlement_commitment
+                || leg.participant_settlement_hash != prepare.body.participant_settlement_commitment
                 || native_amx_participant_application_role(receipt, leg).is_err()
             {
                 return false;
@@ -3296,8 +3300,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                     && body.participant_lane_block_view
                         == leg.participant_proposal.descriptor.lane_block_view
                     && body.participant_proposal_hash == leg.participant_proposal.proposal_hash
-                    && body.participant_settlement_commitment
-                        == Hash::from(leg.participant_settlement_hash)
+                    && body.participant_settlement_commitment == leg.participant_settlement_hash
                     && body.authority_context_height == descriptor.proposal_height
                     && body.planned_coordinator_block_height == descriptor.lane_block_height
                     && body.coordinator_lane_block_view == descriptor.lane_block_view

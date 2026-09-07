@@ -47,7 +47,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment, NexusFeeReceipt,
+            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment,
+            NativeAmxParticipantSettlement, NexusFeeReceipt,
             SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
             SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiAutonomousLaneExecution,
             SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
@@ -2309,7 +2310,7 @@ pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
     /// Exact participant proposal identity.
     pub(crate) participant_proposal_hash: Hash,
     /// Exact zero-effect participant settlement identity.
-    pub(crate) participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    pub(crate) participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Canonical global carrier height.
     pub(crate) application_block_height: u64,
     /// Canonical global carrier hash.
@@ -2335,7 +2336,7 @@ struct NativeAmxParticipantApplicationDiagnosticIdentity {
     predecessor_descriptor_hash: Option<Hash>,
     descriptor_hash: Hash,
     proposal_hash: Hash,
-    settlement_hash: HashOf<LaneBlockCommitment>,
+    settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     source_count: u64,
 }
 impl NativeAmxParticipantApplicationDiagnosticIdentity {
@@ -28171,8 +28172,8 @@ impl State {
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
                     iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-                kaigi_roster_join_vk: None,
-                kaigi_roster_leave_vk: None,
+                kaigi_authorization_vk: None,
+
                 kaigi_usage_vk: None,
                 max_proof_size_bytes:
                     iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
@@ -47961,8 +47962,8 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
+        kaigi_authorization_vk: None,
+
         kaigi_usage_vk: None,
         max_proof_size_bytes:
             iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
@@ -49564,13 +49565,8 @@ pub fn compute_zk_consensus_policy_hash(
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
         &mut h,
-        "kaigi_roster_join_vk",
-        &zk_config.kaigi_roster_join_vk,
-    );
-    zk_policy_put_option_vk_ref(
-        &mut h,
-        "kaigi_roster_leave_vk",
-        &zk_config.kaigi_roster_leave_vk,
+        "kaigi_authorization_vk",
+        &zk_config.kaigi_authorization_vk,
     );
     zk_policy_put_option_vk_ref(&mut h, "kaigi_usage_vk", &zk_config.kaigi_usage_vk);
     zk_policy_put_u32(

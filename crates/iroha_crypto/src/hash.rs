@@ -265,6 +265,23 @@ impl JsonDeserialize for Hash {
     }
 }
 #[cfg(feature = "json")]
+impl json::JsonObjectKey for Hash {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let body = hex::encode_upper(self.as_ref());
+        let canonical = literal::format("hash", &body);
+        visitor(&canonical)
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKeyOwned for Hash {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        parse_hash_literal(key)
+    }
+}
+#[cfg(feature = "json")]
 impl JsonKeyCodec for Hash {
     fn encode_json_key(&self, out: &mut String) {
         FastJsonWrite::write_json(self, out);
@@ -465,6 +482,19 @@ impl<T> FastJsonWrite for HashOf<T> {
 impl<T> JsonDeserialize for HashOf<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Hash::json_deserialize(parser).map(|hash| HashOf(hash, PhantomData))
+    }
+}
+#[cfg(feature = "json")]
+impl<T> json::JsonObjectKey for HashOf<T> {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl<T> json::JsonObjectKeyOwned for HashOf<T> {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        <Hash as json::JsonObjectKeyOwned>::from_json_key_text(key)
+            .map(|hash| HashOf(hash, PhantomData))
     }
 }
 #[cfg(feature = "json")]

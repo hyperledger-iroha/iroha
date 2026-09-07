@@ -10,7 +10,7 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::AccountId,
-    block::consensus::LaneBlockCommitment,
+    block::consensus::NativeAmxParticipantSettlement,
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
@@ -608,6 +608,7 @@ impl HeightContext {
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
         }
+        self.quorum.validate_roster(&self.roster)?;
         if self.kagemusha_mint_finality_epoch_id == [0; 32] {
             return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
         }
@@ -644,7 +645,6 @@ impl HeightContext {
             (false, Some(_)) => return Err(ValidationError::UnexpectedNextEpochSnapshot),
             (false, None) => {}
         }
-        self.quorum.validate_roster(&self.roster)?;
         if self.roster.iter().any(|validator| validator.power != 1) {
             return Err(ValidationError::VotingPowerNotOne);
         }
@@ -732,8 +732,7 @@ impl HeightContext {
             .expect("validated roster length fits ValidatorIndex")
     }
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContextIdentity")]
 struct HeightContextIdentity {
     identity_version: u16,
@@ -756,8 +755,7 @@ struct HeightContextIdentity {
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::ParentCommitIdentity")]
 struct ParentCommitIdentity {
     context_id: HeightContextId,
@@ -858,7 +856,9 @@ pub struct BlockSubject {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1"
+)]
 pub struct NativeAmxApplicationManifestMemberV1 {
     /// Zero-based index of the source entrypoint in the canonical external block payload.
     pub entrypoint_index: u64,
@@ -902,7 +902,7 @@ pub struct NativeAmxApplicationManifestLeafV1 {
     /// Exact certified participant proposal hash.
     pub proposal_hash: Hash,
     /// Hash of the exact zero-effect participant control settlement.
-    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    pub settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Ordered source, entrypoint, and result membership in canonical block order.
     pub members: Vec<NativeAmxApplicationManifestMemberV1>,
     /// Height of the canonical global application block.
@@ -2691,7 +2691,9 @@ impl CertifiedBodyResponse {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponseSignaturePayload")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponseSignaturePayload"
+)]
 pub struct CertifiedBodyResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -2850,7 +2852,9 @@ impl CommitCertificateResponse {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateResponseSignaturePayload")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::CommitCertificateResponseSignaturePayload"
+)]
 pub struct CommitCertificateResponseSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,

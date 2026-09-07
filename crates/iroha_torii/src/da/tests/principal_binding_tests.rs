@@ -1,5 +1,6 @@
-// Included by `da::ingest::tests`; these regressions keep DA attribution tied
-// to the account authenticated by the exact-network canonical HTTP envelope.
+//! DA principal-binding tests for canonical authenticated HTTP envelopes.
+
+use super::*;
 fn verified_principal_for_request(
     request: &DaIngestRequest,
 ) -> crate::app_auth::VerifiedCanonicalRequest {

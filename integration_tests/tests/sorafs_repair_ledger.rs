@@ -3,15 +3,12 @@
 //! These exercise native ledger transitions. Provider storage execution and
 //! production evidence collection remain separate qualification requirements.
 
-use std::{
-    sync::{Arc, Barrier},
-    time::Duration,
-};
+use std::time::Duration;
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::{HashOf, KeyPair},
     data_model::{
         events::data::sorafs::SorafsRepairLedgerEventKind,
@@ -39,6 +36,7 @@ use iroha::{
 use iroha_executor_data_model::permission::{
     query::CanReadAllLedgerData, sorafs::CanOperateSorafsRepair,
 };
+use iroha_test_network::read_on_dedicated_thread;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use sorafs_manifest::repair::{
@@ -57,13 +55,38 @@ fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
 
+async fn submit_instructions(
+    client: &Client,
+    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+) -> Result<HashOf<SignedTransaction>> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        no_fee(),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "fee quote changed the selected payer, sponsor revision, or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    account.submit_transaction_and_wait(&transaction).await
+}
+
 fn client(network: &Network, peer: usize, account: &AccountId, keys: &KeyPair) -> Client {
-    let mut client = network.peers()[peer].client_for(account, keys.private_key().clone());
-    client.transaction_status_timeout = DEADLINE;
-    client.torii_request_timeout = Duration::from_secs(10);
-    client.transaction_ttl = Some(Duration::from_secs(300));
-    client.add_transaction_nonce = false;
-    client
+    let client = network.peers()[peer].client_for(account, keys.private_key().clone());
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = DEADLINE;
+        client.torii_request_timeout = Duration::from_secs(10);
+        client.transaction_ttl = Some(Duration::from_secs(300));
+        client.add_transaction_nonce = false;
+    })
 }
 
 fn report(ticket: &str) -> Result<Vec<u8>> {
@@ -119,31 +142,51 @@ async fn race(
     right: Client,
     instructions: [InstructionBox; 2],
 ) -> Result<[Result<HashOf<SignedTransaction>>; 2]> {
-    let barrier = Arc::new(Barrier::new(2));
-    let left_barrier = Arc::clone(&barrier);
     let [left_instruction, right_instruction] = instructions;
     let mut left_metadata = Metadata::default();
     left_metadata.insert("repair_race_route".parse()?, 0u32);
     let mut right_metadata = Metadata::default();
     right_metadata.insert("repair_race_route".parse()?, 1u32);
-    let left_transaction =
-        left.try_build_transaction([left_instruction], no_fee(), left_metadata)?;
-    let right_transaction =
-        right.try_build_transaction([right_instruction], no_fee(), right_metadata)?;
+    let left_transaction = {
+        let account = left.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [left_instruction],
+                no_fee(),
+                left_metadata,
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }?;
+    let right_transaction = {
+        let account = right.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [right_instruction],
+                no_fee(),
+                right_metadata,
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }?;
     ensure!(
         left_transaction.hash() != right_transaction.hash(),
         "distinct transactions must exercise instruction replay, not transaction deduplication"
     );
-    let (left, right) = tokio::try_join!(
-        tokio::task::spawn_blocking(move || {
-            left_barrier.wait();
-            left.submit_transaction_blocking(&left_transaction)
-        }),
-        tokio::task::spawn_blocking(move || {
-            barrier.wait();
-            right.submit_transaction_blocking(&right_transaction)
-        }),
-    )?;
+    let barrier = tokio::sync::Barrier::new(2);
+    let (left, right) = tokio::join!(
+        async {
+            barrier.wait().await;
+            left.account_client()
+                .submit_transaction_and_wait(&left_transaction)
+                .await
+        },
+        async {
+            barrier.wait().await;
+            right
+                .account_client()
+                .submit_transaction_and_wait(&right_transaction)
+                .await
+        },
+    );
     Ok([left, right])
 }
 
@@ -208,16 +251,22 @@ async fn converged(network: &Network, revision: u64, event_count: usize) -> Resu
         let mut observations = Vec::new();
         for peer in 0..4 {
             let reader = client(network, peer, &BOB_ID, &BOB_KEYPAIR);
-            let observation = (|| -> Result<Observation> {
-                let task =
-                    reader.query_single(FindSorafsRepairTask::new(TICKET.to_owned(), None))?;
+            let observation = read_on_dedicated_thread(move || -> Result<Observation> {
+                let task = reader
+                    .client()
+                    .query_single(FindSorafsRepairTask::new(TICKET.to_owned(), None))?;
                 let anchor = Some(task.finalized_cursor);
                 Ok((
                     task,
-                    reader.query_single(FindSorafsRepairStatus::new(anchor))?,
-                    reader.query_single(FindSorafsRepairEvents::new(anchor, None, 16))?,
+                    reader
+                        .client()
+                        .query_single(FindSorafsRepairStatus::new(anchor))?,
+                    reader
+                        .client()
+                        .query_single(FindSorafsRepairEvents::new(anchor, None, 16))?,
                 ))
-            })();
+            })
+            .await;
             if let Ok(observation) = observation {
                 observations.push(observation);
             }
@@ -246,8 +295,16 @@ async fn converged(network: &Network, revision: u64, event_count: usize) -> Resu
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritative() -> Result<()> {
+#[test]
+fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritative() -> Result<()> {
+    super::sorafs_network::run(
+        stringify!(four_peer_repair_claim_revocation_terminal_and_restart_are_authoritative),
+        four_peer_repair_claim_revocation_terminal_and_restart_are_authoritative_impl,
+    )
+}
+
+async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritative_impl()
+-> Result<()> {
     init_instruction_registry();
     let permission = Permission::from(CanOperateSorafsRepair {
         provider_id: ProviderId::new(PROVIDER),
@@ -268,6 +325,7 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
     ));
     let context =
         stringify!(four_peer_repair_claim_revocation_terminal_and_restart_are_authoritative);
+    let builder = super::sorafs_network::bounded_storage(builder);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
@@ -289,10 +347,11 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
     }
     converged(&network, 1, 1).await?;
     require_validation_rejection(
-        client(&network, 2, &ALICE_ID, &ALICE_KEYPAIR).submit_blocking(
-            SubmitSorafsRepairTask::new(SOURCE, report("REP-CONFLICT")?),
-            no_fee(),
-        ),
+        submit_instructions(
+            &client(&network, 2, &ALICE_ID, &ALICE_KEYPAIR),
+            [SubmitSorafsRepairTask::new(SOURCE, report("REP-CONFLICT")?)],
+        )
+        .await,
         "source identity",
     )?;
 
@@ -324,17 +383,24 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
         ((&*BOB_ID, &*BOB_KEYPAIR), (&*ALICE_ID, &*ALICE_KEYPAIR))
     };
     require_validation_rejection(
-        client(&network, 2, successor, successor_keys)
-            .submit_blocking(claim(2, "unexpired-claim"), no_fee()),
+        submit_instructions(
+            &client(&network, 2, successor, successor_keys),
+            [claim(2, "unexpired-claim")],
+        )
+        .await,
         "lease is held",
     )?;
 
-    client(&network, 0, winner, winner_keys).submit_blocking(
-        Revoke::account_permission(permission, winner.clone()),
-        no_fee(),
-    )?;
-    client(&network, 1, successor, successor_keys)
-        .submit_blocking(claim(2, "revoked-owner-reclaim"), no_fee())?;
+    submit_instructions(
+        &client(&network, 0, winner, winner_keys),
+        [Revoke::account_permission(permission, winner.clone())],
+    )
+    .await?;
+    submit_instructions(
+        &client(&network, 1, successor, successor_keys),
+        [claim(2, "revoked-owner-reclaim")],
+    )
+    .await?;
     let (reclaimed, _, _) = converged(&network, 3, 3).await?;
     let next_lease = reclaimed
         .task
@@ -350,8 +416,11 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
         "this test must exercise revocation before lease expiry"
     );
     require_validation_rejection(
-        client(&network, 2, winner, winner_keys)
-            .submit_blocking(complete(3, 1, "revoked-owner-complete"), no_fee()),
+        submit_instructions(
+            &client(&network, 2, winner, winner_keys),
+            [complete(3, 1, "revoked-owner-complete")],
+        )
+        .await,
         "permission",
     )?;
 
@@ -415,8 +484,9 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
         "repair journal emitted the wrong committed transition kinds"
     );
     require_validation_rejection(
-        client(&network, 2, successor, successor_keys).submit_blocking(
-            ApplySorafsRepairTaskAction::new(
+        submit_instructions(
+            &client(&network, 2, successor, successor_keys),
+            [ApplySorafsRepairTaskAction::new(
                 TICKET.to_owned(),
                 4,
                 SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
@@ -424,9 +494,9 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
                     failure_digest: [0xE1; 32],
                     idempotency_key: "second-terminal".to_owned(),
                 }),
-            ),
-            no_fee(),
-        ),
+            )],
+        )
+        .await,
         "terminal outcome",
     )?;
     let before_restart = converged(&network, 4, 4).await?;

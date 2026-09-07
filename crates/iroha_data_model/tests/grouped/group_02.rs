@@ -1,9 +1,15 @@
 //! Grouped Iroha data model integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "../support/fixture_json.rs"]
+mod fixture_json;
+#[path = "../governance_generated_schema_identity.rs"]
+mod governance_generated_schema_identity;
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../../src/bin/musubi_fixture_values.rs"]
 mod musubi_fixture_values;
+#[path = "../musubi_generated_schema_identity.rs"]
+mod musubi_generated_schema_identity;
 #[path = "../musubi_instruction_fixture.rs"]
 mod musubi_instruction_fixture;
 #[path = "../musubi_sdk_fixture.rs"]
@@ -34,10 +40,14 @@ mod policy_jury_zk_roundtrip;
 mod precomputed;
 #[path = "../print_asset_norito.rs"]
 mod print_asset_norito;
+#[path = "../privacy_generated_schema_identity.rs"]
+mod privacy_generated_schema_identity;
 #[path = "../query_accessors.rs"]
 mod query_accessors;
 #[path = "../query_batch_invariants.rs"]
 mod query_batch_invariants;
+#[path = "../query_generated_schema_identity.rs"]
+mod query_generated_schema_identity;
 #[path = "../query_json_envelope.rs"]
 mod query_json_envelope;
 #[path = "../query_response_roundtrip.rs"]

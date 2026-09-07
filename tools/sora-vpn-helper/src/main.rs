@@ -25,7 +25,7 @@ use iroha_crypto::{
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as _;
 use std::{
@@ -1819,7 +1819,7 @@ impl NetworkIpcSocket {
             match guard.try_io(|inner| {
                 send_network_ipc_once(inner.get_ref().as_raw_fd(), &bytes, descriptor)
             }) {
-                Ok(result) => return result,
+                Ok(result) => return result.map_err(Into::into),
                 Err(_) => continue,
             }
         }
@@ -1835,7 +1835,7 @@ impl NetworkIpcSocket {
             match guard.try_io(|inner| {
                 receive_network_ipc_once(inner.get_ref().as_raw_fd(), expected_token, expected_peer)
             }) {
-                Ok(result) => return result,
+                Ok(result) => return result.map_err(Into::into),
                 Err(_) => continue,
             }
         }
@@ -4112,7 +4112,8 @@ async fn run_tunnel_command(
                 "network worker did not stop before TUN creation",
             )?;
             let message = stop_result
-                .map(network_worker_exit_message)
+                .as_ref()
+                .map(|code| network_worker_exit_message(*code))
                 .unwrap_or("unprivileged network worker failed while stopping")
                 .to_owned();
             clear_session_binding(&mut state);
@@ -4190,7 +4191,7 @@ async fn run_tunnel_command(
         NetworkIpcKind::TunReady,
         packet_read_mtu,
         0,
-        Some(prepared.get().device.as_raw_fd()),
+        Some(prepared.get().device.file.get_ref().as_raw_fd()),
     )
     .await
     {
@@ -4433,9 +4434,12 @@ async fn run_tunnel_command(
                 .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
                 .await
                 .err();
-            let error = reap_error.map_or(error, |reap_error| {
-                ControllerError::State(format!("{error}; exact child reaping failed: {reap_error}"))
-            });
+            let error = match reap_error {
+                Some(reap_error) => ControllerError::State(format!(
+                    "{error}; exact child reaping failed: {reap_error}"
+                )),
+                None => error,
+            };
             (None, Some(error))
         }
     };
@@ -11313,10 +11317,12 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_network_ipc_authenticates_frames_and_transfers_one_descriptor() {
+    #[tokio::test]
+    async fn linux_network_ipc_authenticates_frames_and_transfers_one_descriptor() {
         let (supervisor, worker) =
             create_network_ipc_socketpair().expect("create credentialed IPC socket pair");
+        let supervisor = NetworkIpcSocket::new(supervisor).expect("register supervisor socket");
+        let worker = NetworkIpcSocket::new(worker).expect("register worker socket");
         let token = [0xA5; 32];
         let expected_peer = NetworkPeerCredentials {
             pid: std::process::id(),
@@ -11327,22 +11333,26 @@ mod tests {
         };
 
         let ready = NetworkIpcFrame::new(NetworkIpcKind::WorkerReady, token, 0, 0);
-        send_network_ipc_once(supervisor.as_raw_fd(), &ready.encode(), None)
+        supervisor
+            .send(ready, None)
+            .await
             .expect("send credentialed frame");
-        let received = receive_network_ipc_once(worker.as_raw_fd(), &token, expected_peer)
+        let received = worker
+            .receive(&token, expected_peer)
+            .await
             .expect("receive credentialed frame");
         assert_eq!(received.frame, ready);
         assert!(received.descriptors.is_empty());
 
         let transferred = fs::File::open("/dev/null").expect("open descriptor fixture");
         let tun_ready = NetworkIpcFrame::new(NetworkIpcKind::TunReady, token, 1_280, 0);
-        send_network_ipc_once(
-            worker.as_raw_fd(),
-            &tun_ready.encode(),
-            Some(transferred.as_raw_fd()),
-        )
-        .expect("send descriptor frame");
-        let mut received = receive_network_ipc_once(supervisor.as_raw_fd(), &token, expected_peer)
+        worker
+            .send(tun_ready, Some(transferred.as_raw_fd()))
+            .await
+            .expect("send descriptor frame");
+        let mut received = supervisor
+            .receive(&token, expected_peer)
+            .await
             .expect("receive descriptor frame");
         assert_eq!(received.frame, tun_ready);
         assert_eq!(received.descriptors.len(), 1);

@@ -17,10 +17,10 @@
 //! privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
-use super::privacy_exact12_jindo_network::wait_for_transaction_on_peers;
+use super::privacy_exact12_network_support::{privacy_capabilities, wait_for_transaction_on_peers};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::{
@@ -77,6 +77,57 @@ struct ExpectedProtocolState {
 fn is_expected_unavailable(protocol_id: PrivacyProtocolIdV1) -> bool {
     UNAVAILABLE_PROTOCOLS.contains(&protocol_id)
 }
+// Pin exact diagnostics: incomplete X509 geometry is a profile initialization
+// failure, not an available engine or a reason to weaken its production gate.
+fn expected_unavailable_reason(
+    protocol_id: PrivacyProtocolIdV1,
+) -> Option<PrivacyCompiledProfileUnavailableReasonV1> {
+    match protocol_id {
+        ZK_X509_PROTOCOL => {
+            Some(PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed)
+        }
+        ZK_ACE_PROTOCOL | ZK_AMS_PROTOCOL | VEGA_PROTOCOL => {
+            Some(PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable)
+        }
+        _ => None,
+    }
+}
+fn expected_unavailable_error(
+    protocol_id: PrivacyProtocolIdV1,
+) -> Option<CompiledPrivacyProfileErrorV1> {
+    match protocol_id {
+        ZK_X509_PROTOCOL => {
+            Some(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })
+        }
+        ZK_ACE_PROTOCOL | ZK_AMS_PROTOCOL | VEGA_PROTOCOL => {
+            Some(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        }
+        _ => None,
+    }
+}
+#[test]
+fn unavailable_profile_diagnostics_match_the_exact_compiled_catalog() {
+    for protocol_id in PrivacyProtocolIdV1::ALL {
+        let expected_error = expected_unavailable_error(protocol_id);
+        assert_eq!(
+            expected_error.is_some(),
+            is_expected_unavailable(protocol_id)
+        );
+        assert_eq!(
+            expected_unavailable_reason(protocol_id).is_some(),
+            is_expected_unavailable(protocol_id)
+        );
+        if let Some(error) = expected_error {
+            assert_eq!(compiled_privacy_profile_v1(protocol_id), Err(error));
+            assert_eq!(
+                compiled_privacy_profile_snapshot_result_v1(protocol_id),
+                PrivacyCompiledProfileResultV1::Unavailable(
+                    expected_unavailable_reason(protocol_id).unwrap()
+                ),
+            );
+        }
+    }
+}
 fn require_test_network_feature(feature: &str) -> Result<()> {
     let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -92,11 +143,12 @@ fn require_test_network_feature(feature: &str) -> Result<()> {
     );
     Ok(())
 }
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-    client.torii_request_timeout = Duration::from_secs(20);
-    client.transaction_ttl = Some(Duration::from_secs(3_600));
-    client
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        client.torii_request_timeout = Duration::from_secs(20);
+        client.transaction_ttl = Some(Duration::from_secs(3_600));
+    })
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -136,13 +188,12 @@ fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
                 );
                 profiles.push(profile);
             }
-            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                protocol_id: unavailable,
-            }) if unavailable == protocol_id && is_expected_unavailable(protocol_id) => {
+            Err(error) if Some(error) == expected_unavailable_error(protocol_id) => {
                 ensure!(
                     compiled_privacy_profile_snapshot_result_v1(protocol_id)
                         == PrivacyCompiledProfileResultV1::Unavailable(
-                            PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                            expected_unavailable_reason(protocol_id)
+                                .expect("pinned unavailable protocol"),
                         ),
                     "fail-closed capability result drifted for `{}`",
                     protocol_id.canonical_label()
@@ -209,9 +260,11 @@ fn expected_states(
                 );
                 activation
             }
-            PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ) if is_expected_unavailable(protocol_id) => None,
+            PrivacyCompiledProfileResultV1::Unavailable(reason)
+                if Some(reason) == expected_unavailable_reason(protocol_id) =>
+            {
+                None
+            }
             status => {
                 return Err(eyre!(
                     "unexpected compiled status for `{}`: {status:?}",
@@ -296,7 +349,7 @@ async fn wait_for_identical_exact12_snapshots(
         let mut snapshots = Vec::with_capacity(clients.len());
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_privacy_capabilities() {
+            match privacy_capabilities(&client).await {
                 Ok(snapshot) => {
                     match assert_exact12_snapshot(&snapshot, minimum_height, expected, context) {
                         Ok(()) => {
@@ -343,9 +396,9 @@ async fn wait_for_identical_exact12_snapshots(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn next_incoming_height(client: &Client) -> Result<u64> {
-    client
-        .get_privacy_capabilities()
+async fn next_incoming_height(client: &Client) -> Result<u64> {
+    privacy_capabilities(&client)
+        .await
         .wrap_err("query committed height before governed transaction")?
         .committed_height
         .checked_add(1)
@@ -367,7 +420,17 @@ fn instruction_transaction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
 ) -> SignedTransaction {
-    client.build_transaction([instruction.into()], no_fee(), Metadata::default())
+    {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction.into()],
+                no_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction")
 }
 fn intent_bound_privacy_transaction(
     client: &Client,
@@ -388,7 +451,7 @@ fn intent_bound_privacy_transaction(
     let transaction = TransactionBuilder::from_payload(payload)
         .wrap_err("reopen unavailable-protocol payload")?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair.private_key())
         .wrap_err("sign unavailable-protocol transaction")?;
     ensure!(
         transaction
@@ -405,15 +468,14 @@ async fn submit_signed_transaction(
     transaction: &SignedTransaction,
     context: &str,
 ) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
-    let client = client.clone();
-    let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_blocking(&transaction)),
+        client
+            .account_client()
+            .submit_transaction_and_wait(transaction),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
 async fn submit_instruction(
@@ -425,8 +487,8 @@ async fn submit_instruction(
     submit_signed_transaction(client, &transaction, context).await
 }
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
-    let start = client
-        .get_privacy_capabilities()
+    let start = privacy_capabilities(&client)
+        .await
         .wrap_err("query height before deterministic exact-12 activation advance")?
         .committed_height;
     ensure!(
@@ -449,8 +511,8 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
             .await?;
         }
     }
-    let observed = client
-        .get_privacy_capabilities()
+    let observed = privacy_capabilities(&client)
+        .await
         .wrap_err("query height after deterministic exact-12 activation advance")?
         .committed_height;
     ensure!(
@@ -487,7 +549,7 @@ fn assert_unreleased_profiles_unavailable(
         ensure!(
             row.compiled_profile
                 == PrivacyCompiledProfileResultV1::Unavailable(
-                    PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                    expected_unavailable_reason(protocol_id).expect("pinned unavailable protocol"),
                 ),
             "{context}: compiled status unexpectedly changed for `{}`: {:?}",
             protocol_id.canonical_label(),
@@ -513,7 +575,7 @@ async fn wait_for_identical_unreleased_profiles(
         let mut snapshots = Vec::with_capacity(clients.len());
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_privacy_capabilities() {
+            match privacy_capabilities(&client).await {
                 Ok(snapshot) => {
                     match assert_unreleased_profiles_unavailable(&snapshot, minimum_height, context)
                     {
@@ -550,21 +612,29 @@ async fn wait_for_identical_unreleased_profiles(
         sleep(POLL_INTERVAL).await;
     }
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Result<()> {
+#[test]
+fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Result<()> {
+    super::privacy_exact12_network_support::run_network_case(
+        "all_unreleased_profiles_fail_closed_across_four_peer_restart",
+        all_unreleased_profiles_fail_closed_across_four_peer_restart_impl,
+    )
+}
+async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
     for protocol_id in UNAVAILABLE_PROTOCOLS {
-        let unavailable = CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id };
+        let unavailable =
+            expected_unavailable_error(protocol_id).expect("pinned unavailable protocol");
+        let actual = compiled_privacy_profile_v1(protocol_id);
         ensure!(
-            compiled_privacy_profile_v1(protocol_id) == Err(unavailable),
-            "this closed-profile test must be replaced when `{}` becomes governance-available",
+            actual == Err(unavailable),
+            "closed-profile diagnostic changed for `{}`: {actual:?}",
             protocol_id.canonical_label()
         );
         ensure!(
             compiled_privacy_profile_snapshot_result_v1(protocol_id)
                 == PrivacyCompiledProfileResultV1::Unavailable(
-                    PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                    expected_unavailable_reason(protocol_id).expect("pinned unavailable protocol"),
                 ),
             "local capability result for `{}` is not the exact fail-closed status",
             protocol_id.canonical_label()
@@ -618,8 +688,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let client = all_clients[0].clone();
-        let initial_height = client
-            .get_privacy_capabilities()
+        let initial_height = privacy_capabilities(&client).await
             .wrap_err("query initial unavailable-profile capability state")?
             .committed_height;
         wait_for_identical_unreleased_profiles(
@@ -670,8 +739,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             );
             unavailable_actions.push((protocol_id, action));
         }
-        let pre_restart_height = client
-            .get_privacy_capabilities()
+        let pre_restart_height = privacy_capabilities(&client).await
             .wrap_err("query unavailable-profile state before restart")?
             .committed_height;
         wait_for_identical_unreleased_profiles(
@@ -721,8 +789,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
-        let final_height = client
-            .get_privacy_capabilities()
+        let final_height = privacy_capabilities(&client).await
             .wrap_err("query final unavailable-profile capability state")?
             .committed_height;
         wait_for_identical_unreleased_profiles(
@@ -761,8 +828,14 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
     network.shutdown().await;
     result
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_restart()
+#[test]
+fn canonical_exact12_governance_survives_four_peer_activation_replay_and_restart() -> Result<()> {
+    super::privacy_exact12_network_support::run_network_case(
+        "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart",
+        canonical_exact12_governance_survives_four_peer_activation_replay_and_restart_impl,
+    )
+}
+async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_restart_impl()
 -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
@@ -793,8 +866,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             .collect::<Vec<_>>();
         let client = all_clients[0].clone();
         let absent = expected_states(&profiles, std::iter::repeat_n(None, profiles.len()))?;
-        let initial_height = client
-            .get_privacy_capabilities()
+        let initial_height = privacy_capabilities(&client).await
             .wrap_err("query initial exact-12 governance state")?
             .committed_height;
         let initial_snapshots = wait_for_identical_exact12_snapshots(
@@ -805,7 +877,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;
-        let unauthorized_height = next_incoming_height(&client)?;
+        let unauthorized_height = next_incoming_height(&client).await?;
         let unauthorized_activation_height = unauthorized_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
             .ok_or_else(|| eyre!("unauthorized activation height overflowed"))?;
@@ -825,8 +897,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "unauthorized activation registration rejected for wrong reason: \
              {unauthorized_error:?}"
         );
-        let post_unauthorized_height = client
-            .get_privacy_capabilities()
+        let post_unauthorized_height = privacy_capabilities(&client).await
             .wrap_err("query exact-12 state after unauthorized registration rejection")?
             .committed_height;
         wait_for_identical_exact12_snapshots(
@@ -838,11 +909,11 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         .await?;
         submit_instruction(
             &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.account.clone()),
+            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account.clone()),
             "grant CanEnactGovernance for exact-12 activation",
         )
         .await?;
-        let early_height = next_incoming_height(&client)?;
+        let early_height = next_incoming_height(&client).await?;
         let insufficient_activation_delay =
             PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
                 .checked_sub(1)
@@ -865,8 +936,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             error_chain_contains(&early_error, "is too early"),
             "one-block-early activation rejected for wrong reason: {early_error:?}"
         );
-        let post_early_height = client
-            .get_privacy_capabilities()
+        let post_early_height = privacy_capabilities(&client).await
             .wrap_err("query exact-12 state after one-block-early rejection")?
             .committed_height;
         wait_for_identical_exact12_snapshots(
@@ -876,7 +946,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "one-block-early rejection must not register any available activation",
         )
         .await?;
-        let tampered_height = next_incoming_height(&client)?;
+        let tampered_height = next_incoming_height(&client).await?;
         let tampered_activation_height = tampered_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
             .ok_or_else(|| eyre!("tampered activation height overflowed"))?;
@@ -899,8 +969,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "cross-profile activation substitution rejected for wrong reason: \
              {tampered_error:?}"
         );
-        let post_tamper_height = client
-            .get_privacy_capabilities()
+        let post_tamper_height = privacy_capabilities(&client).await
             .wrap_err("query exact-12 state after substitution rejection")?
             .committed_height;
         wait_for_identical_exact12_snapshots(
@@ -910,7 +979,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "rejected profile substitution must not register any activation",
         )
         .await?;
-        let first_registration_height = next_incoming_height(&client)?;
+        let first_registration_height = next_incoming_height(&client).await?;
         let final_registration_height = first_registration_height
             .checked_add(
                 u64::try_from(profiles.len() - 1).expect("available profile count fits u64"),
@@ -925,7 +994,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             let expected_height = first_registration_height
                 .checked_add(u64::try_from(index).expect("exact-12 index fits u64"))
                 .ok_or_else(|| eyre!("exact-12 proposal height overflowed"))?;
-            let observed_height = next_incoming_height(&client)?;
+            let observed_height = next_incoming_height(&client).await?;
             ensure!(
                 observed_height == expected_height,
                 "proposal `{}` would land at height {observed_height}, expected deterministic \
@@ -957,8 +1026,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             proposed_records.push(proposed);
         }
         ensure!(
-            client
-                .get_privacy_capabilities()
+            privacy_capabilities(&client).await
                 .wrap_err("query height after exact-12 proposals")?
                 .committed_height
                 == final_registration_height,
@@ -1117,13 +1185,18 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .expect("static exact-12 duplicate metadata key is valid"),
             activation_height,
         );
-        let fresh_duplicate_registration = client.build_transaction(
+        let fresh_duplicate_registration ={
+    let account = client.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [RegisterPrivacyProtocolActivationV1::new(
                 proposed_records[0],
             )],
             no_fee(),
             duplicate_metadata,
-        );
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
         ensure!(
             fresh_duplicate_registration.hash() != first_proposal_transaction.hash(),
             "fresh duplicate registration must have a distinct signed transaction hash"
@@ -1139,8 +1212,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             error_chain_contains(&duplicate_error, "is already registered"),
             "fresh duplicate registration rejected for wrong reason: {duplicate_error:?}"
         );
-        let height_after_fresh_duplicate = client
-            .get_privacy_capabilities()
+        let height_after_fresh_duplicate = privacy_capabilities(&client).await
             .wrap_err("query exact-12 height after fresh duplicate registration rejection")?
             .committed_height;
         let post_duplicate_snapshots = wait_for_identical_exact12_snapshots(
@@ -1162,8 +1234,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .all(|snapshot| snapshot.consensus_policy == immutable_consensus_policy),
             "fresh duplicate registration mutated the privacy consensus policy"
         );
-        let height_before_replay = client
-            .get_privacy_capabilities()
+        let height_before_replay = privacy_capabilities(&client).await
             .wrap_err("query exact-12 height before proposal replay")?
             .committed_height;
         let replay_error = submit_signed_transaction(
@@ -1178,8 +1249,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "exact activation proposal replay rejected for wrong reason: {replay_error:?}"
         );
         ensure!(
-            client
-                .get_privacy_capabilities()
+            privacy_capabilities(&client).await
                 .wrap_err("query exact-12 height after proposal replay")?
                 .committed_height
                 == height_before_replay,

@@ -253,7 +253,9 @@ impl CertifiedMergeLedgerReference {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::execution_context::AutonomousLanePayloadEnvelopeV1")]
+#[norito_schema(
+    name = "iroha_data_model::block::execution_context::AutonomousLanePayloadEnvelopeV1"
+)]
 pub struct AutonomousLanePayloadEnvelopeV1 {
     /// Envelope schema version.
     pub version: u8,

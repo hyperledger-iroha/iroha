@@ -507,6 +507,9 @@ object TransferWirePayloadEncoder {
             val payload = decoder.readBytes(payloadLength)
             val child = NoritoDecoder(payload, decoder.flags)
             val count = checkedLength(child.readUInt(64), "multisig member count")
+            // Every member requires at least its length prefix. Validate the
+            // encoded byte budget before allowing an untrusted capacity allocation.
+            require(count <= child.remaining()) { "Multisig member count exceeds encoded bounds" }
             val members = ArrayList<MultisigMemberPayload>(count)
             for (index in 0 until count) {
                 val memberLength = checkedLength(

@@ -83,7 +83,12 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
     let wire = block.encode_wire().expect("canonical executed block wire");
     let (actual, snapshot) = capture_request(
         mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
-        || client.get_canonical_executed_block_wire(height, &committed),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_canonical_executed_block_wire(height, &committed)
+        },
     );
     assert_eq!(actual.expect("verified executed block wire"), wire);
     assert_eq!(snapshot.method, HttpMethod::GET);
@@ -113,7 +118,12 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
     trailing.push(0);
     let error = capture_request(
         mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO)),
-        || client.get_canonical_executed_block_wire(height, &committed),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_canonical_executed_block_wire(height, &committed)
+        },
     )
     .0
     .expect_err("trailing executed-block bytes must fail");
@@ -132,7 +142,12 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
     let wire = block.encode_wire().expect("canonical executed block wire");
     let error = capture_request(
         mk_response(StatusCode::OK, wire, Some(APPLICATION_NORITO)),
-        || client.get_canonical_executed_block_wire(height, &wrong_carrier),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_canonical_executed_block_wire(height, &wrong_carrier)
+        },
     )
     .0
     .expect_err("wrong carrier hash must fail");
@@ -356,7 +371,11 @@ fn rejected_next_bridge_finality_response(
     verifier: &mut BridgeFinalityVerifier,
     response: HttpResponse<Vec<u8>>,
 ) -> String {
-    capture_request(response, || {
+    capture_request(response, |mock_transport| {
+        let client = client
+            .clone()
+            .with_test_http_transport(mock_transport.clone());
+
         client.get_next_bridge_finality_proof(height, verifier)
     })
     .0
@@ -379,7 +398,12 @@ fn bridge_finality_anchor_reader_returns_standalone_verified_proof_and_hash() {
     let body = norito::to_bytes(&proof).expect("encode canonical bridge finality proof");
     let (actual, snapshot) = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
-        || client.get_bridge_finality_anchor(proof.block_header.height(), test_network_id()),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_bridge_finality_anchor(proof.block_header.height(), test_network_id())
+        },
     );
     let (actual_proof, actual_hash) = actual.expect("standalone finality proof must verify");
     assert_eq!(actual_proof, proof);
@@ -412,7 +436,12 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
         NonZeroU64::new(proof.block_header.height().get() + 1).expect("non-zero mismatched height");
     let (error, snapshot) = capture_request(
         mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_NORITO)),
-        || client.get_bridge_finality_anchor(mismatched_height, test_network_id()),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_bridge_finality_anchor(mismatched_height, test_network_id())
+        },
     );
     assert!(
         error
@@ -427,7 +456,12 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
     )));
     let error = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
-        || client.get_bridge_finality_anchor(proof.block_header.height(), wrong_network_id),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_bridge_finality_anchor(proof.block_header.height(), wrong_network_id)
+        },
     )
     .0
     .expect_err("wrong finality network must fail");
@@ -438,7 +472,12 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
     let body = norito::to_bytes(&invalid).expect("encode invalid bridge finality proof");
     let error = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
-        || client.get_bridge_finality_anchor(proof.block_header.height(), test_network_id()),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_bridge_finality_anchor(proof.block_header.height(), test_network_id())
+        },
     )
     .0
     .expect_err("invalid finality signature must fail");
@@ -460,7 +499,11 @@ fn bridge_finality_reader_checks_requested_binding_before_advancing_anchor() {
     let wrong_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x92; Hash::LENGTH]));
     let (error, snapshot) = capture_request(
         mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_NORITO)),
-        || {
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_bridge_finality_proof(proof.block_header.height(), wrong_hash, &mut verifier)
                 .expect_err("wrong requested hash must fail")
@@ -487,7 +530,11 @@ fn bridge_finality_reader_checks_requested_binding_before_advancing_anchor() {
     let expected_hash = proof.block_header.hash();
     let actual = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
-        || {
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.get_bridge_finality_proof(
                 proof.block_header.height(),
                 expected_hash,
@@ -512,7 +559,11 @@ fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
     let anchor_body = norito::to_bytes(&anchor).expect("encode canonical anchor proof");
     let (error, snapshot) = capture_request(
         mk_response(StatusCode::OK, anchor_body, Some(APPLICATION_NORITO)),
-        || {
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_next_bridge_finality_proof(successor_height, &mut verifier)
                 .expect_err("proof from the wrong height must fail")
@@ -526,7 +577,12 @@ fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
     let successor_body = norito::to_bytes(&successor).expect("encode canonical successor proof");
     let actual = capture_request(
         mk_response(StatusCode::OK, successor_body, Some(APPLICATION_NORITO)),
-        || client.get_next_bridge_finality_proof(successor_height, &mut verifier),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_next_bridge_finality_proof(successor_height, &mut verifier)
+        },
     )
     .0
     .expect("valid successor must verify after a height mismatch");
@@ -602,7 +658,12 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
 
     let actual = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
-        || client.get_next_bridge_finality_proof(height, &mut verifier),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_next_bridge_finality_proof(height, &mut verifier)
+        },
     )
     .0
     .expect("valid successor must verify after rejected responses");
@@ -632,7 +693,12 @@ fn bridge_finality_next_reader_verification_failure_does_not_advance() {
     let body = norito::to_bytes(&successor).expect("encode canonical successor proof");
     let actual = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
-        || client.get_next_bridge_finality_proof(height, &mut verifier),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_next_bridge_finality_proof(height, &mut verifier)
+        },
     )
     .0
     .expect("valid successor must verify after a rejected invalid signature");

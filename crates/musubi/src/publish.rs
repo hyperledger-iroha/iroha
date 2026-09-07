@@ -22,10 +22,6 @@
 //! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other targets fail closed
 //! with the platform's unsupported error before inspecting or creating the selected state path.
 use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
-use iroha::musubi_runtime::{
-    MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
-    MusubiSeedIngressCarPlanV1,
-};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -56,6 +52,10 @@ use iroha_data_model::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
         TransactionSignature, signed::MultisigSignatures,
     },
+};
+use iroha_musubi_service::{
+    MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
+    MusubiSeedIngressCarPlanV1,
 };
 use norito::{
     DecodeLimits,

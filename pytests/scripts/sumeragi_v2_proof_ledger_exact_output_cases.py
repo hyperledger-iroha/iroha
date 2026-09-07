@@ -1,6 +1,304 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
 
+_TERMINAL_LANE_MUTATIONS = (
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
+     "dataspace_id: descriptor.dataspace_id,", "dataspace_id: DataSpaceId::UNIVERSAL,",
+     "full proposal route, incarnation, and lane height"),
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
+     "lane_incarnation: descriptor.lane_incarnation,", "lane_incarnation: Hash::prehashed([0; 32]),",
+     "full proposal route, incarnation, and lane height"),
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
+     "lane_block_height: descriptor.lane_block_height,", "lane_block_height: descriptor.proposal_height,",
+     "full proposal route, incarnation, and lane height"),
+    ("validate_terminal_autonomous_availability", "if *actual != expected {",
+     "if false && *actual != expected {", "bind Prepare READY"),
+    ("validate_terminal_autonomous_availability", "(CertPhase::Commit, None) => Ok(()),",
+     "(CertPhase::Prepare | CertPhase::Commit, None) => Ok(()),", "require Commit without READY"),
+    ("validate_terminal_autonomous_vote",
+     "crate::lane_consensus::validate_vote_matches_proposal(vote, &payload.origin_proposal)\n        .map_err(|error| error.to_string())?;",
+     "let _ = &payload.origin_proposal;", "READY committee PoPs, outer signature"),
+    ("validate_terminal_autonomous_vote",
+     "vote.validate_ingress(vote.body.phase)\n        .map_err(|error| error.to_string())?;",
+     "let _ = vote.body.phase;", "READY committee PoPs, outer signature"),
+    ("validate_terminal_autonomous_qc",
+     "validate_winning_lane_qc(qc, &payload.origin_proposal, signer_pops)?;",
+     "let _ = signer_pops;", "complete aggregate before exact availability"),
+    ("validate_terminal_autonomous_qc", "qc.body.phase,", "CertPhase::Commit,",
+     "complete aggregate before exact availability"),
+    ("V2LaneWorkAdapter::insert_lane_vote",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_vote",
+     "validate_terminal_autonomous_vote(&vote, payload).is_ok()", "true",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_vote", "return if validate_terminal_autonomous_vote",
+     "let _outcome = if validate_terminal_autonomous_vote",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc",
+     "validate_terminal_autonomous_qc(&qc, payload, &pops).is_ok()", "true",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc", "return if validate_terminal_autonomous_qc",
+     "let _outcome = if validate_terminal_autonomous_qc",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc", "move_clone_before_terminal", "",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_certificate", ".any(|(qc, phase)| {",
+     ".all(|(qc, phase)| {", "availability before any historical shortcut"),
+    ("V2LaneWorkAdapter::insert_lane_certificate", "move_availability_after_historical", "",
+     "availability before any historical shortcut"),
+    ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)",
+     "either exact own application or the exact applied predecessor"),
+    ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)\n                && !self",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)\n                || !self",
+     "either exact own application or the exact applied predecessor"),
+    ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
+     "let proposal = &payload.origin_proposal;",
+     "let mut detached = payload.origin_proposal.clone();\n            detached.payload_block_hint = None;\n            let proposal = &detached;",
+     "attach the exact global hint"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "self.lane_sessions.retained_vote_bodies()", "Vec::new()", "bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "self.lane_sessions.rollover_slots()", "BTreeSet::new()", "bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".read_certified_lane_block_artifact_read_only(lane_id, lane_block_height)",
+     ".read_certified_lane_block_artifact(lane_id, lane_block_height)", "bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "Kura::validate_certified_lane_block_artifact(&artifact)", "Ok::<(), &str>(())",
+     "authenticate bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".canonical_finalized_autonomous_payload_for_vote_body(&body)\n                .map_err(V2LaneWorkError::Persistence)?",
+     ".canonical_finalized_autonomous_payload_for_vote_body(&body).unwrap_or(None)",
+     "authenticate bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "for qc in [&artifact.prepare_qc, &artifact.commit_qc] {",
+     "for qc in [] as [&LaneBlockQcV1; 0] {", "authenticate bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(&proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(&proposal)",
+     "exact application"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".is_some_and(|existing| existing != &proposal)",
+     ".is_some_and(|existing| !existing.same_consensus_identity(&proposal))", "full slots atomically"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".retire_applied_proposals(&proposals)", ".retire_applied_proposals(&[])", "full slots atomically"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions", "move_cleanup_before_cache", "",
+     "then clean only selected volatile owners"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "lane_incarnation: key.lane_incarnation,", "lane_incarnation: Hash::prehashed([0; 32]),",
+     "only selected volatile owners"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions", "Ok(retired)",
+     "self.pending_committed_lanes.clear();\n        self.committed_lane_outputs.clear();\n        Ok(retired)",
+     "without consuming outputs"),
+    ("V2LaneWorkAdapter::drive_lane_sessions", "self.retire_applied_autonomous_sessions()",
+     "Ok::<usize, V2LaneWorkError>(0)", "close admission on failure before its first signing work"),
+    ("V2LaneWorkAdapter::persist_anchored_sessions", "self.retire_applied_autonomous_sessions()?;",
+     "let _ = self.retire_applied_autonomous_sessions();", "inside its fail-stop operation before hydration"),
+    ("V2LaneWorkAdapter::persist_anchored_sessions", "move_retirement_before_guard", "",
+     "inside its fail-stop operation before hydration"),
+    ("V2LaneWorkAdapter::persist_anchored_sessions",
+     "self.retire_applied_autonomous_sessions()?;\n        self.hydrate_canonical_lane_artifacts()?;",
+     "self.hydrate_canonical_lane_artifacts()?;\n        self.retire_applied_autonomous_sessions()?;",
+     "inside its fail-stop operation before hydration"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)",
+     "reject exact own application"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     "if (historical || self.autonomous_payload_is_expected_for(proposal) || finalized_autonomous)",
+     "if true", "only for authenticated autonomous roles"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     "|| finalized_autonomous)", "|| finalized_observer)",
+     "only for authenticated autonomous roles"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     "historical || self.autonomous_payload_is_expected_for(proposal) || finalized_autonomous",
+     "finalized_autonomous", "only for authenticated autonomous roles"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence",
+     "for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {",
+     "for ((slot, signer), locked_proposal_hash) in &BTreeMap::new() {", "orphan Commit quorums"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence", "signers.len() >= quorum",
+     "signers.len() > quorum", "orphan Commit quorums"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence",
+     "descriptor.validator_set.binary_search(signer).is_err()",
+     "descriptor.validator_set.binary_search(signer).is_ok()", "exact-committee orphan Commit quorums"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence", "if session_has_quorum_certificate(session)",
+     "if session.commit_qc.is_some()", "proposal-less Prepare or Commit QCs"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "validate_lane_block_proposal(proposal)\n                .map_err(LaneBlockSessionError::InvalidProposal)?;",
+     "let _ = proposal;", "complete exact full-slot target set before mutation"),
+    ("LaneBlockSessionCache::retire_applied_proposals", ".is_some_and(|existing| existing != proposal)",
+     ".is_some_and(|existing| !existing.same_consensus_identity(proposal))", "complete exact full-slot target set"),
+    ("LaneBlockSessionCache::retire_applied_proposals", "move_preflight_after_retirement", "",
+     "target set before mutation"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "lane_incarnation: descriptor.lane_incarnation,", "lane_incarnation: Hash::prehashed([0; 32]),",
+     "exact full-slot target set"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "self.commit_vote_locks\n            .retain(|(slot, _), _| !canonical.contains_key(slot));",
+     "self.commit_vote_locks.clear();", "preserve unselected sessions, locks"),
+    ("LaneBlockSessionCache::retire_applied_proposals", ".or_insert(*key);",
+     ".and_modify(|owner| *owner = *key).or_insert(*key);", "claims, recency, and capacity"),
+    ("LaneBlockSessionCache::retire_applied_proposals", "Ok(before.saturating_sub(after))",
+     "self.capacity += 1;\n        Ok(before.saturating_sub(after))", "recency, and capacity"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "self.order.retain(|key| retained_sessions.contains_key(key));", "self.order.clear();",
+     "recency, and capacity"),
+    ("LaneBlockSessionCache::retained_vote_bodies",
+     ".or_else(|| session.prepare_qc.as_ref().map(|qc| qc.body.clone()))", "",
+     "every retained proposal or vote/QC body"),
+    ("LaneBlockSessionCache::retained_vote_bodies",
+     ".or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.clone()))", "",
+     "every retained proposal or vote/QC body"),
+    ("LaneBlockSessionCache::retained_vote_bodies", ".commit_votes", ".prepare_votes",
+     "every retained proposal or vote/QC body"),
+    ("LaneBlockSessionCache::retained_vote_bodies",
+     "session.commit_qc.as_ref().map(|qc| qc.body.clone())",
+     "session.commit_qc.as_ref().map(|qc| { let mut body = qc.body.clone(); body.proposal_height += 1; body })",
+     "without mutation or inferred global heights"),
+    ("LaneBlockSessionCache::retain_canonical_rollover_evidence", "remove_shared_preflight", "",
+     "share the complete canonical quorum preflight"),
+    ("validate_vote_matches_proposal",
+     "|| availability_vote\n                    .validate_against_validator_set(&proposal.descriptor.validator_set)\n                    .is_err()",
+     "|| false", "exact complete committee and its PoPs"),
+    ("State::certified_autonomous_lane_block_is_globally_applied_cached", "replace_exact_frontier_with_height", "",
+     "exact route/incarnation frontier identity"),
+    ("State::certified_autonomous_lane_block_is_globally_applied_cached",
+     ".autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal)",
+     ".lane_block_application_receipt_available(proposal)", "exact authenticated merge receipt"),
+    ("State::certified_autonomous_lane_block_is_globally_applied_cached",
+     ") else {\n            return false;\n        };",
+     ") else {\n            return self.kura.autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal);\n        };",
+     "fail closed on malformed frontier bytes"),
+)
+
+
+def _terminal_lane_order_mutation(item, mutation: str) -> tuple[str, str]:
+    """Move real complete source blocks to exercise semantic boundary ordering."""
+
+    old = item.source
+    if mutation == "move_clone_before_terminal":
+        clone = "        let mut next_sessions = self.lane_sessions.clone();\n"
+        assert old.count(clone) == 1
+        new = old.replace(clone, "", 1).replace(
+            "        if let Some(payload) = finalized_payload.as_ref()",
+            clone + "        if let Some(payload) = finalized_payload.as_ref()", 1,
+        )
+    elif mutation == "move_availability_after_historical":
+        start = old.index("        if let Some(payload) = finalized_payload.as_ref()")
+        end = old.index("        if proposal.descriptor.proposal_height < self.context.height {", start)
+        block = old[start:end]
+        new = old.replace(block, "", 1).replace(
+            "        if !self.proposal_body_available(&proposal)",
+            block + "        if !self.proposal_body_available(&proposal)", 1,
+        )
+    elif mutation == "move_cleanup_before_cache":
+        start = old.index("        let retired = self")
+        end = old.index("        self.lane_ready_authorizations.retain", start)
+        block = old[start:end]
+        new = old.replace(block, "", 1).replace("        Ok(retired)", block + "        Ok(retired)", 1)
+    elif mutation == "move_retirement_before_guard":
+        retire = "        self.retire_applied_autonomous_sessions()?;\n"
+        assert old.count(retire) == 1
+        new = old.replace(retire, "", 1).replace(
+            "        let output_guard = Arc::clone(&self.output_guard);",
+            retire + "        let output_guard = Arc::clone(&self.output_guard);", 1,
+        )
+    elif mutation == "move_preflight_after_retirement":
+        preflight = "        self.preflight_canonical_evidence(|slot| canonical.get(&slot).copied())?;\n"
+        assert old.count(preflight) == 1
+        new = old.replace(preflight, "", 1).replace(
+            "        Ok(before.saturating_sub(after))",
+            preflight + "        Ok(before.saturating_sub(after))", 1,
+        )
+    elif mutation == "remove_shared_preflight":
+        start = old.index("        self.preflight_canonical_evidence(|slot| {")
+        end = old.index("        let mut retained_sessions = BTreeMap::new();", start)
+        new = old[:start] + old[end:]
+    elif mutation == "replace_exact_frontier_with_height":
+        start = old.index("        frontier\n            == (")
+        end = old.index("            || self", start)
+        new = old[:start] + "        frontier.0 >= descriptor.lane_block_height\n" + old[end:]
+    else:
+        raise AssertionError(mutation)
+    assert new != old, mutation
+    return old, new
+
+
+@pytest.mark.parametrize(("qualified", "old", "new", "expected_error"), _TERMINAL_LANE_MUTATIONS)
+def test_terminal_lane_source_mutations_survive_digest_refresh(
+    tmp_path: Path, qualified: str, old: str, new: str, expected_error: str,
+) -> None:
+    """Every copied production baseline passes before a fully rehashed semantic mutant fails."""
+
+    module = load_checker()
+    selected = [
+        (relative, owner, name)
+        for relative, declarations in module._TERMINAL_LANE_SOURCE_OWNERS.items()
+        for owner, name in declarations
+        if (f"{owner}::{name}" if owner else name) == qualified
+    ]
+    assert len(selected) == 1, qualified
+    relative, owner, name = selected[0]
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT_DIR / relative, path)
+    context = (module.rust_code_tokens(f"impl {owner}"),) if owner else ()
+    errors = []
+    item = module._require_terminal_lane_owner(
+        path, path.read_text(encoding="utf-8"), owner, name, errors,
+    )
+    assert item is not None
+    baseline_digest = module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256.get(
+        qualified, module._rust_item_token_sha256(item),
+    )
+    if qualified == "V2LaneWorkAdapter::persist_anchored_sessions":
+        baseline_digest = module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256[qualified]
+    module._require_rust_item_token_sha256(path, item, baseline_digest, qualified, errors)
+    module._require_terminal_lane_source_contracts(path, {qualified: item}, errors)
+    assert not errors, errors
+    if old.startswith("move_") or old in ("remove_shared_preflight", "replace_exact_frontier_with_height"):
+        old, new = _terminal_lane_order_mutation(item, old)
+    mutate_rust_item_source_in_context(module, path, name, context, old, new)
+    # Existing owners are not silently resealed in production. This local table
+    # verifies each mutant's complete item digest independently of its semantics.
+    refreshed = {qualified: baseline_digest}
+    bindings = [(refreshed, qualified)]
+    if qualified in module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256:
+        bindings.append((module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256, qualified))
+    if qualified == "V2LaneWorkAdapter::persist_anchored_sessions":
+        bindings.append((module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256, qualified))
+    original = rebind_reviewed_rust_item_digests(module, path, name, context, tuple(bindings))
+    try:
+        errors = []
+        mutated = next(
+            candidate for candidate in module.rust_items(path.read_text(encoding="utf-8"), name)
+            if candidate.brace_context == context
+        )
+        assert refreshed[qualified] != baseline_digest
+        module._require_rust_item_token_sha256(path, mutated, refreshed[qualified], qualified, errors)
+        module._require_terminal_lane_source_contracts(path, {qualified: mutated}, errors)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+    assert any(expected_error in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
+
+def test_terminal_lane_production_source_is_bound() -> None:
+    """The independent loader binds real adapter, cache, and State production owners."""
+
+    module = load_checker()
+    errors = module._terminal_lane_source_fidelity_errors(ROOT_DIR)
+    assert not errors, errors
+
+
 @pytest.mark.parametrize(
     ("old", "new", "expected_error"),
     (
@@ -515,6 +813,57 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "let _ = &self.validated_merge_execution_candidate;",
             "global body lock must invalidate merge execution validation authority",
         ),
+        (
+            "validate_merge_candidate_for_active_round",
+            "#[cfg(test)]\n        self.merge_candidate_validation_checks.set(",
+            "self.merge_candidate_validation_checks.set(",
+            "merge validation accounting must remain test-only",
+        ),
+        (
+            "refresh_merge_candidates",
+            "if persisted_entries.next().is_some() {",
+            "if false {",
+            "persisted merge reuse must reject competing owners",
+        ),
+        (
+            "refresh_merge_candidates",
+            "let PendingMergeStage::Persisted(entry) = &pending.stage",
+            "let PendingMergeStage::Certified(entry) = &pending.stage",
+            "persisted merge reuse must reject competing owners",
+        ),
+        (
+            "refresh_merge_candidates",
+            "| PendingMergeStage::Persisted(_) => None,",
+            "=> None,\n                PendingMergeStage::Persisted(entry) => Some(crate::merge::MergeLedgerCandidate::from(entry)),",
+            "persisted merge owners must never reenter collecting candidate reconstruction",
+        ),
+        (
+            "refresh_merge_candidates",
+            "move_parent_check_after_persisted",
+            "",
+            "persisted merge reuse must authenticate current authority before its terminal return",
+        ),
+        *(
+            (
+                "refresh_merge_candidates",
+                comparison,
+                "false",
+                "persisted merge reuse must reject competing owners and bind the full candidate",
+            )
+            for comparison in (
+                "key.epoch_id != expected_epoch",
+                "key.view != active_view",
+                "candidate.epoch_id != key.epoch_id",
+                "candidate.view != key.view",
+                "candidate.carrier_height != self.context.height",
+                "candidate.carrier_parent_hash != expected_parent",
+                "key.digest != expected_digest",
+                "entry.merge_qc.epoch_id != key.epoch_id",
+                "entry.merge_qc.view != key.view",
+                "entry.merge_qc.message_digest != key.digest",
+                "authorized != Some((key.digest, candidate, candidate_bytes))",
+            )
+        ),
     )
     try:
         for index, (item_name, old, new, expected_error) in enumerate(mutations):
@@ -528,14 +877,38 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
                 ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
                 lane_path,
             )
-            mutate_rust_item_source_in_context(
-                module,
+            baseline_errors: list[str] = []
+            module._require_merge_execution_validation_cache_contract(
                 lane_path,
-                item_name,
-                (("impl", "V2LaneWorkAdapter"),),
-                old,
-                new,
+                lane_path.read_text(encoding="utf-8"),
+                baseline_errors,
             )
+            assert not baseline_errors, baseline_errors
+            if old == "move_parent_check_after_persisted":
+                source = lane_path.read_text(encoding="utf-8")
+                original_item = next(
+                    candidate
+                    for candidate in module.rust_items(source, item_name)
+                    if candidate.brace_context == (("impl", "V2LaneWorkAdapter"),)
+                )
+                guard_start = original_item.source.index("        if parent_header.hash() != expected_parent")
+                guard_end = original_item.source.index("        let local_is_leader =", guard_start)
+                parent_guard = original_item.source[guard_start:guard_end]
+                mutated_item = original_item.source.replace(parent_guard, "", 1)
+                marker = "        let authorized_candidate = signing_guard"
+                assert mutated_item.count(marker) == 1
+                mutated_item = mutated_item.replace(marker, parent_guard + marker, 1)
+                assert source.count(original_item.source) == 1
+                lane_path.write_text(source.replace(original_item.source, mutated_item, 1), encoding="utf-8")
+            else:
+                mutate_rust_item_source_in_context(
+                    module,
+                    lane_path,
+                    item_name,
+                    (("impl", "V2LaneWorkAdapter"),),
+                    old,
+                    new,
+                )
             item = next(
                 candidate
                 for candidate in module.rust_items(
@@ -559,6 +932,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
                 and "exact reviewed token digest" not in error
                 for error in errors
             ), errors
+            assert not any("exact reviewed token digest" in error for error in errors), errors
             module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.clear()
             module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.update(
                 original_seals
@@ -1566,9 +1940,10 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn hydrate_canonical_lane_artifacts(",
-            "for proposal in raw_proposals {",
-            "for proposal in raw_proposals.into_iter().rev() {",
-            "canonical raw lane hydration must replay the complete predecessor chain in deterministic order and fail closed on conflicts",
+            "        self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "        raw_proposals.reverse();\n"
+            "        self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "raw lane hydration must install independent chains in canonical deterministic order as one complete bounded recovery batch before publishing payloads or historical READY",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",

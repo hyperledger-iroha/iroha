@@ -18,7 +18,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         val VERIFIER_BACKEND_REGISTRY_LABELS_V1: Set<String> = Collections.unmodifiableSet(
             linkedSetOf(
                 "halo2/ipa",
-                "halo2/pasta/kaigi-roster-v1",
+                "halo2/pasta/kaigi-authorization-v1",
                 "halo2/pasta/kaigi-usage-v1",
                 "halo2/pasta/ivm-execution-v1",
                 "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",

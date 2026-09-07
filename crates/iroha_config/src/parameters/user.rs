@@ -4625,10 +4625,9 @@ pub struct Zk {
     /// Pedersen parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_PEDERSEN_PARAMS_ID")]
     pub pedersen_params_id: Option<u32>,
-    /// Optional verifying key reference used for Kaigi roster join proofs.
-    pub kaigi_roster_join_vk: Option<VerifyingKeyRef>,
-    /// Optional verifying key reference used for Kaigi roster leave proofs.
-    pub kaigi_roster_leave_vk: Option<VerifyingKeyRef>,
+    /// Governed verifying key for every final Kaigi authorization action.
+    pub kaigi_authorization_vk: Option<VerifyingKeyRef>,
+
     /// Optional verifying key reference used for Kaigi usage commitment proofs.
     pub kaigi_usage_vk: Option<VerifyingKeyRef>,
 }
@@ -4650,8 +4649,8 @@ impl Zk {
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
-            kaigi_roster_join_vk: self.kaigi_roster_join_vk.map(VerifyingKeyRef::parse),
-            kaigi_roster_leave_vk: self.kaigi_roster_leave_vk.map(VerifyingKeyRef::parse),
+            kaigi_authorization_vk: self.kaigi_authorization_vk.map(VerifyingKeyRef::parse),
+
             kaigi_usage_vk: self.kaigi_usage_vk.map(VerifyingKeyRef::parse),
             max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
             max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
@@ -13338,10 +13337,10 @@ impl SnapshotResourcePolicy {
     /// Relationships stay fail-closed so values cannot exceed the authenticated
     /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
-        if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
+        if self.max_decode_depth.get() > norito::core::MAX_VALUE_NESTING_DEPTH {
             return Err(format!(
                 "snapshot.resources.max_decode_depth must not exceed Norito's structural limit of {}",
-                norito::json::MAX_JSON_VALUE_NESTING_DEPTH
+                norito::core::MAX_VALUE_NESTING_DEPTH
             ));
         }
         if self.max_string_bytes > self.max_blob_bytes {
@@ -35613,7 +35612,7 @@ policy_digest_hex = "{policy_digest_hex}"
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
-                format!("{error:?}").contains(key),
+                format!("{error:?}").contains("`settlement.offline`"),
                 "unexpected error: {error:?}"
             );
         }
@@ -38076,7 +38075,16 @@ publish_delay_seconds = 17
             Value::Integer(101),
         );
         queues.insert("bodies".into(), Value::Integer(310));
-        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            101,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("height-local lifecycle capacity must fit its physical-slot space");
         let report = format!("{error:?}");
@@ -38128,7 +38136,16 @@ publish_delay_seconds = 17
             Value::Integer(33),
         );
         queues.insert("bodies".into(), Value::Integer(106));
-        queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            33,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("home profile admits at most 32 independent authenticated sources");
         let report = format!("{error:?}");
@@ -38208,11 +38225,26 @@ publish_delay_seconds = 17
     }
     include!("user/kura_and_snapshot_tests.rs");
     #[test]
+    fn snapshot_resource_defaults_fit_decoder_limits() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.snapshot.resources.max_decode_depth.get(),
+            norito::core::MAX_VALUE_NESTING_DEPTH
+        );
+        assert!(
+            actual
+                .snapshot
+                .resources
+                .validate(actual.snapshot.max_payload_bytes)
+                .is_ok()
+        );
+    }
+    #[test]
     fn snapshot_resource_policy_rejects_incoherent_budgets() {
         let invalid_resources = [
             (
                 "max_decode_depth",
-                i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1)
+                i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH + 1)
                     .expect("Norito depth limit fits i64"),
             ),
             ("max_string_bytes", 65),
@@ -38228,7 +38260,13 @@ publish_delay_seconds = 17
                 .expect("snapshot table");
             snapshot.insert("max_payload_bytes".into(), Value::Integer(128));
             let mut resources = Table::new();
-            resources.insert("max_decode_depth".into(), Value::Integer(64));
+            resources.insert(
+                "max_decode_depth".into(),
+                Value::Integer(
+                    i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH)
+                        .expect("Norito depth limit fits i64"),
+                ),
+            );
             resources.insert("max_decode_items".into(), Value::Integer(1_024));
             resources.insert("max_string_bytes".into(), Value::Integer(32));
             resources.insert("max_blob_bytes".into(), Value::Integer(64));

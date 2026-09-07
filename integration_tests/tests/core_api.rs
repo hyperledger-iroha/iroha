@@ -52,6 +52,8 @@ mod set_parameter;
 mod sns;
 #[path = "sorafs_moderation_anchor.rs"]
 mod sorafs_moderation_anchor;
+#[path = "sorafs_network.rs"]
+mod sorafs_network;
 #[path = "sorafs_orderbook_ledger.rs"]
 mod sorafs_orderbook_ledger;
 #[path = "sorafs_repair_ledger.rs"]

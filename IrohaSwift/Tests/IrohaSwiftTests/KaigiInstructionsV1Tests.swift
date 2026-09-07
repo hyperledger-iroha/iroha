@@ -137,7 +137,7 @@ final class KaigiInstructionsV1Tests: XCTestCase {
     XCTAssertEqual(try report.barePayload(), expected)
   }
 
-  func testLeaveAlwaysEncodesReservedPrivacyFieldsAsNone() throws {
+  func testTransparentLeaveEncodesAbsentPrivacyFields() throws {
     let leave = try LeaveKaigiInstructionV1(
       callID: KaigiIdV1(domainID: "meetings.universal", callName: "transparent"),
       participant: account(4)
@@ -151,9 +151,9 @@ final class KaigiInstructionsV1Tests: XCTestCase {
     XCTAssertEqual(reader.remaining(), 0)
   }
 
-  func testPrivacyArtifactsFixReservedIdentityHintsToSafeValues() throws {
-    let commitment = KaigiParticipantCommitmentV1(commitment: try hash(0x11))
-    let nullifier = try KaigiParticipantNullifierV1(digest: hash(0x22))
+  func testPrivacyArtifactsEncodeOnlyFinalRawScalarFields() throws {
+    let commitment = KaigiParticipantCommitmentV1(commitment: try scalar(0x11))
+    let nullifier = try KaigiParticipantNullifierV1(digest: scalar(0x22))
     let privacy = try KaigiPrivacyArtifactsV1(
       commitment: commitment,
       nullifier: nullifier,
@@ -175,14 +175,12 @@ final class KaigiInstructionsV1Tests: XCTestCase {
       data: try commitmentOption.readCompactField()
     )
     XCTAssertEqual(try encodedCommitment.readCompactField(), commitment.commitment.bytes)
-    XCTAssertEqual(try encodedCommitment.readCompactField(), Data([0]))
     XCTAssertEqual(encodedCommitment.remaining(), 0)
 
     var nullifierOption = CanonicalNoritoReader(data: try outer.readCompactField())
     XCTAssertEqual(try nullifierOption.readUInt8(), 1)
     var encodedNullifier = CanonicalNoritoReader(data: try nullifierOption.readCompactField())
     XCTAssertEqual(try encodedNullifier.readCompactField(), nullifier.digest.bytes)
-    XCTAssertEqual(try encodedNullifier.readCompactField(), Data(repeating: 0, count: 8))
     XCTAssertEqual(encodedNullifier.remaining(), 0)
   }
 
@@ -304,8 +302,8 @@ final class KaigiInstructionsV1Tests: XCTestCase {
     )
 
     let privacy = try KaigiPrivacyArtifactsV1(
-      commitment: KaigiParticipantCommitmentV1(commitment: hash(0x31)),
-      nullifier: KaigiParticipantNullifierV1(digest: hash(0x32)),
+      commitment: KaigiParticipantCommitmentV1(commitment: scalar(0x31)),
+      nullifier: KaigiParticipantNullifierV1(digest: scalar(0x32)),
       rosterRoot: hash(0x33),
       proof: Data([1])
     )
@@ -321,9 +319,9 @@ final class KaigiInstructionsV1Tests: XCTestCase {
         proof: Data()
       )
     )
-    XCTAssertThrowsError(
-      try KaigiParticipantNullifierV1(
-        digest: KaigiHashV1(bytes: Data(repeating: 0, count: 31) + Data([1]))
+    XCTAssertNoThrow(
+      KaigiParticipantNullifierV1(
+        digest: try KaigiAuthorizationScalarV1(bytes: Data(repeating: 0, count: 32))
       )
     )
   }
@@ -399,6 +397,10 @@ final class KaigiInstructionsV1Tests: XCTestCase {
       privateKeyBytes: Data(repeating: byte, count: 32)
     ).publicKey
     return try AccountId.makeI105(publicKey: publicKey)
+  }
+
+  private func scalar(_ byte: UInt8) throws -> KaigiAuthorizationScalarV1 {
+    try KaigiAuthorizationScalarV1(bytes: Data(repeating: byte, count: 32))
   }
 
   private func hash(_ byte: UInt8) throws -> KaigiHashV1 {

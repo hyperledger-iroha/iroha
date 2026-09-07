@@ -383,12 +383,14 @@ pub(super) mod route_test_support {
     use std::sync::Arc;
     pub(in crate::client) fn assert_rejected_before_http<T: std::fmt::Debug>(
         expected_error: &str,
-        request: impl FnOnce() -> eyre::Result<T>,
+        request: impl FnOnce(crate::http_default::DefaultHttpTransport) -> eyre::Result<T>,
     ) {
         let snapshots: SnapshotStore = Arc::default();
         let error = with_mock_http(
             respond_with(&snapshots, empty_response(StatusCode::ACCEPTED)),
-            || request().expect_err("invalid route transaction must fail locally"),
+            |mock_transport| {
+                request(mock_transport).expect_err("invalid route transaction must fail locally")
+            },
         );
         assert_eq!(error.to_string(), expected_error);
         assert!(
@@ -434,11 +436,19 @@ mod tests {
         let gas_limit = executable
             .requires_transaction_gas_limit()
             .then(|| NonZeroU64::new(1).expect("non-zero gas limit"));
-        client.build_transaction(
-            executable,
-            FeePaymentIntent::authority(Vec::new(), gas_limit),
-            Metadata::default(),
-        )
+        {
+            let account = client
+                .account_client()
+                .expect("bind repair fixture account");
+            account
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    executable,
+                    FeePaymentIntent::authority(Vec::new(), gas_limit),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build repair fixture transaction")
     }
     fn sign_instruction(
         client: &super::super::Client,
@@ -638,7 +648,12 @@ mod tests {
                 "SoraFS repair route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),
-            || client.post_sorafs_repair_transaction(route, transaction),
+            |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .post_sorafs_repair_transaction(route, transaction)
+            },
         );
     }
     fn assert_repair_route_contract() {
@@ -1063,7 +1078,11 @@ mod tests {
         let snapshots: SnapshotStore = Arc::default();
         with_mock_http(
             respond_with(&snapshots, json_response(StatusCode::OK, "{}")),
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 for response in [
                     client.get_sorafs_repair_status(&finalized),
                     client.get_sorafs_repair_tasks(&tasks),

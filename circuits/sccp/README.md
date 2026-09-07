@@ -133,3 +133,11 @@ Phase-2 artifacts, verifiers, and deployments remain invalid; fresh ceremonies
 and independent audits are required even when every local R1CS identity is current.
 The manifest also binds a deterministic definition-source and dependency closure;
 the focused inventory test rejects freshness claims after those inputs change.
+
+The circuit uses the canonical Rust wire namespace: TRON domain `5`, payload
+codecs text `1`, EVM `2`, TRON `5`, TON `7`, transfer payload tag `2`, and
+transfer hub-message kind `5`. These values are separate from network tags
+and destination-proof backend tags. Focused transfer-parser tests reject the
+retired compact identifiers in all four lanes; the shared Rust transfer fixture
+also guards circuit, release-script, and contract constants against drift.
+Namespace alignment changes message KATs and invalidates affected R1CS identities.

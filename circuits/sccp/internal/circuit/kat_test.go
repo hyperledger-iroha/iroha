@@ -161,7 +161,7 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 	}) {
 		t.Fatalf("constraint-count inventory toolchain drift: %#v", inventory.Toolchain)
 	}
-	if inventory.DefinitionState != "post-same-height-message-checkpoint-binding" {
+	if inventory.DefinitionState != "post-canonical-wire-and-checkpoint-binding" {
 		t.Fatalf("unexpected constraint-count definition state %q", inventory.DefinitionState)
 	}
 	definitionHash, err := definitionSourceClosure(filepath.Join("..", ".."))

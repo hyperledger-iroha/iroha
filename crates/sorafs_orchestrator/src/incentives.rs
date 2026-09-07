@@ -534,7 +534,7 @@ pub fn read_metrics_log(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, PublicKey};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
         soranet::incentives::RelayComplianceStatusV1,
@@ -571,8 +571,9 @@ mod tests {
         }
     }
     fn sample_account() -> AccountId {
-        let key_hex = "11".repeat(32);
-        let public_key = PublicKey::from_hex(Algorithm::Ed25519, &key_hex).expect("public key");
+        let (public_key, _) = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("derive relay reward account fixture key")
+            .into_parts();
         AccountId::new(public_key)
     }
     fn metrics(uptime_ratio_per_mille: u16, bandwidth_bytes: u128) -> RelayEpochMetricsV1 {

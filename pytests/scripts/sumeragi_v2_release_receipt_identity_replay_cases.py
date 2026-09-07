@@ -994,6 +994,11 @@ def test_receipt_rejects_rehashed_g_unit_log_missing_named_test(
         "lane_consensus::tests::recovered_proposal_batch_preserves_required_history_and_commit_evidence",
         "lane_consensus::tests::recovered_proposal_batch_preflights_later_quorum_before_any_eviction",
         "lane_consensus::tests::recovered_proposal_batch_rejects_required_union_over_capacity",
+        "lane_consensus::tests::applied_proposal_retirement_preserves_unselected_evidence_and_capacity",
+        "lane_consensus::tests::applied_proposal_retirement_preflights_all_selected_quorums",
+        "lane_consensus::tests::applied_proposal_retirement_revalidates_orphan_commit_lock_quorums",
+        "lane_consensus::tests::applied_proposal_retirement_rejects_invalid_or_conflicting_target_sets",
+        "lane_consensus::tests::retained_vote_body_inventory_covers_partial_owners_without_mutation",
     )
     for case_index, missing_name in enumerate(missing_names):
         case_root = tmp_path / str(case_index)

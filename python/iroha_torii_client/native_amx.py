@@ -1,8 +1,8 @@
 """Canonical Native AMX V2 hashing and participant-identity helpers.
 
 The routines in this module intentionally mirror the Rust data-model encodings
-used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and terminal lane
-settlement commitments.  They are private SDK plumbing, not a second wire
+used by ``HashOf<Vec<PeerId>>``, lane proposal preimages, and Native AMX
+participant settlements. They are private SDK plumbing, not a second wire
 format.
 """
 
@@ -36,8 +36,10 @@ _DESCRIPTOR_PREIMAGE_TYPE = (
 _PROPOSAL_PREIMAGE_TYPE = (
     "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
 )
-_SETTLEMENT_TYPE = "iroha_data_model::block::consensus::LaneBlockCommitment"
-_SETTLEMENT_HASH_DOMAIN = b"iroha.nexus.lane-relay.settlement.v1"
+_SETTLEMENT_TYPE = (
+    "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+)
+_SETTLEMENT_HASH_DOMAIN = b"iroha.consensus.native-amx.participant-settlement.v1"
 _APPLICATION_MANIFEST_LEAF_DOMAIN = b"iroha:merkle:leaf:v1\0"
 
 
@@ -418,14 +420,29 @@ def _settlement_receipt(receipt: Mapping[str, Any]) -> bytes:
 def compute_native_amx_participant_settlement_hash(
     settlement: Mapping[str, Any],
 ) -> str:
-    """Hash a terminal participant ``LaneBlockCommitment`` exactly as Rust."""
+    """Hash the nonrecursive ``NativeAmxParticipantSettlement`` exactly as Rust."""
+
+    expected_fields = {
+        "block_height",
+        "lane_id",
+        "lane_incarnation",
+        "dataspace_id",
+        "tx_count",
+        "total_local_amount",
+        "total_xor_due",
+        "total_xor_after_haircut",
+        "total_xor_variance",
+        "swap_metadata",
+        "receipts",
+        "nexus_fee_receipts",
+    }
+    if set(settlement) != expected_fields:
+        raise ValueError("Native AMX participant settlement must contain exactly its 12 fields")
 
     if settlement.get("swap_metadata") is not None:
         raise ValueError("Native AMX participant settlement must not contain swap metadata")
     if settlement.get("nexus_fee_receipts"):
         raise ValueError("Native AMX participant settlement must not contain fee receipts")
-    if settlement.get("native_amx_receipts"):
-        raise ValueError("Native AMX participant settlement must be terminal")
     payload = _struct(
         (
             _u64(settlement["block_height"]),
@@ -440,10 +457,7 @@ def compute_native_amx_participant_settlement_hash(
             b"\x00",
             _vector(settlement["receipts"], _settlement_receipt),
             _vector((), lambda value: value),
-            _vector((), lambda value: value),
         )
     )
     frame = _norito_frame(_SETTLEMENT_TYPE, payload)
-    return _hash_literal(
-        _u64(len(_SETTLEMENT_HASH_DOMAIN)) + _SETTLEMENT_HASH_DOMAIN + frame
-    )
+    return _hash_literal(_u64(len(_SETTLEMENT_HASH_DOMAIN)) + _SETTLEMENT_HASH_DOMAIN + frame)

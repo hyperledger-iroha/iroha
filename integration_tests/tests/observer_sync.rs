@@ -136,12 +136,14 @@ fn observer_node_catches_up() -> Result<()> {
     let _t0 = now_ms();
     let alice = ALICE_ID.clone();
     let key: Name = "note".parse().unwrap();
-    let mut client = network.peer().client();
-    client.transaction_status_timeout = std::time::Duration::from_millis(180_000);
+    let client =
+        integration_tests::sync::rebind_blocking_client(&network.peer().client(), |client| {
+            client.transaction_status_timeout = std::time::Duration::from_millis(180_000);
+        });
     // 1st block: set note = "v1"
     println!("observer_sync: submitting v1");
     let t1_lo = now_ms();
-    client.submit_blocking(
+    client.submit(
         SetKeyValue::account(alice.clone(), key.clone(), norito::json!("v1")),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -152,7 +154,7 @@ fn observer_node_catches_up() -> Result<()> {
     // 2nd block: set note = "v2"
     let _t2_lo = now_ms();
     println!("observer_sync: submitting v2");
-    client.submit_blocking(
+    client.submit(
         SetKeyValue::account(alice, key, norito::json!("v2")),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -165,7 +167,7 @@ fn observer_node_catches_up() -> Result<()> {
     let key2: Name = "znote".parse().unwrap();
     let _t3_lo = now_ms();
     println!("observer_sync: submitting v3");
-    client.submit_blocking(
+    client.submit(
         SetKeyValue::account(alice2, key2, norito::json!("v3")),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -176,7 +178,7 @@ fn observer_node_catches_up() -> Result<()> {
     // 4th block: set note = "v4"
     let t4_lo = now_ms();
     println!("observer_sync: submitting v4");
-    client.submit_blocking(
+    client.submit(
         SetKeyValue::account(
             ALICE_ID.clone(),
             "note".parse::<Name>().unwrap(),
@@ -190,7 +192,7 @@ fn observer_node_catches_up() -> Result<()> {
     // 5th block: set znote = "v5"
     let t5_lo = now_ms();
     println!("observer_sync: submitting v5");
-    client.submit_blocking(
+    client.submit(
         SetKeyValue::account(
             ALICE_ID.clone(),
             "znote".parse::<Name>().unwrap(),
@@ -238,7 +240,7 @@ fn observer_node_catches_up() -> Result<()> {
         let mut last_znote: Option<String> = None;
         loop {
             let client = peer.client();
-            let accounts = client.query(FindAccounts).execute_all().unwrap();
+            let accounts = client.client().query(FindAccounts).execute_all().unwrap();
             let alice = accounts
                 .into_iter()
                 .find(|a| a.id() == &ALICE_ID.clone())

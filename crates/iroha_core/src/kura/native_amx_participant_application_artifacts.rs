@@ -66,9 +66,9 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Participant control proposal certified by its lane committee.
     pub participant_proposal: LaneBlockProposalV1,
     /// Exact zero-effect control settlement certified alongside the proposal.
-    pub participant_settlement: LaneBlockCommitment,
+    pub participant_settlement: NativeAmxParticipantSettlement,
     /// Canonical hash of `participant_settlement` carried by both participant QCs.
-    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    pub participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Canonical global block which executed the control members.
     pub application_block_height: u64,
     /// Canonical global block identity. It binds the execution context, not the
@@ -125,7 +125,7 @@ struct NativeAmxParticipantReceiptLatestIndexV2 {
     lane_incarnation: Hash,
     lane_block_height: u64,
     participant_proposal_hash: Hash,
-    participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     application_block_height: u64,
     application_block_hash: HashOf<BlockHeader>,
     executed_block_wire_hash: Hash,

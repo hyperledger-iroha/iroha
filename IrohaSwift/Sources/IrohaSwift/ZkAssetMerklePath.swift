@@ -664,6 +664,7 @@ enum StrictJSONDuplicateKeyRejector {
         in data: Data,
         integerKeys: Set<String> = [],
         integerArrayKeys: Set<String> = [],
+        integerMatrixKeys: Set<String> = [],
         requireAllNumbersInteger: Bool = false
     ) throws {
         guard let text = String(data: data, encoding: .utf8) else {
@@ -673,6 +674,7 @@ enum StrictJSONDuplicateKeyRejector {
             text,
             integerKeys: integerKeys,
             integerArrayKeys: integerArrayKeys,
+            integerMatrixKeys: integerMatrixKeys,
             requireAllNumbersInteger: requireAllNumbersInteger
         )
         try parser.parse()
@@ -683,6 +685,7 @@ enum StrictJSONDuplicateKeyRejector {
         private let text: String
         private let integerKeys: Set<String>
         private let integerArrayKeys: Set<String>
+        private let integerMatrixKeys: Set<String>
         private let requireAllNumbersInteger: Bool
         private var index: String.Index
 
@@ -690,11 +693,13 @@ enum StrictJSONDuplicateKeyRejector {
             _ text: String,
             integerKeys: Set<String>,
             integerArrayKeys: Set<String>,
+            integerMatrixKeys: Set<String>,
             requireAllNumbersInteger: Bool
         ) {
             self.text = text
             self.integerKeys = integerKeys
             self.integerArrayKeys = integerArrayKeys
+            self.integerMatrixKeys = integerMatrixKeys
             self.requireAllNumbersInteger = requireAllNumbersInteger
             self.index = text.startIndex
         }
@@ -710,7 +715,8 @@ enum StrictJSONDuplicateKeyRejector {
         private mutating func parseValue(
             depth: Int,
             requireInteger: Bool = false,
-            requireIntegerArrayElements: Bool = false
+            requireIntegerArrayElements: Bool = false,
+            requireIntegerMatrixElements: Bool = false
         ) throws {
             guard depth <= Self.maximumNestingDepth else {
                 throw ZkAssetMerklePathError.invalidField("json.depth")
@@ -732,7 +738,8 @@ enum StrictJSONDuplicateKeyRejector {
             case "[":
                 try parseArray(
                     depth: depth,
-                    requireIntegerElements: requireIntegerArrayElements
+                    requireIntegerElements: requireIntegerArrayElements,
+                    requireIntegerArrayElements: requireIntegerMatrixElements
                 )
             case "\"":
                 _ = try parseString()
@@ -770,7 +777,8 @@ enum StrictJSONDuplicateKeyRejector {
                 try parseValue(
                     depth: depth + 1,
                     requireInteger: integerKeys.contains(key),
-                    requireIntegerArrayElements: integerArrayKeys.contains(key)
+                    requireIntegerArrayElements: integerArrayKeys.contains(key),
+                    requireIntegerMatrixElements: integerMatrixKeys.contains(key)
                 )
                 skipWhitespace()
                 if consumeIf("}") {
@@ -782,7 +790,8 @@ enum StrictJSONDuplicateKeyRejector {
 
         private mutating func parseArray(
             depth: Int,
-            requireIntegerElements: Bool = false
+            requireIntegerElements: Bool = false,
+            requireIntegerArrayElements: Bool = false
         ) throws {
             try consume("[")
             skipWhitespace()
@@ -792,7 +801,8 @@ enum StrictJSONDuplicateKeyRejector {
             while true {
                 try parseValue(
                     depth: depth + 1,
-                    requireInteger: requireIntegerElements
+                    requireInteger: requireIntegerElements,
+                    requireIntegerArrayElements: requireIntegerArrayElements
                 )
                 skipWhitespace()
                 if consumeIf("]") {

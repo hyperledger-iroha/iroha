@@ -64,7 +64,11 @@ if sys.argv[1:2] == ["release-manifest-receipt"]:
     assert args["--custody-trust-sha256"] == expected["custody_trust"]
     assert args["--now-unix-ms"] == {str(NOW * 1000)!r}
     assert args["--format"] == "json"
-    assert set(os.environ) == {{"PATH"}}
+    # The launch-boundary test asserts the complete supplied environment.
+    # Python/macOS can add interpreter and locale metadata after exec.
+    assert "SIGNER_PRIVATE_KEY" not in os.environ
+    assert "SORAFS_RELEASE_VERIFIER_BYPASS" not in os.environ
+    assert os.environ.get("LC_CTYPE") != "caller-locale-must-not-be-forwarded"
     {body if body is not None else 'sys.stdout.buffer.write(' + repr(output) + ')'}
     raise SystemExit(0)
 '''
@@ -101,6 +105,24 @@ def test_exact_native_contract_derives_canary_and_checker_reauthenticates(receip
     assert "verified_at_unix_ms" not in payload  # trusted clock is fresh on each recheck
     assert checker.validate_evidence_payload(payload, _options(path, pin)) == ("signed_manifest", [])
     assert not list(path.parent.glob(".sf11-*-*"))
+
+
+def test_receipt_launcher_supplies_only_the_fixed_native_environment(receipt_context, monkeypatch):
+    path, _, _, pin = receipt_context
+    monkeypatch.setenv("SIGNER_PRIVATE_KEY", "must-not-be-forwarded")
+    monkeypatch.setenv("LC_CTYPE", "caller-locale-must-not-be-forwarded")
+    original = process.subprocess.Popen
+    seen = []
+
+    def inspect_launch(*args, **kwargs):
+        assert kwargs["env"] == {"PATH": os.defpath}
+        assert kwargs["close_fds"] is True
+        seen.append(args[0][1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(process.subprocess, "Popen", inspect_launch)
+    sources.authenticate_signed_manifest_sources(path, pin, NOW)
+    assert "release-manifest-receipt" in seen
 
 
 @pytest.mark.parametrize("field", sorted(sources.NATIVE_RECEIPT_FIELDS))

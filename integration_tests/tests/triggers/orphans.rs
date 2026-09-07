@@ -2,7 +2,7 @@
 //! Orphaned trigger cleanup scenarios.
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{prelude::*, query::trigger::FindTriggers},
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -20,6 +20,7 @@ async fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> eyre::Result<Op
     let trigger_id = trigger_id.clone();
     spawn_blocking(move || {
         Ok(client
+            .client()
             .query(FindTriggers::new())
             .execute_all()
             .ok()
@@ -60,7 +61,7 @@ async fn set_up_trigger(
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
     let failand: DomainId = DomainId::try_new("failand", "universal")?;
-    let create_failand = domain_setup_instruction(&failand, &iroha.account)?;
+    let create_failand = domain_setup_instruction(&failand, &iroha.client().account)?;
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
     let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
     let fail_on_account_events = "fail".parse::<TriggerId>()?;
@@ -92,7 +93,7 @@ async fn set_up_trigger(
         let grant_register_trigger_permission: InstructionBox =
             grant_register_trigger_permission.into();
         move || {
-            client.submit_all_blocking::<InstructionBox>(
+            client.submit_all::<InstructionBox>(
                 [
                     create_failand,
                     create_the_one_who_fails,
@@ -109,7 +110,7 @@ async fn set_up_trigger(
         let register_fail_on_account_events: InstructionBox =
             register_fail_on_account_events.into();
         move || {
-            client.submit_blocking::<InstructionBox>(
+            client.submit::<InstructionBox>(
                 register_fail_on_account_events,
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -144,7 +145,7 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
         let client = iroha.clone();
         let the_one_who_fails = the_one_who_fails.clone();
         move || {
-            client.submit_blocking(
+            client.submit(
                 Unregister::account(the_one_who_fails),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -189,7 +190,7 @@ async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<
         let client = iroha.clone();
         let failand = failand.clone();
         move || {
-            client.submit_blocking(
+            client.submit(
                 Unregister::domain(failand),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

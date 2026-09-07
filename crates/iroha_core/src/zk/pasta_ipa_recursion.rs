@@ -1,36 +1,11 @@
-//! Shared fixed-profile accounting for Pasta IPA recursion.
+//! Test accounting for direct-instance Pasta IPA recursion.
 //!
-//! This module contains no proof-acceptance authority. It fixes the reviewed
-//! Poseidon/direct-instance compilation profile and computes the exact Axiom
-//! IPA transcript shape from a configured Halo2 constraint system. Callers
-//! still have to authenticate the circuit, verifier key, and compiled protocol.
+//! This module computes the exact Axiom IPA transcript shape from a configured
+//! Halo2 constraint system for direct-instance accounting regressions. It
+//! contains no proof-acceptance authority.
 
 use ff::Field;
 use halo2_proofs::plonk::{Any, Column, ConstraintSystem};
-
-/// Width of the reviewed Pasta IPA Poseidon transcript.
-pub(crate) const PASTA_IPA_POSEIDON_WIDTH_V1: usize = 3;
-/// Rate of the reviewed Pasta IPA Poseidon transcript.
-pub(crate) const PASTA_IPA_POSEIDON_RATE_V1: usize = 2;
-/// Full rounds in the reviewed Pasta IPA Poseidon transcript.
-pub(crate) const PASTA_IPA_POSEIDON_FULL_ROUNDS_V1: usize = 8;
-/// Partial rounds in the reviewed Pasta IPA Poseidon transcript.
-pub(crate) const PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1: usize = 57;
-/// `secure_mds` selector in the reviewed Pasta IPA Poseidon transcript.
-pub(crate) const PASTA_IPA_POSEIDON_SECURE_MDS_V1: usize = 0;
-
-/// Build the reviewed one-column, direct-instance IPA compilation profile.
-///
-/// Public instances are evaluated directly from the supplied field elements;
-/// they are not committed and opened as proof polynomials. The matching prover
-/// must therefore set `QUERY_INSTANCE = false`.
-pub(crate) fn pasta_ipa_direct_instance_compile_config_v1(
-    public_len: usize,
-) -> snark_verifier::system::halo2::Config {
-    snark_verifier::system::halo2::Config::ipa()
-        .set_query_instance(false)
-        .with_num_instance(vec![public_len])
-}
 
 /// Compute the exact Axiom IPA augmented-proof length for the direct-instance profile.
 ///

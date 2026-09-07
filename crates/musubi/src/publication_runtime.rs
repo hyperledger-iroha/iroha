@@ -28,15 +28,6 @@ use crate::{
         RegistryTransactionStateV1,
     },
 };
-use iroha::musubi_runtime::{
-    AuthenticatedMusubiPublicationRuntimeClientV1, MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1,
-    MusubiFinalizedArchiveRegistrationEvidenceV1, MusubiProviderReadbackRequestV1,
-    MusubiPublicationRuntimeTransportErrorV1, MusubiPublicationRuntimeTransportFailureClassV1,
-    MusubiSeedIngressCarPlanV1, MusubiSeedIngressStageRequestV1,
-    MusubiStorageCoordinationRequestV1, MusubiStorageCoordinationResponseV1,
-    MusubiStorageLocationDispositionV1, publication_service_origin,
-    validate_publication_service_base_url,
-};
 use iroha_data_model::{
     isi::{
         InstructionBox,
@@ -55,6 +46,15 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     sorafs::pin_registry::ReplicationOrderId,
     transaction::{Executable, SignedTransaction},
+};
+use iroha_musubi_service::{
+    AuthenticatedMusubiPublicationRuntimeClientV1, MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1,
+    MusubiFinalizedArchiveRegistrationEvidenceV1, MusubiProviderReadbackRequestV1,
+    MusubiPublicationRuntimeTransportErrorV1, MusubiPublicationRuntimeTransportFailureClassV1,
+    MusubiSeedIngressCarPlanV1, MusubiSeedIngressStageRequestV1,
+    MusubiStorageCoordinationRequestV1, MusubiStorageCoordinationResponseV1,
+    MusubiStorageLocationDispositionV1, publication_service_origin,
+    validate_publication_service_base_url,
 };
 use norito::{Decode, DecodeLimits, Encode};
 use std::{

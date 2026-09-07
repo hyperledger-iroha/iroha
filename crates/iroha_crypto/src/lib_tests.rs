@@ -1944,6 +1944,15 @@ mod tests {
         assert_bounded_public_key_json(secp_literal, &secp);
     }
     #[test]
+    fn borrowed_public_key_object_key_preserves_checked_validation() {
+        let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+        let map = std::collections::BTreeMap::from([(&malformed, 1_u8)]);
+        assert!(matches!(
+            norito::json::to_json_bounded(&map, 256),
+            Err(norito::json::BoundedJsonError::Unsupported)
+        ));
+    }
+    #[test]
     fn public_key_value_and_map_key_decoders_do_not_stage_json_text() {
         use norito::json::JsonDeserialize as _;
 
@@ -1966,10 +1975,22 @@ mod tests {
         assert_eq!(usage.total_allocated_bytes(), payload_bytes + 1);
 
         let (from_key, usage) = norito::core::with_decode_limits_measured(limits(), || {
-            PublicKey::json_from_map_key(literal)
+            <PublicKey as norito::json::JsonObjectKeyOwned>::from_json_key_text(literal)
         });
         assert_eq!(from_key.expect("PublicKey map key").to_string(), literal);
         assert_eq!(usage.total_allocated_bytes(), payload_bytes + 1);
+        let public_key: PublicKey = literal.parse().expect("PublicKey fixture");
+        let map = std::collections::BTreeMap::from([(&public_key, 5_u8)]);
+        let expected = format!("{{\"{literal}\":5}}");
+        assert_eq!(
+            norito::json::to_json_bounded(&map, expected.len())
+                .expect("serialize borrowed public-key map at exact bound"),
+            expected
+        );
+        assert!(matches!(
+            norito::json::to_json_bounded(&map, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        ));
     }
     #[test]
     fn public_key_json_rejects_above_protocol_literal_before_hex_decode() {

@@ -2,6 +2,7 @@
 use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
 use eyre::{Context, Result, eyre};
 use iroha::{
+    blocking::Client as BlockingIrohaClient,
     client::{
         AccountFaucetClaimV1, AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1,
         AccountOnboardingCurrentStateV1, AccountOnboardingPlanReceiptV1,
@@ -1165,6 +1166,7 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
             )?;
             let prepared = crate::soracloud::prepare_taira_inrou_canary_operation(
                 context.config(),
+                context.soracloud_http_witness_file(),
                 expected_fee_payment.clone(),
                 binding.clone(),
                 &args.stage_dir,
@@ -3762,7 +3764,8 @@ fn prepare_final_canary_operation(
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::new(canary_config.clone());
+    let client = BlockingIrohaClient::from_client(IrohaClient::new(canary_config.clone()))
+        .wrap_err("failed to initialize blocking transaction client")?;
     let message = prepared_canary_message(binding)?;
     let semantic_sha256 = prepared_semantic_sha256(binding, WRITE_CANARY_OPERATION, &message)?;
     let mut metadata = Metadata::default();
@@ -3795,7 +3798,7 @@ fn prepare_final_canary_operation(
     if wire.len() > PREPARED_TRANSACTION_MAX_BYTES {
         eyre::bail!("prepared Taira canary transaction exceeds its V1 byte bound");
     }
-    let prepared = IrohaClient::prepare_transaction_payload(&transaction);
+    let prepared = iroha::client::PreparedTransactionPayload::from_transaction(&transaction);
     if prepared.as_bytes() != wire {
         eyre::bail!("prepared submission changed exact Taira canary transaction bytes");
     }
@@ -4207,7 +4210,7 @@ fn validate_prepared_transaction_closure(
     transaction
         .verify_signature()
         .wrap_err("prepared operation transaction signature is invalid")?;
-    let prepared = IrohaClient::prepare_transaction_payload(transaction);
+    let prepared = iroha::client::PreparedTransactionPayload::from_transaction(transaction);
     if prepared.as_bytes() != wire || prepared.hash() != transaction.hash() {
         eyre::bail!("prepared client payload differs from the exact signed transaction");
     }
@@ -4415,21 +4418,25 @@ fn submit_exact_prepared_operation(
                 account_id: config.account.clone(),
                 key_pair: config.key_pair.clone(),
             };
-            let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
-            let classification = classify_exact_prepared_operation(&client, validated)?;
+            let client = BlockingIrohaClient::from_client(IrohaClient::new(write_canary_config(
+                config,
+                public_root,
+                &signer,
+            )?))?;
+            let classification = classify_exact_prepared_operation(client.client(), validated)?;
             if !submit_required_after_classification(&validated.envelope.binding, &classification)?
             {
                 return Ok(classification);
             }
             let transaction = validated.transaction()?;
-            let prepared = IrohaClient::prepare_transaction_payload(transaction);
+            let prepared = iroha::client::PreparedTransactionPayload::from_transaction(transaction);
             if prepared.as_bytes() != validated.wire()? {
                 eyre::bail!("raw submit bytes differ from the retained prepared envelope");
             }
             let submitted = match client.submit_prepared_transaction_payload(&prepared) {
                 Ok(submitted) => submitted,
                 Err(error) => {
-                    return match classify_exact_prepared_operation(&client, validated)? {
+                    return match classify_exact_prepared_operation(client.client(), validated)? {
                         PreparedRecoveryClassification::Absent => Err(hint_submit_error(error)),
                         reconciled => Ok(reconciled),
                     };
@@ -4445,7 +4452,7 @@ fn submit_exact_prepared_operation(
                     poll_interval: Duration::from_millis(500),
                 },
             );
-            match classify_exact_prepared_operation(&client, validated)? {
+            match classify_exact_prepared_operation(client.client(), validated)? {
                 PreparedRecoveryClassification::Absent => {
                     Ok(PreparedRecoveryClassification::Pending {
                         terminal_kind: "AcceptedNotVisible".to_owned(),
@@ -5543,7 +5550,9 @@ fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String
     if capability.device_lifecycle_version
         != iroha::data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1
     {
-        return Err("/v1/kagemusha/readiness does not require secure-device lifecycle V1".to_owned());
+        return Err(
+            "/v1/kagemusha/readiness does not require secure-device lifecycle V1".to_owned(),
+        );
     }
     if !capability.ready {
         return Err("/v1/kagemusha/readiness reports KAGEMUSHA V1 unavailable".to_owned());

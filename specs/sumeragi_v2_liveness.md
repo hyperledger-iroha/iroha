@@ -1589,10 +1589,10 @@ migration in `9c17d8bd0`. Its framing test does not establish cryptographic
 provenance coverage. The new direct share/QC and production-ingress negative
 matrix is registered, but still requires compilation and execution.
 
-Nine of those legs execute the separate 526-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 527 TSV lines and has SHA-256
-`15f6b8abd9f1f0afb270d4f457318baf4d5dca5f21e238e9689004a180f0c654`.
-The 320-test core group includes grouped Native prevote-budget rejection before
+Nine of those legs execute the separate 531-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 532 TSV lines and has SHA-256
+`d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81`.
+The 325-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -2014,7 +2014,7 @@ run. The gate now additionally queues local adapter work and rotates
 deterministic restart at the Decision-WAL, body-fetch, body-store, validation,
 and application boundaries, rejecting each old-generation completion. Because
 that expansion postdates the older recorded run, fresh evidence was required.
-The expanded 320-height smoke and exact schema-v2 100,000-height harness run are
+The expanded 325-height smoke and exact schema-v2 100,000-height harness run are
 green; the latest run matched every pinned counter. The source-attested wrapper
 intentionally rejects the current dirty worktree, so checkout-manifest-bound
 evidence still requires a signed clean commit. The fresh full strict
@@ -2049,7 +2049,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 881 exact production
 liveness tests and executes all 43 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 526-test
+profile additionally records nine G-UNIT legs executing a separate 531-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2263,7 +2263,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 84-leg, 881-production-test corridor plus 526 G-UNIT tests; execution
+audited 84-leg, 881-production-test corridor plus 531 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2432,7 +2432,7 @@ respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
-`d09f1808391cc23c3db3fa9ee3c6fef4750ee4a165e42f637c44f9f03bc658c0`,
+`782a3d17c988a4f99ee8ed8addc5a8311771809c07e8f4730c121e2d21b3ee96`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
@@ -2546,7 +2546,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
 receipt binds the 84 pre-network corridor legs and
-their exact 881-test production inventory, the separate 526-test G-UNIT
+their exact 881-test production inventory, the separate 531-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

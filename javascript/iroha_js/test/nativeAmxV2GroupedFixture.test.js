@@ -368,11 +368,11 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
   const expectedSettlementHashes = new Map([
     [
       "7/11",
-      "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+      "hash:2DA510B86888B5D77EA760618AF06BE5511D39E8588156639EEAB566A91F2F5D#5534",
     ],
     [
       "8/12",
-      "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+      "hash:0CDECBD738386DFB71F6ADB85E49799EC6982634632C99E6E81149E7F7F42FA5#B635",
     ],
   ]);
   const vectorLegs =
@@ -548,11 +548,12 @@ test("grouped Native AMX v2 owns immutable checked participant settlements", () 
     const settlement = leg.participant_settlement;
     const checkedHash = leg.participant_settlement_hash;
     assert.equal(helpers.computeParticipantSettlementHash(settlement), checkedHash);
+    assert.equal(Object.hasOwn(settlement, "native_amx_receipts"), false, implementation);
 
     inputSettlement.receipts[0].local_amount = "1";
     inputSettlement.receipts.pop();
     inputSettlement.nexus_fee_receipts.push({});
-    inputSettlement.native_amx_receipts.push({});
+    inputSettlement.native_amx_receipts = [{}];
     inputSettlement.tx_count = 0;
     assert.deepEqual(JSON.parse(JSON.stringify(settlement)), expected, implementation);
 
@@ -563,7 +564,7 @@ test("grouped Native AMX v2 owns immutable checked participant settlements", () 
       () => { settlement.receipts[0] = settlement.receipts[1]; },
       () => { settlement.receipts.pop(); },
       () => { settlement.nexus_fee_receipts.push({}); },
-      () => { settlement.native_amx_receipts.push({}); },
+      () => { settlement.native_amx_receipts = [{}]; },
     ]) {
       assert.throws(mutate, TypeError, implementation);
     }

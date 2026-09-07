@@ -2,6 +2,8 @@
 /// Canonical identity inputs recomputed by Kaigi authorization verifiers.
 pub mod authorization;
 pub mod participation;
+/// Exact canonical Pasta field encodings used by Kaigi authorization.
+pub mod scalar;
 use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
 use derive_more::Display;
 use getset::Getters;
@@ -11,6 +13,8 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
+use participation::KaigiPrivateParticipationLedgerV1;
+use scalar::KaigiAuthorizationScalarV1;
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
@@ -45,9 +49,10 @@ pub const KAIGI_RECORD_MAX_JSON_BYTES_V1: usize = KAIGI_METADATA_VALUE_MAX_JSON_
 pub const KAIGI_MAX_PARTICIPANTS_V1: usize = 4_096;
 /// Maximum retained private nullifiers in V1.
 ///
-/// The extra two entries beyond the participant bound accommodate optional
-/// host-create and host-end nullifiers.
-pub const KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1: usize = KAIGI_MAX_PARTICIPANTS_V1 + 2;
+/// One join and leave per maximum live roster plus mandatory host-create and
+/// host-end actions. Admission reserves every live leave and the host end;
+/// subsequent rejoins may consume only unreserved history capacity.
+pub const KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1: usize = 2 * KAIGI_MAX_PARTICIPANTS_V1 + 2;
 /// Maximum retained private usage commitments in V1.
 pub const KAIGI_MAX_USAGE_COMMITMENTS_V1: usize = 4_096;
 /// Maximum governance-allowlisted relay identities in V1.
@@ -58,7 +63,7 @@ pub const KAIGI_RELAY_ALLOWLIST_MAX_ENTRIES_V1: usize = KAIGI_RELAY_REGISTRY_MAX
 fn empty_roster_root() -> Hash {
     Hash::new(KAIGI_ROSTER_EMPTY_SEED)
 }
-fn roster_leaf_hash(commitment: &Hash) -> HashOf<[u8; 32]> {
+fn roster_leaf_hash(commitment: &KaigiAuthorizationScalarV1) -> HashOf<[u8; 32]> {
     let mut buf = [0u8; KAIGI_ROSTER_LEAF_TAG.len() + Hash::LENGTH];
     buf[..KAIGI_ROSTER_LEAF_TAG.len()].copy_from_slice(KAIGI_ROSTER_LEAF_TAG);
     buf[KAIGI_ROSTER_LEAF_TAG.len()..].copy_from_slice(commitment.as_ref());
@@ -141,7 +146,7 @@ impl KaigiId {
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "state"))]
 #[norito(reuse_archived)]
 pub enum KaigiPrivacyMode {
-    /// Participants are stored explicitly, matching the prior behaviour.
+    /// Participants are stored explicitly.
     Transparent,
     /// Participants use commitments/nullifiers for roster privacy.
     ZkRosterV1,
@@ -179,10 +184,13 @@ pub enum KaigiRoomPolicy {
     #[default]
     Authenticated,
 }
-/// Commitment entry representing an anonymised participant.
+/// Canonical private opening commitment for an authenticated participant.
+///
+/// Transaction signers and retained participation owners remain ledger-visible.
 #[derive(
     Debug,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     PartialOrd,
@@ -201,19 +209,16 @@ pub enum KaigiRoomPolicy {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+#[norito(deny_unknown_fields)]
 pub struct KaigiParticipantCommitment {
-    /// Hash commitment to the participant identity.
-    pub commitment: Hash,
-    /// Reserved diagnostic field; native on-chain privacy execution requires `None`.
-    ///
-    /// Clear participant labels belong in the host's encrypted off-chain session
-    /// state, not in a ledger-visible commitment payload.
-    pub alias_tag: Option<String>,
+    /// Exact Pasta Fp commitment to the participant's private opening.
+    pub commitment: KaigiAuthorizationScalarV1,
 }
 /// Nullifier entry ensuring joins/leaves occur only once.
 #[derive(
     Debug,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     PartialOrd,
@@ -233,15 +238,10 @@ pub struct KaigiParticipantCommitment {
     ffi_type(opaque)
 )]
 #[norito(reuse_archived)]
-#[allow(missing_copy_implementations)]
+#[norito(deny_unknown_fields)]
 pub struct KaigiParticipantNullifier {
-    /// Hash derived from the join/leave witness for uniqueness.
-    pub digest: Hash,
-    /// Reserved timing field; native on-chain privacy execution requires zero.
-    ///
-    /// Wall-clock issuance time would disclose a participant timing hint. Replay
-    /// protection uses [`Self::digest`] and does not depend on this value.
-    pub issued_at_ms: u64,
+    /// Exact Pasta Fp nullifier binding the action and participation sequence.
+    pub digest: KaigiAuthorizationScalarV1,
 }
 /// Relay hop metadata.
 #[derive(
@@ -642,10 +642,12 @@ pub struct KaigiRecord {
     pub roster_root: Hash,
     /// Participant roster commitments used in privacy mode.
     pub roster_commitments: Vec<KaigiParticipantCommitment>,
-    /// Nullifier log preventing duplicate joins in privacy mode.
+    /// Original account ownership and consumed participation sequences.
+    pub private_participation: KaigiPrivateParticipationLedgerV1,
+    /// Nullifier log preventing duplicate actions in privacy mode.
     pub nullifier_log: Vec<KaigiParticipantNullifier>,
     /// Historical usage commitments recorded for privacy billing.
-    pub usage_commitments: Vec<Hash>,
+    pub usage_commitments: Vec<KaigiAuthorizationScalarV1>,
     /// Current status of the call.
     pub status: KaigiStatus,
     /// Milliseconds since epoch when the record was created.
@@ -687,6 +689,7 @@ impl KaigiRecord {
             host_commitment: None,
             roster_root: empty_roster_root(),
             roster_commitments: Vec::new(),
+            private_participation: KaigiPrivateParticipationLedgerV1::default(),
             nullifier_log: Vec::new(),
             usage_commitments: Vec::new(),
             status: KaigiStatus::Active,
@@ -754,7 +757,7 @@ impl KaigiRecord {
         self.nullifier_log.push(nullifier);
     }
     /// Append a usage commitment to the privacy usage log.
-    pub fn push_usage_commitment(&mut self, commitment: Hash) {
+    pub fn push_usage_commitment(&mut self, commitment: KaigiAuthorizationScalarV1) {
         self.usage_commitments.push(commitment);
     }
     /// Append a participant, preserving uniqueness.
@@ -843,6 +846,9 @@ pub mod prelude {
         KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, KaigiStatus, NewKaigi,
         kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
         kaigi_relay_metadata_key,
+    };
+    pub use super::{
+        participation::KaigiPrivateParticipationLedgerV1, scalar::KaigiAuthorizationScalarV1,
     };
 }
 #[cfg(test)]
@@ -1028,8 +1034,7 @@ mod tests {
     #[test]
     fn participant_commitment_norito_roundtrip() {
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::new(b"commitment-bytes"),
-            alias_tag: Some("relay-1".to_owned()),
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x24; 32]).unwrap(),
         };
         let bytes = encode_adaptive(&commitment);
         let decoded: KaigiParticipantCommitment =
@@ -1041,8 +1046,7 @@ mod tests {
         let empty_root = KaigiRecord::compute_roster_root(&[]);
         assert_eq!(empty_root, empty_roster_root());
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::prehashed([0xAA; Hash::LENGTH]),
-            alias_tag: Some("participant".to_string()),
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x2A; 32]).unwrap(),
         };
         let populated_root = KaigiRecord::compute_roster_root(std::slice::from_ref(&commitment));
         assert_ne!(populated_root, empty_root);
@@ -1149,11 +1153,13 @@ mod tests {
     #[test]
     fn participant_nullifier_norito_roundtrip() {
         let nullifier = KaigiParticipantNullifier {
-            digest: Hash::new(b"nullifier-seed"),
-            issued_at_ms: 42,
+            digest: KaigiAuthorizationScalarV1::from_le_bytes([0x26; 32]).unwrap(),
         };
         let bytes = encode_adaptive(&nullifier);
         let decoded: KaigiParticipantNullifier = decode_adaptive(&bytes).expect("decode nullifier");
         assert_eq!(decoded, nullifier);
     }
 }
+
+#[cfg(all(test, feature = "json"))]
+mod final_wire_tests;

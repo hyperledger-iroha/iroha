@@ -367,7 +367,7 @@ STABLE_BINDING_IDENTITIES = {
         "MLDebugAppendReservationAndRestartAccounting",
         "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
         "method",
-        "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
+        "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked",
     ),
     "debug_append_file_accounting": (
         "MLDebugAppendReservationAndRestartAccounting",
@@ -456,14 +456,19 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "found.insert(identity, frame.entry_hash).is_some()",
     ),
     "exact_incomplete_carrier_reservation_rebuild": (
-        ".difference(&inventory.complete_terminal_outcome_identities)",
-        "AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier",
-        "read_lane_block_application_receipt_from_paths_durability_attested_locked",
-        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
-        "latest_height != identity.0",
-        "execution_entries_for_bounded_identities(&historical_execution_identities)",
-        "authenticated_carriers.push((entry_hash, carrier))",
-        "ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked",
+        'self.autonomous_lane_attempt_inventory_counts_locked(&lane_entry, 1)?',
+        'for identity in inventory.lifecycle_identities.union(&inventory.terminal_outcome_identities).filter(|identity| { !inventory.complete_terminal_outcome_identities.contains(identity) }).copied()',
+        'incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES',
+        'AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier',
+        'read_lane_block_application_receipt_from_paths_durability_attested_locked',
+        'receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution',
+        'receipt.proposal.descriptor.proposal_height == identity.1',
+        'latest_execution_entry',
+        'latest_height != identity.0',
+        'execution_entries_for_bounded_identities(&historical_execution_identities)',
+        'merge_carrier_for_entry_under_prune_and_canonical_guards',
+        'authenticated_carriers.push((entry_hash, carrier))',
+        'ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked',
     ),
     "autonomous_predecessor_role_dispatch": (
         "session.prepare_qc.payload_availability_qc.is_some()",
@@ -607,16 +612,27 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "*self.certified_bundle_capacity_reservations.lock() = rebuilt",
     ),
     "lane_history_compaction_recovery_before_capacity": (
-        "let before_recovery = Self::sidecar_tracked_bytes",
-        "let recovery_accounting = self.begin_total_disk_usage_mutation()",
-        "Self::recover_indexed_sidecar_artifacts",
-        "self.update_disk_usage_delta(before_recovery, before)",
-        "recovery_accounting.finish()",
-        "let temp_peak = before",
-        ".checked_add(pending_canonical_bytes)",
-        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
-        "LaneHistoryCompactionOutcome::CapacityBlocked",
-        "Self::prune_indexed_sidecars_through_terminal_frontier",
+        'self.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards',
+        'let before_recovery = Self::sidecar_tracked_bytes',
+        'let recovery_accounting = self.begin_total_disk_usage_mutation()',
+        'Self::recover_indexed_sidecar_artifacts',
+        'let before = Self::sidecar_tracked_bytes',
+        'self.update_disk_usage_delta(before_recovery, before)',
+        'recovery_accounting.finish()',
+        'let temp_peak = pairs.iter().try_fold(0_u64, |peak, ((data, index), _, _)| { Self::sidecar_tracked_bytes(data, index).map(|bytes| peak.max(bytes)) })?',
+        '.checked_add(pending_canonical_bytes)',
+        '.checked_add(terminal_reservations)',
+        '.checked_add(post_wsv_reservations)',
+        '.checked_add(certified_bundle_reservations)',
+        'Self::canonical_prune_intent_maintenance_headroom_bytes()',
+        '.checked_add(temp_peak)',
+        'LaneHistoryCompactionOutcome::CapacityBlocked',
+        'Self::prune_indexed_sidecars_through_terminal_frontier',
+        'for ((data_path, index_path), kind, role) in &pairs',
+        'LaneHistoryTerminalEvidenceRole::CanonicalReplica => { &terminal_references.replica_heights }',
+        'LaneHistoryTerminalEvidenceRole::ApplicationReceipt => { &terminal_references.receipt_heights }',
+        'Self::recover_indexed_sidecar_artifacts_with_required_heights( data_path, index_path, required_heights, kind, )',
+        'self.validate_active_autonomous_terminal_evidence_references_locked( entry, &terminal_references, )?',
     ),
     "prune_transaction_peak_projection": (
         "self.marker_stable_growth_bytes .checked_add(sidecar.sequential_peak_bytes)",
@@ -747,14 +763,22 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "None",
     ),
     "debug_append_carrier_reservation_gate": (
-        "let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?",
-        "let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?",
-        ".kura_disk_usage_bytes()?",
-        ".checked_add(pending_canonical_bytes)",
-        ".and_then(|bytes| bytes.checked_add(post_wsv_reservations))",
-        ".and_then(|bytes| bytes.checked_add(certified_bundle_reservations))",
-        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
-        "if required > self.max_disk_usage_bytes",
+        'additional_physical_peak_bytes',
+        'stable_terminal_reservations',
+        'let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?',
+        'let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?',
+        '.kura_disk_usage_bytes()?',
+        '.checked_add(pending_canonical_bytes)',
+        '.and_then(|bytes| bytes.checked_add(post_wsv_reservations))',
+        '.and_then(|bytes| bytes.checked_add(certified_bundle_reservations))',
+        'Self::canonical_prune_intent_maintenance_headroom_bytes()',
+        'if required > self.max_disk_usage_bytes',
+        'if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() { return Ok(()); }',
+        '.checked_add(additional_missing_terminal_identities)',
+        '.checked_add(additional_incomplete_terminal_identities)',
+        'resulting_missing > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES || resulting_incomplete > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES',
+        'if consumes_terminal_cas_transient && additional_physical_peak_bytes > shared_terminal_transient',
+        '.and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes))',
     ),
     "debug_append_file_accounting": (
         "let path = root.join(\"blocks.jsonl\")",
@@ -1314,6 +1338,38 @@ def _validate_stable_bindings(
             if item.count(scanner) != 1:
                 errors.append(
                     f"stable binding {binding_id} ({symbol}) must own exactly one combined disk scan"
+                )
+        if binding_id == "debug_append_carrier_reservation_gate":
+            bridge, bridge_error = _extract_rust_method(
+                source,
+                "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
+            )
+            expected_bridge = """
+fn validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked(
+    &self,
+    pending_canonical_bytes: u64,
+    additional_physical_peak_bytes: u64,
+    creates_lifecycle_identity: bool,
+    consumes_terminal_cas_transient: bool,
+    path: &Path,
+    allowed_view_temp: Option<&Path>,
+) -> Result<()> {
+    let additional_identities = usize::from(creates_lifecycle_identity);
+    self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(
+        pending_canonical_bytes,
+        additional_physical_peak_bytes,
+        0,
+        additional_identities,
+        additional_identities,
+        consumes_terminal_cas_transient,
+        path,
+        allowed_view_temp,
+    )
+}
+"""
+            if bridge is None or _normalize_space(bridge) != _normalize_space(expected_bridge):
+                errors.append(
+                    f"stable binding {binding_id} must forward exact lifecycle deltas, zero unreserved stable bytes and unchanged CAS/view authority: {bridge_error or 'bridge body differs'}"
                 )
         combined_publish_call = {
             "startup_carrier_envelope_reconstruction_order": (

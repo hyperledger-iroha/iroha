@@ -2756,7 +2756,7 @@ fn query_reserve_event_page(
         let position = ReserveQueryEventPosition::from(&record);
         let resolved = resolve_committed_event(state_ro, record, budget)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            .checked_add(norito::canonical_frame_len(&resolved).map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to size committed reserve event: {error}"
                 ))
@@ -2790,7 +2790,7 @@ fn query_reserve_event_page(
         has_more,
         next_after,
     };
-    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size committed reserve event page: {error}"
         ))
@@ -2865,7 +2865,7 @@ fn validate_encoded_record_page<T: norito::core::NoritoSerialize>(
     let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
         RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1,
     );
-    let encoded_len = norito::core::encoded_frame_len(page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(page).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size authoritative reserve record page: {error}"
         ))

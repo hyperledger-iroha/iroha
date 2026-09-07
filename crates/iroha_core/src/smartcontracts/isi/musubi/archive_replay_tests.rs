@@ -627,16 +627,18 @@ fn insert_enacted_proposal(
         enacted_at_height,
     );
     let attempt_id = attempt.attempt().id;
-    transaction.world.put_governance_proposal(
-        decision_id,
-        GovernanceProposalRecord {
-            proposer,
-            kind,
-            created_height,
-            status: GovernanceProposalStatus::Enacted,
-        },
-    )
-    .expect("Musubi test proposal must satisfy first-release JSON bounds");
+    transaction
+        .world
+        .put_governance_proposal(
+            decision_id,
+            GovernanceProposalRecord {
+                proposer,
+                kind,
+                created_height,
+                status: GovernanceProposalStatus::Enacted,
+            },
+        )
+        .expect("Musubi test proposal must satisfy first-release JSON bounds");
     transaction
         .world
         .put_parliament_attempt_for_testing(attempt_id, attempt)
@@ -1243,18 +1245,24 @@ fn archive_location_genesis_header() -> iroha_data_model::block::BlockHeader {
     )
 }
 fn archive_location_replay_state(world: World) -> State {
-    let state = State::new_with_chain_and_network_id_for_testing(
+    let header = archive_location_genesis_header();
+    let signer = KeyPair::try_from_seed(vec![0xF1; 32], Algorithm::Ed25519)
+        .expect("archive replay fixture signer");
+    let genesis = iroha_data_model::block::builder::BlockBuilder::new(header.clone())
+        .try_build_with_signature(0, signer.private_key())
+        .expect("canonical result-bearing archive replay genesis");
+    assert_eq!(genesis.hash(), header.hash());
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(std::sync::Arc::new(genesis))
+        .expect("retain the archive replay fixture's canonical genesis body");
+    let mut state = State::new_with_chain_and_network_id_for_testing(
         world,
-        Kura::blank_kura_for_testing(),
+        kura,
         LiveQueryStore::start_test(),
         iroha_data_model::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
-    {
-        let mut block_hashes = state.block_hashes.block();
-        block_hashes.push_for_tests(archive_location_genesis_header().hash());
-        block_hashes.commit_for_tests();
-    }
+    state.push_block_hash_for_testing(header.hash());
     state
 }
 fn archive_location_replay_block(state: &State) -> crate::state::StateBlock<'_> {

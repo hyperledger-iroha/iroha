@@ -130,7 +130,7 @@ fn tiny_add_public_fixture() -> TinyAddPublicFixture {
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical() {
-    use ff::PrimeField as _;
+    use ff::{Field as _, PrimeField as _};
     let (vk_envelope, proof) = anon_transfer_pow5_fixture();
     let mut prf_env = zk1::wrap_start();
     zk1::wrap_append_proof(&mut prf_env, &proof);
@@ -670,48 +670,69 @@ fn halo2_verify_add2inst_public_ipa() {
 
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_ipa() {
-    let k = 6u32;
-    let params: PastaParams = pasta_params_new(k);
-    let vk_h2: VerifyingKey<Curve> =
-        keygen_vk(&params, &pasta_tiny::AnonTransfer2x2::default()).expect("vk");
-    let pk = keygen_pk(
-        &params,
-        vk_h2.clone(),
-        &pasta_tiny::AnonTransfer2x2::default(),
+fn halo2_verify_final_confidential_transfer_ipa() {
+    use super::confidential_v2 as confidential;
+    const BACKEND: &str = "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3";
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"final-confidential-transfer-registry-test",
+        )),
+    );
+    let asset = "xor#universal";
+    let spend_key = [0x11; 32];
+    let rho = [0x22; 32];
+    let diversifier = confidential::derive_confidential_diversifier_v2(b"registry-input");
+    let owner =
+        confidential::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, diversifier)
+            .expect("input owner");
+    let commitment =
+        confidential::derive_confidential_note_v2(asset, 7, rho, owner).expect("input commitment");
+    let tree = [commitment];
+    let root = confidential::compute_confidential_root_v2(&tree).expect("canonical input root");
+    let recipient = confidential::derive_confidential_owner_tag_v2_with_diversifier(
+        &[0x33; 32],
+        confidential::derive_confidential_diversifier_v2(b"registry-output"),
     )
-    .expect("pk");
-
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<
-        IPACommitmentScheme<Curve>,
-        ProverIPA<'_, Curve>,
-        Challenge255<Curve>,
-        _,
-        _,
-        _,
-    >(
-        &params,
-        &pk,
-        &[pasta_tiny::AnonTransfer2x2::default()],
-        &[&[][..]],
-        OsRng,
-        &mut transcript,
+    .expect("recipient owner");
+    let vk_record = confidential::confidential_transfer_v2_vk_record("registry-transfer", 1)
+        .expect("final confidential relation key");
+    assert_eq!(
+        vk_record.circuit_id,
+        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
+    );
+    let vk = vk_record.key.as_ref().expect("inline canonical key");
+    let proof = confidential::build_confidential_transfer_proof_v2(
+        &network,
+        asset,
+        &spend_key,
+        &tree,
+        &[confidential::ConfidentialTransferInputV2 {
+            amount: 7,
+            rho,
+            diversifier,
+            leaf_index: 0,
+        }],
+        &[confidential::ConfidentialTransferOutputV2 {
+            amount: 7,
+            rho: [0x44; 32],
+            owner_tag: recipient,
+        }],
+        root,
+        &vk_record.circuit_id,
+        vk,
     )
-    .expect("proof created");
-    let proof_bytes = transcript.finalize();
-
-    // ZK1 envelopes
-    let mut vk_env = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut vk_env, k);
-    zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
-    let mut proof_env = zk1::wrap_start();
-    zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
-
-    let backend = "halo2/pasta/ipa/tiny-anon-transfer-2x2";
-    let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
-    let prf_box = ProofBox::new(backend.into(), proof_env);
-    assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
+    .expect("real final confidential transfer proof");
+    let (proof, vk) = super::relabel_halo2_ipa_open_verify_fixture(&proof.proof, vk, BACKEND);
+    assert!(super::verify_backend(BACKEND, &proof, Some(&vk)));
+    // The old conservation-only toy never serves as a production transfer relation.
+    let retired = "halo2/pasta/tiny-anon-transfer-2x2";
+    let retired_proof = ProofBox::new(retired.into(), proof.bytes.clone());
+    let retired_vk = VerifyingKeyBox::new(retired.into(), vk.bytes.clone());
+    assert!(!super::verify_backend(
+        retired,
+        &retired_proof,
+        Some(&retired_vk)
+    ));
 }
 
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]

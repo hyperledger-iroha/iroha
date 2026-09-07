@@ -8,9 +8,10 @@ use iroha_data_model::{
             LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneSettlementReceipt,
             NATIVE_AMX_BLS_PROOF_BYTES, NATIVE_AMX_GROUP_SOURCES_MAX,
             NATIVE_AMX_PARTICIPANT_LEGS_MAX, NATIVE_AMX_VALIDATORS_MAX, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiDiagnosticsStatus, SumeragiNativeAmxParticipantApplication,
-            SumeragiNativeAmxParticipantApplicationState, SumeragiPipelineExecutionStatus,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
+            NativeAmxPhase, NativeAmxReceipt, SumeragiDiagnosticsStatus,
+            SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
+            SumeragiPipelineExecutionStatus, compute_native_amx_participant_settlement_hash,
         },
         consensus_v2::{
             ConsensusRound, ExecutionCommitment, HeightContext, HeightContextId,
@@ -21,7 +22,7 @@ use iroha_data_model::{
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneId, compute_settlement_hash},
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
     transaction::{TransactionEntrypoint, TransactionResult},
 };
@@ -37,8 +38,8 @@ const EXECUTED_BLOCK_WIRE_FIXTURE: &[u8] = b"native-amx-v2-grouped-fixture-execu
 #[derive(Clone)]
 struct ParticipantFixture {
     proposal: LaneBlockProposalV1,
-    settlement: LaneBlockCommitment,
-    settlement_hash: HashOf<LaneBlockCommitment>,
+    settlement: NativeAmxParticipantSettlement,
+    settlement_hash: HashOf<NativeAmxParticipantSettlement>,
 }
 struct FixtureContext {
     keypairs: Vec<KeyPair>,
@@ -139,7 +140,7 @@ fn grouped_settlement(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     lane_incarnation: Hash,
-) -> Result<LaneBlockCommitment, Box<dyn Error>> {
+) -> Result<NativeAmxParticipantSettlement, Box<dyn Error>> {
     let receipts = context
         .sources
         .iter()
@@ -153,7 +154,7 @@ fn grouped_settlement(
             timestamp_ms: context.authority_context_height,
         })
         .collect::<Vec<_>>();
-    Ok(LaneBlockCommitment {
+    Ok(NativeAmxParticipantSettlement {
         block_height: context.coordinator_lane_block_height,
         lane_id,
         lane_incarnation,
@@ -166,7 +167,6 @@ fn grouped_settlement(
         swap_metadata: None,
         receipts,
         nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
     })
 }
 fn participant_fixture(
@@ -178,7 +178,7 @@ fn participant_fixture(
 ) -> Result<ParticipantFixture, Box<dyn Error>> {
     let lane_incarnation = participant_incarnation(context, lane_id, dataspace_id);
     let settlement = grouped_settlement(context, lane_id, dataspace_id, lane_incarnation)?;
-    let settlement_hash = compute_settlement_hash(&settlement)?;
+    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)?;
     let mut descriptor = LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id,
@@ -269,7 +269,7 @@ fn body(
         participant_lane_block_height: descriptor.lane_block_height,
         participant_lane_block_view: descriptor.lane_block_view,
         participant_proposal_hash: participant.proposal.proposal_hash,
-        participant_settlement_commitment: Hash::from(participant.settlement_hash),
+        participant_settlement_commitment: participant.settlement_hash,
         participant_validator_set_hash: context.validator_set_hash,
         participant_validator_count: u32::try_from(context.validators.len())?,
         participant_min_quorum: u32::try_from(MIN_QUORUM)?,
@@ -1179,6 +1179,15 @@ fn negative_controls(
         b"native-amx-v2-grouped-fixture-coordinator-incarnation",
     ))
     .expect("hash serializes to JSON");
+    // The participant wire type has no nested Native AMX receipt field. Replace
+    // the complete object so the control injects the forbidden field without
+    // requiring that field to exist in the canonical fixture.
+    let mut nested_native_settlement =
+        json::to_value(&commitment.native_amx_receipts[0].legs[0].participant_settlement)?;
+    nested_native_settlement
+        .as_object_mut()
+        .ok_or("participant settlement must serialize to a JSON object")?
+        .insert("native_amx_receipts".to_owned(), norito::json!([{}]));
     let mut controls = vec![
         control(
             "flattened_phase",
@@ -1428,11 +1437,7 @@ fn negative_controls(
         ),
         control(
             "nested_native_receipt",
-            mutation(
-                "replace",
-                &format!("{settlement}/native_amx_receipts"),
-                Some(norito::json!([{}])),
-            ),
+            mutation("replace", &settlement, Some(nested_native_settlement)),
         ),
         control(
             "nested_fee_receipt",

@@ -15,7 +15,7 @@ const SEED: &[u8; 10] = &[1u8; 10];
 // a malformed fixture cannot make the subgroup tripwire pass accidentally.
 const NON_SUBGROUP_G1: [u8; 48] = hex_literal::hex!(
     "8000000000000000000000000000000000000000000000000000000000000000\
-     00000000000000000000000000000000"
+     00000000000000000000000000000004"
 );
 const NON_SUBGROUP_G2: [u8; 96] = hex_literal::hex!(
     "8158b0083c00046272a9b63583963fff07e147f3f9e6e24174328ad8bc2aa150\
@@ -325,11 +325,14 @@ mod normal {
     }
     #[test]
     fn parse_public_key_rejects_non_subgroup_point() {
+        // x = 4 reaches the subgroup check. The x = 0 torsion point is rejected
+        // by blst's uncompress operation before its unchecked decoder returns.
         let unchecked = G1Affine::from_compressed_unchecked(&NON_SUBGROUP_G1)
             .into_option()
             .expect("tripwire fixture is a compressed on-curve G1 point");
         assert!(bool::from(unchecked.is_on_curve()));
         assert!(!bool::from(unchecked.is_torsion_free()));
+        assert_eq!(unchecked.to_compressed(), NON_SUBGROUP_G1);
         assert!(
             BlsImpl::<NormalConfiguration>::parse_public_key(&NON_SUBGROUP_G1).is_err(),
             "BLS-normal parser must enforce the G1 prime-order subgroup"

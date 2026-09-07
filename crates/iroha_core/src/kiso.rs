@@ -1642,8 +1642,8 @@ mod tests {
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
                     iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-                kaigi_roster_join_vk: None,
-                kaigi_roster_leave_vk: None,
+                kaigi_authorization_vk: None,
+
                 kaigi_usage_vk: None,
                 max_proof_size_bytes:
                     iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,

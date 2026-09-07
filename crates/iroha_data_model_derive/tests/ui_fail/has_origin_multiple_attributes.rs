@@ -1,3 +1,4 @@
+//! Duplicate event-origin declarations are rejected, including empty enums.
 use iroha_data_model_derive::HasOrigin;
 #[derive(HasOrigin)]
 #[has_origin(origin = Object)]

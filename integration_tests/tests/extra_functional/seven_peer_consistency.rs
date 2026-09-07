@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_or_storage};
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{
         ValidationFail,
         parameter::BlockParameter,
@@ -74,12 +74,15 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             None,
         )
     });
-    let mut submitter_client = submitter.client();
+    let submitter_client = submitter.client();
     let tx_timeout = sync_timeout;
-    submitter_client.transaction_status_timeout = tx_timeout;
-    submitter_client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
-    let create_domain = domain_setup_instruction(&domain_id, &submitter_client.account)?;
-    let setup_result = submitter_client.submit_all_blocking::<InstructionBox>(
+    let submitter_client =
+        integration_tests::sync::rebind_blocking_client(&submitter_client, |client| {
+            client.transaction_status_timeout = tx_timeout;
+            client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
+        });
+    let create_domain = domain_setup_instruction(&domain_id, &submitter_client.client().account)?;
+    let setup_result = submitter_client.submit_all::<InstructionBox>(
         [
             create_domain,
             create_account.into(),
@@ -108,7 +111,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = Quantity::from(500_u32);
-    if let Err(err) = submitter_client.submit_blocking(
+    if let Err(err) = submitter_client.submit(
         Mint::asset_quantity(
             quantity.clone(),
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
@@ -120,7 +123,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let submitter_deadline = Instant::now() + sync_timeout;
     loop {
-        let err_detail = match submitter_client.query_single(FindAssetById::new(asset_id.clone())) {
+        let err_detail = match submitter_client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
             Ok(asset) => {
                 if asset.value() == &quantity {
                     None
@@ -159,7 +165,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         let mut pending = Vec::new();
         for peer in peers {
             let client = peer.client();
-            match client.query_single(FindAssetById::new(asset_id.clone())) {
+            match client
+                .client()
+                .query_single(FindAssetById::new(asset_id.clone()))
+            {
                 Ok(asset) => {
                     if asset.value() != &quantity {
                         pending.push(format!(
@@ -258,9 +267,9 @@ fn wait_for_setup_state(
     let deadline = Instant::now() + timeout;
     let mut last_err = None;
     loop {
-        let domains = client.query(FindDomains).execute_all();
-        let accounts = client.query(FindAccounts).execute_all();
-        let asset_defs = client.query(FindAssetsDefinitions).execute_all();
+        let domains = client.client().query(FindDomains).execute_all();
+        let accounts = client.client().query(FindAccounts).execute_all();
+        let asset_defs = client.client().query(FindAssetsDefinitions).execute_all();
         match (domains, accounts, asset_defs) {
             (Ok(domains), Ok(accounts), Ok(asset_defs)) => {
                 let domain_ok = domains.iter().any(|domain| domain.id() == domain_id);

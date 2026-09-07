@@ -60,9 +60,10 @@ async fn register_new_peer() -> Result<()> {
             .expect("network peer should have BLS PoP")
             .to_vec(),
     );
-    let mut client = network.client();
-    client.transaction_status_timeout = submit_timeout;
-    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    let client = integration_tests::sync::rebind_blocking_client(&network.client(), |client| {
+        client.transaction_status_timeout = submit_timeout;
+        client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    });
     submit_instruction_or_warn(client, register, "register_new_peer").await?;
     if sandbox::handle_result(
         network.ensure_blocks(2).await,
@@ -88,9 +89,10 @@ async fn register_new_peer() -> Result<()> {
     {
         return Ok(());
     }
-    let mut client = network.client();
-    client.transaction_status_timeout = submit_timeout;
-    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    let client = integration_tests::sync::rebind_blocking_client(&network.client(), |client| {
+        client.transaction_status_timeout = submit_timeout;
+        client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    });
     submit_instruction_or_warn(
         client,
         Log::new(Level::INFO, "register_new_peer_sync".to_string()),
@@ -207,9 +209,11 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             .to_vec(),
     )
     .into();
-    let mut client = leader_peer(randomized_peers.iter().copied()).client();
-    client.transaction_status_timeout = submit_timeout;
-    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    let client = leader_peer(randomized_peers.iter().copied()).client();
+    let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = submit_timeout;
+        client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    });
     if sandbox::handle_result(
         submit_instruction_or_warn(client, register_peer, context).await,
         context,
@@ -445,7 +449,7 @@ async fn wait_for_block_height(
     }
 }
 async fn submit_instruction_or_warn(
-    client: iroha::client::Client,
+    client: iroha::blocking::Client,
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<()> {
@@ -465,7 +469,7 @@ async fn submit_instruction_or_warn(
 }
 async fn submit_instruction_until_peer_roster(
     peers: impl IntoIterator<Item = &'_ NetworkPeer>,
-    roster_client: &iroha::client::Client,
+    roster_client: &iroha::blocking::Client,
     instruction: InstructionBox,
     expected_roster: usize,
     context: &str,
@@ -484,9 +488,11 @@ async fn submit_instruction_until_peer_roster(
             ));
         }
         let tx_timeout = submit_timeout.min(remaining);
-        let mut client = leader_peer(peers.iter().copied()).client();
-        client.transaction_status_timeout = tx_timeout;
-        client.transaction_ttl = Some(tx_timeout.saturating_add(Duration::from_secs(120)));
+        let client = leader_peer(peers.iter().copied()).client();
+        let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+            client.transaction_status_timeout = tx_timeout;
+            client.transaction_ttl = Some(tx_timeout.saturating_add(Duration::from_secs(120)));
+        });
         match submit_instruction_or_warn(client, instruction.clone(), context).await {
             Ok(()) => {}
             Err(err) if is_submit_timeout_error(&err) || is_register_duplicate_error(&err) => {
@@ -536,7 +542,7 @@ fn expected_connected_peers(roster_len: usize) -> u64 {
         .unwrap_or(0)
 }
 async fn wait_for_peer_roster(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     expected: usize,
     timeout: Duration,
 ) -> Result<()> {
@@ -547,6 +553,7 @@ async fn wait_for_peer_roster(
         let client = client.clone();
         let result = spawn_blocking(move || {
             client
+                .client()
                 .query(FindPeers)
                 .execute_all()
                 .map(|peers| peers.len())
@@ -579,6 +586,7 @@ async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, 
             let client = peer.client();
             let result = spawn_blocking(move || {
                 client
+                    .client()
                     .query(FindPeers)
                     .execute_all()
                     .map(|roster| roster.len())

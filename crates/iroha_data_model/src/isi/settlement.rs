@@ -50,12 +50,14 @@ mod model {
 }
 string_id!(SettlementId);
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::settlement::SettlementExecutionOrder")]
     pub enum SettlementExecutionOrder {
         DeliveryThenPayment,
         PaymentThenDelivery,
     }
 }
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::settlement::SettlementAtomicity")]
     pub enum SettlementAtomicity {
         AllOrNothing,
         CommitFirstLeg,
@@ -330,6 +332,7 @@ impl FxCorridorPolicyRegistry {
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Register or replace a native FX corridor policy.
+    #[norito_schema(name = "iroha_data_model::isi::settlement::SetFxCorridorPolicy")]
     pub struct SetFxCorridorPolicy {
         /// Complete policy to persist under its stable identifier.
         pub policy: FxCorridorPolicy,
@@ -338,6 +341,7 @@ isi! {
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Fund the isolated destination reserve of one exact FX corridor.
+    #[norito_schema(name = "iroha_data_model::isi::settlement::FundFxCorridorEscrow")]
     pub struct FundFxCorridorEscrow {
         /// Stable corridor policy identifier.
         pub policy_id: Name,
@@ -352,6 +356,7 @@ isi! {
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Refund an inactive FX corridor reserve to its immutable owner.
+    #[norito_schema(name = "iroha_data_model::isi::settlement::RefundFxCorridorEscrow")]
     pub struct RefundFxCorridorEscrow {
         /// Stable corridor policy identifier.
         pub policy_id: Name,
@@ -366,6 +371,7 @@ isi! {
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Atomically settle one policy-backed cross-dataspace FX conversion.
+    #[norito_schema(name = "iroha_data_model::isi::settlement::SettleFxCorridor")]
     pub struct SettleFxCorridor {
         /// Stable corridor policy identifier.
         pub policy_id: Name,
@@ -458,6 +464,7 @@ isi! {
     ///
     /// Core accepts this instruction only with `AllOrNothing` atomicity and a
     /// counterparty-issued permission bound to [`DvpIsi::intent_hash`].
+    #[norito_schema(name = "iroha_data_model::isi::settlement::DvpIsi")]
     pub struct DvpIsi {
         /// Stable identifier shared across the delivery lifecycle.
         pub settlement_id: SettlementId,
@@ -477,6 +484,7 @@ isi! {
     ///
     /// Core accepts this instruction only with `AllOrNothing` atomicity and a
     /// counterparty-issued permission bound to [`PvpIsi::intent_hash`].
+    #[norito_schema(name = "iroha_data_model::isi::settlement::PvpIsi")]
     pub struct PvpIsi {
         /// Stable identifier associated with this FX settlement lifecycle.
         pub settlement_id: SettlementId,
@@ -729,6 +737,7 @@ impl crate::seal::Instruction for RefundFxCorridorEscrow {}
 impl crate::seal::Instruction for SettleFxCorridor {}
 isi_box! {
     /// Grouping enum for settlement instructions.
+    #[norito_schema(name = "iroha_data_model::isi::settlement::SettlementInstructionBox")]
     pub enum SettlementInstructionBox {
         /// Delivery-versus-payment settlement.
         Dvp(DvpIsi),

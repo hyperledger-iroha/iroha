@@ -155,7 +155,10 @@ use iroha_primitives::{
     numeric::{NumericSpec, Quantity, XorQuantity},
 };
 use iroha_schema::Ident;
-use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
+use iroha_service_model::{
+    sorafs,
+    soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy},
+};
 use iroha_torii_shared::{
     connect::{
         AppMeta, ConnectCiphertextV1, ConnectControlV1, ConnectFrameV1, ConnectPayloadV1,
@@ -1934,14 +1937,14 @@ fn decode_connect_frame_bytes(bytes: &[u8]) -> PyResult<ConnectFrameV1> {
 }
 fn sorafs_default_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
 fn policy_override_u64<'py>(
@@ -2162,7 +2165,7 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-    let expires_default = generated + iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS;
+    let expires_default = generated + sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS;
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
             let secs: u64 = value.extract().map_err(|_| {

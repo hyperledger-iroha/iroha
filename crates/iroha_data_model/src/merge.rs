@@ -12,8 +12,8 @@ use crate::{
     block::{
         BlockHeader,
         consensus::{
-            LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt,
-            ValidatorIndex,
+            LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1,
+            NativeAmxParticipantSettlement, NativeAmxReceipt, ValidatorIndex,
         },
         consensus_v2::finality::V2FinalityArtifact,
     },
@@ -228,7 +228,7 @@ pub struct LaneDrainNativeFrontierEvidenceV1 {
     /// Exact participant proposal identity.
     pub participant_proposal_hash: Hash,
     /// Exact zero-effect participant settlement identity.
-    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    pub participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Number of unique grouped source transactions applied by the carrier.
     pub source_count: u32,
     /// Canonical global application height.

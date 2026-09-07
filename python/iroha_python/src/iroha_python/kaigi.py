@@ -105,6 +105,10 @@ _MAX_JSON_BYTES: Final[int] = 1_048_576
 _MAX_JSON_DEPTH: Final[int] = 128
 _U64_MAX: Final[int] = (1 << 64) - 1
 _U32_MAX: Final[int] = (1 << 32) - 1
+# ``kaigi_zk::Scalar`` is Pasta Fp; its canonical representation is little-endian.
+_PASTA_FP_MODULUS: Final[int] = int(
+    "40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16
+)
 _HASH_LITERAL_RE: Final[re.Pattern[str]] = re.compile(
     r"hash:([0-9A-F]{64})#([0-9A-F]{4})\Z", re.ASCII
 )
@@ -438,6 +442,17 @@ def _require_all_or_none(context: str, **artifacts: Any) -> None:
         )
 
 
+def _pasta_scalar_bytes(value: Any, context: str) -> bytes:
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{context} must be a raw bytes-like Pasta Fp scalar")
+    raw = bytes(value)
+    if len(raw) != 32:
+        raise ValueError(f"{context} must contain exactly 32 bytes")
+    if int.from_bytes(raw, "little") >= _PASTA_FP_MODULUS:
+        raise ValueError(f"{context} must be a canonical Pasta Fp scalar below the modulus")
+    return raw
+
+
 def _hash_bytes(value: Any, context: str) -> bytes:
     if isinstance(value, (bytes, bytearray, memoryview)):
         raw = bytes(value)
@@ -563,32 +578,29 @@ class KaigiIdV1:
 
 @dataclass(frozen=True)
 class KaigiParticipantCommitmentV1:
-    """Ledger-safe participant commitment without a clear-text alias tag."""
+    """A raw canonical Pasta Fp participant commitment with no alias tag."""
 
-    commitment: bytes | str
+    commitment: bytes
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "commitment",
-            _hash_bytes(self.commitment, "KaigiParticipantCommitmentV1.commitment"),
+            _pasta_scalar_bytes(self.commitment, "KaigiParticipantCommitmentV1.commitment"),
         )
 
 
 @dataclass(frozen=True)
 class KaigiParticipantNullifierV1:
-    """Ledger-safe participant nullifier; the V1 timing hint is fixed to zero."""
+    """A raw canonical Pasta Fp nullifier with no clear-text timing field."""
 
-    digest: bytes | str
-    issued_at_ms: int = 0
+    digest: bytes
 
     def __post_init__(self) -> None:
-        if type(self.issued_at_ms) is not int or self.issued_at_ms != 0:
-            raise ValueError("KaigiParticipantNullifierV1.issued_at_ms must be zero")
         object.__setattr__(
             self,
             "digest",
-            _hash_bytes(self.digest, "KaigiParticipantNullifierV1.digest"),
+            _pasta_scalar_bytes(self.digest, "KaigiParticipantNullifierV1.digest"),
         )
 
 
@@ -699,13 +711,13 @@ class KaigiInstructionWireV1:
 def _participant_commitment(value: KaigiParticipantCommitmentV1) -> bytes:
     if not isinstance(value, KaigiParticipantCommitmentV1):
         raise TypeError("commitment must be a KaigiParticipantCommitmentV1")
-    return _struct(bytes(value.commitment), b"\x00")
+    return _struct(bytes(value.commitment))
 
 
 def _participant_nullifier(value: KaigiParticipantNullifierV1) -> bytes:
     if not isinstance(value, KaigiParticipantNullifierV1):
         raise TypeError("nullifier must be a KaigiParticipantNullifierV1")
-    return _struct(bytes(value.digest), _u64(value.issued_at_ms, "nullifier.issued_at_ms"))
+    return _struct(bytes(value.digest))
 
 
 def _relay_hop(value: KaigiRelayHopV1) -> bytes:
@@ -793,6 +805,10 @@ def encode_create_kaigi_instruction_v1(
             raise ValueError("transparent CreateKaigi must omit every privacy artifact")
     else:
         _require_all_or_none("CreateKaigi", **privacy_artifacts)
+        if commitment is None:
+            raise ValueError(
+                "private CreateKaigi requires the host commitment, nullifier, roster_root, and proof"
+            )
     call = _struct(
         _kaigi_id(call_id, "CreateKaigi.call_id"),
         host_payload,
@@ -833,18 +849,13 @@ def _encode_join_or_leave_kaigi_instruction_v1(
     roster_root: bytes | str | None,
     proof: bytes | None,
 ) -> KaigiInstructionWireV1:
-    if wire_id == LEAVE_KAIGI_WIRE_ID_V1 and any(
-        value is not None for value in (commitment, nullifier, roster_root, proof)
-    ):
-        raise ValueError("LeaveKaigi V1 privacy artifacts are reserved and must be omitted")
-    if wire_id == JOIN_KAIGI_WIRE_ID_V1:
-        _require_all_or_none(
-            "JoinKaigi",
-            commitment=commitment,
-            nullifier=nullifier,
-            roster_root=roster_root,
-            proof=proof,
-        )
+    _require_all_or_none(
+        "JoinKaigi" if wire_id == JOIN_KAIGI_WIRE_ID_V1 else "LeaveKaigi",
+        commitment=commitment,
+        nullifier=nullifier,
+        roster_root=roster_root,
+        proof=proof,
+    )
     _, participant_payload = _account_id(participant, "Kaigi participant")
     payload = _struct(
         _kaigi_id(call_id, "Kaigi.call_id"),
@@ -880,18 +891,28 @@ def encode_join_kaigi_instruction_v1(
 
 
 def encode_leave_kaigi_instruction_v1(
-    *, call_id: KaigiIdV1, participant: str
+    *,
+    call_id: KaigiIdV1,
+    participant: str,
+    commitment: KaigiParticipantCommitmentV1 | None = None,
+    nullifier: KaigiParticipantNullifierV1 | None = None,
+    roster_root: bytes | str | None = None,
+    proof: bytes | None = None,
 ) -> KaigiInstructionWireV1:
-    """Encode one transparent-mode ``LeaveKaigi`` canonical wire payload."""
+    """Encode a leave, including the complete authorization quartet for a private call.
+
+    The transparent form omits all four artifacts. Core checks the call mode,
+    participation sequence, ownership, and proof against committed state.
+    """
 
     return _encode_join_or_leave_kaigi_instruction_v1(
         LEAVE_KAIGI_WIRE_ID_V1,
         call_id=call_id,
         participant=participant,
-        commitment=None,
-        nullifier=None,
-        roster_root=None,
-        proof=None,
+        commitment=commitment,
+        nullifier=nullifier,
+        roster_root=roster_root,
+        proof=proof,
     )
 
 
@@ -929,7 +950,7 @@ def encode_record_kaigi_usage_instruction_v1(
     call_id: KaigiIdV1,
     duration_ms: int,
     billed_gas: int = 0,
-    usage_commitment: bytes | str | None = None,
+    usage_commitment: bytes | None = None,
     proof: bytes | None = None,
 ) -> KaigiInstructionWireV1:
     """Encode one typed ``RecordKaigiUsage`` canonical wire payload."""
@@ -945,7 +966,7 @@ def encode_record_kaigi_usage_instruction_v1(
         _u64(billed_gas, "RecordKaigiUsage.billed_gas"),
         _option(
             usage_commitment,
-            lambda value: _hash_bytes(value, "RecordKaigiUsage.usage_commitment"),
+            lambda value: _pasta_scalar_bytes(value, "RecordKaigiUsage.usage_commitment"),
         ),
         _option(proof, lambda value: _proof(value, "RecordKaigiUsage.proof")),
     )
@@ -1077,12 +1098,24 @@ def build_join_kaigi_instruction(
     ).to_instruction()
 
 
-def build_leave_kaigi_instruction(*, call_id: KaigiIdV1, participant: str) -> "Instruction":
+def build_leave_kaigi_instruction(
+    *,
+    call_id: KaigiIdV1,
+    participant: str,
+    commitment: KaigiParticipantCommitmentV1 | None = None,
+    nullifier: KaigiParticipantNullifierV1 | None = None,
+    roster_root: bytes | str | None = None,
+    proof: bytes | None = None,
+) -> "Instruction":
     """Build a native ``LeaveKaigi`` instruction from typed keyword arguments."""
 
     return encode_leave_kaigi_instruction_v1(
         call_id=call_id,
         participant=participant,
+        commitment=commitment,
+        nullifier=nullifier,
+        roster_root=roster_root,
+        proof=proof,
     ).to_instruction()
 
 
@@ -1112,7 +1145,7 @@ def build_record_kaigi_usage_instruction(
     call_id: KaigiIdV1,
     duration_ms: int,
     billed_gas: int = 0,
-    usage_commitment: bytes | str | None = None,
+    usage_commitment: bytes | None = None,
     proof: bytes | None = None,
 ) -> "Instruction":
     """Build a native ``RecordKaigiUsage`` instruction from typed keyword arguments."""

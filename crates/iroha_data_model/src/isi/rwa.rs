@@ -4,6 +4,7 @@ use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
 use iroha_primitives::numeric::Quantity;
 isi! {
     /// Issue a new canonical RWA lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::RegisterRwa")]
     pub struct RegisterRwa {
         /// Registration payload for the new lot.
         pub rwa: NewRwa,
@@ -11,6 +12,7 @@ isi! {
 }
 isi! {
     /// Transfer quantity from an existing lot into a destination account.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::TransferRwa")]
     pub struct TransferRwa {
         /// Current owner recorded on the source lot.
         pub source: AccountId,
@@ -24,6 +26,7 @@ isi! {
 }
 isi! {
     /// Create a derived lot by merging one or more parent lots.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::MergeRwas")]
     pub struct MergeRwas {
         /// Parent lots and quantities contributed into the merged result.
         pub parents: Vec<RwaParentRef>,
@@ -37,6 +40,7 @@ isi! {
 }
 isi! {
     /// Redeem a quantity from an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::RedeemRwa")]
     pub struct RedeemRwa {
         /// Lot being redeemed.
         pub rwa: RwaId,
@@ -46,6 +50,7 @@ isi! {
 }
 isi! {
     /// Freeze an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::FreezeRwa")]
     pub struct FreezeRwa {
         /// Lot being frozen.
         pub rwa: RwaId,
@@ -53,6 +58,7 @@ isi! {
 }
 isi! {
     /// Unfreeze an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::UnfreezeRwa")]
     pub struct UnfreezeRwa {
         /// Lot being unfrozen.
         pub rwa: RwaId,
@@ -60,6 +66,7 @@ isi! {
 }
 isi! {
     /// Reserve a quantity on an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::HoldRwa")]
     pub struct HoldRwa {
         /// Lot receiving the hold.
         pub rwa: RwaId,
@@ -69,6 +76,7 @@ isi! {
 }
 isi! {
     /// Release a reserved quantity on an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::ReleaseRwa")]
     pub struct ReleaseRwa {
         /// Lot receiving the release.
         pub rwa: RwaId,
@@ -78,6 +86,7 @@ isi! {
 }
 isi! {
     /// Perform a controller-driven transfer from an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::ForceTransferRwa")]
     pub struct ForceTransferRwa {
         /// Lot being moved.
         pub rwa: RwaId,
@@ -89,6 +98,7 @@ isi! {
 }
 isi! {
     /// Replace the control policy on an existing lot.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::SetRwaControls")]
     pub struct SetRwaControls {
         /// Lot whose controls are being replaced.
         pub rwa: RwaId,
@@ -208,6 +218,7 @@ impl crate::seal::Instruction for SetKeyValue<Rwa> {}
 impl crate::seal::Instruction for RemoveKeyValue<Rwa> {}
 isi_box! {
     /// Grouping enum for RWA-related instructions.
+    #[norito_schema(name = "iroha_data_model::isi::rwa::RwaInstructionBox")]
     pub enum RwaInstructionBox {
         /// Register a new lot.
         Register(RegisterRwa),

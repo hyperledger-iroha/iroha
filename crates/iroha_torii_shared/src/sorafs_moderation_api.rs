@@ -466,7 +466,7 @@ mod tests {
     fn every_dto_rejects_unknown_json_fields() {
         let identity = "11".repeat(32);
         let signature = "33".repeat(64);
-        for rejected in [
+        for (rejected, expected_field) in [
             norito::json::from_str::<SorafsModerationDeadLetterPrepareRequestV1>(&format!(
                 r#"{{"identity_hex":"{identity}","kind":"native_submission","action":"redrive","authorized_at_unix_ms":1,"identity":"alias"}}"#
             ))
@@ -484,9 +484,17 @@ mod tests {
                 r#"{{"schema":"{SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1}","status":"applied","identity_hex":"{identity}","kind":"panel_notification","action":"acknowledge","result":"alias"}}"#
             ))
             .map(|_| ()),
-        ] {
+        ]
+        .into_iter()
+        .zip(["identity", "payload_hex", "resolution_hex", "result"])
+        {
             let error = rejected.expect_err("unknown DTO field must fail closed");
-            assert_eq!(error.to_string(), "unknown JSON field");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{expected_field}`")),
+                "the rejected DTO member must be identified: {error}"
+            );
         }
     }
     #[test]

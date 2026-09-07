@@ -9,8 +9,7 @@ use norito::codec::{Decode, Encode};
 use std::{collections::BTreeSet, fmt, num::NonZeroU32, str::FromStr};
 use thiserror::Error;
 /// Confidential-compute protection mechanism.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::confidential_compute::ConfidentialComputeMechanism")]
 pub enum ConfidentialComputeMechanism {
     /// Payload is encrypted (e.g., envelope-encrypted with a rotation key).

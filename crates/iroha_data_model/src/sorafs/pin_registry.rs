@@ -882,7 +882,9 @@ pub fn derive_sorafs_auto_replication_order_id_v1(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1"
+)]
 pub struct ProviderIngestCompletionSignerPolicyV1 {
     /// Stable governance identity for this provider-owner signing policy.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -940,7 +942,9 @@ impl ProviderIngestCompletionSignerPolicyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1"
+)]
 pub struct ProviderIngestCompletionAuthorityV1 {
     /// Current registered owner authorized to complete this provider's work.
     pub provider_owner: AccountId,

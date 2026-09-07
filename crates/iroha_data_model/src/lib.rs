@@ -109,6 +109,8 @@ pub mod isi;
 mod json_helpers;
 #[cfg(feature = "json")]
 mod json_key_codec;
+#[cfg(feature = "json")]
+mod json_object_key;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
 /// KAGEMUSHA hardware-backed cash commitments, proofs, and settlement models.

@@ -45,3 +45,10 @@ Groth16 fields. Run `sccp-circuits constraint-count --profile <closed-id>` to
 record the exact constraint count for a source revision; this command emits no
 key material. Constraint and prover resource ceilings are release blockers, not
 grounds for weakening these equations.
+
+Canonical wire identifiers must agree with Rust admission and destination
+contracts. The focused transfer-parser tests accept the canonical namespace
+and reject compact aliases in all four lanes. The repository's
+`pytests/scripts/sccp_wire_inventory_test.py` compares named circuit and contract
+constants against the Rust-owned native transfer fixture. A namespace change
+requires fresh KATs and R1CS identities before rebuilding dependent release artifacts.

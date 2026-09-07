@@ -17,6 +17,7 @@ iroha_data_model_derive::model_single! {
 }
 isi! {
     /// Generic instruction to set key value at the object.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::SetKeyValue")]
     pub struct SetKeyValue<O: Identifiable> {
         /// Where to set key value.
         pub object: O::Id,
@@ -92,6 +93,7 @@ impl SetKeyValue<Trigger> {
 }
 isi! {
     /// Set metadata on a concrete asset balance (`AssetId`).
+    #[norito_schema(name = "iroha_data_model::isi::transparent::SetAssetKeyValue")]
     pub struct SetAssetKeyValue {
         /// Asset to edit.
         pub asset: AssetId,
@@ -133,6 +135,7 @@ impl_into_box! {
 }
 isi! {
     /// Generic instruction to remove key value at the object.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::RemoveKeyValue")]
     pub struct RemoveKeyValue<O: Identifiable> {
         /// From where to remove key value.
         pub object: O::Id,
@@ -196,6 +199,7 @@ impl RemoveKeyValue<Trigger> {
 }
 isi! {
     /// Remove a metadata key from a concrete asset balance (`AssetId`).
+    #[norito_schema(name = "iroha_data_model::isi::transparent::RemoveAssetKeyValue")]
     pub struct RemoveAssetKeyValue {
         /// Asset to edit.
         pub asset: AssetId,
@@ -231,6 +235,7 @@ impl_into_box! {
 }
 isi! {
     /// Add a signatory to an account's multisig specification.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::AddSignatory")]
     pub struct AddSignatory {
         /// Account whose multisig spec is updated.
         pub account: AccountId,
@@ -246,6 +251,7 @@ impl AddSignatory {
 }
 isi! {
     /// Remove a signatory from an account's multisig specification.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::RemoveSignatory")]
     pub struct RemoveSignatory {
         /// Account whose multisig spec is updated.
         pub account: AccountId,
@@ -261,6 +267,7 @@ impl RemoveSignatory {
 }
 isi! {
     /// Set the quorum threshold for an account's multisig specification.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::SetAccountQuorum")]
     pub struct SetAccountQuorum {
         /// Account whose multisig spec is updated.
         pub account: AccountId,
@@ -285,6 +292,7 @@ impl_display! {
 }
 isi! {
     /// Generic instruction for granting permission to an entity.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::Grant")]
     pub struct Grant<O, D: Identifiable> {
         /// Object to grant.
         pub object: O,
@@ -338,6 +346,7 @@ impl_into_box! {
 }
 isi! {
     /// Generic instruction for revoking permission from an entity.
+    #[norito_schema(name = "iroha_data_model::isi::transparent::Revoke")]
     pub struct Revoke<O, D: Identifiable> {
         /// Object to revoke.
         pub object: O,
@@ -397,6 +406,7 @@ isi! {
     /// Instruction to execute specified trigger
     #[derive(Display)]
     #[display("EXECUTE `{trigger}`")]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::ExecuteTrigger")]
     pub struct ExecuteTrigger {
         /// Id of a trigger to execute
         pub trigger: TriggerId,
@@ -429,6 +439,7 @@ isi! {
     #[derive(Constructor, Display)]
     #[display("UPGRADE")]
     #[repr(transparent)]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::Upgrade")]
     pub struct Upgrade {
         /// Object to upgrade.
         pub executor: Executor,
@@ -480,6 +491,7 @@ isi! {
     /// Instruction to print logs
     #[derive(Constructor, Display)]
     #[display("LOG({level}): {msg}")]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::Log")]
     pub struct Log {
         /// Message log level
         pub level: Level,
@@ -552,6 +564,7 @@ isi! {
     ///   in a custom executor.
     #[derive(Display)]
     #[display("CUSTOM({payload})")]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::CustomInstruction")]
     pub struct CustomInstruction {
         pub payload: Json,
     }
@@ -573,6 +586,7 @@ isi! {
     /// Dev note: This instruction is not intended to be submitted by clients.
     #[derive(Display)]
     #[display("INVALID_INSTRUCTION({wire_id}, {payload_hash:?}): {message}")]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::InvalidInstruction")]
     pub struct InvalidInstruction {
         /// Wire identifier of the instruction that failed to decode.
         pub wire_id: String,

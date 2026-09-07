@@ -919,7 +919,9 @@ def test_release_lane_rejects_stale_signed_topology_review(tmp_path: Path) -> No
         ),
         (
             "--topology-qualification-signer-key-revision",
-            str(TOPOLOGY_SIGNER_KEY_REVISION + 1),
+            # A distinctive valid revision preserves the redaction assertion
+            # without colliding with arbitrary digits in temporary paths.
+            "1700700123",
             "signer_key_revision must match the trusted external software signer",
         ),
         (

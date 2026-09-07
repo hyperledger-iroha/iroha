@@ -10,7 +10,7 @@
 //! that state.
 use super::{
     FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot,
-    FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
+    FairV2IngressLeaderWireToken,
     safety_wal::{SafetyWalLeaderWireStoreAuthority, SafetyWalServicedCandidateStoreAuthority},
     v2_body_store::DurableBodyReceipt,
     v2_core::{

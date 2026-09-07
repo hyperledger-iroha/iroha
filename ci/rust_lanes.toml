@@ -82,7 +82,9 @@ description = "SoraFS, SoraNet, bridge, binding, settlement, and application ser
 packages = [
   "connect_norito_bridge",
   "iroha_js_host",
+  "iroha_musubi_service",
   "iroha_sccp",
+  "iroha_storage_client",
   "mochi-core",
   "mochi-integration",
   "mochi-ui",

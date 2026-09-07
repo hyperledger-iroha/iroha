@@ -661,8 +661,6 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         transaction_ttl: std::time::Duration::from_secs(5),
         transaction_status_timeout: std::time::Duration::from_secs(10),
         transaction_add_nonce: false,
-        connect_queue_root: iroha::config::default_connect_queue_root(),
-        soracloud_http_witness_file: None,
         sorafs_alias_cache: default_alias_policy(),
         sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::Canary,
@@ -675,9 +673,11 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     .with_instructions([Log::new(Level::INFO, "client submit e2e".to_owned())])
     .sign(key_pair.private_key());
     let expected_hash = tx.hash();
-    let actual_hash = tokio::task::spawn_blocking(move || client.submit_transaction(&tx))
+    let actual_hash = client
+        .account_client()
+        .expect("valid account authority context")
+        .submit_transaction(&tx)
         .await
-        .expect("join client submit")
         .expect("submit transaction");
     assert_eq!(actual_hash, expected_hash);
     harness.shutdown().await;

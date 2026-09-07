@@ -5,6 +5,7 @@ isi! {
     ///
     /// `alias = None` clears the current binding.
     /// `alias = Some(...)` sets or updates the binding and optionally refreshes lease metadata.
+    #[norito_schema(name = "iroha_data_model::isi::contract_alias::SetContractAlias")]
     pub struct SetContractAlias {
         /// Contract address that should be updated.
         pub contract_address: ContractAddress,

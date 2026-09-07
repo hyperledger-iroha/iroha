@@ -63,7 +63,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     // Subscribe to committed block headers.
     let mut events = timeout(
         network.sync_timeout(),
-        test_client.listen_for_events_async([BlockEventFilter::new()
+        test_client.listen_for_events([BlockEventFilter::new()
             .for_height(nonzero!(2u64))
             .for_status(BlockStatus::Committed)]),
     )

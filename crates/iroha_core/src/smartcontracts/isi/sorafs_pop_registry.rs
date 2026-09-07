@@ -2788,9 +2788,7 @@ mod tests {
             InstructionExecutionError::InvalidParameter(_)
         ));
         assert!(
-            input_error
-                .to_string()
-                .contains("not exact canonical Norito")
+            matches!(&input_error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("not exact canonical Norito"))
         );
         let state_error = decode_exact::<PopCredentialCommitmentBatchV1>(
             &alternate,

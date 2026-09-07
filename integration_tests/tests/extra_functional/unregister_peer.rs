@@ -3,7 +3,7 @@
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
@@ -74,7 +74,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let mut expected_height = run_blocking_with_timeout(
         {
             let client = client.clone();
-            move || client.get_status().map(|status| status.blocks)
+            move || client.client().get_status().map(|status| status.blocks)
         },
         tx_timeout,
         "network_stable_after_add_and_after_remove_peer fetch status",
@@ -107,7 +107,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-    let setup_domain = domain_setup_instruction(&domain_id, &client.account)?;
+    let setup_domain = domain_setup_instruction(&domain_id, &client.client().account)?;
     run_blocking_with_timeout(
         {
             let client = client.clone();
@@ -213,7 +213,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     expected_height = run_blocking_with_timeout(
         {
             let client = client.clone();
-            move || client.get_status().map(|status| status.blocks)
+            move || client.client().get_status().map(|status| status.blocks)
         },
         tx_timeout,
         "network_stable_after_add_and_after_remove_peer refresh status after unregister",
@@ -272,7 +272,7 @@ async fn find_asset(
 ) -> Result<Option<Quantity>> {
     let account_id = account.clone();
     let client = client.clone();
-    let asset = spawn_blocking(move || client.query(FindAssets::new()).execute_all())
+    let asset = spawn_blocking(move || client.client().query(FindAssets::new()).execute_all())
         .await??
         .into_iter()
         .filter(|asset| asset.id().account() == &account_id)
@@ -382,6 +382,7 @@ async fn wait_for_peer_count(
             let client = client.clone();
             move || {
                 client
+                    .client()
                     .query(FindPeers)
                     .execute_all()
                     .map(|peers| peers.len())

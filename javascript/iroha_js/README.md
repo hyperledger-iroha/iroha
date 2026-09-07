@@ -332,7 +332,7 @@ cryptographic-review, and artifact-publication gates.
 
 ## Native Privacy Bridge
 
-The first-release native surface exposes local build metadata only:
+The first-release native catalog surface exposes local build metadata:
 `isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
 latter returns this binary's canonical Norito
 `PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
@@ -353,6 +353,26 @@ retains that exact network and Torii origin. There is no browser, JSON snapshot,
 mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
+
+`buildKaigiAuthorizationProofV1()` consumes a mutable, canonical nonzero Pasta
+Fp blinding and returns raw 32-byte commitment, nullifier, authorization, and
+pre-roster-root buffers plus the canonical proof envelope. Its required context
+is a typed deployment `NetworkId`, canonical call domain/name, full original host
+and participant `AccountId` values, an exact `bigint` participation sequence,
+one of `hostCreate`, `join`, `leave`, or `hostEnd`, and the exact pre-state root.
+The blinding buffer is cleared on success and rejection; callers must keep any
+separate copies under their own secret-lifetime policy. This API requires the
+native prover, which verifies the generated envelope through the canonical Core
+backend before returning it. Browser calls clear a supplied mutable blinding
+and fail closed.
+
+Pass `{ commitment: result.commitment }` and `{ digest: result.nullifier }` into
+the matching Kaigi instruction builder. These values use raw canonical Pasta
+field bytes, including in the Norito JSON byte-array representation. The signed
+transaction identifies the participant; a proof binds its opening to the
+retained original account and current action, while ledger validation enforces
+membership and rekey lineage. Local proof construction alone does not establish
+network admission or production qualification.
 
 Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
 by a production confidential wallet or prover. The JavaScript SDK does not

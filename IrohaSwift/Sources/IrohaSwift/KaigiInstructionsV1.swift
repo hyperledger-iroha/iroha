@@ -48,7 +48,7 @@ extension KaigiInstructionV1 {
   }
 }
 
-/// Exact marked 32-byte Iroha hash used by Kaigi privacy fields.
+/// Exact marked 32-byte Iroha hash used only for a Kaigi roster root.
 public struct KaigiHashV1: Equatable, Hashable, Sendable {
   public static let byteCount = 32
 
@@ -68,9 +68,6 @@ public struct KaigiHashV1: Equatable, Hashable, Sendable {
   /// A defensive copy of the exact marked hash bytes.
   public var bytes: Data { Data(storage) }
 
-  fileprivate var isZeroSentinel: Bool {
-    storage.dropLast().allSatisfy { $0 == 0 } && storage.last == 1
-  }
 }
 
 /// Domain-scoped identifier for one Kaigi session.
@@ -110,34 +107,48 @@ public enum KaigiRelayBoundsV1 {
   public static let maxHPKEPublicKeyBytes = 4_096
 }
 
-/// Ledger-safe participant commitment.
-///
-/// Rust reserves `alias_tag` for diagnostics and production admission requires
-/// it to be absent. The Swift V1 type therefore does not expose that field.
-public struct KaigiParticipantCommitmentV1: Equatable, Hashable, Sendable {
-  public let commitment: KaigiHashV1
+/// Exact canonical little-endian Pasta Fp public output, without Hash marker packing.
+/// Zero is valid; private blinding requirements belong to the proving relation.
+public struct KaigiAuthorizationScalarV1: Equatable, Hashable, Sendable {
+  public static let byteCount = 32
+  private let storage: Data
+  private static let modulus: [UInt8] = [
+    0x01, 0, 0, 0, 0xed, 0x30, 0x2d, 0x99, 0x1b, 0xf9, 0x4c, 0x09, 0xfc, 0x98, 0x46, 0x22,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40,
+  ]
 
-  public init(commitment: KaigiHashV1) {
+  public init(bytes: Data) throws {
+    guard bytes.count == Self.byteCount,
+      bytes.reversed().lexicographicallyPrecedes(Self.modulus.reversed())
+    else {
+      throw KaigiV1Error.invalidValue("Kaigi scalars require exactly 32 canonical Pasta Fp bytes.")
+    }
+    storage = Data(bytes)
+  }
+
+  /// The exact validated bytes; no reduction or marker bit is applied.
+  public var bytes: Data { Data(storage) }
+}
+
+/// Stable participant C encoded as a single final scalar field.
+public struct KaigiParticipantCommitmentV1: Equatable, Hashable, Sendable {
+  public let commitment: KaigiAuthorizationScalarV1
+
+  public init(commitment: KaigiAuthorizationScalarV1) {
     self.commitment = commitment
   }
 }
 
-/// Ledger-safe participant nullifier.
-///
-/// Rust requires `issued_at_ms == 0` for on-chain privacy artifacts. The Swift
-/// V1 type fixes that reserved field to zero and rejects the zero sentinel.
+/// Deterministic action nullifier N encoded as a single final scalar field.
 public struct KaigiParticipantNullifierV1: Equatable, Hashable, Sendable {
-  public let digest: KaigiHashV1
+  public let digest: KaigiAuthorizationScalarV1
 
-  public init(digest: KaigiHashV1) throws {
-    guard !digest.isZeroSentinel else {
-      throw KaigiV1Error.invalidValue("Kaigi privacy nullifiers must be non-zero.")
-    }
+  public init(digest: KaigiAuthorizationScalarV1) {
     self.digest = digest
   }
 }
 
-/// Complete roster-proof artifact set used by create, join, and host-end actions.
+/// Complete final authorization artifact set for create, join, leave and host-end actions.
 public struct KaigiPrivacyArtifactsV1: Equatable, Sendable {
   public let commitment: KaigiParticipantCommitmentV1
   public let nullifier: KaigiParticipantNullifierV1
@@ -162,10 +173,10 @@ public struct KaigiPrivacyArtifactsV1: Equatable, Sendable {
 
 /// Complete privacy payload for one usage segment.
 public struct KaigiUsagePrivacyV1: Equatable, Sendable {
-  public let commitment: KaigiHashV1
+  public let commitment: KaigiAuthorizationScalarV1
   public let proof: Data
 
-  public init(commitment: KaigiHashV1, proof: Data) throws {
+  public init(commitment: KaigiAuthorizationScalarV1, proof: Data) throws {
     guard !proof.isEmpty else {
       throw KaigiV1Error.invalidValue("Kaigi usage proof bytes must not be empty.")
     }
@@ -332,9 +343,9 @@ public struct CreateKaigiInstructionV1: KaigiInstructionV1, Equatable {
   public let privacyArtifacts: KaigiPrivacyArtifactsV1?
 
   public init(call: NewKaigiV1, privacyArtifacts: KaigiPrivacyArtifactsV1? = nil) throws {
-    guard call.privacyMode != .transparent || privacyArtifacts == nil else {
+    guard (call.privacyMode == .transparent) == (privacyArtifacts == nil) else {
       throw KaigiV1Error.invalidValue(
-        "Transparent Kaigi creation must not contain privacy artifacts."
+        "Kaigi creation requires authorization artifacts exactly when privacy mode is enabled."
       )
     }
     self.call = call
@@ -354,10 +365,8 @@ public struct CreateKaigiInstructionV1: KaigiInstructionV1, Equatable {
 
 /// Add a participant to an active Kaigi.
 ///
-/// The optional privacy fields preserve the canonical wire contract. Native
-/// production admission currently rejects ZkRosterV1 joins until its proof
-/// statement binds the signed participant authority; transparent joins use
-/// `nil` here.
+/// Private joins carry final authorization V1 artifacts bound to the exact
+/// ledger-owned original subject and participation sequence.
 public struct JoinKaigiInstructionV1: KaigiInstructionV1, Equatable {
   public static let stableWireID = "iroha.instruction.v1::kaigi::JoinKaigi"
   public static let schemaName = "iroha_data_model::isi::kaigi::JoinKaigi"
@@ -388,20 +397,21 @@ public struct JoinKaigiInstructionV1: KaigiInstructionV1, Equatable {
   }
 }
 
-/// Remove a participant from an active transparent Kaigi.
-///
-/// Native V1 performs privacy-mode departure off-chain. The four reserved
-/// privacy fields are therefore always encoded as `None`.
+/// Remove a participant from an active Kaigi.
+/// Private leave proves the stored commitment opening at the current sequence/root.
 public struct LeaveKaigiInstructionV1: KaigiInstructionV1, Equatable {
   public static let stableWireID = "iroha.instruction.v1::kaigi::LeaveKaigi"
   public static let schemaName = "iroha_data_model::isi::kaigi::LeaveKaigi"
 
   public let callID: KaigiIdV1
   public let participant: String
+  public let privacyArtifacts: KaigiPrivacyArtifactsV1?
 
-  public init(callID: KaigiIdV1, participant: String) throws {
+  public init(callID: KaigiIdV1, participant: String,
+              privacyArtifacts: KaigiPrivacyArtifactsV1? = nil) throws {
     self.callID = callID
     self.participant = try kaigiCanonicalAccountID(participant, field: "participant")
+    self.privacyArtifacts = privacyArtifacts
   }
 
   public var wireID: String { Self.stableWireID }
@@ -411,7 +421,7 @@ public struct LeaveKaigiInstructionV1: KaigiInstructionV1, Equatable {
     var writer = CompactNoritoWriter()
     writer.writeField(KaigiInstructionNoritoV1.kaigiID(callID))
     writer.writeField(try CanonicalNorito.encodeCompactAccountId(participant))
-    for _ in 0..<4 { writer.writeField(Data([0])) }
+    KaigiInstructionNoritoV1.writePrivacyArtifacts(privacyArtifacts, into: &writer)
     return writer.data
   }
 }
@@ -660,14 +670,12 @@ private enum KaigiInstructionNoritoV1 {
   static func participantCommitment(_ value: KaigiParticipantCommitmentV1) -> Data {
     var writer = CompactNoritoWriter()
     writer.writeField(value.commitment.bytes)
-    writer.writeField(Data([0]))
     return writer.data
   }
 
   static func participantNullifier(_ value: KaigiParticipantNullifierV1) -> Data {
     var writer = CompactNoritoWriter()
     writer.writeField(value.digest.bytes)
-    writer.writeField(CompactNorito.encodeUInt64(0))
     return writer.data
   }
 
@@ -723,7 +731,7 @@ private enum KaigiInstructionNoritoV1 {
   }
 }
 
-private func kaigiCanonicalAccountID(_ value: String, field: String) throws -> String {
+func kaigiCanonicalAccountID(_ value: String, field: String) throws -> String {
   do {
     return try TransactionInputValidator.sanitizeAccountId(value, field: field)
   } catch {

@@ -20,7 +20,7 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     };
     let client = network.client();
     // Execute a simple iterable query; default fetch size is fine for smoke test.
-    let assets = client.query(FindAssets::new()).execute_all()?;
+    let assets = client.client().query(FindAssets::new()).execute_all()?;
     assert!(
         !assets.is_empty(),
         "expected at least one asset from genesis"

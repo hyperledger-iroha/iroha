@@ -14,8 +14,9 @@ fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
     let config = crate::fallback_config();
     let endpoint =
         reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
-    let headers = build_soracloud_mutation_auth_headers(&config, &endpoint, br#"{"noop":true}"#)
-        .expect("single-sig headers");
+    let headers =
+        build_soracloud_mutation_auth_headers(&config, None, &endpoint, br#"{"noop":true}"#)
+            .expect("single-sig headers");
     assert_eq!(
         headers.expected_response_signers,
         vec![config.key_pair.public_key().clone()]
@@ -99,6 +100,7 @@ fn build_soracloud_mutation_auth_headers_reports_nonce_rng_failure() {
     let mut rng = FailingSoracloudSignatureNonceRng;
     let error = build_soracloud_mutation_auth_headers_with_rng(
         &config,
+        None,
         &endpoint,
         br#"{"noop":true}"#,
         &mut rng,
@@ -137,8 +139,7 @@ fn load_soracloud_http_witness_rejects_oversized_file_before_reading() {
 }
 #[test]
 fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
-    let mut config = crate::fallback_config();
-    config.soracloud_http_witness_file = Some(PathBuf::from("ignored-for-read-auth.json"));
+    let config = crate::fallback_config();
     let endpoint = reqwest::Url::parse(
         "http://127.0.0.1:8080/v1/soracloud/apps/status?service=zeta&audit_limit=3",
     )
@@ -222,18 +223,52 @@ fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
 }
 #[test]
 fn protected_soracloud_get_fails_before_network_without_local_signer() {
-    let previous = SORACLOUD_SUBMISSION_CONFIG.with(|slot| slot.borrow_mut().take());
+    let previous = SORACLOUD_INVOCATION_CONTEXT.with(|slot| slot.borrow_mut().take());
     let error = fetch_torii_soracloud_status("http://127.0.0.1:1", None, Some("token"), 1)
         .expect_err("missing local signer must fail closed");
-    SORACLOUD_SUBMISSION_CONFIG.with(|slot| *slot.borrow_mut() = previous);
+    SORACLOUD_INVOCATION_CONTEXT.with(|slot| *slot.borrow_mut() = previous);
     let message = format!("{error:#}");
     assert!(message.contains("protected GET requires an initialized local account signer"));
-    assert!(message.contains("submission config is not initialized"));
+    assert!(message.contains("invocation context is not initialized"));
     assert!(!message.contains("failed to fetch"));
+}
+
+#[test]
+fn soracloud_invocation_guard_restores_config_and_witness_together() {
+    let previous = SORACLOUD_INVOCATION_CONTEXT.with(|slot| slot.borrow_mut().take());
+    {
+        let _outer = SoracloudInvocationGuard::install(SoracloudInvocationContext {
+            submission_config: crate::fallback_config(),
+            http_witness_file: Some(PathBuf::from("outer-witness.json")),
+            fee_payment: Ok(FeePaymentIntent::authority(Vec::new(), None)),
+        });
+        {
+            let _inner = SoracloudInvocationGuard::install(SoracloudInvocationContext {
+                submission_config: crate::fallback_config(),
+                http_witness_file: Some(PathBuf::from("inner-witness.json")),
+                fee_payment: Ok(FeePaymentIntent::authority(Vec::new(), None)),
+            });
+            let current = soracloud_invocation_context().expect("inner invocation context");
+            assert_eq!(
+                current.http_witness_file.as_deref(),
+                Some(Path::new("inner-witness.json"))
+            );
+        }
+        let current = soracloud_invocation_context().expect("outer invocation context restored");
+        assert_eq!(
+            current.http_witness_file.as_deref(),
+            Some(Path::new("outer-witness.json"))
+        );
+    }
+    assert!(
+        SORACLOUD_INVOCATION_CONTEXT.with(|slot| slot.borrow().is_none()),
+        "dropping the outer guard must clear its SDK config and witness together"
+    );
+    SORACLOUD_INVOCATION_CONTEXT.with(|slot| *slot.borrow_mut() = previous);
 }
 #[test]
 fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
-    let mut config = crate::fallback_config();
+    let config = crate::fallback_config();
     let endpoint =
         reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
     let body = br#"{"noop":true}"#;
@@ -262,8 +297,9 @@ fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
         json::to_vec(&witness).expect("encode witness json"),
     )
     .expect("write witness file");
-    config.soracloud_http_witness_file = Some(witness_path);
-    let headers = build_soracloud_mutation_auth_headers(&config, &endpoint, body).expect("headers");
+    let headers =
+        build_soracloud_mutation_auth_headers(&config, Some(&witness_path), &endpoint, body)
+            .expect("headers");
     assert_eq!(
         headers.expected_response_signers,
         vec![config.key_pair.public_key().clone()]
@@ -278,7 +314,7 @@ fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
 
 #[test]
 fn build_soracloud_mutation_auth_headers_rejects_empty_witness_signer_set() {
-    let mut config = crate::fallback_config();
+    let config = crate::fallback_config();
     let endpoint =
         reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
     let body = br#"{"noop":true}"#;
@@ -303,9 +339,9 @@ fn build_soracloud_mutation_auth_headers_rejects_empty_witness_signer_set() {
         json::to_vec(&witness).expect("encode witness json"),
     )
     .expect("write witness file");
-    config.soracloud_http_witness_file = Some(witness_path);
-    let error = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
-        .expect_err("empty canonical request witness signer set must fail");
+    let error =
+        build_soracloud_mutation_auth_headers(&config, Some(&witness_path), &endpoint, body)
+            .expect_err("empty canonical request witness signer set must fail");
     assert!(error.to_string().contains("at least one signature"));
 }
 
@@ -350,8 +386,11 @@ fn post_torii_mutation_does_not_follow_signed_body_redirects() {
         }
     });
 
-    let previous =
-        SORACLOUD_SUBMISSION_CONFIG.with(|slot| slot.replace(Some(crate::fallback_config())));
+    let _invocation = SoracloudInvocationGuard::install(SoracloudInvocationContext {
+        submission_config: crate::fallback_config(),
+        http_witness_file: None,
+        fee_payment: Ok(FeePaymentIntent::authority(Vec::new(), None)),
+    });
     let error = post_torii_soracloud_mutation(
         &format!("http://{address}"),
         "v1/soracloud/deploy",
@@ -360,8 +399,6 @@ fn post_torii_mutation_does_not_follow_signed_body_redirects() {
         1,
     )
     .expect_err("redirect response must not be followed");
-    SORACLOUD_SUBMISSION_CONFIG.with(|slot| *slot.borrow_mut() = previous);
-
     assert!(error.to_string().contains("307 Temporary Redirect"));
     assert!(
         server.join().expect("redirect server").is_none(),

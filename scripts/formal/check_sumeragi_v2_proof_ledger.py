@@ -66174,54 +66174,9 @@ if autonomous_certificate {
         errors,
         count=2,
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
-        """
-if self.lane_sessions.len() >= hydration_capacity
-    && !self.lane_sessions.contains_proposal(proposal)
-{
-    self.output_guard.close_admission_for_restart();
-    return Err(V2LaneWorkError::InvalidContext(
-        "historical autonomous recovery sessions exceed bounded capacity".to_owned(),
-    ));
-}
-self.lane_sessions
-    .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
-    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
-self.authorize_autonomous_ready_from_durable_input(
-    &record.payload,
-    proposal,
-    record.historical_context_id,
-)
-.map_err(V2LaneWorkError::InvalidContext)?;
-""",
-        "late canonical lane hydration must bound and authorize every exact historical recovery proposal before successor work",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
-        """
-raw_proposals.sort_by_key(|proposal| {
-    let descriptor = &proposal.descriptor;
-    (descriptor.proposal_height, descriptor.lane_id, descriptor.dataspace_id,
-        descriptor.lane_block_height, proposal.proposal_hash,)
-});
-for proposal in raw_proposals {
-    self.lane_sessions
-        .insert_recovered_proposal_replacing_uncommitted_conflict(proposal)
-        .map_err(|error| {
-            self.output_guard.close_admission_for_restart();
-            V2LaneWorkError::InvalidContext(format!(
-                "canonical raw lane hydration conflicts with retained session state: {error}"
-            ))
-        })?;
-}
-""",
-        "canonical raw lane hydration must replay the complete predecessor chain in deterministic order and fail closed on conflicts",
-        errors,
-    )
+    # Required historical/raw hydration is bound once by the canonical
+    # _require_lane_predecessor_ordering_source_contracts call below. Its atomic
+    # batch and publication checks replace the superseded per-proposal path.
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::prune_finalized_merge_sidecars"),
@@ -69086,6 +69041,7 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
         lane_path, lane_ack_items, lane_items, errors
     )
     errors.extend(_lane_recovery_cache_source_fidelity_errors(repo_root))
+    errors.extend(_terminal_lane_source_fidelity_errors(repo_root))
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("serve_durable_lane_certificate"),

@@ -221,7 +221,7 @@ export {
   signSm2,
   verifySm2,
   sm2PublicKeyMultihash,
-  buildKaigiRosterJoinProof,
+  buildKaigiAuthorizationProofV1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,

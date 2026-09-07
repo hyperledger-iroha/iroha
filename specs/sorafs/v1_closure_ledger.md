@@ -35,6 +35,48 @@ synthetic fixtures cannot override a blocked aggregate.
 
 ## 2026-09-06 execution checkpoint
 
+The broader native Core checkpoint (2026-09-07) finished **275 passed, 113 failed,
+0 ignored**, across all 388 tests selected by `sorafs`, in 381.64 seconds.
+It uses the same captured Core artifact as the 15 passing targeted security
+regressions. The retained log is
+`/tmp/iroha-sorafs-fresh-core-full-subsystem-tests.log`. Failures include missing
+eligible-provider fixtures, transaction call hashes, canonical consensus hashes,
+validated Kura block results and stale timing/error assertions. A production
+canonical-size defect also surfaced: ambient Norito layout affected query byte
+limits and proof-outcome signer-policy digests. Corrections and fresh native
+qualification remain open; the targeted pass does not qualify the full subsystem.
+
+The canonical-size correction now adds `norito::canonical_frame_len`, preserving
+ambient layout only for the explicitly layout-aware low-level codec. All 17
+SoraFS sizing calls and the proof-outcome policy hash use canonical framing;
+the full 17-test Norito canonical-codec selection passes, including every valid
+ambient flag combination. Provider/rollout source contracts pass 409 tests with
+three existing unfinished-inventory/Apple bootstrap-path failures. Revised Core
+fixtures are queued for one coordinated native rebuild, preserving production
+provider, custody, timing, hash, finality and typed-rejection checks.
+
+The Apple Rustup bootstrap now uses the same shared path-identity resolver as
+its pinned Python bootstrap, retaining executable/regular/non-symlink and copied
+basename checks. The release-automation selection plus the exact path guard
+passes **623 tests**; extracted Bash syntax and actual regular, missing and
+symlink-loop paths pass three cases. This closes that path-resolution failure;
+the two genuine unfinished-source inventory failures remain. No source or
+bootstrap seal was refreshed, and no hardware qualification was inferred.
+
+The corrected `core_api-77e01945b49a2039` harness compiled in 7m35s, SHA-256
+`22e4fefc841dd8bf8f7c7f105f47d49e6a3d998845b948cae2d3cbc363031888`.
+Its strict four-validator repair attempt gets beyond the former stack and disk
+resource failures, but daemon `7924973a…` rejects the newer genesis ZK policy
+hash. The attempt also reveals four retained Tokio `spawn_blocking` status
+queries that inherit a forbidden blocking-SDK context. Rebuild the matched
+daemon and harness with the shared dedicated-thread polling correction before retry. The four status/consensus HTTP calls now use one plain-thread owner
+in `iroha_test_network::read_on_dedicated_thread`; all six integration consumers
+import that owner directly. Its moved regression checks Tokio-context exclusion,
+error propagation and worker panics; native execution of the move remains pending.
+`/tmp/iroha-sorafs-four-peer-repair-bounded-runtime.log` is failure evidence,
+not ledger runtime qualification. The exact test exited 101 after its three
+startup attempts: zero passed, one failed, zero ignored, 372.02 seconds.
+
 G01, G02, G03 and G13 are active under the
 [implementation goals](v1_implementation_goals.md).
 Source inspection confirms that the dependency expectation already contains
@@ -117,7 +159,7 @@ nullifier domain is unchanged. Copied/retargeted proof, duplicate-person and
 actual-schema missing-field rejection regressions are written. A separate bounded
 source review found no additional defect or missing changed call site; native
 test execution and external security qualification remain pending.
-The latest complete manifest library run passed **891 tests**, with no failures
+The latest complete manifest library run passed **893 tests**, with no failures
 or ignored tests. The original failures are corrected. New real-signature, canonical archive,
 size-budget and cross-layout regressions pass for PoP, PDP, PoR, PoTR, orderbook,
 provider advertisements, finance and transparency. The transparency correction
@@ -125,18 +167,18 @@ also verifies actual publication Merkle proofs and signatures under every tested
 layout and rejects alternate-layout entry hashes. Strict
 canonical decoding rejects compressed headers before decoding and retains
 composed resource limits.
-The focused Core run passed **11 of 15 tests**. The rightful/copied PoP
-presentation regression now passes. Three registry fixtures used an invalid
-issuer label, and the moderation permission fixture incorrectly assumed the
-stored bootstrap block left an empty state map. Those are corrected, preserving
-exact negative errors and comparing the complete state before and after denial.
-The newest recipient-binding helper streams the canonical AccountId frame rather
-than a network-dependent display string, with explicit encoding-error propagation.
-The model regression and all **three node authorization tests** pass on freshly
-compiled binaries. Torii now passes all three recipient-binding and three native
-OpenAPI contract tests. The four account-filter assertions use the canonical
-explicit account parser; that test and the existing NFT and RWA candidate tests
-pass on the same fresh binary. A fresh Core binary is still required.
+The fresh captured Core run passes **all 15 security regressions** with zero
+failures or ignored tests in 74.91 seconds. This validates the repaired registry
+labels and bootstrap-state fixtures, exact direct/role permissions, initial
+executor gates, replay/revocation handling and cross-account PoP rejection.
+The executable SHA-256 is
+`018e5824299745153816b8fa53ca060e4fac29b304dee3f5aa4a920df5745421`;
+it captures the SoraFS changes before later unrelated Kaigi carrier edits and
+is a scoped local result, not a sealed production candidate.
+The recipient-binding helper streams the canonical AccountId frame with explicit
+encoding-error propagation. Its model regression and three node authorization
+tests pass; Torii also passes the three recipient-binding tests, three OpenAPI
+contracts, and account/NFT/RWA query-filter regressions on the captured binary.
 
 The SF-11 signed-manifest gate now requires independently supplied, digest-pinned
 source files. Metadata-only signing claims cannot qualify a canary. Raw Ed25519
@@ -151,8 +193,11 @@ The six PoP structural fixtures have been generated and checked; all **30 Python
 fixture-checker tests** pass. Seven actual CLI process checks pass, including a
 complete signed positive and tampered signature/state, wrong deployment,
 revocation, expiry and pinned-policy substitution negatives. These use simulated
-signed observations and do not qualify hardware. Python gate integration remains
-in progress. Both focused Kotlin and Java-source PoP tests pass with a freshly
+signed observations and do not qualify hardware. The integrated Python source,
+receipt, builder, checker and runner selection passes **360 tests**. It accepts
+only the exact native result, reauthenticates every checker use and binds all
+canary claims to the independently pinned sources and deployment. Both focused
+Kotlin and Java-source PoP tests pass with a freshly
 rebuilt host JNI bridge; their XML reports contain two executed tests and no
 failures, errors or skips. Each exercises the current, missing-binding and
 zero-binding structural fixture. Swift awaits a current Apple bridge artifact.
@@ -169,12 +214,16 @@ bindings, enrollment replay, use after enrollment, revocation, freshness and
 state changes across provider operations. The public receipt verifier adds exact
 four-signature purpose/order, reviewed-manifest, original-custody and finalized
 completion binding. The opaque operation coordinator also
-passes **26 native tests** after migration to the shared public record owner,
+passes **34 native tests** after migration to the shared public record owner,
 covering private signature staging, operation reservations,
 state-change fences, enrollment, renewal/rotation/revocation ordering and exact
 durable-response recovery. Independent review found and corrected a gap in binding
 the original custody: a renewed coordinator cannot relabel an earlier completed
-response as belonging to its new custody record. Production authoritative-state
+response as belonging to its new custody record. The exact reviewed release
+producer stages a durable private receipt before authoritative completion and
+rechecks journal identity and current custody before release. Its exclusive
+directory lease prevents concurrent journal instances or processes from racing
+the aggregate storage bound. Production authoritative-state
 and provider adapters and the atomic consumer/profile replacement remain
 unfinished. The existing software service is not hardware-qualified by these
 interfaces or their simulated providers.
@@ -192,9 +241,22 @@ identified SoraFS growth findings still require source refactoring. Other
 tasks have advanced the repository revision during this work, so these results
 cannot serve as evidence for one immutable release candidate.
 
-The broad release-helper baseline is still being evaluated. Source-budget
-findings, the reviewed-source seal mismatch, dirty OpenAPI manifests and the
-software-only production custody profile remain explicit follow-on work.
+The broad Python 3.12 release-helper baseline completed with **3,371 passes and
+60 failures** after 3h40m across a changing worktree. Current-source triage
+corrected stale guards for canonical account drafts, registered consolidated
+ledger tests, source-authenticated signed-manifest examples, operator-only route
+catalog entries, and catalog-generated metrics. The expanded release-automation,
+provider-ingest and rollout-contract run passes **1,031 tests with three
+failures**: two unfinished-source inventories and the Apple tool-bootstrap
+path-resolution check. These stay open. The receipt verifier suite is now
+mandatory in the release gate and its source/test changes trigger the workflow.
+Packaging replays with Python 3.12 stop at the unchanged reviewed-source seal;
+the pipeline also rejects its changed signing bootstrap helper. These denials
+are not successful packaging evidence. Source-budget findings, dirty OpenAPI
+manifests, remaining hardware provider/state adapters and atomic custody-profile
+replacement still require closure. The workspace formatting check found the
+receipt CLI's formatting plus unrelated executor/exporter formatting; the
+receipt CLI is now formatted. No other owner's Rust code was reformatted.
 No production lane, foundational envelope or readiness claim is created by
 these repairs.
 
@@ -206,8 +268,8 @@ these repairs.
 | V1-C02 | Production policy and behavior come from `iroha_config`; file keys and environment overrides are limited to explicit development/test paths. | All SoraFS daemons, Torii routes, publishers, workers, and deployment bundles. | Config parsing/default tests plus static production-path guards. | Reviewed production config digest with runtime-secret provenance. | open |
 | V1-C03 | Canonical envelopes, bounded inputs, finalized cursors, idempotency, durable outboxes/dead letters, signer rotation/revocation, payload-free logs, and deterministic integer/fixed-point computation. | Common service and ledger boundaries in `crates/iroha_core`, `crates/iroha_torii`, `crates/sorafs_node`, and `crates/sorafs_manifest`. | Unit/property/model, replay, crash, poison, allocation, timestamp, signer, and concurrency negatives. | Four-validator recovery and disaster-recovery records. | open |
 | V1-C04 | Orderbook, reserve/rent, repair, and moderation authority is committed ledger state; daemons reconcile rather than own competing truth. | Native instructions, queries, committed events, Torii projections, and SDK builders. The local-authority removals are listed below. | Atomicity, conservation, uniqueness, finality, fork/retry, and cross-peer duplicate-submission suites. | Identical post-recovery queries, balances, roots, events, and serialized responses on four validators. | open |
-| V1-C05 | Release artifacts are reproducible, mandatory Linux/macOS x86_64/aarch64 binaries are smoke-tested, signing is Ed25519-only, and provenance/SBOM/vulnerability results are verified. | The release workflow closes the exact five-target inventory (mandatory Linux/macOS x86_64/aarch64 plus additional Windows x86_64), replays both inner validator and outer platform archives, uses locked builds, requires byte-identical shared files, and transactionally publishes Ed25519 signature/public-key/receipt outputs with no-follow exclusive creation and signer/manifest snapshots. | Release automation, archive replay, exact version-map/inventory, unsafe permission/hardlink/symlink/signer/key/signature/receipt-race negatives, shell Ed25519 integration, action-pin, and workflow static guards are green locally. | Run the five native host builds and smokes, independently administered external software Ed25519 reference signature, Syft/Grype scans, OIDC/cosign provenance, package-channel canaries, and prove zero critical/high findings. | open |
-| V1-C06 | Promotion uses an explicit clock and one reviewed deployment context; secret material and payload data never enter evidence. | `scripts/run_sorafs_production_readiness.py`, `scripts/check_sorafs_production_readiness.py`, lane checkers, and the private-key-free two-phase builder in `scripts/build_sorafs_foundational_prerequisite.py`. Later sequences require the exact immediately preceding signed envelope; all signing inputs, the nine plural-summary evidence packages, the 17 independently supplied lane-summary files, and output parents are pinned against path replacement. | Builder-to-aggregate acceptance, aggregate positive/replay, plus missing, duplicate, stale, predecessor, signature, mapping, path-swap, and sensitivity negatives. | One external-software-Ed25519-signed monotonic foundational envelope and 17 fresh genuine lane summaries. | local-complete; evidence-pending |
+| V1-C05 | Release artifacts are reproducible, mandatory Linux/macOS x86_64/aarch64 binaries are smoke-tested, signing is Ed25519-only, and provenance/SBOM/vulnerability results are verified. | The release workflow closes the exact five-target inventory (mandatory Linux/macOS x86_64/aarch64 plus additional Windows x86_64), replays both inner validator and outer platform archives, uses locked builds, requires byte-identical shared files, and transactionally publishes Ed25519 signature/public-key/receipt outputs with no-follow exclusive creation and signer/manifest snapshots. | Focused release automation, manifest/receipt verification and publication-race tests pass as scoped above; the current broad source, reviewed-seal, packaging and native-target qualification checks remain open. | Run the five native host builds and smokes, independently administered hardware Ed25519 reference signature with authenticated custody and finalized completion, Syft/Grype scans, OIDC/cosign provenance, package-channel canaries, and prove zero critical/high findings. | open |
+| V1-C06 | Promotion uses an explicit clock and one reviewed deployment context; secret material and payload data never enter evidence. | `scripts/run_sorafs_production_readiness.py`, `scripts/check_sorafs_production_readiness.py`, lane checkers, and the private-key-free two-phase builder in `scripts/build_sorafs_foundational_prerequisite.py`. Later sequences require the exact immediately preceding signed envelope; all signing inputs, the nine plural-summary evidence packages, the 17 independently supplied lane-summary files, and output parents are pinned against path replacement. | Builder-to-aggregate acceptance, aggregate positive/replay, plus missing, duplicate, stale, predecessor, signature, mapping, path-swap, and sensitivity negatives. | One hardware-Ed25519-signed monotonic foundational envelope and 17 fresh genuine lane summaries; migrate the remaining producer and receipt consumers under G02. | open |
 | V1-C07 | The promotion decision is cryptographically bound to the exact reviewed lane summaries and their payload-free evidence. | Each evidence package contains its exact ordered `readiness_summaries` mapping; the builder carries those digests into the signed prerequisite row as `readiness_summary_sha256`, signs all 17 top-level lane digests in canonical aggregate order, and rejects any mismatch. The independent aggregate checker validates the nine-to-17 partition, cross-binds the grouped and top-level signed rows, rehashes the 17 supplied summaries, and rejects substitution. | Singular-package, forged-summary, cross-prerequisite reassignment, grouped/top-level digest mismatch, swapped-summary bytes, omitted/reordered lane, wrong-key, predecessor, path-identity, and deterministic-replay negatives. | Trusted signatures and archive digests for the exact accepted 22-input aggregate set and result: topology summary and signed envelope, resilience receipt, signed lane inventory, foundational envelope, and 17 lane summaries. | local-complete; evidence-pending |
 
 The latest complete pinned-Python run passed all 465 aggregate

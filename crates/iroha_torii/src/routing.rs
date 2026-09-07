@@ -153,9 +153,9 @@ use iroha_sccp::{
     sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
-use iroha_torii_shared::status::Status;
-#[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
+#[cfg(feature = "telemetry")]
+use iroha_torii_shared::status::Status;
 use iroha_torii_shared::sumeragi_evidence_api::{
     SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT,
     SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT,
@@ -42527,6 +42527,7 @@ mod tx_query_filter_tests {
             participant_metadata: std::collections::BTreeMap::new(),
             roster_root: Hash::prehashed([0x44; Hash::LENGTH]).into(),
             roster_commitments: Vec::new(),
+            private_participation: Default::default(),
             nullifier_log: Vec::new(),
             usage_commitments: Vec::new(),
             status: iroha_data_model::kaigi::KaigiStatus::Active,

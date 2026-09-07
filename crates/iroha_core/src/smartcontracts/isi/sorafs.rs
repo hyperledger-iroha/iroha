@@ -6849,7 +6849,7 @@ fn ensure_repair_query_encoded_budget<T: norito::core::NoritoSerialize>(
     label: &str,
 ) -> Result<(), QueryExecutionFail> {
     let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(maximum);
-    let encoded_len = norito::core::encoded_frame_len(value).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(value).map_err(|error| {
         QueryExecutionFail::Conversion(format!("failed to size {label}: {error}"))
     })?;
     if encoded_len > maximum {
@@ -6985,7 +6985,7 @@ fn finalize_pin_manifest_page(
             has_more,
             next_after_digest,
         };
-        let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size finalized pin-manifest page: {error}"
             ))
@@ -7410,7 +7410,7 @@ fn query_repair_task_page(
                 "repair task page inspected more than {REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1} state bytes"
             )));
         }
-        let task_len = norito::core::encoded_frame_len(&task).map_err(|error| {
+        let task_len = norito::canonical_frame_len(&task).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size authoritative repair task: {error}"
             ))
@@ -7656,7 +7656,7 @@ fn query_repair_event_page(
             "repair event page",
         )?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            .checked_add(norito::canonical_frame_len(&resolved).map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to size committed repair event: {error}"
                 ))
@@ -7996,6 +7996,7 @@ mod sorafs_tests {
     fn registered_manifest_approval_envelope(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> (Vec<u8>, String, String) {
+        seed_automatic_replication_capacity(state_transaction, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -8783,6 +8784,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
             perms.clear();
         }
@@ -8891,6 +8893,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_global_manifests = 1;
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -8934,6 +8937,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             if authority_scoped {
                 stx.gov.sorafs_pin_policy.max_manifests_per_authority = 1;
             } else {
@@ -9003,6 +9007,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             if authority_scoped {
                 stx.gov.sorafs_pin_policy.max_bytes_per_authority = default_content_length();
             } else {
@@ -9048,6 +9053,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             RegisterPinManifest {
                 manifest_payload: default_manifest_payload(),
                 alias: None,
@@ -9067,7 +9073,7 @@ mod sorafs_tests {
                 previous.clone(),
                 None,
                 None,
-                41_999,
+                default_policy().retention_epoch * 1_000 - 1,
                 0,
             );
             let mut block = state.block(header);
@@ -9092,7 +9098,7 @@ mod sorafs_tests {
             previous,
             None,
             None,
-            42_000,
+            default_policy().retention_epoch * 1_000,
             0,
         );
         let mut block = state.block(header);
@@ -9106,7 +9112,10 @@ mod sorafs_tests {
             .pin_manifests
             .get(&default_digest())
             .expect("retired pin remains queryable");
-        assert!(matches!(stored.status, PinStatus::Retired(42)));
+        assert_eq!(
+            stored.status,
+            PinStatus::Retired(default_policy().retention_epoch)
+        );
         assert_eq!(
             stored.retirement_reason.as_deref(),
             Some("consensus retention expired")
@@ -9124,7 +9133,10 @@ mod sorafs_tests {
             block
                 .world
                 .smart_contract_state
-                .get(&pin_expiry_key(42, &default_digest()))
+                .get(&pin_expiry_key(
+                    default_policy().retention_epoch,
+                    &default_digest()
+                ))
                 .is_none()
         );
     }
@@ -9135,6 +9147,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             RegisterPinManifest {
                 manifest_payload: default_manifest_payload(),
                 alias: None,
@@ -9153,7 +9166,7 @@ mod sorafs_tests {
             previous,
             None,
             None,
-            42_000,
+            default_policy().retention_epoch * 1_000,
             0,
         );
         let mut block = state.block(header);
@@ -9186,7 +9199,10 @@ mod sorafs_tests {
             block
                 .world
                 .smart_contract_state
-                .get(&pin_expiry_key(42, &default_digest()))
+                .get(&pin_expiry_key(
+                    default_policy().retention_epoch,
+                    &default_digest()
+                ))
                 .is_some(),
             "the due canonical marker must remain when any index entry is corrupt"
         );
@@ -9316,6 +9332,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let record = stx
             .world
@@ -9349,6 +9366,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -10281,6 +10299,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         let telemetry = CapacityTelemetryRecord::new(
             provider, 0, 1, 1, 1, 1, 0, 0, 10_000, 10_000, 0, 0, 0, 0, 0,
         )
@@ -10425,6 +10448,12 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_governed_capacity_provider(
+            &mut stx,
+            ProviderId::new([0xE8; 32]),
+            &alice(),
+            Quantity::from(1_u32),
+        );
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
         let missing_record_error = RegisterCapacityDeclaration {
@@ -10463,6 +10492,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         stx.gov.sorafs_telemetry.require_submitter = true;
         stx.gov.sorafs_telemetry.submitters = vec![alice(), bob()];
         let telemetry = CapacityTelemetryRecord::new(
@@ -10681,11 +10715,18 @@ mod sorafs_tests {
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
-        let alias = default_alias_binding();
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
         manifest.pin_policy.retention_epoch =
             6 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        assert_eq!(manifest.root_cid, default_root_cid().as_bytes());
+        let alias = alias_binding_for(
+            default_digest(),
+            "sora",
+            "docs",
+            5,
+            manifest.pin_policy.retention_epoch,
+        );
         let manifest_digest =
             ManifestDigest::from_manifest(&manifest).expect("derive governed manifest digest");
         RegisterPinManifest {
@@ -11041,6 +11082,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let instruction = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11072,6 +11114,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11598,6 +11641,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let duplicate_alias = alias_binding_for(
             second_digest(),
@@ -11651,6 +11695,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -11887,6 +11932,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: manifest_payload_for_seed(0xBB),
             alias: None,
@@ -12001,7 +12047,7 @@ mod sorafs_tests {
             other => panic!("unexpected error: {other:?}"),
         };
         assert!(
-            message.contains("must be approved before registering successor"),
+            message.contains("must be approved and live before registering successor"),
             "unexpected error message: {message}"
         );
         assert_pin_fee_balances_unchanged(
@@ -12101,6 +12147,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
         insert_manifest_with_status(
             &mut stx,
@@ -12150,6 +12197,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
         insert_manifest_with_status(
             &mut stx,
@@ -12232,7 +12280,7 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect_err("lineage beyond the consensus depth limit must reject");
         assert!(
-            smart_contract_error_message(&error).contains("configured maximum depth 1"),
+            smart_contract_error_message(&error).contains("exceeding configured maximum 1"),
             "unexpected error: {error:?}"
         );
         assert_pin_fee_balances_unchanged(
@@ -12249,6 +12297,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -12810,6 +12859,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -12818,6 +12868,13 @@ mod sorafs_tests {
         register
             .execute(&alice(), &mut stx)
             .expect("register manifest");
+        stx.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit automatic approval fixture");
+        let mut block = state.block(block_header_at_epoch(6));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let approve = ApprovePinManifest {
             digest: default_digest(),
             council_envelope: None,
@@ -12975,6 +13032,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13221,6 +13279,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13254,6 +13313,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13290,6 +13350,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13648,12 +13709,13 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let binding = alias_binding_for(default_digest(), "sora", "docs", 8, 43);
+        let expiry_epoch = default_policy().retention_epoch + 1;
+        let binding = alias_binding_for(default_digest(), "sora", "docs", 8, expiry_epoch);
         let err = BindManifestAlias {
             digest: default_digest(),
             binding: binding.clone(),
             bound_epoch: 8,
-            expiry_epoch: 43,
+            expiry_epoch,
         }
         .execute(&alice(), &mut stx)
         .expect_err("alias expiry beyond retention must fail");
@@ -14128,7 +14190,13 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(1),
+        );
         let order_id = ReplicationOrderId::new([0x55; 32]);
         let providers = vec![
             ProviderId::new([0x21; 32]),
@@ -14457,7 +14525,13 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(1),
+        );
         let order_id = ReplicationOrderId::new([0x77; 32]);
         let providers = vec![
             ProviderId::new([0x31; 32]),
@@ -14545,7 +14619,13 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(1),
+        );
         let order_id = ReplicationOrderId::new([0x7B; 32]);
         let original_provider = ProviderId::new([0x3A; 32]);
         let replacement_provider = ProviderId::new([0x3B; 32]);
@@ -14720,7 +14800,13 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(1),
+        );
         let order_id = ReplicationOrderId::new([0x72; 32]);
         let providers = vec![
             ProviderId::new([0x27; 32]),
@@ -14868,10 +14954,16 @@ mod sorafs_tests {
     #[test]
     fn expire_replication_order_rejects_completed_order_and_missing_permission() {
         let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
+        let mut block = state.block(block_header_at_epoch(15));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x73; 32]);
         let providers = vec![
             ProviderId::new([0x2D; 32]),
@@ -15113,10 +15205,16 @@ mod sorafs_tests {
     fn provider_owner_transfer_after_retained_completion_cannot_rewrite_evidence() {
         let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(block_header_at_epoch(12));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x79; 32]);
         let providers = vec![
             ProviderId::new([0x35; 32]),
@@ -15525,6 +15623,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         record_capacity_window(&mut stx, provider, 0, 10, 50, 50, 25, 9_500, 9_500, 0);
         let overlap = CapacityTelemetryRecord::new(
             provider, 5, 12, 50, 50, 25, 1, 1, 9_500, 9_500, 0, 0, 0, 0, 0,
@@ -15576,6 +15679,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         stx.gov.sorafs_telemetry.require_nonce = false;
         record_capacity_window(&mut stx, provider, 0, 10, 50, 50, 25, 9_500, 9_500, 0);
         let replay = CapacityTelemetryRecord::new(
@@ -15633,6 +15741,11 @@ mod sorafs_tests {
         let (provider, declaration) = capacity_record_with_owner(&bob());
         register_governed_capacity_declaration(&mut stx, &bob(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         stx.gov.sorafs_telemetry.require_submitter = true;
         stx.gov.sorafs_telemetry.submitters = vec![alice()];
         stx.gov
@@ -16914,6 +17027,12 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_governed_capacity_provider(
+            &mut stx,
+            ProviderId::new([0xE8; 32]),
+            &alice(),
+            Quantity::from(1_u32),
+        );
         let provider = ProviderId::new([0x56; 32]);
         seed_provider_owners(&mut stx, &[provider], &alice());
         let record = ProviderCreditRecord::new(
@@ -17531,13 +17650,15 @@ mod sorafs_tests {
         let mut state = make_state();
         let mut first_digest = None;
         for ordinal in 1..=RECORD_COUNT {
-            let digest = ManifestDigest::new([u8::try_from(ordinal).expect("small ordinal"); 32]);
-            first_digest.get_or_insert(digest);
+            let seed = u8::try_from(ordinal).expect("small ordinal");
+            let digest = manifest_digest_for_seed(seed);
+            first_digest =
+                Some(first_digest.map_or(digest, |first: ManifestDigest| first.min(digest)));
             let record = PinManifestRecord::new(
                 digest,
-                default_root_cid(),
+                root_cid_for_manifest(digest),
                 default_chunker(),
-                default_chunk_digest(),
+                chunk_digest_for_seed(seed),
                 por_root_for_manifest(digest),
                 default_content_length(),
                 default_policy(),
@@ -17566,7 +17687,7 @@ mod sorafs_tests {
             )
             .expect("encode byte-ceiling query fixture usage"),
         );
-        let block_hash = iroha_crypto::HashOf::new(&block_header());
+        let block_hash = block_header().hash();
         state.push_block_hash_for_testing(block_hash);
         let page = FindSorafsPinManifests::new(
             None,

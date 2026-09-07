@@ -4,15 +4,14 @@
 //! policies, reserve funding, orders, matching and settlement use signed native instructions.
 //! Provider delivery, owner-governance transitions, partial fills and expiry remain separate tests.
 
-use std::{
-    sync::{Arc, Barrier},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::sorafs_network::{prepare_transaction, submit_instruction};
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, QueryError},
+    blocking::Client,
+    client::QueryError,
     crypto::{Algorithm, HashOf, KeyPair, Signature},
     data_model::{
         escrow::{AssetEscrowRecord, AssetEscrowStatus},
@@ -47,12 +46,13 @@ use iroha::{
                 ReserveProviderTermsV1, ReserveTier,
             },
         },
-        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
+        transaction::error::TransactionRejectionReason,
     },
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanSetSorafsPricing, CanSetSorafsReservePolicy,
 };
+use iroha_test_network::read_on_dedicated_thread;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use sorafs_manifest::{
@@ -76,17 +76,14 @@ const PROVIDER: ProviderId = ProviderId::new([0xB6; 32]);
 const DEADLINE: Duration = Duration::from_secs(180);
 const BYTES: u64 = 2 << 30;
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
-}
-
 fn reader(network: &Network, peer: usize, account: &AccountId, keys: &KeyPair) -> Client {
-    let mut client = network.peers()[peer].client_for(account, keys.private_key().clone());
-    client.transaction_status_timeout = DEADLINE;
-    client.torii_request_timeout = Duration::from_secs(5);
-    client.transaction_ttl = Some(Duration::from_secs(300));
-    client.add_transaction_nonce = false;
-    client
+    let client = network.peers()[peer].client_for(account, keys.private_key().clone());
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = DEADLINE;
+        client.torii_request_timeout = Duration::from_secs(5);
+        client.transaction_ttl = Some(Duration::from_secs(300));
+        client.add_transaction_nonce = false;
+    })
 }
 
 fn signing_material(keys: &KeyPair) -> Result<OrderbookSignatureV1> {
@@ -159,28 +156,31 @@ async fn race(
     left_metadata.insert("orderbook_race_route".parse()?, 0u32);
     let mut right_metadata = Metadata::default();
     right_metadata.insert("orderbook_race_route".parse()?, 1u32);
-    let left_transaction =
-        left.try_build_transaction([instruction.clone()], no_fee(), left_metadata)?;
-    let right_transaction = right.try_build_transaction([instruction], no_fee(), right_metadata)?;
+    let left_transaction = prepare_transaction(&left, [instruction.clone()], left_metadata).await?;
+    let right_transaction = prepare_transaction(&right, [instruction], right_metadata).await?;
     ensure!(
         left_transaction.hash() != right_transaction.hash(),
         "race must not collapse into transaction deduplication"
     );
-    let barrier = Arc::new(Barrier::new(2));
-    let left_barrier = Arc::clone(&barrier);
+    let barrier = tokio::sync::Barrier::new(2);
     let (left, right) = timeout(DEADLINE + Duration::from_secs(10), async {
-        tokio::try_join!(
-            tokio::task::spawn_blocking(move || {
-                left_barrier.wait();
-                left.submit_transaction_blocking(&left_transaction)
-            }),
-            tokio::task::spawn_blocking(move || {
-                barrier.wait();
-                right.submit_transaction_blocking(&right_transaction)
-            }),
+        tokio::join!(
+            async {
+                barrier.wait().await;
+                left.account_client()
+                    .submit_transaction_and_wait(&left_transaction)
+                    .await
+            },
+            async {
+                barrier.wait().await;
+                right
+                    .account_client()
+                    .submit_transaction_and_wait(&right_transaction)
+                    .await
+            },
         )
     })
-    .await??;
+    .await?;
     Ok([left, right])
 }
 
@@ -189,7 +189,7 @@ fn asset_balance(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Quantity> {
-    match client.query_single(FindAssetById::new(AssetId::of(
+    match client.client().query_single(FindAssetById::new(AssetId::of(
         definition.clone(),
         account.clone(),
     ))) {
@@ -240,12 +240,22 @@ fn observe(
     treasury: &AccountId,
     bid_id: [u8; 32],
 ) -> Result<Observation> {
-    let orders = client.query_single(FindSorafsOrderbookOrders::new(None, None, None, 8))?;
+    let orders = client
+        .client()
+        .query_single(FindSorafsOrderbookOrders::new(None, None, None, 8))?;
     let anchor = Some(orders.finalized_cursor);
-    let trades = client.query_single(FindSorafsOrderbookTrades::new(anchor, None, 8))?;
-    let channels = client.query_single(FindSorafsOrderbookChannels::new(anchor, None, None, 8))?;
-    let receipts = client.query_single(FindSorafsOrderbookReceipts::new(anchor, None, None, 8))?;
-    let events = client.query_single(FindSorafsOrderbookEvents::new(anchor, None, 16))?;
+    let trades = client
+        .client()
+        .query_single(FindSorafsOrderbookTrades::new(anchor, None, 8))?;
+    let channels = client
+        .client()
+        .query_single(FindSorafsOrderbookChannels::new(anchor, None, None, 8))?;
+    let receipts = client
+        .client()
+        .query_single(FindSorafsOrderbookReceipts::new(anchor, None, None, 8))?;
+    let events = client
+        .client()
+        .query_single(FindSorafsOrderbookEvents::new(anchor, None, 16))?;
     ensure!(
         trades.finalized_cursor == orders.finalized_cursor
             && channels.finalized_cursor == orders.finalized_cursor
@@ -261,17 +271,19 @@ fn observe(
             && !events.has_more,
         "bounded scenario must retain complete pages"
     );
-    let parent =
-        client.query_single(FindAssetEscrowById::new(orderbook_order_escrow_id(bid_id)))?;
-    let child = channels
-        .channels
-        .first()
-        .map(|channel| {
-            client.query_single(FindAssetEscrowById::new(orderbook_settlement_escrow_id(
-                channel.channel_id,
-            )))
-        })
-        .transpose()?;
+    let parent = client
+        .client()
+        .query_single(FindAssetEscrowById::new(orderbook_order_escrow_id(bid_id)))?;
+    let child =
+        channels
+            .channels
+            .first()
+            .map(|channel| {
+                client.client().query_single(FindAssetEscrowById::new(
+                    orderbook_settlement_escrow_id(channel.channel_id),
+                ))
+            })
+            .transpose()?;
     let mut balances = vec![];
     for account in [&*ALICE_ID, &*BOB_ID, treasury, manager, &parent.custody] {
         balances.push(asset_balance(client, definition, account)?);
@@ -280,9 +292,13 @@ fn observe(
         Some(child) => asset_balance(client, definition, &child.custody)?,
         None => Quantity::zero(),
     });
-    let status = client.query_single(FindSorafsOrderbookStatus)?;
-    let provider_owner = client.query_single(FindSorafsProviderOwner::new(PROVIDER))?;
-    let after = client.query_single(FindSorafsOrderbookEvents::new(None, None, 16))?;
+    let status = client.client().query_single(FindSorafsOrderbookStatus)?;
+    let provider_owner = client
+        .client()
+        .query_single(FindSorafsProviderOwner::new(PROVIDER))?;
+    let after = client
+        .client()
+        .query_single(FindSorafsOrderbookEvents::new(None, None, 16))?;
     ensure!(
         after.finalized_cursor == orders.finalized_cursor,
         "finalized state advanced during custody observation"
@@ -317,8 +333,12 @@ async fn converged(
             let definition = definition.clone();
             let manager = manager.clone();
             let treasury = treasury.clone();
-            tasks
-                .spawn_blocking(move || observe(&client, &definition, &manager, &treasury, bid_id));
+            tasks.spawn(async move {
+                read_on_dedicated_thread(move || {
+                    observe(&client, &definition, &manager, &treasury, bid_id)
+                })
+                .await
+            });
         }
         let mut observations = vec![];
         while let Some(result) = timeout_at(deadline, tasks.join_next()).await? {
@@ -371,8 +391,15 @@ fn require_conservation(observation: &Observation) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() -> Result<()> {
+#[test]
+fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() -> Result<()> {
+    super::sorafs_network::run(
+        stringify!(four_peer_orderbook_match_settlement_and_restart_are_authoritative),
+        four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl,
+    )
+}
+
+async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl() -> Result<()> {
     init_instruction_registry();
     let manager_keys = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)?;
     let manager = AccountId::new(manager_keys.public_key().clone());
@@ -435,6 +462,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
         ));
     }
     let context = stringify!(four_peer_orderbook_match_settlement_and_restart_are_authoritative);
+    let builder = super::sorafs_network::bounded_storage(builder);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
@@ -444,12 +472,14 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
         "orderbook requires four validators"
     );
     for peer in 0..4 {
-        ensure!(
-            reader(&network, peer, &ALICE_ID, &ALICE_KEYPAIR)
-                .query_single(FindSorafsProviderOwner::new(PROVIDER))?
-                == *BOB_ID,
-            "trusted genesis provider binding missing"
-        );
+        let reader = reader(&network, peer, &ALICE_ID, &ALICE_KEYPAIR);
+        let owner = read_on_dedicated_thread(move || {
+            Ok(reader
+                .client()
+                .query_single(FindSorafsProviderOwner::new(PROVIDER))?)
+        })
+        .await?;
+        ensure!(owner == *BOB_ID, "trusted genesis provider binding missing");
     }
     let governor = reader(&network, 0, &manager, &manager_keys);
     // Sequential setup shares the submitting peer's Applied confirmation. The
@@ -473,8 +503,9 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
         max_open_appeals_per_provider: 2,
     };
     let reserve_digest = reserve_policy.digest()?;
-    governor.submit_blocking(SetSorafsReservePolicy::new(reserve_policy), no_fee())?;
-    governor.submit_blocking(
+    submit_instruction(&governor, SetSorafsReservePolicy::new(reserve_policy)).await?;
+    submit_instruction(
+        &governor,
         RegisterSorafsReserveAccount::new(
             ReserveProviderTermsV1 {
                 provider_id: PROVIDER,
@@ -486,9 +517,10 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
             },
             reserve_digest,
         ),
-        no_fee(),
-    )?;
-    provider.submit_blocking(
+    )
+    .await?;
+    submit_instruction(
+        &provider,
         RequestSorafsReserveMovement::new(
             [0xB9; 32],
             PROVIDER,
@@ -497,9 +529,10 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
             1,
             reserve_digest,
         ),
-        no_fee(),
-    )?;
-    governor.submit_blocking(
+    )
+    .await?;
+    submit_instruction(
+        &governor,
         DecideSorafsReserveMovement::new(
             [0xB9; 32],
             2,
@@ -507,13 +540,20 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
             true,
             "fund provider underwriting".to_owned(),
         ),
-        no_fee(),
-    )?;
-    governor.submit_blocking(
+    )
+    .await?;
+    submit_instruction(
+        &governor,
         AdvanceSorafsReserveLifecycle::new(PROVIDER, 3, 0, reserve_digest),
-        no_fee(),
-    )?;
-    let reserve = buyer.query_single(FindSorafsReserveProviderById::new(PROVIDER))?;
+    )
+    .await?;
+    let reserve_reader = buyer.clone();
+    let reserve = read_on_dedicated_thread(move || {
+        Ok(reserve_reader
+            .client()
+            .query_single(FindSorafsReserveProviderById::new(PROVIDER))?)
+    })
+    .await?;
     ensure!(
         reserve.reserve_balance == "100".parse()?
             && reserve.lifecycle_stage == ReserveLifecycleStage::Active,
@@ -541,19 +581,19 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
     };
     let digest = policy.digest()?;
     require_native_rejection(
-        provider.submit_blocking(SetSorafsOrderbookPolicy::new(policy.clone()), no_fee()),
+        submit_instruction(&provider, SetSorafsOrderbookPolicy::new(policy.clone())).await,
         "CanSetSorafsPricing",
     )?;
-    governor.submit_blocking(SetSorafsOrderbookPolicy::new(policy), no_fee())?;
+    submit_instruction(&governor, SetSorafsOrderbookPolicy::new(policy)).await?;
     let expiry = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + 1800;
     let bid = signed_order(&ALICE_KEYPAIR, OrderSideV1::Bid, expiry)?;
     let ask = signed_order(&BOB_KEYPAIR, OrderSideV1::Ask, expiry)?;
     let bid_instruction = SubmitSorafsOrderbookOrder::new(norito::encode_canonical(&bid)?, digest);
     require_native_rejection(
-        provider.submit_blocking(bid_instruction.clone(), no_fee()),
+        submit_instruction(&provider, bid_instruction.clone()).await,
         "does not match transaction authority",
     )?;
-    buyer.submit_blocking(bid_instruction, no_fee())?;
+    submit_instruction(&buyer, bid_instruction).await?;
     let admitted = converged(
         &network,
         &definition,
@@ -574,10 +614,11 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
         admitted.balances[0] == Quantity::from(100u32).checked_sub(&initial_lock)?,
         "buyer balance did not fund the bid lock"
     );
-    provider.submit_blocking(
+    submit_instruction(
+        &provider,
         SubmitSorafsOrderbookOrder::new(norito::encode_canonical(&ask)?, digest),
-        no_fee(),
-    )?;
+    )
+    .await?;
     let before_match = converged(
         &network,
         &definition,
@@ -590,7 +631,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
     let matching: InstructionBox =
         MatchSorafsOrderbook::new(digest, before_match.status.book_revision, 1).into();
     require_native_rejection(
-        buyer.submit_blocking(matching.clone(), no_fee()),
+        submit_instruction(&buyer, matching.clone()).await,
         "governed authority",
     )?;
     let outcomes = race(
@@ -817,13 +858,14 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative() ->
         "cold peer recovery changed finalized orders, custody, balances or journal"
     );
     require_native_rejection(
-        reader(&network, 3, &ALICE_ID, &ALICE_KEYPAIR).submit_blocking(
+        submit_instruction(
+            &reader(&network, 3, &ALICE_ID, &ALICE_KEYPAIR),
             RecordSorafsOrderbookSettlementReceipt::new(
                 norito::encode_canonical(&receipt)?,
                 digest,
             ),
-            no_fee(),
-        ),
+        )
+        .await,
         "channel is not open",
     )?;
     let after_replay = converged(

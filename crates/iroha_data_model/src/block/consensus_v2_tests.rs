@@ -25,17 +25,13 @@ mod tests {
             validators: roster
                 .iter()
                 .enumerate()
-                .map(
-                    |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                        validator: validator.validator.clone(),
-                        eq_proof_public_key: [u8::try_from(index + 1)
-                            .expect("small fixture roster");
-                            32],
-                        ep_proof_public_key: [u8::try_from(index + 17)
-                            .expect("small fixture roster");
-                            32],
-                    },
-                )
+                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                })
                 .collect(),
         }
     }
@@ -1045,10 +1041,24 @@ mod tests {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
         assert_eq!(empty.leader(u64::MAX), 0);
-        assert_eq!(empty.validate(), Err(ValidationError::EmptyRoster));
+        assert_eq!(
+            DualQuorum::from_roster(&empty.roster),
+            Err(ValidationError::EmptyRoster)
+        );
+        assert_eq!(
+            empty.validate(),
+            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+        );
         let mut too_small = context(&[1, 1, 1, 1]);
         too_small.roster.truncate(MIN_VALIDATORS_PER_HEIGHT - 1);
-        assert_eq!(too_small.validate(), Err(ValidationError::RosterTooSmall));
+        assert_eq!(
+            DualQuorum::from_roster(&too_small.roster),
+            Err(ValidationError::RosterTooSmall)
+        );
+        assert_eq!(
+            too_small.validate(),
+            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+        );
         let mut invalid_geometry = context(&[1, 1, 1, 1]);
         invalid_geometry.roster.push(ValidatorPower {
             validator: peer(0xFE),
@@ -1056,12 +1066,23 @@ mod tests {
         });
         invalid_geometry.roster.sort();
         assert_eq!(
-            invalid_geometry.validate(),
+            DualQuorum::from_roster(&invalid_geometry.roster),
             Err(ValidationError::InvalidCommitteeGeometry)
+        );
+        assert_eq!(
+            invalid_geometry.validate(),
+            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
         );
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.roster[1].validator = invalid.roster[0].validator.clone();
-        assert_eq!(invalid.validate(), Err(ValidationError::DuplicateValidator));
+        assert_eq!(
+            DualQuorum::from_roster(&invalid.roster),
+            Err(ValidationError::DuplicateValidator)
+        );
+        assert_eq!(
+            invalid.validate(),
+            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+        );
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.quorum.min_signers = 2;
         assert_eq!(
@@ -1073,7 +1094,14 @@ mod tests {
         oversized
             .roster
             .resize(MAX_VALIDATORS_PER_HEIGHT + 1, repeated);
-        assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
+        assert_eq!(
+            DualQuorum::from_roster(&oversized.roster),
+            Err(ValidationError::RosterTooLarge)
+        );
+        assert_eq!(
+            oversized.validate(),
+            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+        );
         let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
         assert_eq!(largest.validate(), Ok(()));
         let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);
@@ -1176,9 +1204,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x6e, 0x27, 0x3d, 0x47, 0xa7, 0x42, 0xec, 0xa0, 0x81, 0x97, 0xeb, 0x84, 0x26, 0x0f,
-                0x6d, 0xe2, 0x63, 0x5a, 0x7e, 0x08, 0xb4, 0x6c, 0xc5, 0xa8, 0xce, 0x05, 0xa1, 0x54,
-                0x04, 0xf4, 0x1e, 0x1f,
+                0xfc, 0x5e, 0x84, 0x52, 0x9f, 0x0b, 0x03, 0x30, 0x2e, 0x01, 0x77, 0x4a, 0x89, 0x57,
+                0xf6, 0x51, 0x8e, 0x67, 0xb7, 0xfe, 0xd3, 0x4b, 0xf2, 0x88, 0x79, 0x73, 0x3a, 0x71,
+                0x8b, 0xbc, 0x45, 0x29,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -1208,9 +1236,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0xa1, 0x53, 0x7a, 0xd0, 0x9e, 0x51, 0xcf, 0xd1, 0x1c, 0x5a, 0xac, 0xcb, 0x5d, 0x44,
-                0x16, 0xdb, 0xba, 0xfa, 0x3b, 0x1c, 0xd2, 0x3b, 0xae, 0xf5, 0x07, 0x66, 0x6e, 0x33,
-                0x85, 0xa4, 0x4c, 0x6b,
+                0x6c, 0xa6, 0xe7, 0x06, 0x1c, 0x2d, 0x85, 0xb5, 0x6b, 0x95, 0x6e, 0xe4, 0x75, 0x38,
+                0x12, 0xde, 0x85, 0xcd, 0x4b, 0xcf, 0x48, 0xfd, 0x0b, 0x5d, 0xbf, 0x3e, 0x11, 0x5d,
+                0xc2, 0x9f, 0xbd, 0xef,
             ],
             "intentional transition-identity changes require updating this golden"
         );

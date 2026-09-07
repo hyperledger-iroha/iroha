@@ -3559,9 +3559,7 @@ fn apply_parameter_overrides(
             builder = builder.append_parameter(parameter);
         }
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn apply_localnet_crypto_overrides(
     genesis: RawGenesisTransaction,
@@ -3592,11 +3590,7 @@ fn apply_localnet_crypto_overrides(
         .collect();
     crypto.allowed_curve_ids.sort_unstable();
     crypto.allowed_curve_ids.dedup();
-    genesis
-        .into_builder()
-        .with_crypto(crypto)
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    genesis.into_builder().with_crypto(crypto).build_raw()
 }
 fn append_peer_pop(
     genesis: RawGenesisTransaction,
@@ -3614,7 +3608,6 @@ fn append_peer_pop(
         .next_transaction()
         .set_topology(topology)
         .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 #[cfg(test)]
 fn append_localnet_contract_permissions(
@@ -3649,9 +3642,7 @@ fn append_localnet_service_accounts(
                 builder.append_instruction(Register::account(Account::new((*account_id).clone())));
         }
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn append_localnet_alias_fee_bootstrap(
     genesis: RawGenesisTransaction,
@@ -3705,9 +3696,7 @@ fn append_localnet_alias_fee_bootstrap(
             AssetId::new(fee_asset_id, onboarding_account_id.clone()),
         ));
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn localnet_alias_setup_request(
     genesis_account_id: &AccountId,
@@ -3777,9 +3766,7 @@ fn append_localnet_alias_setup(
     for ensure in request.intents.iter().cloned() {
         builder = builder.append_instruction(ensure);
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn write_localnet_alias_setup_intent(
     out_dir: &Path,
@@ -3890,9 +3877,7 @@ fn append_localnet_contract_permissions_for_client(
     for (permission, destination) in grants {
         builder = builder.append_instruction(Grant::account_permission(permission, destination));
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,

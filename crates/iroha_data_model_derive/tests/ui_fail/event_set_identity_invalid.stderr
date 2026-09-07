@@ -1,0 +1,5 @@
+error: expected string literal
+ --> tests/ui_fail/event_set_identity_invalid.rs:5:27
+  |
+5 | #[event_set(schema_name = concat!("fixture", "::Identity"))]
+  |                           ^^^^^^

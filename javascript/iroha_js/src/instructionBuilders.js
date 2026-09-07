@@ -1,3 +1,4 @@
+import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import { blake2b256 } from "./blake2b.js";
 import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
@@ -2018,26 +2019,30 @@ function normalizeRoomPolicyTag(value) {
   );
 }
 
+function normalizeOptionalKaigiScalarV1(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    return Array.from(kaigiScalarBytesV1(value, context));
+  } catch (error) {
+    fail(ValidationErrorCode.INVALID_OBJECT, error.message, context);
+  }
+}
+
 function normalizeKaigiParticipantCommitment(value, context) {
   if (value === undefined || value === null) {
     return null;
   }
   const commitment = assertPlainObject(value, context);
-  const alias = commitment.alias_tag ?? commitment.aliasTag ?? null;
-  if (alias !== null && alias !== undefined) {
-    fail(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.aliasTag is off-chain only and must be omitted`,
-      `${context}.aliasTag`,
-    );
+  if (Object.keys(commitment).length !== 1 || !("commitment" in commitment)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${context} requires only commitment`, context);
   }
-  return {
-    commitment: normalizeHash(
-      commitment.commitment,
-      `${context}.commitment`,
-    ),
-    alias_tag: null,
-  };
+  const scalar = normalizeOptionalKaigiScalarV1(commitment.commitment, `${context}.commitment`);
+  if (scalar === null) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${context}.commitment is required`, context);
+  }
+  return { commitment: scalar };
 }
 
 function normalizeKaigiParticipantNullifier(value, context) {
@@ -2045,38 +2050,14 @@ function normalizeKaigiParticipantNullifier(value, context) {
     return null;
   }
   const nullifier = assertPlainObject(value, context);
-  const digest = nullifier.digest ?? nullifier.hash ?? nullifier.value;
-  const timestampFields = ["issued_at_ms", "issuedAtMs", "issuedAt"];
-  let issuedAtMs;
-  for (const field of timestampFields) {
-    if (!Object.prototype.hasOwnProperty.call(nullifier, field)) {
-      continue;
-    }
-    const fieldValue = nullifier[field];
-    if (fieldValue === undefined || fieldValue === null) {
-      continue;
-    }
-    const normalized = asNonNegativeInteger(fieldValue, `${context}.${field}`);
-    if (normalized !== 0) {
-      fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
-        `${context}.issuedAtMs is off-chain only and must be zero`,
-        `${context}.${field}`,
-      );
-    }
-    issuedAtMs = 0;
+  if (Object.keys(nullifier).length !== 1 || !("digest" in nullifier)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${context} requires only digest`, context);
   }
-  if (issuedAtMs === undefined) {
-    fail(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${context}.issuedAtMs must be zero`,
-      `${context}.issuedAtMs`,
-    );
+  const digest = normalizeOptionalKaigiScalarV1(nullifier.digest, `${context}.digest`);
+  if (digest === null) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${context}.digest is required`, context);
   }
-  return {
-    digest: normalizeHash(digest, `${context}.digest`),
-    issued_at_ms: issuedAtMs,
-  };
+  return { digest };
 }
 
 function normalizeNewKaigi(options) {
@@ -2195,21 +2176,6 @@ function normalizeJoinOrLeaveInput(type, options) {
     ),
     proof: normalizeOptionalBase64(source.proof, `${type}.proof`),
   };
-  if (
-    type === "leaveKaigi" &&
-    (
-      normalized.commitment !== null ||
-      normalized.nullifier !== null ||
-      normalized.roster_root !== null ||
-      normalized.proof !== null
-    )
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "leaveKaigi privacy artifacts are reserved and must be omitted in V1",
-      "leaveKaigi",
-    );
-  }
   return normalized;
 }
 
@@ -2253,7 +2219,7 @@ function normalizeKaigiUsageInput(options) {
       source.billed_gas ?? source.billedGas ?? source.gas ?? 0,
       "recordKaigiUsage.billedGas",
     ),
-    usage_commitment: normalizeOptionalHash(
+    usage_commitment: normalizeOptionalKaigiScalarV1(
       source.usage_commitment ?? source.usageCommitment,
       "recordKaigiUsage.usageCommitment",
     ),

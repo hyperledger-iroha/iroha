@@ -49,6 +49,313 @@ The [base extraction inventory](model_base_extraction.md) defines the first
 dependency-closed identity move and its codec, FFI and consumer obligations.
 Physical relocation awaits the atomic identity cutover.
 
+Connect queue and Soracloud witness paths belong to CLI configuration. The SDK
+rejects those sections and accepts a validated application-layer TOML table with
+its original source path, preserving relative credential-file resolution.
+Configured CLI paths resolve from that same directory. Soracloud authority,
+witness path and fee intent share one scoped invocation context, restored
+together on exit; witness authentication retains all existing bounds and checks.
+The SDK config suite passes 15 tests, with 13 CLI loader, filesystem, witness,
+authentication and context-restoration tests. The manifest adds only the CLI's
+direct `iroha_config_base` edge; the exact budget and all 15 dependency
+boundaries pass. Complete client immutability and async migration remain open.
+
+Integration status helpers and all CLI development binaries now use explicit
+blocking/client/account contexts after removal of the blocking facade's `Deref`.
+The integration library and its test target compile; the three development-bin
+suites pass 40 tests. The CLI invocation guard is structurally `!Send`/`!Sync`,
+matching its thread-local restoration responsibility, and its restoration test
+passes. Existing synchronous reads remain part of the pending SDK capability
+migration; these caller checks do not qualify network scenarios.
+
+Local transaction construction now uses `AccountTransactionDraft` and the
+immutable `AccountClient::prepare_transaction` and `sign_transaction` operations.
+All six superseded generic helpers and the quote-and-sign composite are removed.
+The draft has no network or authority; preparation supplies them from its
+context and applies configured nonce/TTL defaults once. Direct signing rejects
+foreign networks, substituted authorities and multisig-member contexts; those
+members may prepare payloads for external threshold signing. Typed preparation
+and signing causes now belong to the crate-level `iroha::Error`/`Result` family.
+Ten focused runtime tests pass, including exact signed bytes, attachments,
+context isolation, fee binding and entropy failure. The compiler-guided integration
+migration replaced 730 implicit blocking-client accesses across 88 files;
+configuration changes construct fresh validated contexts, with an isolation
+test passing. Musubi, Izanami and every integration test target compile.
+Native AMX integration evidence recomputes the finite settlement hash, and the
+alias-registry replay fixture retains owned copies of every restart layer.
+SDK examples, all CLI/Musubi/Izanami/test-network targets and integration tests
+compile. Four specialized SoraFS transaction wrappers are also removed; their
+callers use the same draft and account operations. Five focused SoraFS runtime
+tests preserve exact instructions, the five-minute moderation TTL and invariant
+preflight. Other specialized preparation methods, non-transaction error shapes
+and synchronous capabilities remain open. Live four-validator execution was not
+run; this remains an ownership and compilation checkpoint.
+
+Fee quoting now has one typed asynchronous account operation with explicit
+direct-signature or multisignature-witness authorization. Raw response handling
+is private, and synchronous callers use the owned blocking runtime. All old
+public raw and witness-specific quote methods are removed. Exact payload and
+witness binding, signer order/threshold, response bounds and structured fee
+error details retain focused passing tests. Every CLI target and integration
+test target compiles through the canonical operation. The broader SDK error
+family and remaining synchronous capabilities still require consolidation.
+
+The generated event family now has explicit captured identities for all 25 set
+types and 12 enclosing data-event enums. All 225 captured set frames and 75 JSON
+values remain exact. The full derive suites pass 48 tests after rejecting
+duplicate origin/identity metadata and replacing the stale numerical direct-FFI
+check with a declaration inventory. The [identity specification](norito_schema_identity.md)
+retains the remaining generated/generic and atomic-cutover obligations.
+
+The Musubi digest, bounded-text and page generators now require explicit
+identities for all 17 types. Their 49 captured values preserve 196 complete
+frames, including generic containers and populated pages. Active codecs remain
+unchanged; this qualifies the generated-family preparation only.
+
+All 16 governance hash wrappers now also declare their captured identities.
+A separate capture of these handwritten codecs preserves 256 complete frames
+and 64 JSON values; their active codec bodies remain unchanged. Both generated
+Musubi and governance identity suites pass after these declarations.
+
+All 12 current instruction enums now declare their captured identities, with
+57 variants and 228 complete root/container frames preserved. The compiler
+identified two mint/burn callers absent from the historical generated-family
+review; their original codecs received a separate capture. This closes that
+generator's current declaration set, not the remaining instruction families.
+
+The instruction suite also exposed stale fixture assumptions. Governance
+negative-layout tests now resolve the current canonical wire identifier before
+framing a retired payload. Cross-family tests under removed Rust type names
+require lookup rejection; registered canonical cross-family checks remain.
+Shared test-helper ownership is checked per consumer instead of by aggregate
+call totals. The wire-ID digest refresh was reviewed against commit
+`7035517653`: only the already-committed KAGEMUSHA top-up and redemption names
+replace the retired offline-cash names; all 349 other assignments are exact.
+Both previous golden digests were reproduced from the parent source before
+computing the replacement digests. Production registry and codec logic are
+unchanged by these fixture repairs.
+
+Native AMX participant evidence uses `NativeAmxParticipantSettlement`, which
+contains the exact zero-effect fields and ordered source receipts but cannot
+contain Native AMX receipts. This removes the former type cycle from
+`LaneBlockCommitment` through `NativeAmxReceipt` and `NativeAmxLegRecordV2` back
+to `LaneBlockCommitment`. Its domain-separated typed hash binds that finite
+record and its source order; the removed recursive JSON field is rejected.
+
+The complete instruction library selection passes 319 tests after these repairs.
+The two finite Native AMX participant-settlement regressions also pass again on
+the default stack. This is local mutable-tree development evidence; full model,
+workspace, native and source-bound release qualification remain open.
+
+Twelve Nexus instruction records now declare their captured identities and
+preserve 120 complete frames across 24 populated values. All nine owner tests
+pass, including ordering and invalid-withdrawal checks. The immutable fixtures
+exercise each existing JSON surface: instruction carriers for all twelve and
+direct withdrawal JSON. This adds no codec, proof-admission or finality claim.
+
+All twelve current `isi_box!` callers now supply captured identities through a
+single required generator derive. Exhaustive variant matches preserve 68
+populated variants, 340 complete frames and 68 instruction-carrier JSON values.
+The complete instruction selection passes 336 tests after these declarations.
+The broader compiler capture records 433 actual identities and 413 distinct
+payloads across 330 types; remaining instruction-record fixture gaps are tracked
+explicitly. All one-time probes were removed, and the production source matches
+its captured bytes after removing only the new identity declarations. Active
+codec cutover and model crate moves remain pending.
+
+A complete default-stack model-library diagnostic run then finished with 3,081
+passes, 29 failures and six ignored tests; it did not overflow the stack.
+Five stale fixture assumptions have since been repaired and pass individually:
+the multisig preflight uses a valid current header and proves zero allocation
+charges; bridge tag checks inspect the fixed-width prefix; every block decoder
+rejects removed nested instruction aliases; query scope includes its canonical
+null content; and the audit fixture proves valid complete attribution before
+removing the required result commitment. All 336 instruction tests and both
+finite-settlement regressions pass again after those repairs. Production
+validation and decode resource limits are unchanged. That left twenty-four
+other failures before the following codec corrections; the full suite remains
+unqualified pending a fresh run. Exact failures from that earlier run are retained under
+untracked `target/architecture-redesign/model-library-after-stack-and-box-fixes-review.json`.
+
+The signature-layout diagnosis found a handwritten slice decoder interpreting
+the tuple wrapper's field framing as a signature sequence count. It is replaced
+with the decoder derived from the same declaration; serialization is unchanged.
+Six signature tests pass, covering advertised layouts, exact bytes and rejection
+of empty, zero, truncated, trailing and unwrapped signatures. Packed named and
+tuple decoders now enforce their complete boundary in table and bitset layouts;
+empty table layouts consume their existing zero-offset sentinel. Explicit prefix
+decoding continues to report the exact bytes consumed.
+
+`ConstVec` now decodes the advertised element layout once, preserves the first
+error and checks complete field consumption. The removed recovery paths retried
+the same malformed value, copied aligned payloads and accepted re-encoded or
+length-mismatched values. The shared sequence planner charges the count once;
+tests prove its exact allocation boundary. `Vec<u8>` retains its raw-byte layout
+and `ConstVec<u8>` retains its element layout. All 812 Norito grouped tests, 285
+primitive library tests and 48 final immutable-vector tests pass. Strict Clippy
+for Norito, its derive crate and the primitives library now passes after three
+equivalent numeric-range expressions and filesystem Rustdoc formatting are
+corrected. The complete JSON group passes 152 tests, including exact-integer,
+saturation, NaN, infinity, fraction and negative-zero equality checks.
+
+The RPC peer fixture still contained the `hsm` field removed from
+`RegisterPeerWithPop` by `40f44e84cde4ffca106a47db9db8438cd063989f`.
+Repeated vector recovery attempts masked its first length mismatch with
+cumulative-budget exhaustion. The authoritative Rust renderer now regenerates
+the current four-field record with the original public key and proof. Review
+confirms that only this entry and its signed dependents change across ten
+canonical/mirrored files; all 55 other publication files remain byte-identical.
+The one-time writer is removed. Two subsequent public-API publications under
+independent absent external roots match all 79 filesystem entries, including
+all 65 file bytes and modes, and every tracked fixture matches them. Three
+public fixture files had mode 0600; restoring their required 0644 modes closes
+the exporter filesystem check. All 44 exporter tests pass. No decode budget or
+stack override was increased.
+
+The final dependent build passes. Its complete model-library diagnostic run
+finishes on the default stack with 3,092 passes, 21 failures and six ignored
+tests; both finite Native AMX regressions, all signature tests and the complete
+RPC manifest roundtrip pass. Two failures are subsequently corrected: the
+moderation anchor requires an explicit JSON key while permitting null, and the
+address test asserts rejection when constructing an unsupported header version.
+Those two cases and all ten authorization tests pass on the subsequent build
+without warnings. Moving authorization into its own test module reduces the
+transaction test file from 3,093 to 2,770 lines and preserves every assertion.
+The final compiled model also passes all nine signature, finite-settlement and
+RPC-manifest regressions after those corrections and numeric lint cleanup.
+Nineteen other model failures remained at that checkpoint; it did not qualify
+the complete final suite.
+All 47 derive unit tests and 14 strict-JSON tests pass. Kotlin fixture parity
+passes 17 tests, the selected Java-source consumers pass 146 and the Python
+fixture-validator suites pass 324. The actual Python, Android, Swift and
+cross-SDK checks agree on all 27 fixtures. Full JVM testing reports 1,418 tests
+with 56 failures involving absent generated/native artifacts and two separate
+privacy KAT drifts. Python SDK runtime tests cannot load the unbuilt `_crypto`
+extension; Swift cannot build without `NoritoBridge.xcframework`. These are
+unverified runtime qualification, not passing results.
+
+The typed Musubi fixture producers and shared signed JSON now agree on the
+purpose-issued order namespace introduced by `f9a236e869`. Review of the
+deterministic producer output confines the refresh to the order ID and its
+signed dependents; schema fields and unaffected cases are exact. Six Rust and
+33 Kotlin tests pass, alongside the two fixture-diagnostic tests. Swift remains
+unverified because the required native bridge is absent. The
+[fixture record](musubi_signed_fixtures.md) retains the exact scope and hashes.
+
+All 292 current `isi!` declarations now supply explicit captured identities.
+Their 283 nongeneric records and 39 instantiated generic forms preserve 357
+values and 1,428 root/container frames across 322 concrete types. The 51 missing
+populated values were captured through their owning typed constructors before
+the declarations were applied. All 325 record tests and the twelve-argument
+marker identity test pass; active codec identity and field layouts are unchanged.
+The [record fixture](../crates/iroha_data_model/tests/fixtures/instruction_record_generated_identity_frames.md)
+retains the exact capture scope and digest.
+
+The remaining model failures were traced to their owners. Consensus and bridge
+fixtures now account for the already-committed paired Pasta epoch roster and
+complete SORA finality anchor. Invalid roster tests retain every earlier
+assertion at the constructor that owns validation; forged successor tests still
+reach certificate/context binding. Intent and ZK-ACE known answers were captured
+from the production typed APIs after the committed six-lane digest and proof
+envelope changes. FHE negative cases use a valid current policy before changing
+the field under test.
+
+Two independently generated Exact12 publications are byte-identical and match
+the adopted TSV and typed bundle. The production fixture checker passes. The
+Kotlin implementation now pins the decoded archive digest
+`ca479cad31f3d3fb6d834b5d490bb14f0f823ae4b869cf9c7cb5e32c20250035`.
+Its six codec tests pass, as do six native-independent Java consumer tests,
+42 Python parity tests and 72 standalone Python codec tests. The two required
+Java JNI tests fail because the ABI 23 native exports are unavailable. The
+standalone Python run loads the repository codec modules directly and does not
+qualify normal SDK import or the absent native `_crypto` extension.
+
+The next complete model-library run finishes on the default stack with 3,439
+passes, one failure and six ignored tests. All recorded source inputs remain
+unchanged during the run. The FHE investigation exposes two stale production
+descriptions from `a29120a068`: the composition challenge uses six
+64-bit lanes (48 bytes), and removal of `hash_fn` leaves 57 proof-profile fields.
+The public schema now describes both owning definitions exactly; its known
+answers and contract fixtures are updated coherently, and the complete focused
+schema test passes without relaxing its assertions.
+
+An additional Native AMX regression encodes the removed nested
+`LaneBlockCommitment` layout beneath the current leg schema identity. Across six
+declared layouts, the current finite leg roundtrips and the removed thirteenth
+settlement field is rejected. Current QCs and hash bytes are retained in the
+negative fixture, isolating the nested layout boundary. This test passes on the
+default stack. The schema known-answer pin also now uses the owning Iroha
+`Hash` marker, with all ten focused FHE schema tests passing. The complete final
+model-library run passes **3,441 tests with zero failures** in 760.71 seconds on
+the default stack. Its six ignored entries are explicit fixture-generation
+helpers. All 997 recorded source/fixture inputs and the test artifact remain
+unchanged throughout the run. These are selected development input hashes,
+not a complete workspace release seal.
+
+Core's receipt-append crash test passes. A real reopen test exposed a fixture
+that wrote the primary lane-incarnation marker without first recording its
+authenticated geometry binding. The fixture now uses the same primary anchor
+initialization API as production State before publishing markers or evidence.
+The temporary recovery matrix and authenticated primary restore test pass with
+all recovery validation unchanged. All **60 Native AMX Kura tests pass** on the
+final artifact after related empty-store fixtures establish valid geometry
+before writing their invalid sidecars. The symlink case recognizes the owning
+recovery error while retaining its link, target and inventory assertions.
+Rejection, size/count bounds and no-mutation checks are preserved. The separate
+authenticated primary restore test also passes again on that same artifact.
+The Core build retains 193 existing warnings; strict Core Clippy, workspace,
+native, four-validator and source-bound release qualification remain open.
+After the tuple and metadata corrections below, a fresh Core build again
+passes all 60 AMX tests and the authenticated primary restore check on one
+artifact, with the default stack and all 2,417 recorded inputs unchanged.
+The dependency build additionally reports 23 FastPQ warnings.
+
+The next storage-wrapper capture exposed two layout errors in Metadata's
+handwritten encoder: nested entry fields promoted explicit fixed-width lengths
+to compact lengths, and packed offsets were emitted without being advertised
+in the header. Metadata now streams a borrowed entry view through the shared
+field writers, counts packed entry lengths, emits checked offsets and verifies
+each streamed length. Its duplicate entry buffers and unchecked cumulative
+offset addition are removed. Tuple, block-signature, instruction and query
+writers now inherit explicit layout flags; defaults apply only without an
+active layout. All 1,246 Norito tests pass (one fixture generator ignored),
+strict Norito-library Clippy passes, and the three metadata tests plus two
+block-signature wire/allocation tests pass. The instruction/query tuple parity
+checks include the previously missed packed-sequence-only mode.
+Three dedicated metadata integration tests also pass. With preallocated output
+and warmed encoder state, both 16-byte and 256-KiB JSON strings require zero
+non-packed scratch allocations. Packed metadata allocates only one entry-count
+offset-length vector, independent of payload size; empty metadata allocates
+nothing. The same fixtures retain exact sequence-of-tuples bytes and framed
+roundtrips under fixed, compact and packed layouts.
+
+The immutable [storage identity capture](../crates/iroha_data_model/tests/fixtures/owned_storage_identity_frames.md)
+preserves 432 complete frames across nine values and 40 nominal identities.
+`Owned<T>` composes the captured nominal constructor and forwards its inner
+root projection; account/NFT/RWA storage records have captured declarations.
+All seven common-module tests pass, including exact fixtures, truncation,
+container-header substitution and marker-only nested wrappers. The capture
+writer is removed. These declarations do not change active codec selection.
+The revised model-library artifact passes all **3,446 tests** with the default
+stack; six manual fixture generators are ignored. Its executable digest and
+all 1,000 selected source-input hashes remain unchanged through the 792-second
+run. The capture record and its 999 pre-declaration input hashes are retained
+beside the fixture. These are scoped development checks, not full release
+provenance. The history archive verifies and all 74 history/source-budget guard
+tests pass; the source-size audit still reports 231 violations.
+Strict model Clippy is not passing: the dependency-inclusive run reports five
+crypto errors and one proof-library error. A separate model-target-only run
+reports 129 model diagnostics. Their complete logs are retained under
+`target/architecture-redesign/owned-storage-identity/`; neither run qualifies
+strict model or workspace linting.
+
+TODO: Correct the independently discovered numeric JSON map-key writer
+asymmetry. Numeric key decoding exists, but the current BTreeMap writer emits
+unquoted key tokens. A reviewed draft remains unapplied: its infallible path
+would turn unsupported-key errors into panics. The correction must retain
+string-key bytes, bounded writes and typed failures on fallible entry points;
+neither the storage fixture's string keys nor the draft qualify that behavior.
+
 ## Accepted design
 
 - Split foundational, privacy, and service wire models into independent
@@ -74,7 +381,7 @@ single IVM ABI remain enforced. Existing uncommitted work must be preserved.
 
 | Area | State | Remaining acceptance |
 | --- | --- | --- |
-| Source inventory | Source state and 655 canonical Torii routes recorded; 8 inventory tests pass | Request/response and SDK consumer mapping; sealed, comparable build-memory baseline |
+| Source inventory | Source state and 657 canonical Torii routes recorded; 8 inventory tests pass | Request/response and SDK consumer mapping; sealed, comparable build-memory baseline |
 | Relay incentives | Extracted to `soranet_incentives`; consumers use its canonical API | 13 Rust unit tests pass; downstream checks remain |
 | SDK dependency boundary | Core, Torii, daemon, IVM, FastPQ prover and forbidden Halo2 execution features absent; direct SDK node-config dependency removed | Remove the remaining node-config path through telemetry, plus storage orchestration and telemetry implementation dependencies |
 | Service policy ownership | `iroha_service_model` owns the four canonical SoraNet policy enums and SoraFS alias-cache defaults; duplicate runtime/config definitions and reexports removed; 4 policy and 131 architecture/router tests pass | Full policy consumer checks and remaining service record extraction |

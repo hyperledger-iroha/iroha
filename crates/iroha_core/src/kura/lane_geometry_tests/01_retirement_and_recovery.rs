@@ -174,15 +174,61 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         &extended_activations,
     );
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (network_id, epoch, payload) = autonomous_retirement_payload(
+    let (network_id, epoch, payload_template) = autonomous_retirement_payload(
         extended_incarnations[&LaneId::SINGLE],
         LaneId::new(1),
         DataSpaceId::new(8),
         extended_incarnations[&LaneId::new(1)],
         &producer,
     );
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"pending-native-amx-retirement-lifecycle"),
+    ));
+    let payload = lifecycle_bound_autonomous_retirement_payload(
+        &payload_template,
+        height_context_id,
+        &producer,
+    );
+    let local_peer = PeerId::new(producer.public_key().clone());
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind pending Native AMX lifecycle signer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim pending Native AMX lifecycle process generation");
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist coordinator-owned participant work");
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+            .expect("bind pending Native AMX reservation group");
+    let descriptor = &payload.origin_proposal.descriptor;
+    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        height_context_id,
+        descriptor.lane_block_height,
+        &payload,
+        reservation_group,
+        &local_peer,
+    )
+    .expect("bind pending Native AMX lifecycle attempt");
+    let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+    let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        extended.entry(LaneId::SINGLE).expect("coordinator lane"),
+        &root,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+    );
+    let projection = kura
+        .authorize_autonomous_lane_slot_retirement_persistence(&payload, &retirement, &view_path)
+        .expect("derive the pending Native AMX lifecycle state")
+        .consume_for_persistence(&payload, &retirement, &view_path)
+        .expect("bind the exact pending Native AMX lifecycle projection");
+    install_initial_geometry_retirement_lifecycle_cursor(
+        &kura,
+        &generation,
+        &payload,
+        &binding,
+        projection.before,
+        &producer,
+    );
     let error = kura
         .apply_lane_geometry_transition(
             &extended,

@@ -4,15 +4,13 @@
 //! use signed transactions through the Initial executor. Rent coverage rejects premature charging;
 //! elapsed monthly rent settlement and hardware service qualification are separate scenarios.
 
-use std::{
-    sync::{Arc, Barrier},
-    time::Duration,
-};
+use std::time::Duration;
 
+use super::sorafs_network::{prepare_transaction, submit_instruction};
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         events::data::sorafs::SorafsReserveLedgerEventKind,
@@ -38,10 +36,11 @@ use iroha::{
                 ReserveProviderTermsV1, ReserveTier,
             },
         },
-        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
+        transaction::error::TransactionRejectionReason,
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanSetSorafsReservePolicy;
+use iroha_test_network::read_on_dedicated_thread;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use sorafs_manifest::XorQuantity;
@@ -55,9 +54,6 @@ const TOP_UP: [u8; 32] = [0xB8; 32];
 const WITHDRAWAL: [u8; 32] = [0xB9; 32];
 const DEADLINE: Duration = Duration::from_secs(180);
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
-}
 fn xor(value: u64) -> XorQuantity {
     value.to_string().parse().expect("canonical integer XOR")
 }
@@ -67,12 +63,13 @@ fn client(network: &Network, peer: usize, provider: bool) -> Client {
     } else {
         (&*ALICE_ID, &*ALICE_KEYPAIR)
     };
-    let mut client = network.peers()[peer].client_for(account, keys.private_key().clone());
-    client.transaction_status_timeout = DEADLINE;
-    client.torii_request_timeout = Duration::from_secs(10);
-    client.transaction_ttl = Some(Duration::from_secs(300));
-    client.add_transaction_nonce = false;
-    client
+    let client = network.peers()[peer].client_for(account, keys.private_key().clone());
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = DEADLINE;
+        client.torii_request_timeout = Duration::from_secs(10);
+        client.transaction_ttl = Some(Duration::from_secs(300));
+        client.add_transaction_nonce = false;
+    })
 }
 
 fn configured_policy(custody: AccountId, asset: AssetDefinitionId) -> ReserveAuthorityPolicyV1 {
@@ -161,28 +158,31 @@ async fn competing_decisions(network: &Network, instruction: InstructionBox) -> 
     left_metadata.insert("reserve_decision_route".parse()?, 0u32);
     let mut right_metadata = Metadata::default();
     right_metadata.insert("reserve_decision_route".parse()?, 1u32);
-    let left_transaction =
-        left.try_build_transaction([instruction.clone()], no_fee(), left_metadata)?;
-    let right_transaction = right.try_build_transaction([instruction], no_fee(), right_metadata)?;
+    let left_transaction = prepare_transaction(&left, [instruction.clone()], left_metadata).await?;
+    let right_transaction = prepare_transaction(&right, [instruction], right_metadata).await?;
     ensure!(
         left_transaction.hash() != right_transaction.hash(),
         "decisions must exercise instruction replay, not transaction deduplication"
     );
-    let barrier = Arc::new(Barrier::new(2));
-    let left_barrier = Arc::clone(&barrier);
+    let barrier = tokio::sync::Barrier::new(2);
     let outcomes = timeout(DEADLINE + Duration::from_secs(10), async {
-        tokio::try_join!(
-            tokio::task::spawn_blocking(move || {
-                left_barrier.wait();
-                left.submit_transaction_blocking(&left_transaction)
-            }),
-            tokio::task::spawn_blocking(move || {
-                barrier.wait();
-                right.submit_transaction_blocking(&right_transaction)
-            }),
+        tokio::join!(
+            async {
+                barrier.wait().await;
+                left.account_client()
+                    .submit_transaction_and_wait(&left_transaction)
+                    .await
+            },
+            async {
+                barrier.wait().await;
+                right
+                    .account_client()
+                    .submit_transaction_and_wait(&right_transaction)
+                    .await
+            },
         )
     })
-    .await??;
+    .await?;
     let outcomes = [outcomes.0, outcomes.1];
     ensure!(
         outcomes.iter().filter(|result| result.is_ok()).count() == 1,
@@ -205,10 +205,16 @@ type Observation = (
 );
 
 fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observation> {
-    let events = reader.query_single(FindSorafsReserveEvents::new(None, None, 16))?;
+    let events = reader
+        .client()
+        .query_single(FindSorafsReserveEvents::new(None, None, 16))?;
     let anchor = Some(events.finalized_cursor);
-    let providers = reader.query_single(FindSorafsReserveProviders::new(anchor, None, 16))?;
-    let movements = reader.query_single(FindSorafsReserveMovements::new(anchor, None, 16))?;
+    let providers = reader
+        .client()
+        .query_single(FindSorafsReserveProviders::new(anchor, None, 16))?;
+    let movements = reader
+        .client()
+        .query_single(FindSorafsReserveMovements::new(anchor, None, 16))?;
     ensure!(
         providers.finalized_cursor == events.finalized_cursor
             && movements.finalized_cursor == events.finalized_cursor,
@@ -225,14 +231,16 @@ fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observa
             && events.next_after.is_none(),
         "bounded reserve query must not omit state"
     );
-    let owner = reader.query_single(FindSorafsProviderOwner::new(PROVIDER))?;
+    let owner = reader
+        .client()
+        .query_single(FindSorafsProviderOwner::new(PROVIDER))?;
     let ids = [&*BOB_ID, &policy.custody_account, &*ALICE_ID]
         .map(|account| AssetId::of(policy.asset_definition.clone(), account.clone()));
     let mut balances = std::array::from_fn(|_| Quantity::zero());
     let mut found = [false; 3];
     // A completed authenticated asset query establishes zero for an absent asset;
     // an arbitrary missing/failed singular query never becomes a zero balance.
-    for asset in reader.query(FindAssets::new()).execute_all()? {
+    for asset in reader.client().query(FindAssets::new()).execute_all()? {
         if let Some(index) = ids.iter().position(|id| id == asset.id()) {
             ensure!(
                 !found[index],
@@ -242,7 +250,9 @@ fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observa
             balances[index] = asset.value().clone();
         }
     }
-    let after = reader.query_single(FindSorafsReserveEvents::new(None, None, 16))?;
+    let after = reader
+        .client()
+        .query_single(FindSorafsReserveEvents::new(None, None, 16))?;
     ensure!(
         after.finalized_cursor == events.finalized_cursor,
         "finalized state advanced during reserve observation"
@@ -275,7 +285,9 @@ async fn converged(
         for peer in 0..4 {
             let reader = client(network, peer, false);
             let policy = policy.clone();
-            readers.spawn_blocking(move || observe(&reader, &policy));
+            readers.spawn(async move {
+                read_on_dedicated_thread(move || observe(&reader, &policy)).await
+            });
         }
         let mut observations = Vec::new();
         while let Some(result) = timeout_at(deadline, readers.join_next()).await? {
@@ -336,8 +348,15 @@ fn require_unchanged(before: &Observation, after: &Observation) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> Result<()> {
+#[test]
+fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> Result<()> {
+    super::sorafs_network::run(
+        stringify!(four_peer_reserve_decisions_conserve_custody_and_survive_restart),
+        four_peer_reserve_decisions_conserve_custody_and_survive_restart_impl,
+    )
+}
+
+async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart_impl() -> Result<()> {
     init_instruction_registry();
     let custody_keys = KeyPair::try_from_seed(
         b"sorafs-reserve-native-custody".to_vec(),
@@ -384,6 +403,7 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> R
             ALICE_ID.clone(),
         ));
     let context = stringify!(four_peer_reserve_decisions_conserve_custody_and_survive_restart);
+    let builder = super::sorafs_network::bounded_storage(builder);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
@@ -393,18 +413,24 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> R
         "reserve qualification requires four validators"
     );
     for peer in 0..4 {
+        let reader = client(&network, peer, false);
+        let owner = read_on_dedicated_thread(move || {
+            Ok(reader
+                .client()
+                .query_single(FindSorafsProviderOwner::new(PROVIDER))?)
+        })
+        .await?;
         ensure!(
-            client(&network, peer, false).query_single(FindSorafsProviderOwner::new(PROVIDER))?
-                == *BOB_ID,
+            owner == *BOB_ID,
             "canonical genesis provider owner differs across validators"
         );
     }
     let policy_instruction: InstructionBox = SetSorafsReservePolicy::new(policy.clone()).into();
     require_native_rejection(
-        client(&network, 2, true).submit_blocking(policy_instruction.clone(), no_fee()),
+        submit_instruction(&client(&network, 2, true), policy_instruction.clone()).await,
         "CanSetSorafsReservePolicy",
     )?;
-    client(&network, 0, false).submit_blocking(policy_instruction, no_fee())?;
+    submit_instruction(&client(&network, 0, false), policy_instruction).await?;
     let registration: InstructionBox = RegisterSorafsReserveAccount::new(
         ReserveProviderTermsV1 {
             provider_id: PROVIDER,
@@ -418,21 +444,21 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> R
     )
     .into();
     require_native_rejection(
-        client(&network, 0, true).submit_blocking(registration.clone(), no_fee()),
+        submit_instruction(&client(&network, 0, true), registration.clone()).await,
         "governed operations account",
     )?;
-    client(&network, 0, false).submit_blocking(registration, no_fee())?;
+    submit_instruction(&client(&network, 0, false), registration).await?;
     let before = converged(&network, &policy, 1, 2, [1_000, 0, 10]).await?;
     let top_up = request(ReserveMovementKindV1::TopUp, 1, digest);
     require_native_rejection(
-        client(&network, 0, false).submit_blocking(top_up.clone(), no_fee()),
+        submit_instruction(&client(&network, 0, false), top_up.clone()).await,
         "not the provider account",
     )?;
     require_unchanged(
         &before,
         &converged(&network, &policy, 1, 2, [1_000, 0, 10]).await?,
     )?;
-    client(&network, 0, true).submit_blocking(top_up.clone(), no_fee())?;
+    submit_instruction(&client(&network, 0, true), top_up.clone()).await?;
     let pending = converged(&network, &policy, 2, 3, [1_000, 0, 10]).await?;
     ensure!(
         pending.0.pending_movements == 1
@@ -441,11 +467,11 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> R
         "request must reserve one decision without moving custody"
     );
     require_native_rejection(
-        client(&network, 2, true).submit_blocking(top_up, no_fee()),
+        submit_instruction(&client(&network, 2, true), top_up).await,
         "already recorded",
     )?;
     require_native_rejection(
-        client(&network, 2, true).submit_blocking(decision(TOP_UP, 2, digest), no_fee()),
+        submit_instruction(&client(&network, 2, true), decision(TOP_UP, 2, digest)).await,
         "governed decision account",
     )?;
     require_unchanged(
@@ -455,34 +481,37 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> R
     competing_decisions(&network, decision(TOP_UP, 2, digest)).await?;
     let funded = converged(&network, &policy, 3, 4, [900, 100, 10]).await?;
     require_native_rejection(
-        client(&network, 2, false).submit_blocking(decision(TOP_UP, 3, digest), no_fee()),
+        submit_instruction(&client(&network, 2, false), decision(TOP_UP, 3, digest)).await,
         "already decided",
     )?;
     require_native_rejection(
-        client(&network, 2, true).submit_blocking(
+        submit_instruction(
+            &client(&network, 2, true),
             ChargeSorafsReserveRent::new(PROVIDER, 3, 1, digest),
-            no_fee(),
-        ),
+        )
+        .await,
         "governed operations account",
     )?;
     require_native_rejection(
-        client(&network, 2, false).submit_blocking(
+        submit_instruction(
+            &client(&network, 2, false),
             ChargeSorafsReserveRent::new(PROVIDER, 3, 1, digest),
-            no_fee(),
-        ),
+        )
+        .await,
         "only 0 are due",
     )?;
     require_unchanged(
         &funded,
         &converged(&network, &policy, 3, 4, [900, 100, 10]).await?,
     )?;
-    client(&network, 0, true).submit_blocking(
+    submit_instruction(
+        &client(&network, 0, true),
         request(ReserveMovementKindV1::Withdrawal, 3, digest),
-        no_fee(),
-    )?;
+    )
+    .await?;
     let pending = converged(&network, &policy, 4, 5, [900, 100, 10]).await?;
     require_native_rejection(
-        client(&network, 2, false).submit_blocking(decision(WITHDRAWAL, 3, digest), no_fee()),
+        submit_instruction(&client(&network, 2, false), decision(WITHDRAWAL, 3, digest)).await,
         "revision conflict",
     )?;
     require_unchanged(
@@ -554,7 +583,7 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart() -> R
         "reserve journal contains an unauthorized custody or rent event"
     );
     require_native_rejection(
-        client(&network, 2, false).submit_blocking(decision(WITHDRAWAL, 5, digest), no_fee()),
+        submit_instruction(&client(&network, 2, false), decision(WITHDRAWAL, 5, digest)).await,
         "already decided",
     )?;
     let before_restart = converged(&network, &policy, 5, 6, [925, 75, 10]).await?;

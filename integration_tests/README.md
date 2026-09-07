@@ -39,6 +39,11 @@ This crate hosts cross-component tests for Iroha.
 
 The native SoraFS repair corridor runs with
 `IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api sorafs_repair_ledger:: -- --nocapture`.
+The SoraFS scenarios give genesis preexecution and Tokio workers explicit 32 MiB
+stacks and configure a 1 GiB storage ceiling per validator through the ordinary
+Nexus configuration. This bounds the local test allocation independently of the
+capacity of a shared host filesystem. No extra stack environment setting is
+required by the tests.
 It uses four NPoS voting validators with mandatory DA/RBC, submits duplicate
 reports and competing claims through different peers, revokes an active owner,
 rejects stale completion, and verifies one terminal result plus byte-identical

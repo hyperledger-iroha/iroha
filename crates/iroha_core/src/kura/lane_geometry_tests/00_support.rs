@@ -17,8 +17,8 @@ use iroha_config::{
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         defaults::kura::{
-            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES,
-            MERGE_LEDGER_CACHE_CAPACITY, LANE_HISTORY_RETENTION,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION, MAX_DISK_USAGE_BYTES,
+            MERGE_LEDGER_CACHE_CAPACITY,
         },
     },
 };
@@ -30,7 +30,8 @@ use iroha_data_model::{
         consensus::{
             CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
             LaneBlockProposalV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
-            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            NativeAmxLegRecordV2, NativeAmxParticipantSettlement, NativeAmxPhase, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership, compute_native_amx_participant_settlement_hash,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,

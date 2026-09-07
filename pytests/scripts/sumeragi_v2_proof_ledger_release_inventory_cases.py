@@ -563,26 +563,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=526",
-            "readonly expected_multilane_focus_test_count=525",
-            "multilane G-UNIT source count must be sealed as 526",
+            "readonly expected_multilane_focus_test_count=531",
+            "readonly expected_multilane_focus_test_count=530",
+            "multilane G-UNIT source count must be sealed as 531",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 527 ]]; then""",
+                """'[:space:]')" != 532 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 526 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 526 focus rows",
+                """'[:space:]')" != 531 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 531 focus rows",
         ),
         (
-            "The canonical 526-row TSV is",
-            "The canonical 525-row TSV is",
-            "G-UNIT inventory comment must seal 526 rows",
+            "The canonical 531-row TSV is",
+            "The canonical 530-row TSV is",
+            "G-UNIT inventory comment must seal 531 rows",
         ),
         (
-            "including exact 526/526 G-UNIT,",
-            "including exact 525/526 G-UNIT,",
-            "terminal success text must seal exact 526/526 G-UNIT",
+            "including exact 531/531 G-UNIT,",
+            "including exact 530/531 G-UNIT,",
+            "terminal success text must seal exact 531/531 G-UNIT",
         ),
         (
             "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
@@ -1306,18 +1306,18 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "contain exactly 526 unique required",
-            "contain exactly 525 unique required",
+            "contain exactly 531 unique required",
+            "contain exactly 530 unique required",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "tests: 320 core, 143 queue-journal",
+            "tests: 325 core, 143 queue-journal",
             "tests: 315 core, 143 queue-journal",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "exact `526/526` source consistency",
-            "exact `525/526` source consistency",
+            "exact `531/531` source consistency",
+            "exact `530/531` source consistency",
         ),
     ),
     ids=(

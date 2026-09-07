@@ -1911,8 +1911,17 @@ impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         <bool as norito::json::JsonDeserialize>::json_from_value(value).map(Self)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
-        <bool as norito::json::JsonDeserialize>::json_from_map_key(key).map(Self)
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for PrivacyX509KeyUsageRequirementV1 {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for PrivacyX509KeyUsageRequirementV1 {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        <bool as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
     }
 }
 #[cfg(all(test, feature = "json"))]

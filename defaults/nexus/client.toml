@@ -10,7 +10,3 @@ password = "nexus_password"
 domain = "wonderland.universal"
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key_file = "/run/secrets/iroha/nexus-operator-account-private-key"
-
-[connect]
-# Root directory for Connect queue diagnostics and evidence export. Defaults to `~/.iroha/connect`.
-# queue_root = "/home/nexus/.iroha/connect"

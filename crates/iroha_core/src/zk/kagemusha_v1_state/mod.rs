@@ -100,20 +100,19 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use self::sparse_merkle::ExactConsumedCreditIndex;
+#[cfg(test)]
+use self::sparse_merkle::authenticated_history::KagemushaHistoryOverlayUsageV1;
 #[cfg(unix)]
 pub(crate) use self::sparse_merkle::authenticated_history::disk_history_store::{
     KagemushaDiskAuthenticatedHistoryStoreV1, KagemushaHistoryDeviceCredentialsV1,
 };
 pub(crate) use self::sparse_merkle::authenticated_history::{
-    KagemushaAuthenticatedHistoryStoreV1, KagemushaCommittedRootReadV1,
-    KagemushaHistoryAbortOutcomeV1, KagemushaHistoryCommitOutcomeV1,
-    KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryIdentityClassificationV1,
-    KagemushaHistoryInsertPreparationV1, KagemushaHistoryNodeBodyV1, KagemushaHistoryNodeRecordV1,
-    KagemushaHistoryOverlayUsageV1, KagemushaHistoryPrepareOutcomeV1,
-    KagemushaHistoryProofRootBridgeErrorV1, KagemushaHistoryProofRootBridgeRequestV1,
-    KagemushaHistoryRecoveryOutcomeV1, KagemushaHistoryRootCasV1,
-    KagemushaHistoryRootSelectionCertificateV1, KagemushaHistoryRootSelectionSubjectV1,
-    KagemushaHistoryRootSelectionV1, KagemushaHistoryRootsV1, KagemushaHistoryStoreErrorV1,
+    KagemushaAuthenticatedHistoryStoreV1, KagemushaHistoryAbortOutcomeV1,
+    KagemushaHistoryCommitOutcomeV1, KagemushaHistoryDualInsertPreparationV1,
+    KagemushaHistoryIdentityClassificationV1, KagemushaHistoryInsertPreparationV1,
+    KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryProofRootBridgeRequestV1,
+    KagemushaHistoryRecoveryOutcomeV1, KagemushaHistoryRootSelectionCertificateV1,
+    KagemushaHistoryRootSelectionSubjectV1, KagemushaHistoryRootsV1, KagemushaHistoryStoreErrorV1,
     KagemushaHistoryTreeV1, KagemushaMemoryAuthenticatedHistoryStoreV1,
     KagemushaPreparedHistoryCasV1, VerifiedKagemushaHistoryProofRootBridgeV1,
     VerifiedKagemushaHistoryRootSelectionV1, classify_history_identity_v1,
@@ -175,6 +174,7 @@ where
     }
 
     /// Return exact live WAL usage; this meter never includes committed history.
+    #[cfg(test)]
     pub(crate) fn overlay_usage(&self) -> KagemushaHistoryOverlayUsageV1 {
         self.store.overlay_usage()
     }
@@ -193,20 +193,6 @@ where
         )
     }
 
-    /// Classify one terminal decision identity against byte-identical decision material.
-    pub(crate) fn classify_terminal_decision(
-        &self,
-        decision_id: DigestV1,
-        decision_digest: DigestV1,
-    ) -> Result<KagemushaHistoryIdentityClassificationV1, KagemushaHistoryStoreErrorV1> {
-        classify_history_identity_v1(
-            &self.store,
-            KagemushaHistoryTreeV1::TerminalDecision,
-            decision_id,
-            decision_digest,
-        )
-    }
-
     /// Durably prepare one consumed-credit replay insertion before hardware root selection.
     pub(crate) fn prepare_replay(
         &mut self,
@@ -219,22 +205,6 @@ where
             KagemushaHistoryTreeV1::Replay,
             credit_id.0,
             envelope_digest,
-            attempt_binding_digest,
-        )
-    }
-
-    /// Durably prepare one terminal decision insertion before hardware root selection.
-    pub(crate) fn prepare_terminal_decision(
-        &mut self,
-        decision_id: DigestV1,
-        decision_digest: DigestV1,
-        attempt_binding_digest: DigestV1,
-    ) -> Result<KagemushaHistoryInsertPreparationV1, KagemushaHistoryStoreErrorV1> {
-        prepare_history_identity_insert_v1(
-            &mut self.store,
-            KagemushaHistoryTreeV1::TerminalDecision,
-            decision_id,
-            decision_digest,
             attempt_binding_digest,
         )
     }
@@ -311,6 +281,7 @@ where
     }
 
     /// Return the underlying store to its owner without changing durable state.
+    #[cfg(test)]
     pub(crate) fn into_store(self) -> S {
         self.store
     }
@@ -329,7 +300,6 @@ pub const KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1: usize = 65_536;
 /// Exact depth of the consumed-credit sparse-Merkle tree.
 pub const KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1: usize = 256;
 
-const STATE_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:state-commitment\0";
 const SNAPSHOT_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:snapshot-commitment\0";
 const BOOTSTRAP_STATEMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:bootstrap-statement\0";
 const MINT_CREDIT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-credit\0";
@@ -1168,11 +1138,6 @@ pub struct CreditFoldPreviewV1 {
 }
 
 impl CreditFoldPreviewV1 {
-    /// Borrow the exact authenticated native-only mint witness inputs.
-    pub(crate) fn mint_private_inputs(&self) -> &KagemushaMintFoldPrivateInputsV1 {
-        &self.mint_private_inputs
-    }
-
     /// Borrow the opaque recursive-opening capability from this exact checked preview.
     #[must_use]
     pub fn mint_fold_opening(&self) -> KagemushaMintFoldOpeningCapabilityV1<'_> {
@@ -1658,11 +1623,14 @@ fn map_authenticated_history_error(error: KagemushaHistoryStoreErrorV1) -> Kagem
         | KagemushaHistoryStoreErrorV1::StoreAlreadyOpen
         | KagemushaHistoryStoreErrorV1::RecoveryCommitmentMismatch
         | KagemushaHistoryStoreErrorV1::MissingSelectedRoot { .. }
-        | KagemushaHistoryStoreErrorV1::MissingCommittedRoot { .. }
         | KagemushaHistoryStoreErrorV1::MissingHistoryNode { .. }
         | KagemushaHistoryStoreErrorV1::CorruptHistoryNode { .. }
         | KagemushaHistoryStoreErrorV1::InvalidHistoryTree { .. }
         | KagemushaHistoryStoreErrorV1::CommittedRootsMismatch { .. } => {
+            KagemushaStateErrorV1::AuthenticatedHistoryUnavailable
+        }
+        #[cfg(test)]
+        KagemushaHistoryStoreErrorV1::MissingCommittedRoot { .. } => {
             KagemushaStateErrorV1::AuthenticatedHistoryUnavailable
         }
         _ => KagemushaStateErrorV1::StateInvariant,
@@ -1872,6 +1840,14 @@ where
     /// exact epoch/key reference. Journal replay alone cannot grant authority: the existing
     /// restore path still verifies the guard, full snapshot commitment, both roots, and retained
     /// proof state. This function never initializes missing files or falls back to empty history.
+    // TODO: Wire the product coordinator's authenticated hardware session into durable restore.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the product coordinator has not wired durable lane restoration"
+        )
+    )]
     pub(crate) fn restore_from_disk_history(
         snapshot: KagemushaStateSnapshotV1,
         current_hardware_anchor: &DurabilityAnchorV1,

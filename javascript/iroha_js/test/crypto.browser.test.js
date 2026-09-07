@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import {
-  buildKaigiRosterJoinProof,
+  buildKaigiAuthorizationProofV1,
   generateKeyPair,
   normalizeCryptoAlgorithm,
   supportedCryptoAlgorithms,
@@ -17,11 +17,24 @@ import * as distPrivacyCapabilities from "../dist/privacyCapabilities.js";
 const RETIRED_STATIC_CRYPTO_CAPABILITY_LIST =
   ["SUPPORTED", "CRYPTO", "ALGORITHMS"].join("_");
 
-test("browser crypto bundle exposes Kaigi roster proof helper and omits retired ZK-ACE helpers", () => {
+test("browser crypto bundle rejects native Kaigi authorization proof construction and omits retired ZK-ACE helpers", () => {
+  const blinding = Buffer.alloc(32, 0x11);
   assert.throws(
-    () => buildKaigiRosterJoinProof({ seed: Buffer.from("seed") }),
-    /buildKaigiRosterJoinProof is unavailable in browser-only crypto builds/,
+    () => buildKaigiAuthorizationProofV1({ blinding }),
+    /buildKaigiAuthorizationProofV1 is unavailable in browser-only crypto builds/,
   );
+  assert.deepEqual(blinding, Buffer.alloc(32));
+  const originalFill = Uint8Array.prototype.fill;
+  try {
+    Uint8Array.prototype.fill = () => { throw new Error("replaced fill must not run"); };
+    for (const crypto of [srcBrowserCrypto, distBrowserCrypto]) {
+      const secret = Uint8Array.from(Array(32).fill(0x11));
+      assert.throws(() => crypto.buildKaigiAuthorizationProofV1({blinding: secret}), /unavailable/u);
+      assert.ok(secret.every((byte) => byte === 0));
+    }
+  } finally {
+    Uint8Array.prototype.fill = originalFill;
+  }
   for (const [label, crypto] of [
     ["src", srcBrowserCrypto],
     ["dist", distBrowserCrypto],

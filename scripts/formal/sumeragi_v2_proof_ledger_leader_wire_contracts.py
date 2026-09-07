@@ -919,6 +919,8 @@ def _postmerge_exact_output_strengthening_errors(
         "ProductionV2Services::start_inner": ("#[allow(clippy::too_many_arguments)]",),
         "ProductionV2Services::activate_effect_completion_observer": ("#[allow(dead_code)]",),
         "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": ("#[allow(clippy::too_many_arguments)]",),
+        "MergeSidecarTransport::defer_decided_block": ("#[cfg(test)]",),
+        "MergeSidecarTransport::defer_lifecycle_decided_block": ("#[cfg(test)]",),
         "MergeSidecarTransport::defer_block_with_priority": ("#[allow(clippy::too_many_arguments)]",),
     }
 

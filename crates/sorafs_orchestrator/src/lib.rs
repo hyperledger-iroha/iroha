@@ -5606,18 +5606,20 @@ mod tests {
     #[test]
     fn reconcile_circuits_reports_and_teardown() {
         test_logger();
+        let entry = directory_descriptor(0xAA, RelayRoles::new(true, false, false), true);
         let guard = GuardRecord {
-            relay_id: [0xAA; 32],
-            pinned_at_unix: 100,
-            endpoint: Endpoint::new("soranet://guard-AA", 0),
-            guard_weight: 50,
-            bandwidth_bytes_per_sec: 0,
-            reputation_weight: 0,
-            certificate: Some(pq_test_bundle([0xAA; 32])),
-            path_metadata: PathMetadata::default(),
+            relay_id: entry.relay_id,
+            pinned_at_unix: 1,
+            endpoint: entry.endpoints[0].clone(),
+            guard_weight: entry.guard_weight,
+            bandwidth_bytes_per_sec: entry.bandwidth_bytes_per_sec,
+            reputation_weight: entry.reputation_weight,
+            certificate: entry.certificate.clone(),
+            path_metadata: entry.path_metadata.clone(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
         let directory = RelayDirectory::new(vec![
+            entry,
             directory_descriptor(0x11, RelayRoles::new(false, true, false), true),
             directory_descriptor(0x22, RelayRoles::new(false, false, true), true),
         ]);
@@ -6118,7 +6120,8 @@ mod tests {
     fn retired_taikai_cache_config_is_rejected() {
         let value = norito::json!({"taikai_cache": {}});
         let error = bindings::config_from_json(&value)
-            .expect_err("retired Taikai cache config must fail closed");
+            .err()
+            .expect("retired Taikai cache config must fail closed");
         assert_eq!(
             error.to_string(),
             "taikai_cache was removed from the V1 orchestrator configuration"

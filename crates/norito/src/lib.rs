@@ -209,9 +209,6 @@ pub mod codec {
         }
         /// Return the encoded length for `self` without allocating a buffer.
         fn encoded_len(&self) -> usize {
-            if let Some(len) = self.encoded_len_exact() {
-                return len;
-            }
             let mut sink = std::io::sink();
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
@@ -363,18 +360,18 @@ pub mod codec {
             assert_eq!(value.encoded_len(), bytes.len());
         }
         #[test]
-        fn encoded_len_uses_exact_len_when_available() {
+        fn encoded_len_counts_serialized_bytes_instead_of_trusting_exact_len() {
             EXACT_CALLS.store(0, Ordering::Relaxed);
             let value = ExactLenOnly(7);
             assert_eq!(value.encoded_len(), 1);
-            assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
+            assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 0);
         }
         #[test]
-        fn seq_encoding_uses_len_hints_only_for_capacity() {
+        fn seq_encoding_does_not_trust_length_hints() {
             HINT_CALLS.store(0, Ordering::Relaxed);
             let items = vec![Hinted(1), Hinted(2), Hinted(3)];
             assert_eq!(items.encode().last(), Some(&3));
-            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 3);
+            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 0);
         }
         #[test]
         fn huge_length_hint_is_capped_before_reservation() {
@@ -604,10 +601,10 @@ pub mod json {
     };
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
-    /// A Kotodama boundary value may use the complete 256-level public type budget beneath its
-    /// required parameter object. The one extra structural level covers that boundary envelope
-    /// without relaxing the 256-level guard used by recursively owned typed decoders.
-    pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1;
+    /// The extra structural level covers a required boundary envelope around a value at the
+    /// codec's recursively owned value limit. Kotodama's larger logical type budget uses a flat
+    /// node tape and therefore does not consume one JSON parser frame per logical type level.
+    pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_VALUE_NESTING_DEPTH + 1;
     thread_local! {
         static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
     }
@@ -616,10 +613,10 @@ pub mod json {
         fn enter() -> Result<Self, Error> {
             OWNED_VALUE_DECODE_DEPTH.with(|depth| {
                 let next = depth.get().saturating_add(1);
-                if next > crate::core::MAX_OWNED_VALUE_DECODE_DEPTH {
+                if next > crate::core::MAX_VALUE_NESTING_DEPTH {
                     return Err(Error::NestingDepthExceeded {
                         depth: next,
-                        limit: crate::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                        limit: crate::core::MAX_VALUE_NESTING_DEPTH,
                         context: "owned JSON value",
                     });
                 }
@@ -910,7 +907,7 @@ pub mod json {
     mod validated;
     pub use bounded::{
         BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, to_json_bounded_boxed,
-        write_json_display_to, write_json_string_to, write_json_unbounded,
+        visit_json_display_text, write_json_display_to, write_json_string_to, write_json_unbounded,
     };
     #[doc(hidden)]
     pub use canonical_base64::{
@@ -996,24 +993,21 @@ pub mod json {
         fn i64_equals_f64(integer: i64, float: f64) -> bool {
             float.is_finite()
                 && float.fract() == 0.0
-                && float >= -F64_TWO_POW_63
-                && float < F64_TWO_POW_63
+                && (-F64_TWO_POW_63..F64_TWO_POW_63).contains(&float)
                 && (float as i64) == integer
         }
 
         fn u64_equals_f64(integer: u64, float: f64) -> bool {
             float.is_finite()
                 && float.fract() == 0.0
-                && float >= 0.0
-                && float < F64_TWO_POW_64
+                && (0.0..F64_TWO_POW_64).contains(&float)
                 && (float as u64) == integer
         }
 
         fn u128_equals_f64(integer: u128, float: f64) -> bool {
             float.is_finite()
                 && float.fract() == 0.0
-                && float >= 0.0
-                && float < F64_TWO_POW_128
+                && (0.0..F64_TWO_POW_128).contains(&float)
                 && (float as u128) == integer
         }
 
@@ -2341,16 +2335,16 @@ pub mod json {
         use crate::json;
         #[test]
         fn owned_value_decode_depth_guard_is_bounded_and_restores() {
-            let guards = (0..crate::core::MAX_OWNED_VALUE_DECODE_DEPTH)
+            let guards = (0..crate::core::MAX_VALUE_NESTING_DEPTH)
                 .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within JSON limit"))
                 .collect::<Vec<_>>();
             assert!(matches!(
                 OwnedValueDecodeDepthGuard::enter(),
                 Err(Error::NestingDepthExceeded {
                     depth,
-                    limit: crate::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                    limit: crate::core::MAX_VALUE_NESTING_DEPTH,
                     context: "owned JSON value",
-                }) if depth == crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1
+                }) if depth == crate::core::MAX_VALUE_NESTING_DEPTH + 1
             ));
             drop(guards);
             OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore JSON depth");
@@ -2593,7 +2587,7 @@ pub mod json {
                 .name("norito-json-iterative-boundary".into())
                 .stack_size(128 * 1024)
                 .spawn(|| -> Result<(), String> {
-                    let wrappers = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+                    let wrappers = crate::core::MAX_VALUE_NESTING_DEPTH - 1;
                     let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
                     validate_json(&at_255).map_err(|error| error.to_string())?;
                     let value = parse_value(&at_255).map_err(|error| error.to_string())?;
@@ -3193,6 +3187,57 @@ pub mod json {
             out.push('"');
         }
     }
+    /// A type whose values have one injective canonical JSON object-key text.
+    ///
+    /// Implementations provide unescaped key text in bounded chunks. The map
+    /// serializer applies Norito's canonical JSON string escaping exactly once.
+    ///
+    /// Composite and optional values intentionally do not implement this trait.
+    ///
+    /// ```compile_fail
+    /// use std::collections::BTreeMap;
+    /// let values = BTreeMap::from([(vec![1_u8], 1_u8)]);
+    /// let _ = norito::json::to_json(&values);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use std::collections::BTreeMap;
+    /// let values = BTreeMap::from([(("left".to_owned(), "right".to_owned()), 1_u8)]);
+    /// let _ = norito::json::to_json(&values);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use std::collections::BTreeMap;
+    /// let values = BTreeMap::from([(Some("value".to_owned()), 1_u8)]);
+    /// let _ = norito::json::to_json(&values);
+    /// ```
+    pub trait JsonObjectKey {
+        /// Visit the canonical unescaped object-key text.
+        ///
+        /// Concatenating every visited chunk must produce one injective canonical
+        /// representation. Implementations can only return errors from `visitor`.
+        fn visit_json_key_text<E>(
+            &self,
+            visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E>;
+
+        /// Visit the key text through a checked serialization path.
+        ///
+        /// Types whose canonical key conversion can fail override this method.
+        fn visit_json_key_text_checked(
+            &self,
+            visitor: impl FnMut(&str) -> Result<(), BoundedJsonError>,
+        ) -> Result<(), BoundedJsonError> {
+            self.visit_json_key_text(visitor)
+        }
+    }
+
+    /// An owned JSON object key that can be reconstructed from canonical key text.
+    pub trait JsonObjectKeyOwned: JsonObjectKey + Sized {
+        /// Parse one unescaped JSON object-key string.
+        fn from_json_key_text(key: &str) -> Result<Self, Error>;
+    }
+
     /// Trait for types that can be serialized to JSON.
     pub trait JsonSerialize {
         /// Serialize `self` into `out` as JSON.
@@ -3315,7 +3360,17 @@ pub mod json {
             }
             String::json_from_value(value).map(String::into_boxed_str)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKey for Box<str> {
+        fn visit_json_key_text<E>(
+            &self,
+            visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            self.as_ref().visit_json_key_text(visitor)
+        }
+    }
+    impl JsonObjectKeyOwned for Box<str> {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             try_decode_string_copy(key).map(String::into_boxed_str)
         }
     }
@@ -4662,10 +4717,6 @@ pub mod json {
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             json_from_value_via_string::<Self>(value)
         }
-        /// Convert a JSON object key into `Self`.
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            json_from_value_via_string::<Self>(&Value::String(key.to_owned()))
-        }
     }
     /// Marker trait mirroring `serde::de::DeserializeOwned` for Norito JSON.
     pub trait JsonDeserializeOwned: JsonDeserialize {}
@@ -4692,7 +4743,9 @@ pub mod json {
                 .as_bool()
                 .ok_or_else(|| Error::Message("expected bool".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for bool {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             match key {
                 "true" => Ok(true),
                 "false" => Ok(false),
@@ -4769,7 +4822,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u128 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u128>()
                 .map_err(|_| Error::Message("expected u128".into()))
         }
@@ -4785,8 +4840,10 @@ pub mod json {
             core::num::NonZeroU128::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u128".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = u128::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU128 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u128 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU128::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u128".into()))
         }
@@ -4801,7 +4858,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u64 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u64>()
                 .map_err(|_| Error::Message("expected u64".into()))
         }
@@ -4817,8 +4876,10 @@ pub mod json {
             core::num::NonZeroU64::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u64".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = u64::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU64 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u64 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU64::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u64".into()))
         }
@@ -4835,8 +4896,10 @@ pub mod json {
             core::num::NonZeroU32::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u32".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = u32::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU32 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u32 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU32::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u32".into()))
         }
@@ -4852,7 +4915,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u32 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u32>()
                 .map_err(|_| Error::Message("u32 overflow".into()))
         }
@@ -4863,10 +4928,23 @@ pub mod json {
             u16::try_from(n).map_err(|_| Error::Message("u16 overflow".into()))
         }
     }
+    impl JsonObjectKeyOwned for u16 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<u16>()
+                .map_err(|_| Error::Message("u16 overflow".into()))
+        }
+    }
     impl JsonDeserialize for core::num::NonZeroU16 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let n = p.parse_u64()?;
             let value = u16::try_from(n).map_err(|_| Error::Message("u16 overflow".into()))?;
+            core::num::NonZeroU16::new(value)
+                .ok_or_else(|| Error::Message("expected non-zero u16".into()))
+        }
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU16 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u16 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU16::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u16".into()))
         }
@@ -4883,8 +4961,10 @@ pub mod json {
             core::num::NonZeroUsize::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero usize".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = usize::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroUsize {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <usize as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroUsize::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero usize".into()))
         }
@@ -4900,7 +4980,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u8 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u8>()
                 .map_err(|_| Error::Message("u8 overflow".into()))
         }
@@ -4916,7 +4998,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for usize {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<usize>()
                 .map_err(|_| Error::Message("usize overflow".into()))
         }
@@ -4993,10 +5077,22 @@ pub mod json {
             parse_i64_from_parser(p)
         }
     }
+    impl JsonObjectKeyOwned for i64 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i64>()
+                .map_err(|_| Error::Message("i64 overflow".into()))
+        }
+    }
     impl JsonDeserialize for i32 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let v = parse_i64_from_parser(p)?;
             i32::try_from(v).map_err(|_| Error::Message("i32 overflow".into()))
+        }
+    }
+    impl JsonObjectKeyOwned for i32 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i32>()
+                .map_err(|_| Error::Message("i32 overflow".into()))
         }
     }
     impl JsonDeserialize for i16 {
@@ -5005,16 +5101,34 @@ pub mod json {
             i16::try_from(v).map_err(|_| Error::Message("i16 overflow".into()))
         }
     }
+    impl JsonObjectKeyOwned for i16 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i16>()
+                .map_err(|_| Error::Message("i16 overflow".into()))
+        }
+    }
     impl JsonDeserialize for i8 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let v = parse_i64_from_parser(p)?;
             i8::try_from(v).map_err(|_| Error::Message("i8 overflow".into()))
         }
     }
+    impl JsonObjectKeyOwned for i8 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i8>()
+                .map_err(|_| Error::Message("i8 overflow".into()))
+        }
+    }
     impl JsonDeserialize for isize {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let v = parse_i64_from_parser(p)?;
             isize::try_from(v).map_err(|_| Error::Message("isize overflow".into()))
+        }
+    }
+    impl JsonObjectKeyOwned for isize {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<isize>()
+                .map_err(|_| Error::Message("isize overflow".into()))
         }
     }
     impl JsonDeserialize for f64 {
@@ -5092,7 +5206,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for String {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             try_decode_string_copy(key)
         }
     }
@@ -5110,7 +5226,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for Url {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse()
                 .map_err(|e| Error::Message(format!("invalid url: {e}")))
         }
@@ -5174,13 +5292,6 @@ pub mod json {
                 Ok(None)
             } else {
                 T::json_from_value(value).map(Some)
-            }
-        }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            if key == "null" {
-                Ok(None)
-            } else {
-                T::json_from_map_key(key).map(Some)
             }
         }
     }
@@ -8260,7 +8371,9 @@ pub mod json {
                 json_from_value_via_string(value)
             }
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl<const N: usize> JsonObjectKeyOwned for [u8; N] {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             decode_hex::<N>(key)
         }
     }
@@ -8272,9 +8385,23 @@ pub mod json {
             bounded::write_hex_to(self, out)
         }
     }
+    impl<const N: usize> JsonObjectKey for [u8; N] {
+        fn visit_json_key_text<E>(
+            &self,
+            mut visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            for byte in self {
+                let chunk = [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0x0f)]];
+                // SAFETY: both bytes come from the ASCII hexadecimal alphabet.
+                visitor(unsafe { std::str::from_utf8_unchecked(&chunk) })?;
+            }
+            Ok(())
+        }
+    }
     impl<K, V> JsonDeserialize for std::collections::HashMap<K, V>
     where
-        K: JsonDeserialize + Eq + core::hash::Hash,
+        K: JsonObjectKeyOwned + Eq + core::hash::Hash,
         V: JsonDeserialize,
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
@@ -8290,7 +8417,7 @@ pub mod json {
                     KeyRef::Borrowed(s) => *s,
                     KeyRef::Owned(s) => s.as_str(),
                 };
-                let parsed_key = K::json_from_map_key(key_ref)?;
+                let parsed_key = K::from_json_key_text(key_ref)?;
                 let value = visitor.parse_value::<V>()?;
                 if map.insert(parsed_key, value).is_some() {
                     return Err(MapVisitor::duplicate_field(key_ref));
@@ -8307,7 +8434,7 @@ pub mod json {
                 map.try_reserve(obj.len())
                     .map_err(|_| Error::AllocationFailed)?;
                 for (k, v) in obj.iter() {
-                    let parsed_key = K::json_from_map_key(k)?;
+                    let parsed_key = K::from_json_key_text(k)?;
                     if map.insert(parsed_key, V::json_from_value(v)?).is_some() {
                         return Err(Error::duplicate_field(k));
                     }
@@ -8320,7 +8447,7 @@ pub mod json {
     }
     impl<K, V> JsonDeserialize for std::collections::BTreeMap<K, V>
     where
-        K: JsonDeserialize + Ord,
+        K: JsonObjectKeyOwned + Ord,
         V: JsonDeserialize,
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
@@ -8334,7 +8461,7 @@ pub mod json {
                     KeyRef::Borrowed(s) => *s,
                     KeyRef::Owned(s) => s.as_str(),
                 };
-                let parsed_key = K::json_from_map_key(key_ref)?;
+                let parsed_key = K::from_json_key_text(key_ref)?;
                 let value = visitor.parse_value::<V>()?;
                 if map.insert(parsed_key, value).is_some() {
                     return Err(MapVisitor::duplicate_field(key_ref));
@@ -8349,7 +8476,7 @@ pub mod json {
                     .map_err(Error::from_decode_resource)?;
                 let mut map = std::collections::BTreeMap::new();
                 for (k, v) in obj.iter() {
-                    let parsed_key = K::json_from_map_key(k)?;
+                    let parsed_key = K::from_json_key_text(k)?;
                     if map.insert(parsed_key, V::json_from_value(v)?).is_some() {
                         return Err(Error::duplicate_field(k));
                     }
@@ -8462,6 +8589,14 @@ pub mod json {
         }
         fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
             write_json_string_to(self.as_str(), out)
+        }
+    }
+    impl JsonObjectKey for Url {
+        fn visit_json_key_text<E>(
+            &self,
+            mut visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            visitor(self.as_str())
         }
     }
     /// Borrowed-or-owned key reference returned by `Parser::parse_key`.
@@ -8862,6 +8997,18 @@ where
     let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
     core::to_bytes(value)
 }
+/// Count the exact uncompressed V1 frame produced by [`encode_canonical`].
+///
+/// A real serialization pass counts bytes without allocating an output frame or trusting
+/// serializer length hints. Ambient layout guards are restored before returning.
+///
+/// # Errors
+///
+/// Returns the serialization error or [`Error::LengthMismatch`] on length overflow.
+pub fn canonical_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+    let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+    core::encoded_frame_len(value)
+}
 const CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER: usize = 63;
 const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;
 const CANONICAL_DECODE_FIXED_ALLOCATION_BYTES: usize = 64 * 1024;
@@ -8894,7 +9041,7 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
         payload_len,
         payload_len.saturating_mul(8),
         allocation_limit,
-        core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        core::MAX_VALUE_NESTING_DEPTH,
     )
 }
 

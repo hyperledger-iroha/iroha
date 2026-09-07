@@ -103,14 +103,22 @@ over-capacity rejection. The existing ordinary recovery test now repeats actual
 persistence at capacity one. Historical coverage includes certification followed
 by cache clearing and rehydration without resurrecting completed sources. These
 Rust changes are formatted and reviewed; compilation and execution remain pending
-while other Cargo/rustc jobs occupy the shared queue. The new direct hydration and
-cache source controls are being qualified separately from full ledger integration.
+while other Cargo/rustc jobs occupy the shared queue. On Python 3.12.14 with
+repository-pinned pytest 9.0.3, the combined 84 recovery-owner controls and complete
+five-owner seal baseline pass. The separate persistent recovery-cut component
+passes 114 source checks, including its full component integration and negatives
+rejecting inserted shadow or fabricated authority bindings. Broader proof-ledger
+integration and Rust execution remain independent obligations.
 
-The prospective G-UNIT inventory contains 526 tests (320 core), preserving all
-previous 522 rows in order and adding exactly the four cache regressions. The
+The prospective G-UNIT inventory contains 531 tests (325 core), preserving all
+previous 522 rows in order, adding the four recovery-batch regressions and five
+terminal-retirement regressions. The
 production inventory remains 881 tests across 43 modules, with 465 required
 regressions and 84 corridor legs. Counts describe registered source, not test
 execution. Fresh Rust-owned grouped fixture regeneration is still required.
+The final 531-registration cohort passes 84 source checks; three approval checks
+and ten independently rehashed missing-result receipt fixtures also pass on the
+supported Python runtime. No registered Rust test execution is inferred.
 
 The formal preflight now runs 55 passing controls, including 28 artifact-retention
 cases. Fresh pinned TLC runs pass 106 multilane mutations and the in-flight
@@ -118,8 +126,37 @@ positive plus 22 mutations. All 129 per-case stderr streams are empty; private
 artifacts retain the exact inputs, pinned tool copies/hashes, arguments, statuses,
 raw outputs and named counterexamples with validated acceptance links. These are
 local bounded-model results, not production refinement or release receipts. Five
-Apalache bounds pass; the original in-flight 18-step run remains active. All
-milestones and release gates stay Open.
+Apalache bounds pass; the original in-flight 18-step run has no terminal result
+or live process and ends in its retained log at state 13. A separate fresh
+18-step attempt has passed typechecking and remains pending. All milestones and
+release gates stay Open.
+
+Subsequent terminal replay work authenticates standalone votes/QCs and each exact
+READY payload before a duplicate result. Complete historical certificates share
+the exact READY-role check. Public historical lookup attaches the full canonical
+hint before checking own application or predecessor application. Bounded
+read-only cache resolution retires exact applied slots only after all selected
+quorum evidence passes; unrelated sessions, signer locks, recency, capacity and
+separate output handoffs retain their ownership. Cleanup runs before fresh signing
+and persistence hydration. The real merge fixture covers
+pre-application retained QC/partial-vote owners with full output capacity, and
+observer/member replay. Five cache tests and the expanded fixture remain unexecuted
+in Rust. The new terminal source-loader baseline and 62 rehashed semantic mutants
+pass as a 63-case cohort, followed by a fresh dedicated baseline. The broader
+exact-output integration failed with 77 errors. The preceding 84-pass
+recovery-owner result predates this terminal slice and is not its validation.
+The fixture now adds a genuine second source/application cycle at global heights
+4/5 and lane height 2, retaining all original first-cycle assertions. Context 6
+checks non-genesis terminal replay and the exact older lane-height-1 receipt;
+wrong descriptor/incarnation identities fail. Voting adapters preserve the same
+Kura-local identity. The shared FIFO pipeline is unchanged; later source parents
+and contexts come from canonical State/Kura. Rust execution remains pending.
+Two obsolete per-proposal hydration clauses were consolidated into the existing
+atomic-batch contract; its copied-source baseline and rehashed reversed-batch
+negative pass. A fresh full source result is pending; unrelated errors remain
+unresolved. Separately,
+the recovery/capacity source contract now follows three current storage owners;
+33 tests and ten additional subcases pass after strengthening recovery-role ordering.
 
 ## 2026-08-19 mutable-development closure snapshot
 
@@ -889,7 +926,7 @@ Historical same-day isolated Rust 1.93.1 locked/offline slices passed the 18
 exact Kura replica tests and four exact configuration tests. The mutable
 focused inventory still names those tests, but this reconciliation makes no
 immutable-candidate execution claim for them or for a multi-peer body-pruning
-corridor. Those focused runs and source anchors are not the complete 526-test `G-UNIT` receipt,
+corridor. Those focused runs and source anchors are not the complete 531-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -1372,7 +1409,7 @@ historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. The mutable
 focused inventory still names those 12 tests, but this reconciliation makes no
-immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 526-test `G-UNIT` receipt,
+immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 531-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 The source-bound focused inventory binds the runner startup order directly and
@@ -1928,7 +1965,7 @@ the CompleteTip payload-before-ledger-repair regression produced a historical
 867-test inventory. The Kagemusha clean-break retired two one-test module legs
 and replaced their rows with one consensus-signature-envelope regression in an
 existing module, leaving that historical production checkpoint at 866 tests.
-The current inventories contain 881 production tests and 526 G-UNIT tests.
+The current inventories contain 881 production tests and 531 G-UNIT tests.
 Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
@@ -2009,22 +2046,22 @@ The seven additional Native AMX regressions bind finality-aware merge
 projection across canonical ordering, multi-height and same-height identity
 conflicts, coordinator-only receipts, route conflicts, duplicate sources, and
 decoded replay. The focused source inventory is now internally consistent. The
-nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 526 unique required
-tests: 320 core, 143 queue-journal, 13 configuration, eight data-model,
+nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 531 unique required
+tests: 325 core, 143 queue-journal, 13 configuration, eight data-model,
 39 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-526-row shape, including grouped Native prevote-budget rejection before
+531-row shape, including grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
 checked snapshot replay file/owner sealing, exact QueuePlan obligation
 authentication, ApplyCarrier authorization, and canonical historical
-autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `526/526` source consistency and also source-
+autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `531/531` source consistency and also source-
 bind the synchronized 56-control grouped corpus. The planned-
 association Rust coverage described under `ML-NAT-06` is present in the focused
 source inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12 passive-
 diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static Python
-source tests outside the 526 G-UNIT count.
+source tests outside the 531 G-UNIT count.
 
 On 2026-07-31, pinned Rust 1.93.1 locked/offline execution from isolated source
 `/tmp/iroha-kura-final3.dvOYAN` and isolated target
@@ -2035,8 +2072,8 @@ repair, Native post-WSV retention, and authenticated geometry refresh. That
 checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
-execution of all 526 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 864 production, 526 G-UNIT,
+execution of all 531 required tests. This reconciliation claims no immutable-
+candidate Cargo run or full matrix execution: the 864 production, 531 G-UNIT,
 and 56-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -2299,11 +2336,11 @@ These are inspected test definitions, not fresh execution evidence.
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
 - `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 881-production-test,
-  526-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
+  531-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
   substitute for a complete SDK harness, formal-engine result, or network
-  receipt; no complete 526-test execution from an immutable candidate is
+  receipt; no complete 531-test execution from an immutable candidate is
   claimed by this reconciliation.
 
 ### Explicitly out of scope

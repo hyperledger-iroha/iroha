@@ -51,7 +51,7 @@ async fn failed_trigger_revert() -> Result<()> {
     let _ = spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit_blocking(
+            client.submit(
                 register_trigger,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -62,7 +62,7 @@ async fn failed_trigger_revert() -> Result<()> {
     let err = spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit_blocking(
+            client.submit(
                 call_trigger,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -107,7 +107,12 @@ async fn failed_trigger_revert() -> Result<()> {
     let query_result = match sandbox::handle_result(
         spawn_blocking({
             let client = client.clone();
-            move || client.query(FindAssetsDefinitions::new()).execute_all()
+            move || {
+                client
+                    .client()
+                    .query(FindAssetsDefinitions::new())
+                    .execute_all()
+            }
         })
         .await?
         .map_err(Into::into),

@@ -1,5 +1,5 @@
-//! Verifies `JoinKaigi` Norito encoding supports canonical hash literals.
-use iroha_crypto::Hash;
+//! Verifies `JoinKaigi` preserves canonical raw Pasta commitment bytes.
+use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
@@ -7,18 +7,10 @@ use iroha_data_model::{
     kaigi::{KaigiId, KaigiParticipantCommitment},
     name::Name,
 };
-use norito::{
-    core::NoritoDeserialize,
-    json::{self, JsonDeserialize},
-};
+use norito::core::NoritoDeserialize;
 use std::str::FromStr;
-fn parse_hash_literal(literal: &str) -> Hash {
-    let raw = format!("\"{literal}\"");
-    let mut parser = json::Parser::new(raw.as_str());
-    Hash::json_deserialize(&mut parser).expect("parse hash literal")
-}
 #[test]
-fn join_kaigi_accepts_canonical_commitment_literal() {
+fn join_kaigi_preserves_canonical_raw_commitment() {
     let call = KaigiId::new(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         Name::from_str("weekly-sync").expect("call name"),
@@ -26,16 +18,11 @@ fn join_kaigi_accepts_canonical_commitment_literal() {
     let participant =
         AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
             .expect("account id");
-    let commitment_literal =
-        "hash:1111111111111111111111111111111111111111111111111111111111111111#4667";
-    let commitment = parse_hash_literal(commitment_literal);
+    let commitment = KaigiAuthorizationScalarV1::from_le_bytes([0x24; 32]).unwrap();
     let join = JoinKaigi {
         call_id: call,
         participant,
-        commitment: Some(KaigiParticipantCommitment {
-            commitment,
-            alias_tag: None,
-        }),
+        commitment: Some(KaigiParticipantCommitment { commitment }),
         nullifier: None,
         roster_root: None,
         proof: None,
@@ -46,4 +33,10 @@ fn join_kaigi_accepts_canonical_commitment_literal() {
     let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from bytes");
     let decoded = InstructionBox::try_deserialize(archived).expect("deserialize");
     assert_eq!(decoded.as_any().downcast_ref::<JoinKaigi>(), Some(&join));
+}
+
+#[test]
+fn join_kaigi_rejects_retired_hash_scalar_json() {
+    let literal = "\"hash:1111111111111111111111111111111111111111111111111111111111111111#4667\"";
+    assert!(norito::json::from_str::<KaigiAuthorizationScalarV1>(literal).is_err());
 }

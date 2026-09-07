@@ -1775,10 +1775,10 @@ migration in `9c17d8bd0`. Its framing test does not establish cryptographic
 provenance coverage. The new direct share/QC and production-ingress negative
 matrix is registered, but still requires compilation and execution.
 
-The separate source-sealed G-UNIT inventory contains 526 focused tests,
-including 320 core and 143 queue-journal `iroha_core` tests. Its 527-line
+The separate source-sealed G-UNIT inventory contains 531 focused tests,
+including 325 core and 143 queue-journal `iroha_core` tests. Its 532-line
 canonical TSV has SHA-256
-`15f6b8abd9f1f0afb270d4f457318baf4d5dca5f21e238e9689004a180f0c654`;
+`d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through

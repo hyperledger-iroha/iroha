@@ -327,14 +327,17 @@ fn authority_identity_policy_and_public_key_are_independently_pinned() {
 
 #[test]
 fn matching_software_key_self_attestation_is_rejected_even_if_trust_is_misconfigured() {
-    let mut fixture = custody_fixture();
-    fixture.trust.public_key = fixture.signer.public_key().clone();
-    let bytes = attest_unchecked(fixture.statement.clone(), &fixture.signer);
-    assert_error(&bytes, &fixture, SignerCustodyErrorV1::SelfAttestation);
-    fixture.trust.public_key = fixture.attester.public_key().clone();
+    let mut self_attested = custody_fixture();
+    self_attested.trust.public_key = self_attested.signer.public_key().clone();
+    let bytes = attest_unchecked(self_attested.statement.clone(), &self_attested.signer);
+    assert_error(
+        &bytes,
+        &self_attested,
+        SignerCustodyErrorV1::SelfAttestation,
+    );
     for identity in [
-        &fixture.statement.binding.service_id,
-        &fixture.statement.binding.administrator_id,
+        &self_attested.statement.binding.service_id,
+        &self_attested.statement.binding.administrator_id,
     ] {
         let mut fixture = custody_fixture();
         fixture.statement.authority.administrator_id = identity.clone();

@@ -37,6 +37,18 @@ pub fn split_nonempty<'a>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Owned<T>(pub T);
+impl<T: norito::NoritoSchema> norito::NoritoSchema for Owned<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_data_model::common::Owned",
+            &[T::nominal_name()],
+        )
+    }
+    fn frame_name() -> String {
+        T::frame_name()
+    }
+}
+
 impl<T> core::ops::Deref for Owned<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
@@ -156,6 +168,9 @@ impl<Id, Value> core::ops::Deref for Ref<'_, Id, Value> {
         self.value
     }
 }
+#[cfg(all(test, feature = "json"))]
+mod owned_identity_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +186,34 @@ mod tests {
         let wrapped = Owned::new(5u32);
         assert_eq!(*wrapped, 5);
         assert_eq!(wrapped.into_inner(), 5);
+    }
+    #[test]
+    fn owned_schema_requires_only_a_marker_and_preserves_nested_projections() {
+        use norito::{NoritoSchema, schema::identity::frame_hash};
+
+        struct Marker;
+        impl NoritoSchema for Marker {
+            fn nominal_name() -> String {
+                "iroha_test::StorageMarker".to_owned()
+            }
+            fn frame_name() -> String {
+                "iroha_test::ProjectedStorage".to_owned()
+            }
+        }
+
+        // No payload or JSON codec is implemented for the marker.
+        type Nested = Owned<Owned<Marker>>;
+        assert_eq!(
+            Nested::nominal_name(),
+            "iroha_data_model::common::Owned<iroha_data_model::common::Owned<iroha_test::StorageMarker>>"
+        );
+        assert_eq!(Nested::frame_name(), Marker::frame_name());
+        assert_eq!(frame_hash::<Nested>(), frame_hash::<Marker>());
+        assert_eq!(
+            Vec::<Nested>::nominal_name(),
+            "alloc::vec::Vec<iroha_data_model::common::Owned<iroha_data_model::common::Owned<iroha_test::StorageMarker>>>"
+        );
+        assert_ne!(frame_hash::<Vec<Nested>>(), frame_hash::<Vec<Marker>>());
     }
     #[test]
     fn ref_provides_access() {

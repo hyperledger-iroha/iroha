@@ -8652,7 +8652,7 @@
             "lane_incarnation: Hash",
             "lane_block_height: u64",
             "participant_proposal_hash: Hash",
-            "participant_settlement_hash: HashOf<LaneBlockCommitment>",
+            "participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>",
             "application_block_height: u64",
             "application_block_hash: HashOf<BlockHeader>",
             "executed_block_wire_hash: Hash",

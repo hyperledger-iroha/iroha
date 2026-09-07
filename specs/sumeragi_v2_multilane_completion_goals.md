@@ -235,8 +235,8 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   Rust refinement proof and a sealed release receipt remain open.
 - Pinned Apalache 0.52.2 typechecks all six models and passes the autoscale,
   Native evidence, autonomous carrier (12 steps), QueuePlan and Kura retention
-  bounds. The in-flight 18-step check is still running. It must finish at its
-  exact bound before any all-model Apalache pass is recorded.
+  bounds. The original in-flight 18-step check later ended without a terminal
+  result; that attempt does not qualify its bound.
 - SDK inspection reproduced mutable nested participant settlement data after
   hash validation in JavaScript and Python. The repair preserves the checked
   settlement hash and wire JSON; grouped tests pass 62 JavaScript and 64 Python
@@ -319,10 +319,63 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   counterexamples, one in-flight positive and 22 expected in-flight counterexamples.
   All 129 stderr streams are empty; retained private artifacts bind tools, exact
   input copies, argv, status, raw outputs, named traces and acceptance links.
-  These are local bounded-model results. The original 18-step Apalache run is
-  still active; no reduced bound or restarted run substitutes for its result.
+  These are local bounded-model results. The original 18-step Apalache run has
+  no terminal result or live process at the latest inspection; its retained output
+  ends at state 13. A separately retained fresh 18-step attempt has started and
+  passed typechecking; its bounded result remains pending. It does not replace
+  the original incomplete attempt.
 - Reconcile the new hydration/cache and actual WAL authority source contracts,
   execute focused Rust regressions after the shared Cargo queue clears, and run
   full SwiftPM against the real ABI-23 bridge once built. The grouped fixture hash
   still needs two fresh Rust-owned regenerations. No milestone or release gate
   is complete.
+- Recovery-owner source qualification now passes 84 checks on Python 3.12.14
+  with the repository-pinned pytest 9.0.3, plus the five complete owner seals.
+  The persistent recovery-cut component passes 114 checks on the same supported
+  environment, including full component integration and factory shadow/rebinding
+  negatives. These replace older-interpreter diagnostics as the current local
+  source evidence; they do not prove Rust behavior or full release closure.
+
+## Terminal autonomous replay checkpoint
+
+- Full vote/QC and exact executable READY authentication precedes terminal
+  duplicate results, including the complete-certificate historical shortcut.
+  Historical payload lookup attaches the exact public hint before accepting own
+  application or the applied predecessor; an advanced frontier alone is insufficient.
+- A bounded read-only inventory resolves exact applied cache slots. Shared quorum
+  preflight rejects conflicts before retiring sessions/locks or READY references;
+  unrelated owners, capacity and separate output handoffs are preserved. Cleanup
+  precedes fresh signing and guarded persistence hydration.
+- Five added cache regressions bring the current G-UNIT registration to 531
+  (325 core), preserving all 526 prior rows. The real merge fixture now exercises
+  actual pre-application cache owners, full output
+  capacity, observer/member replays, malformed signatures and incorrect READY roles.
+  Rust execution remains pending. The terminal independent source loader and
+  62 rehashed semantic mutants pass as a 63-case cohort. These include autonomous
+  role scoping, exact READY cryptography/payload validation, full-slot conversion,
+  output preservation and retirement ordering. A fresh dedicated baseline also
+  passes after the test extension. The broader exact-output source check failed
+  with 77 errors; full proof-ledger qualification remains open.
+- The test extension now follows the actual first merge with source height 4,
+  lane height 2, and economic merge height 5. Context 6 checks non-genesis own
+  application and the older lane-height-1 receipt after frontier advancement;
+  distinct descriptor/incarnation identities are rejected. All voting adapters
+  retain the same Kura-local key while global leaders rotate. Original first-cycle
+  assertions remain. Shared helpers retain the exact FIFO pipeline and derive
+  later parents/contexts from canonical State/Kura. Rust execution is pending.
+- Two obsolete per-proposal hydration clauses in the broad checker now defer to
+  its existing canonical atomic-batch contract. A copied-source positive baseline
+  and rehashed reverse-before-batch negative pass, and the full checker retains
+  exactly one call to that owner. A fresh broader run is pending; remaining
+  source errors are not waived or repaired by copying new digest values.
+- The 531/881 approval operation identities are current, with no compatibility
+  aliases; all 74 other ordered operations remain unchanged. Three approval
+  controls and ten independently omitted-result receipt fixtures pass on the
+  supported Python runtime. The final selected inventory cohort passes 84 checks,
+  including exact constants and name/count/feature/prose adversaries; these do
+  not execute the registered Rust tests.
+- The independent recovery/capacity contract is reconciled to three current
+  storage owners and passes 33 tests plus ten new subcases with copied-source
+  positive baselines. One initially surviving role mutation led to a stronger
+  pre-recovery ordering check; the final full cohort passes. No model or Rust
+  runtime result is inferred.

@@ -24,6 +24,7 @@ from iroha_python.kaigi import (
     KaigiParticipantNullifierV1,
     KaigiRelayHopV1,
     KaigiRelayManifestV1,
+    build_leave_kaigi_instruction,
     encode_create_kaigi_instruction_v1,
     encode_end_kaigi_instruction_v1,
     encode_join_kaigi_instruction_v1,
@@ -39,6 +40,7 @@ _FIXTURE_PATH = Path(__file__).with_name("fixtures") / "kaigi_instruction_wire_v
 _FIXTURE = json.loads(_FIXTURE_PATH.read_text("utf-8"))
 _CRC64_POLY = 0xC96C_5795_D787_0F42
 _U64_MASK = (1 << 64) - 1
+_PASTA_FP_MODULUS = 0x40000000000000000000000000000000224698FC094CF91B992D30ED00000001
 _RELAY_PUBLIC_KEYS_HEX = (
     "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
     "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
@@ -158,8 +160,8 @@ def _complex_create() -> KaigiInstructionWireV1:
         privacy_mode="ZkRosterV1",
         room_policy="Public",
         relay_manifest=manifest,
-        commitment=KaigiParticipantCommitmentV1(bytes([0x44]) * 31 + b"\x45"),
-        nullifier=KaigiParticipantNullifierV1(bytes([0x55]) * 32),
+        commitment=KaigiParticipantCommitmentV1(bytes([0x44]) * 31 + b"\x04"),
+        nullifier=KaigiParticipantNullifierV1(bytes([0x55]) * 31 + b"\x05"),
         roster_root=bytes([0x66]) * 31 + b"\x67",
         proof=b"\x01\x02\x03",
     )
@@ -194,10 +196,10 @@ def test_all_nine_builders_match_complete_instruction_box_golden_frames() -> Non
     assert outer_schema.hex() == _FIXTURE["outer_schema_hash_hex"]
 
 
-def test_complex_create_matches_cross_sdk_golden_without_losing_u64_precision() -> None:
+def test_complex_create_matches_final_v1_reference_without_losing_u64_precision() -> None:
     archive = _complex_create().to_norito_bytes()
     expected = _FIXTURE["complex_create"]
-    assert len(archive) == 883
+    assert len(archive) == 872
     assert hashlib.sha256(archive).hexdigest() == expected["sha256_hex"]
     assert base64.b64encode(archive).decode("ascii") == expected["instruction_box_base64"]
 
@@ -223,15 +225,16 @@ def test_native_instruction_round_trip_when_current_extension_is_available() -> 
     ]
 
 
-def test_hash_bytes_require_marker_and_are_never_mutated() -> None:
-    marked = bytearray(bytes([0x22]) * 31 + b"\x23")
-    snapshot = bytes(marked)
-    commitment = KaigiParticipantCommitmentV1(marked)
-    assert bytes(marked) == snapshot
+def test_scalar_bytes_are_preserved_while_roster_roots_still_require_hash_markers() -> None:
+    raw = bytearray(bytes([0x22]) * 32)
+    snapshot = bytes(raw)
+    commitment = KaigiParticipantCommitmentV1(raw)
+    assert bytes(raw) == snapshot
     assert commitment.commitment == snapshot
+    raw[0] ^= 1
+    assert commitment.commitment == snapshot
+    assert KaigiParticipantNullifierV1(memoryview(snapshot)).digest == snapshot
 
-    with pytest.raises(ValueError, match="marker bit"):
-        KaigiParticipantCommitmentV1(bytes([0x22]) * 32)
     with pytest.raises(ValueError, match="marker bit"):
         encode_join_kaigi_instruction_v1(
             call_id=KaigiIdV1(**_FIXTURE["call_id"]),
@@ -241,6 +244,108 @@ def test_hash_bytes_require_marker_and_are_never_mutated() -> None:
             roster_root=bytes([0x44]) * 32,
             proof=b"proof",
         )
+
+
+@pytest.mark.parametrize("scalar", [0, 1, (1 << 248), _PASTA_FP_MODULUS - 1])
+def test_commitments_and_nullifiers_accept_exact_canonical_pasta_boundaries(scalar: int) -> None:
+    raw = scalar.to_bytes(32, "little")
+    assert KaigiParticipantCommitmentV1(raw).commitment == raw
+    assert KaigiParticipantNullifierV1(raw).digest == raw
+
+
+@pytest.mark.parametrize("scalar", [_PASTA_FP_MODULUS, _PASTA_FP_MODULUS + 1, (1 << 255), (1 << 256) - 1])
+def test_scalar_outputs_reject_out_of_field_values_without_reduction(scalar: int) -> None:
+    raw = bytearray(scalar.to_bytes(32, "little"))
+    original = bytes(raw)
+    for constructor in (KaigiParticipantCommitmentV1, KaigiParticipantNullifierV1):
+        with pytest.raises(ValueError, match="below the modulus"):
+            constructor(raw)
+        assert bytes(raw) == original
+    with pytest.raises(ValueError, match="below the modulus"):
+        encode_record_kaigi_usage_instruction_v1(
+            call_id=KaigiIdV1(**_FIXTURE["call_id"]), duration_ms=1,
+            usage_commitment=raw, proof=b"proof",
+        )
+    assert bytes(raw) == original
+
+
+@pytest.mark.parametrize("raw", [b"", bytes(31), bytes(33)])
+def test_scalar_outputs_reject_noncanonical_lengths(raw: bytes) -> None:
+    for constructor in (KaigiParticipantCommitmentV1, KaigiParticipantNullifierV1):
+        with pytest.raises(ValueError, match="exactly 32 bytes"):
+            constructor(raw)
+
+
+@pytest.mark.parametrize("value", [False, 0, "00" * 32, "hash:" + "11" * 32 + "#0000"])
+def test_scalar_outputs_reject_hash_literals_and_nonbyte_inputs(value: Any) -> None:
+    for constructor in (KaigiParticipantCommitmentV1, KaigiParticipantNullifierV1):
+        with pytest.raises(TypeError, match="raw bytes-like Pasta Fp scalar"):
+            constructor(value)
+
+
+@pytest.mark.parametrize("mask", range(16))
+def test_private_create_requires_all_fields_and_other_actions_reject_partial_quartets(mask: int) -> None:
+    call_id = KaigiIdV1(**_FIXTURE["call_id"])
+    account = _FIXTURE["accounts"][0]
+    fields = {
+        "commitment": KaigiParticipantCommitmentV1(bytes(32)),
+        "nullifier": KaigiParticipantNullifierV1((_PASTA_FP_MODULUS - 1).to_bytes(32, "little")),
+        "roster_root": bytes([0x55]) * 32,
+        "proof": b"proof",
+    }
+    selected = {name: value for index, (name, value) in enumerate(fields.items()) if mask & (1 << index)}
+    if mask == 15:
+        encode_create_kaigi_instruction_v1(call_id=call_id, host=account, privacy_mode="ZkRosterV1", **selected)
+    else:
+        with pytest.raises(ValueError, match="requires the host|all present or all omitted"):
+            encode_create_kaigi_instruction_v1(call_id=call_id, host=account, privacy_mode="ZkRosterV1", **selected)
+    if mask:
+        with pytest.raises(ValueError, match="transparent.*omit"):
+            encode_create_kaigi_instruction_v1(call_id=call_id, host=account, **selected)
+    for encode, identity in (
+        (encode_join_kaigi_instruction_v1, {"participant": account}),
+        (encode_leave_kaigi_instruction_v1, {"participant": account}),
+        (encode_end_kaigi_instruction_v1, {}),
+    ):
+        if mask in (0, 15):
+            encode(call_id=call_id, **identity, **selected)
+        else:
+            with pytest.raises(ValueError, match="all present or all omitted"):
+                encode(call_id=call_id, **identity, **selected)
+
+
+def test_usage_scalar_preserves_raw_pasta_bytes_without_hash_marker_conversion() -> None:
+    raw = (_PASTA_FP_MODULUS - 1).to_bytes(32, "little")
+    wire = encode_record_kaigi_usage_instruction_v1(
+        call_id=KaigiIdV1(**_FIXTURE["call_id"]), duration_ms=1,
+        usage_commitment=raw, proof=b"proof",
+    )
+    payload = wire.payload_norito[40:]
+    offset = 0
+    fields = []
+    while offset < len(payload):
+        field, offset = _read_field(payload, offset)
+        fields.append(field)
+    assert fields[3][0] == 1
+    scalar, end = _read_field(fields[3], 1)
+    assert end == len(fields[3])
+    assert scalar == raw
+
+
+def test_private_leave_builder_preserves_the_complete_wire_quartet(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifacts = {
+        "call_id": KaigiIdV1(**_FIXTURE["call_id"]),
+        "participant": _FIXTURE["accounts"][0],
+        "commitment": KaigiParticipantCommitmentV1(bytes(32)),
+        "nullifier": KaigiParticipantNullifierV1(bytes([0x22]) * 32),
+        "roster_root": bytes([0x55]) * 32,
+        "proof": b"proof",
+    }
+    expected = encode_leave_kaigi_instruction_v1(**artifacts)
+    # Check the wrapper hands the complete wire to the native boundary; native
+    # proof acceptance remains the Core verifier's responsibility.
+    monkeypatch.setattr(KaigiInstructionWireV1, "to_instruction", lambda wire: wire)
+    assert build_leave_kaigi_instruction(**artifacts) == expected
 
 
 def test_privacy_artifacts_are_complete_nonempty_and_mode_safe() -> None:
@@ -426,7 +531,16 @@ def test_metadata_rejects_floats_and_unpinned_unicode_identity_keys() -> None:
         encode_create_kaigi_instruction_v1(call_id=call_id, host=account, metadata={"e\u0301": 1})
 
 
-@pytest.mark.parametrize("issued_at_ms", [False, 0.0, "0", None])
-def test_nullifier_timing_hint_requires_exact_integer_zero(issued_at_ms: Any) -> None:
-    with pytest.raises(ValueError, match="must be zero"):
-        KaigiParticipantNullifierV1(bytes([0x55]) * 32, issued_at_ms=issued_at_ms)
+@pytest.mark.parametrize("issued_at_ms", [False, 0, 1, 0.0, "0", None])
+def test_nullifier_timing_hint_is_not_a_final_v1_field(issued_at_ms: Any) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'issued_at_ms'"):
+        KaigiParticipantNullifierV1(bytes(32), issued_at_ms=issued_at_ms)
+
+
+def test_participant_scalar_wrappers_have_only_their_single_raw_field() -> None:
+    from dataclasses import fields
+
+    assert [field.name for field in fields(KaigiParticipantCommitmentV1)] == ["commitment"]
+    assert [field.name for field in fields(KaigiParticipantNullifierV1)] == ["digest"]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'alias_tag'"):
+        KaigiParticipantCommitmentV1(bytes(32), alias_tag=None)

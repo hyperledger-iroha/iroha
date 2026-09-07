@@ -240,7 +240,7 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
     let (session, _) =
         sample_committed_lane_block_session_for_kura(LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
     let proposal = session.proposal;
-    let settlement = LaneBlockCommitment {
+    let settlement = NativeAmxParticipantSettlement {
         block_height: 1,
         lane_id: LaneId::SINGLE,
         lane_incarnation: proposal.descriptor.lane_incarnation,
@@ -253,10 +253,9 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
     };
-    let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-        .expect("hash fixture settlement");
+    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+        .expect("fixture participant settlement encodes canonically");
     let mut receipt = NativeAmxParticipantApplicationReceiptArtifact {
         version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
         participant_proposal: proposal.clone(),
@@ -1299,9 +1298,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
     );
     let malformed_temp_dir = TempDir::new().expect("malformed temporary Kura directory");
     let malformed_config = kura_config_for_dir(&malformed_temp_dir, BLOCKS_IN_MEMORY);
-    let (malformed_kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&malformed_config, &lane_config)
-            .expect("initialize malformed temporary Kura");
+    let (malformed_kura, _) = test_kura_with_default_lane_markers(&malformed_config, &lane_config);
     let malformed_entry = malformed_kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("malformed temporary primary lane entry");
@@ -1337,8 +1334,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
             TempDir::new().expect("oversized publication temporary Kura directory");
         let oversized_config = kura_config_for_dir(&oversized_temp_dir, BLOCKS_IN_MEMORY);
         let (oversized_kura, _) =
-            Kura::open_test_kura_with_configured_lane_config(&oversized_config, &lane_config)
-                .expect("initialize oversized publication temporary Kura");
+            test_kura_with_default_lane_markers(&oversized_config, &lane_config);
         let oversized_entry = oversized_kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("oversized publication temporary primary lane entry");
@@ -1443,6 +1439,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
+    establish_configured_lane_markers_for_test(&kura, &lane_config);
     let latest_path =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
     drop(kura);
@@ -1454,7 +1451,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("symlinked")
+        error.to_string().contains("symlink")
             || error.to_string().contains("non-regular")
             || error.to_string().contains("multi-link")
             || error.to_string().contains("single-link regular file"),

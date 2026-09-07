@@ -1,3 +1,7 @@
+//! Governed compliance-feed transport boundary tests.
+
+use super::*;
+
 #[test]
 fn feed_transport_response_debug_is_payload_free() {
     let mut response = fetch_response(b"PRIVATE-FEED-BODY".to_vec());

@@ -16,6 +16,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::staking::ActivatePublicLaneValidator")]
     pub struct ActivatePublicLaneValidator {
         /// Lane that the validator targets.
         pub lane_id: LaneId,
@@ -32,6 +33,7 @@ impl ActivatePublicLaneValidator {
 }
 isi! {
     /// Request graceful exit for a validator and release its slot.
+    #[norito_schema(name = "iroha_data_model::isi::staking::ExitPublicLaneValidator")]
     pub struct ExitPublicLaneValidator {
         /// Lane that the validator targets.
         pub lane_id: LaneId,
@@ -47,6 +49,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::staking::RegisterPublicLaneValidator")]
     pub struct RegisterPublicLaneValidator {
         /// Lane that the validator targets.
         pub lane_id: LaneId,
@@ -89,6 +92,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer")]
     pub struct RebindPublicLaneValidatorPeer {
         /// Lane that the validator targets.
         pub lane_id: LaneId,
@@ -111,6 +115,7 @@ impl RebindPublicLaneValidatorPeer {
 }
 isi! {
     /// Bond additional stake for an existing validator (self or delegator supplied).
+    #[norito_schema(name = "iroha_data_model::isi::staking::BondPublicLaneStake")]
     pub struct BondPublicLaneStake {
         /// Lane identifier.
         pub lane_id: LaneId,
@@ -182,6 +187,7 @@ mod tests {
 }
 isi! {
     /// Schedule stake withdrawal for a validator or delegator.
+    #[norito_schema(name = "iroha_data_model::isi::staking::SchedulePublicLaneUnbond")]
     pub struct SchedulePublicLaneUnbond {
         /// Lane identifier.
         pub lane_id: LaneId,
@@ -199,6 +205,7 @@ isi! {
 }
 isi! {
     /// Finalise a previously scheduled stake withdrawal once the unlock timer expires.
+    #[norito_schema(name = "iroha_data_model::isi::staking::FinalizePublicLaneUnbond")]
     pub struct FinalizePublicLaneUnbond {
         /// Lane identifier.
         pub lane_id: LaneId,
@@ -212,6 +219,7 @@ isi! {
 }
 isi! {
     /// Slash a validator for misbehaviour and emit an audit trail entry.
+    #[norito_schema(name = "iroha_data_model::isi::staking::SlashPublicLaneValidator")]
     pub struct SlashPublicLaneValidator {
         /// Lane identifier.
         pub lane_id: LaneId,
@@ -231,6 +239,7 @@ isi! {
 }
 isi! {
     /// Cancel a pending consensus evidence penalty before slashing executes.
+    #[norito_schema(name = "iroha_data_model::isi::staking::CancelConsensusEvidencePenalty")]
     pub struct CancelConsensusEvidencePenalty {
         /// Evidence entry to cancel.
         pub evidence: Evidence,
@@ -238,6 +247,7 @@ isi! {
 }
 isi! {
     /// Record a reward distribution for a public lane epoch.
+    #[norito_schema(name = "iroha_data_model::isi::staking::RecordPublicLaneRewards")]
     pub struct RecordPublicLaneRewards {
         /// Lane identifier.
         pub lane_id: LaneId,
@@ -255,6 +265,7 @@ isi! {
 }
 isi! {
     /// Claim pending public-lane rewards for an account up to an optional epoch (inclusive).
+    #[norito_schema(name = "iroha_data_model::isi::staking::ClaimPublicLaneRewards")]
     pub struct ClaimPublicLaneRewards {
         /// Lane identifier.
         pub lane_id: LaneId,

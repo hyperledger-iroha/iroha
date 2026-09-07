@@ -152,6 +152,7 @@ pub struct DefiOracleAttestationRecorded {
     ffi_type(opaque)
 )]
 #[cfg_attr(feature = "json", norito(tag = "event", content = "payload"))]
+#[event_set(schema_name = "iroha_data_model::events::data::oracle::OracleEventSet")]
 pub enum OracleEvent {
     /// Feed slot aggregated with an outcome.
     FeedProcessed(FeedEventRecord),

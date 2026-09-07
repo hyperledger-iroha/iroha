@@ -112,6 +112,30 @@
         ],
         "type": "object"
       },
+      "AccountAliasLeaseListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountAliasLease"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
       "AccountAliasName": {
         "additionalProperties": false,
         "description": "Canonical component form of one account alias. The domain slot is mandatory and null only for a dataspace-root alias.",
@@ -23874,10 +23898,6 @@
           "lane_incarnation": {
             "$ref": "#/components/schemas/Hash"
           },
-          "native_amx_receipts": {
-            "maxItems": 0,
-            "type": "array"
-          },
           "nexus_fee_receipts": {
             "maxItems": 0,
             "type": "array"
@@ -23925,8 +23945,7 @@
           "total_xor_variance",
           "swap_metadata",
           "receipts",
-          "nexus_fee_receipts",
-          "native_amx_receipts"
+          "nexus_fee_receipts"
         ],
         "type": "object"
       },
@@ -51304,6 +51323,12 @@
         "tags": [
           "Accounts"
         ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_capabilities_get"
+        },
         "x-iroha-tool-effect": "read"
       }
     },
@@ -53397,6 +53422,107 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/aliases": {
+      "get": {
+        "description": "List the caller-visible active and retained alias leases bound to one canonical account. The request must be signed by an account with permission to resolve every returned alias.",
+        "operationId": "accountAliasLeases",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountAliasLeaseListResponse"
+                }
+              }
+            },
+            "description": "Canonical alias leases visible to the authenticated caller.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The account selector or stored alias binding is not canonical.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated account cannot resolve the requested account's aliases.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List canonical account alias leases.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_aliases_get"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -83469,6 +83595,336 @@
           "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "sccp.registry.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root": {
+      "get": {
+        "description": "Return one canonical Norito replay-root response only after Torii has authenticated the complete three-replica checkpoint inventory against its current Core and Kura head.",
+        "operationId": "sccpReplayRoot",
+        "parameters": [
+          {
+            "description": "Exact public SORA replay boundary.",
+            "in": "path",
+            "name": "boundary",
+            "required": true,
+            "schema": {
+              "enum": [
+                "sora-outbound-lock",
+                "sora-inbound-release"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical external SCCP network profile key.",
+            "in": "path",
+            "name": "source_profile",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP route identifier.",
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP asset key.",
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nonzero immutable governed route revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito `SccpReplayRootResponseV1` bytes.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated signed replay-root evidence.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Replay proofs are always served without storage by intermediaries.",
+                "required": true,
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay accumulator path is not canonical."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated inventory contains no matching accumulator."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/x-norito."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Locally retained replay evidence failed integrity validation."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay archive is disabled or has no authenticated current projection."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Fetch an authenticated SCCP replay root.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.replay.root.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}": {
+      "get": {
+        "description": "Return one canonical Norito replay membership or non-membership witness and the authenticated signed root from the same locally rebuilt replay head.",
+        "operationId": "sccpReplayWitness",
+        "parameters": [
+          {
+            "description": "Exact public SORA replay boundary.",
+            "in": "path",
+            "name": "boundary",
+            "required": true,
+            "schema": {
+              "enum": [
+                "sora-outbound-lock",
+                "sora-inbound-release"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical external SCCP network profile key.",
+            "in": "path",
+            "name": "source_profile",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP route identifier.",
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP asset key.",
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nonzero immutable governed route revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exact lowercase 32-byte replay key. The all-zero key requests an ordinary non-membership proof.",
+            "in": "path",
+            "name": "replay_key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito `SccpReplayWitnessResponseV1` bytes.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated replay root and canonical witness.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Replay proofs are always served without storage by intermediaries.",
+                "required": true,
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay accumulator path or replay key is not canonical."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated inventory contains no matching accumulator."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/x-norito."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Locally retained replay evidence failed integrity validation."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay archive is disabled or has no authenticated current projection."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Fetch an authenticated SCCP replay witness.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.replay.witness.read"
         },
         "x-iroha-tool-effect": "read"
       }

@@ -19616,10 +19616,10 @@ enum ToriiNativeAmxWire {
         "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage"
     private static let proposalPreimageType =
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
-    private static let settlementType =
-        "iroha_data_model::block::consensus::LaneBlockCommitment"
-    private static let settlementHashDomain =
-        Data("iroha.nexus.lane-relay.settlement.v1".utf8)
+    private static let participantSettlementType =
+        "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+    private static let participantSettlementHashDomain =
+        Data("iroha.consensus.native-amx.participant-settlement.v1".utf8)
     private static let blsKeyAdmissionMessage =
         Data("native-amx:bls-normal-key-admission:v1".utf8)
     /// A valid compressed BLS-Normal signature used only to make the native
@@ -20130,18 +20130,18 @@ enum ToriiNativeAmxWire {
         ])
     }
 
-    static func settlementHash(_ settlement: ToriiLaneSettlementCommitment) -> String? {
+    static func participantSettlementHash(
+        _ settlement: ToriiNativeAmxParticipantSettlement
+    ) -> String? {
         guard settlement.swapMetadata == nil,
               settlement.nexusFeeReceipts.isEmpty,
-              settlement.nativeAmxReceipts.isEmpty,
               let laneIncarnation = hashBytes(settlement.laneIncarnation),
               let totalLocalAmount = quantity(settlement.totalLocalAmount),
               let totalXorDue = quantity(settlement.totalXorDue),
               let totalXorAfterHaircut = quantity(settlement.totalXorAfterHaircut),
               let totalXorVariance = quantity(settlement.totalXorVariance),
               let receipts = vector(settlement.receipts, encode: settlementReceipt),
-              let emptyNexusReceipts = vector([Data](), encode: { $0 }),
-              let emptyNativeReceipts = vector([Data](), encode: { $0 })
+              let emptyNexusReceipts = vector([Data](), encode: { $0 })
         else {
             return nil
         }
@@ -20158,11 +20158,10 @@ enum ToriiNativeAmxWire {
             Data([0]),
             receipts,
             emptyNexusReceipts,
-            emptyNativeReceipts,
         ])
-        var hashPreimage = littleEndian(UInt64(settlementHashDomain.count))
-        hashPreimage.append(settlementHashDomain)
-        hashPreimage.append(noritoFrame(typeName: settlementType, payload: payload))
+        var hashPreimage = littleEndian(UInt64(participantSettlementHashDomain.count))
+        hashPreimage.append(participantSettlementHashDomain)
+        hashPreimage.append(noritoFrame(typeName: participantSettlementType, payload: payload))
         return hashLiteral(hashPreimage)
     }
 }
@@ -20892,7 +20891,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
     public let laneId: UInt32
     public let dataspaceId: UInt64
     public let participantProposal: ToriiNativeAmxParticipantLaneBlockProposal
-    public let participantSettlement: ToriiLaneSettlementCommitment
+    public let participantSettlement: ToriiNativeAmxParticipantSettlement
     public let participantSettlementHash: String
     /// True when the current source entrypoint is absent from the control proposal.
     /// Full block admission must prove such a proposal is another transaction's
@@ -20929,7 +20928,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
             forKey: .participantProposal
         )
         participantSettlement = try container.decode(
-            ToriiLaneSettlementCommitment.self,
+            ToriiNativeAmxParticipantSettlement.self,
             forKey: .participantSettlement
         )
         participantSettlementHash = try ToriiNativeAmxWire.canonicalHash(
@@ -21003,7 +21002,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               coordinatorParticipantProposalMatches,
               participantSettlementHash == body.participantSettlementCommitment,
               participantSettlementHash
-                == ToriiNativeAmxWire.settlementHash(participantSettlement),
+                == ToriiNativeAmxWire.participantSettlementHash(participantSettlement),
               participantSettlement.blockHeight == body.participantLaneBlockHeight,
               participantSettlement.laneId == laneId,
               participantSettlement.dataspaceId == dataspaceId,
@@ -21018,8 +21017,7 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               Set(settlementSources).count == settlementSources.count,
               sourcePositions.count == 1,
               settlementIsZeroEffect,
-              participantSettlement.nexusFeeReceipts.isEmpty,
-              participantSettlement.nativeAmxReceipts.isEmpty
+              participantSettlement.nexusFeeReceipts.isEmpty
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .prepareQc,

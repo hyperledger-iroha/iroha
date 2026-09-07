@@ -869,7 +869,7 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
         payload_block_hint: None,
     };
     participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
-    let participant_settlement = LaneBlockCommitment {
+    let participant_settlement = NativeAmxParticipantSettlement {
         block_height: participant_proposal.descriptor.lane_block_height,
         lane_id: target_lane,
         lane_incarnation: retired_incarnation,
@@ -882,11 +882,10 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
     };
     let participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-            .expect("participant settlement hashes");
+        compute_native_amx_participant_settlement_hash(&participant_settlement)
+            .expect("fixture participant settlement encodes canonically");
     let participant_validator_set = Vec::<PeerId>::new();
     let participant_validator_set_hash = HashOf::new(&participant_validator_set);
     let source_id = [0x73; Hash::LENGTH];
@@ -919,7 +918,7 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
         participant_lane_block_height: participant_proposal.descriptor.lane_block_height,
         participant_lane_block_view: participant_proposal.descriptor.lane_block_view,
         participant_proposal_hash: participant_proposal.proposal_hash,
-        participant_settlement_commitment: Hash::from(participant_settlement_hash),
+        participant_settlement_commitment: participant_settlement_hash,
         participant_validator_set_hash,
         participant_validator_count: 0,
         participant_min_quorum: 0,

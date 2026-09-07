@@ -24419,17 +24419,17 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         const DOMAIN: &str = "torii:proxy:v1";
         let mut scratch = norito::core::SmallBuf::<384>::new();
-        norito::core::write_len_prefixed_exact(writer, &DOMAIN, &mut scratch)?;
-        norito::core::write_len_prefixed_exact(writer, self.process_session_id, &mut scratch)?;
-        norito::core::write_len_prefixed_exact(writer, self.local_peer_id, &mut scratch)?;
-        norito::core::write_len_prefixed_exact(writer, &self.sequence, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, &DOMAIN, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, self.process_session_id, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, self.local_peer_id, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, &self.sequence, &mut scratch)?;
         if self.request.encoded_len_exact().is_none() {
             // The generic fallback stages the entire request field. Request-id
             // derivation is admitted only when the request enum can use the
             // proven direct-streaming path.
             return Err(norito::core::Error::LengthMismatch);
         }
-        norito::core::write_len_prefixed_exact(writer, self.request, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, self.request, &mut scratch)?;
         Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
@@ -25782,7 +25782,7 @@ where
         return Err(norito::core::Error::LengthMismatch);
     }
     let mut unused_fallback = norito::core::DeriveSmallBuf::new();
-    norito::core::write_len_prefixed_exact(writer, value, &mut unused_fallback)
+    norito::core::write_len_prefixed(writer, value, &mut unused_fallback)
 }
 #[derive(Clone, Copy)]
 enum CanonicalFanoutBatchRef<'a> {

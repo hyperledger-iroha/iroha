@@ -78,7 +78,7 @@ implementation markers must not be substituted for the qualification record in
 | BFV/Soracloud and MKHE | Full BFV-RNS and one atomic 40-limb source/materialization/packing/cross-field/padding verifier, full-size/eight-party KAT, resource measurements and governed noise/qROM evidence. Unavailable stages cannot issue receipts. |
 | Confidential assets and private settlement | Regenerated canonical proofs/keys, authority/amount/conservation adversaries, complete SDK routes and deployment evidence described by the owning settlement/asset specifications. |
 | SoraFS | Complete the V1 closure ledger, live four-voter/multi-provider/dual-gateway L1, resilience/load/24-hour soak, all 17 summaries and ordered L2 promotion evidence. |
-| Kaigi | Signed participant-authority/replay-bound roster proof, exact keys/schema, suite-tagged HPKE, bounded long-session accounting and authenticated relay recovery. |
+| Kaigi | Final 31-row authorization and 25-row usage proofs; retained original-account participation, exact keys/schema, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |
 | Elections | Complete private ballot/deadline/retry, finalized-beacon, rollback/restore and independent timed-OVN/threshold-BLS review on four validators. |
 | SDKs and fixtures | Rust, Kotlin/Java consumers, Swift, JavaScript, Python and C# use the same final canonical bytes and native admission; signed same-source native packages and target-platform execution. Structural parser/source tests alone cannot qualify an SDK. |
 | Hardware | Final FASTPQ six-lane hashes and polynomial derivation currently execute on CPU. Old scalar-permutation/FFT preflights cannot qualify final V1 GPU proofs. The allocation-free typed frame now shares CPU, streaming and hardware input framing. Dedicated Metal digest dispatch and cleanup/quarantine tests pass locally; CUDA compilation/device evidence and full proof routing remain outstanding. Complete real mode propagation; then execute CPU/NEON/SIMD/Metal/CUDA parity, fault quarantine and measured memory/throughput. A feature build or selected mode is not device execution. |
@@ -141,7 +141,7 @@ blocked, ignored, timed-out or unavailable runs cannot be recorded as passes.
   with six privacy exports.
   Swift runtime qualification still requires the rebuilt XCFramework; syntax
   and source checks do not replace it.
-- SDK source admission checks pass 86 regressions, including immutable origin,
+- SDK source admission checks pass 90 regressions, including immutable origin,
   exact expected-network propagation, one-use JS transport receipts, Kotlin
   wire-payload snapshots, and final Swift envelope/cache controls. The strict
   audit retains its explicit source-prerequisite evidence label.
@@ -149,13 +149,20 @@ blocked, ignored, timed-out or unavailable runs cannot be recorded as passes.
   Python and the JS admission helper, plus missing deployment-network comparisons
   in managed SDK projections. The final origin/network fixes now bind admission to configured client networks
   and reject offline inspection objects at construction. Focused tests pass:
-  JavaScript 37, Kotlin 63, Python 103, C# 17 and Swift 35. Swift also rejects
+  JavaScript 62, Kotlin 63, Python 103 and Swift 35. The actual C#
+  native privacy/verifier selection passes 143 tests against the rebuilt ABI-23
+  host bridge; it is local artifact conformance, not signed package qualification. Swift also rejects
   the retired 11-field envelope and checks all twelve final statement contexts.
   C# passes 11 source/native-validator mutation controls. Swift execution used
   an isolated source-only package; native packaging remains unqualified.
   Kotlin captures caller-provided wire payloads before admission and encoding;
   Swift capability requests explicitly bypass caching. Native JNI/PyO3/N-API
-  test rebuilds remain in progress after stale test/import owners were corrected.
+  unit selections pass 4/7/2 tests respectively. Actual Kotlin and Java host
+  runtime consumers pass 37 tests. The captured Python wheel passes canonical
+  installation verification and 169 installed-package tests, plus actual native
+  authenticated-transport replay/network controls. N-API package runtime
+  execution remains open. JS private request/auth/response methods prevent
+  mutable public helper overrides from minting transport receipts.
 - The final 50,264-byte model intent KAT is reproduced through the public model
   API and independent Python BLAKE3 framing. The model privacy selection passes
   127 tests with three explicitly ignored generators.
@@ -174,7 +181,8 @@ blocked, ignored, timed-out or unavailable runs cannot be recorded as passes.
 - The explicitly selected real T256 membership smoke proves and verifies one
   16,384-coefficient ternary chunk, including nonzero commitments and secret
   cleanup. It passes in 263.59 seconds with 50,659,328 bytes peak RSS. The full
-  eight-chunk membership KAT is running; CPK relation linkage remains unavailable.
+  eight-chunk membership KAT also passes in 1,758.52 seconds with 69,140,480
+  bytes peak RSS. CPK relation linkage remains unavailable.
 - Three explicitly selected Vega/Figure 9 circuit gates pass the authenticated
   input/statement mutation matrix, independently signed calendar boundaries and
   exact split metadata/step/core-row checks. Peak RSS was 121,241,600 bytes.
@@ -197,13 +205,16 @@ control reproduces the duplicate-symbol failure on all three targets. The actual
 bridge source is corrected. A fresh complete five-target build is running from
 immutable overlay manifest `c1e13661ade2148661fa620425a66846cd18af41ec31a53b7ab2043df5c37983`.
 It precedes the subsequent Swift request-cache change and Python dependency
-owner correction; it cannot qualify the later moving checkout.
+owner correction; it cannot qualify the later moving checkout. Its first iOS
+target finished in 64m49s; after the prior process stopped, the same frozen
+build resumed using its existing target cache. No complete XCFramework or
+Swift native runtime pass is recorded yet.
 
 The previous complete optimized proof-crate run finished with 1,294 passes,
 four failures and 13 explicitly ignored resource/generator tests. All four
 failures now pass focused reruns (ten section-codec and three additional MKHE
 cases). The corrected complete proof-crate run passes 1,299 tests with zero
-failures and 13 explicitly ignored tests in 3,085.08 seconds. Nine of the
+failures and 13 explicitly ignored tests in 3,085.08 seconds. Ten of the
 ignored component gates pass the separate explicit runs described above; those
 do not qualify the remaining full-proof resource gates. Earlier cleanup, independently
 reproduced MKHE KAT and four split pending-owner regressions also pass.
@@ -221,3 +232,36 @@ rejection, stride and witness erasure. The BFV conformance-material generator an
 wrapper rejection tests pass both cases; they do not supply external noise or
 qROM qualification. These observations are from a moving shared checkout, not one signed
 immutable release candidate.
+
+The final canonical Kaigi model passes 33 tests, including independent six-lane
+identity vectors, complete multisig identities, layout invariance, mandatory
+retained original-account ownership, sequence consumption and strict unmarked
+Pasta scalar bytes. Retired artifact hints are rejected. After deleting all old
+circuit and seed APIs, the final authorization/usage crate passes 20 tests in
+25.46s, including real k13/k12 IPA proofs, every changed 31/25-row public input,
+range/action/role constraints and independent C/N/A/U framing vectors. Its test
+binary SHA256 is `17e458d9ccad3c499911b378e1c852c4489acd6b64bdd24ec6c9d7bce2b75fdd`.
+
+The earlier captured Core backend passes three tests in 988.65s, including both
+authorization routes and all 62 row mutations; that capture predates the final
+circuit cleanup and lifecycle cutover. Current source connects mandatory host
+authorization, on-chain leave/rejoin, final usage, storage reservations and
+retained original-account dependencies. The registered combined Core unit and
+integration targets are rebuilding; there is no final lifecycle pass yet.
+
+The final wire passes 15 exact Rust/Python/Kotlin vectors and three
+modulus-negative archives. Kotlin/Java and Python focused selections pass 22 and
+51 tests respectively; the Kotlin tests include bounded decoding of malicious
+multisig member counts before allocation. The Node native generator produced a
+real authorization proof verified by Core, and its other 17 focused native
+tests pass after fixture corrections. A frozen official addon build will verify
+the final circuit/key source. Swift and C# scalar/wire integration is ongoing.
+These results do not attest deployment, relay transport or release readiness.
+
+The captured four-validator harness compiles, but its first runtime attempt
+stopped before peer startup on a stale X509 status expectation: the current
+profile reports `ProfileInitializationFailed` for invalid shared STARK
+geometry, rather than `EngineUnavailable`. This is not governance availability
+or four-validator execution evidence. The per-profile assertions now track
+that exact diagnostic and the harness uses explicit 32-MiB parent and worker
+stacks; those revisions still await compilation and execution.

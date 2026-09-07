@@ -10,6 +10,7 @@ isi! {
     ///
     /// Supply operations such as mint and burn are deliberately outside this
     /// transfer policy. Use a holding limit to constrain all native credits.
+    #[norito_schema(name = "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability")]
     pub struct SetAssetTransferAvailability {
         /// Controlled account.
         pub account_id: AccountId,
@@ -37,6 +38,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::asset_transfer_control::SetAssetHoldingLimit")]
     pub struct SetAssetHoldingLimit {
         /// Controlled account.
         pub account_id: AccountId,
@@ -48,6 +50,7 @@ isi! {
 }
 isi! {
     /// Blacklist or clear outbound transfers for an account on one asset definition.
+    #[norito_schema(name = "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist")]
     pub struct SetAssetTransferBlacklist {
         /// Controlled account.
         pub account_id: AccountId,
@@ -59,6 +62,7 @@ isi! {
 }
 isi! {
     /// Replace calendar-window outbound transfer caps for an account on one asset definition.
+    #[norito_schema(name = "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl")]
     pub struct SetAssetTransferControl {
         /// Controlled account.
         pub account_id: AccountId,

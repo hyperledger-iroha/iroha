@@ -2450,8 +2450,27 @@ impl norito::json::JsonDeserialize for PublicKey {
         };
         Self::from_canonical_str_for_decode(value).map_err(public_key_json_decode_error)
     }
+}
+impl norito::json::JsonObjectKey for PublicKey {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self.normalize_lossy();
+        visitor(&canonical)
+    }
 
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), norito::json::BoundedJsonError>,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        self.structural_components()
+            .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
+        norito::json::visit_json_display_text(self, visitor)
+    }
+}
+impl norito::json::JsonObjectKeyOwned for PublicKey {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         Self::from_canonical_str_for_decode(key).map_err(public_key_json_decode_error)
     }
 }

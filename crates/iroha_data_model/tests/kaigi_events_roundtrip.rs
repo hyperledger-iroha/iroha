@@ -1,5 +1,6 @@
 //! Roundtrip coverage for Kaigi domain event summaries.
 use iroha_crypto::{Hash, KeyPair};
+use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     events::data::prelude::{
         KaigiRelayRegistrationSummary, KaigiRelayUnregistrationSummary, KaigiStatusSummary,
@@ -64,8 +65,7 @@ fn usage_summary_roundtrips_via_norito() {
 #[test]
 fn participant_commitment_roundtrip_preserves_payload() {
     let commitment = KaigiParticipantCommitment {
-        commitment: Hash::prehashed([0xAA; 32]),
-        alias_tag: Some("speaker".to_owned()),
+        commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x2A; 32]).unwrap(),
     };
     let bytes = commitment.encode();
     let decoded =

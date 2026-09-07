@@ -180,7 +180,7 @@ pub(super) async fn run() -> Result<()> {
                 .map(|peer| {
                     let blocks = peer
                         .client()
-                        .query(FindBlocks)
+                        .client().query(FindBlocks)
                         .execute_all()
                         .wrap_err_with(|| format!("query blocks from {}", peer.mnemonic()))?;
                     let latest = blocks
@@ -265,7 +265,7 @@ pub(super) async fn run() -> Result<()> {
             {
                 let blocks = network
                     .client()
-                    .query(FindBlocks)
+                    .client().query(FindBlocks)
                     .execute_all()
                     .wrap_err("query delayed baseline work")?;
                 let delayed = blocks
@@ -318,14 +318,19 @@ pub(super) async fn run() -> Result<()> {
             );
         }
         let client = network.client();
-        let external_transaction = client.build_transaction(
+        let external_transaction ={
+    let account = client.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(Log::new(
                 Level::INFO,
                 "proposal-work external transaction".to_owned(),
             ))],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
-        );
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
         let external_entrypoint = external_transaction.hash_as_entrypoint();
         client
             .submit_transaction(&external_transaction)
@@ -334,7 +339,7 @@ pub(super) async fn run() -> Result<()> {
         wait_for_converged_height(&network, external_height, PROGRESS_TIMEOUT).await?;
         let mut external_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {
-            let blocks = peer.client().query(FindBlocks).execute_all()?;
+            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
             let matches = blocks
                 .iter()
                 .filter(|block| {
@@ -382,11 +387,16 @@ pub(super) async fn run() -> Result<()> {
             )
             .expect("one-shot PreCommit trigger is a valid action"),
         );
-        let registration_transaction = client.build_transaction(
+        let registration_transaction ={
+    let account = client.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(Register::trigger(trigger))],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
-        );
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
         let registration_entrypoint = registration_transaction.hash_as_entrypoint();
         client
             .submit_transaction(&registration_transaction)
@@ -397,7 +407,7 @@ pub(super) async fn run() -> Result<()> {
         let mut registration_block_hash = None;
         let mut internal_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {
-            let blocks = peer.client().query(FindBlocks).execute_all()?;
+            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
             let registration_matches = blocks
                 .iter()
                 .filter(|block| {
@@ -452,7 +462,7 @@ pub(super) async fn run() -> Result<()> {
                 internal_block_hash = Some(trigger_block.hash());
             }
         }
-        let alice = client.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+        let alice = client.client().query_single(FindAccountById::new(ALICE_ID.clone()))?;
         ensure!(
             alice.metadata().get(&marker_key) == Some(&marker_value),
             "one-shot PreCommit carrier did not apply its queryable state effect"

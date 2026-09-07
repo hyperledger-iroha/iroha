@@ -14,7 +14,12 @@ fn get_sumeragi_status_rejects_unknown_json_fields() {
         .unwrap();
     let result = with_mock_http(
         respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-        || client.get_sumeragi_status(),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_sumeragi_status()
+        },
     );
     assert!(result.is_err(), "unknown status fields must be rejected");
 
@@ -26,7 +31,12 @@ fn get_sumeragi_status_rejects_unknown_json_fields() {
         .unwrap();
     let result = with_mock_http(
         respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-        || client.get_sumeragi_status(),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_sumeragi_status()
+        },
     );
     assert!(
         result.is_err(),
@@ -44,7 +54,12 @@ fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
         .unwrap();
     let result = with_mock_http(
         respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-        || client.get_sumeragi_diagnostics(),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_sumeragi_diagnostics()
+        },
     );
     assert!(
         result.is_err(),
@@ -52,8 +67,7 @@ fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
     );
 
     let (diagnostics, _) = sample_sumeragi_status_with_relay();
-    let mut value =
-        norito::json::to_value(&diagnostics).expect("serialize diagnostics fixture");
+    let mut value = norito::json::to_value(&diagnostics).expect("serialize diagnostics fixture");
     value
         .as_object_mut()
         .expect("diagnostics object")
@@ -65,7 +79,12 @@ fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
         .unwrap();
     let result = with_mock_http(
         respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-        || client.get_sumeragi_diagnostics(),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_sumeragi_diagnostics()
+        },
     );
     assert!(
         result.is_err(),
@@ -75,14 +94,16 @@ fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
     let response = HttpResponse::builder()
         .status(StatusCode::OK)
         .header("content-type", APPLICATION_JSON)
-        .body(
-            norito::json::to_vec(&sample_sumeragi_status())
-                .expect("encode status-shaped JSON"),
-        )
+        .body(norito::json::to_vec(&sample_sumeragi_status()).expect("encode status-shaped JSON"))
         .unwrap();
     let result = with_mock_http(
         respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-        || client.get_sumeragi_diagnostics(),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_sumeragi_diagnostics()
+        },
     );
     assert!(
         result.is_err(),

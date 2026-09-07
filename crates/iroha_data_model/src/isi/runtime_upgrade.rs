@@ -4,6 +4,7 @@ use crate::runtime::RuntimeUpgradeId;
 use norito::json::{FastJsonWrite, JsonSerialize};
 isi! {
     /// Propose a runtime upgrade by submitting a manifest.
+    #[norito_schema(name = "iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade")]
     pub struct ProposeRuntimeUpgrade {
         /// Canonical V1 manifest bytes encoded as Norito JSON/binary at admission time.
         pub manifest_bytes: Vec<u8>,
@@ -11,6 +12,7 @@ isi! {
 }
 isi! {
     /// Activate a previously proposed runtime upgrade at the window start height.
+    #[norito_schema(name = "iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade")]
     pub struct ActivateRuntimeUpgrade {
         /// Content-address (blake2b32) of the canonical manifest bytes.
         pub id: RuntimeUpgradeId,
@@ -18,6 +20,7 @@ isi! {
 }
 isi! {
     /// Cancel a proposed runtime upgrade prior to its start height.
+    #[norito_schema(name = "iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade")]
     pub struct CancelRuntimeUpgrade {
         /// Content-address (blake2b32) of the canonical manifest bytes.
         pub id: RuntimeUpgradeId,

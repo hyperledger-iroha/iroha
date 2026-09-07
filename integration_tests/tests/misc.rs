@@ -2,7 +2,7 @@
 //! Miscellaneous integration coverage for status endpoints and helpers.
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{client, data_model::prelude::*};
+use iroha::{blocking, data_model::prelude::*};
 use iroha_test_network::*;
 use iroha_torii_shared::status::Status;
 use sandbox::start_network_async_or_skip;
@@ -15,10 +15,10 @@ fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
         && lhs.txs_rejected == rhs.txs_rejected
         && lhs.view_changes == rhs.view_changes
 }
-async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()> {
+async fn check(client: &blocking::Client, min_blocks_non_empty: u64) -> Result<()> {
     let http = integration_tests::http::client();
     let body = http
-        .get(client.torii_url.join("/status").unwrap())
+        .get(client.client().torii_url.join("/status").unwrap())
         .header("Accept", "application/json")
         .send()
         .await?
@@ -28,7 +28,7 @@ async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()>
         .map_err(|err| eyre::Report::msg(format!("decode status JSON: {err}")))?;
     let status_norito = {
         let client = client.clone();
-        spawn_blocking(move || client.get_status()).await??
+        spawn_blocking(move || client.client().get_status()).await??
     };
     assert!(status_eq_excluding_uptime_and_queue(
         &status_json,
@@ -60,8 +60,8 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         let client = client.clone();
         spawn_blocking(move || {
             let domain: DomainId = DomainId::try_new("lookingglass", "universal")?;
-            client.submit_blocking(
-                domain_setup_instruction(&domain, &client.account)?,
+            client.submit(
+                domain_setup_instruction(&domain, &client.client().account)?,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
         })
@@ -78,14 +78,14 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
     check(&client, 2).await?;
     // get_server_version
     let response =
-        tokio::task::spawn_blocking(move || client.get_server_version().unwrap()).await?;
+        tokio::task::spawn_blocking(move || client.client().get_server_version().unwrap()).await?;
     let version: u64 = response
         .parse()
         .expect("server API version should be a positive integer");
     assert!(version >= 1);
     // status_with_norito_accept_header
     let http = integration_tests::http::client();
-    let url = network.client().torii_url.join("/status").unwrap();
+    let url = network.client().client().torii_url.join("/status").unwrap();
     let resp = http
         .get(url)
         .header("Accept", "application/x-norito")

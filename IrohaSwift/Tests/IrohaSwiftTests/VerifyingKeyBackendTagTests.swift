@@ -71,7 +71,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testVerifierRegistryAcceptsOnlyPinnedRustProfiles() throws {
         let supported = [
             "halo2/ipa",
-            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kaigi-authorization-v1",
             "halo2/pasta/kaigi-usage-v1",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -82,6 +82,8 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
 
         for label in supported {
             XCTAssertTrue(VerifierBackendRegistryLabels.isSupported(label), label)
+            XCTAssertTrue(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label), label)
+            XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .production)
             XCTAssertEqual(
                 try VerifierBackendRegistryLabels.requireSupported(label),
                 label
@@ -92,6 +94,8 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testVerifierRegistryRejectsAliasesRetiredProfilesAndConfusables() {
         let rejected: [String?] = [
             nil,
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "",
             " ",
             " halo2/ipa",
@@ -201,6 +205,8 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     func testProductionVerifierBackendClassifierRejectsUnsafeLabels() {
         let rejected = [
             "",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "unknown/privacy/backend",
             "halo2/unknown-native-v1",
             " halo2/ipa",

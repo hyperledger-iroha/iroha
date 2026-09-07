@@ -1,5 +1,6 @@
 //! Adversarial witnesses and real proof coverage for the complete V1 relation.
 use super::*;
+use halo2_proofs::poly::{VerificationStrategy, commitment::ParamsProver};
 use halo2_proofs::{
     dev::MockProver,
     halo2curves::pasta::EqAffine,
@@ -76,6 +77,56 @@ fn reject_words(words: [Scalar; CONTEXT_WORDS]) {
 }
 
 #[test]
+fn framed_sponge_matches_independent_poseidon_primitive() {
+    use poseidon_primitives::poseidon::primitives::{ConstantLength, Hash};
+    let primitive = Hash::<Scalar, crate::KaigiPoseidonSpec, ConstantLength<2>, 3, 2>::init();
+    for domain in [DOMAIN_COMMITMENT, DOMAIN_NULLIFIER, DOMAIN_AUTHORIZATION] {
+        for length in 0..=33 {
+            let payload: Vec<_> = (0..length)
+                .map(|i| blinding() + Scalar::from(i as u64))
+                .collect();
+            // Separate complete-frame construction and the dependency's own
+            // permutation implementation, rather than the circuit round helper.
+            let mut frame = vec![Scalar::from(length as u64)];
+            frame.extend_from_slice(&payload);
+            frame.push(Scalar::ONE);
+            if frame.len() % 2 != 0 {
+                frame.push(Scalar::ZERO);
+            }
+            let mut state = [Scalar::ZERO, Scalar::ZERO, Scalar::from(domain)];
+            for pair in frame.chunks_exact(2) {
+                state[0] += pair[0];
+                state[1] += pair[1];
+                primitive.permute(&mut state);
+            }
+            assert_eq!(
+                sponge(domain, &payload),
+                state[0],
+                "domain={domain:x}, length={length}"
+            );
+        }
+    }
+    let context = context(KaigiAuthorizationActionV1::Join);
+    let outputs = compute_authorization_v1(&context, &witness(blinding())).unwrap();
+    let hex = outputs.canonical_bytes().map(|bytes| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    });
+    // Derived only after the complete-frame implementation above matched the
+    // dependency's independently implemented permutation for all frame lengths.
+    assert_eq!(
+        hex,
+        [
+            "3b89d88b663dcfe20558d2a7cf7e0c9eda724fc2eca44b8531f10dcda3e2572f",
+            "8ea7a9e034a95dc3af08f4d49bce71c17345b5d8d82e4e776977038b2cbb983d",
+            "37781fcab0765cd1663bbc2b9f248bd8c793e1589feb4dfafe9f387bdf459112",
+        ]
+    );
+}
+
+#[test]
 fn all_four_roles_satisfy_the_same_fixed_circuit() {
     for action in [
         KaigiAuthorizationActionV1::HostCreate,
@@ -86,13 +137,17 @@ fn all_four_roles_satisfy_the_same_fixed_circuit() {
         let context = context(action);
         let witness = witness(blinding());
         let outputs = compute_authorization_v1(&context, &witness).unwrap();
-        assert!(
-            check(
-                &KaigiAuthorizationCircuitV1::new(context, witness).unwrap(),
-                KaigiAuthorizationPublicInputsV1 { context, outputs }.instance()
-            ),
-            "{action:?}"
-        );
+        MockProver::run(
+            KAIGI_AUTHORIZATION_CIRCUIT_K_V1,
+            &KaigiAuthorizationCircuitV1::new(context, witness).unwrap(),
+            vec![
+                KaigiAuthorizationPublicInputsV1 { context, outputs }
+                    .instance()
+                    .to_vec(),
+            ],
+        )
+        .unwrap()
+        .assert_satisfied();
         assert_eq!(
             outputs.canonical_bytes(),
             [

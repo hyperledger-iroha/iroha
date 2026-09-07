@@ -3,7 +3,8 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, QueryError},
+    blocking::Client,
+    client::QueryError,
     data_model::{prelude::*, query::builder::SingleQueryError},
 };
 use iroha_test_network::submit_ensure_domain_for_network;
@@ -47,7 +48,7 @@ fn find_asset_total_quantity() -> Result<()> {
             .skip(1) // Alice has already been registered in genesis
             .map(|(_index, account_id)| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
-        test_client.submit_all_blocking(
+        test_client.submit_all(
             register_accounts,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -106,7 +107,7 @@ fn test_total_quantity(
             None,
         )
     };
-    test_client.submit_blocking(
+    test_client.submit(
         Register::asset_definition(asset_definition),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -134,6 +135,7 @@ fn test_total_quantity(
         let mut last_err = None;
         for attempt in 1..=MAX_ATTEMPTS {
             match test_client
+                .client()
                 .query(FindAssetsDefinitions::new())
                 .execute_all()
             {
@@ -171,7 +173,7 @@ fn test_total_quantity(
         mint_and_burn_assets.push(Mint::asset_quantity(to_mint.clone(), asset_id.clone()).into());
         mint_and_burn_assets.push(Burn::asset_quantity(to_burn.clone(), asset_id).into());
     }
-    test_client.submit_all_blocking(
+    test_client.submit_all(
         mint_and_burn_assets,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -180,6 +182,7 @@ fn test_total_quantity(
     let total_asset_quantity = observed_after_burn;
     let log_balances = |stage: &str, definition_total: &Quantity| -> Result<Quantity> {
         let assets = test_client
+            .client()
             .query(FindAssets::new())
             .execute_all()
             .map_err(|e| eyre!("failed to fetch assets: {e}"))?;
@@ -224,7 +227,7 @@ fn test_total_quantity(
     }
     assert_eq!(expected_total_asset_quantity, &total_asset_quantity);
     // Unregister asset definition
-    test_client.submit_blocking(
+    test_client.submit(
         Unregister::asset_definition(definition_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -257,7 +260,10 @@ fn test_total_quantity(
             last_value
         ));
     }
-    let remaining_assets = test_client.query(FindAssets::new()).execute_all()?;
+    let remaining_assets = test_client
+        .client()
+        .query(FindAssets::new())
+        .execute_all()?;
     assert!(
         remaining_assets
             .iter()

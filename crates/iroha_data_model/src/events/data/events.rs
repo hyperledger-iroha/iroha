@@ -22,6 +22,7 @@ macro_rules! data_event {
                 EventSet,
                 Decode,
                 Encode,
+                norito::NoritoSchema,
                 iroha_schema::IntoSchema,
             )]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -201,6 +202,8 @@ mod asset {
     data_event! {
         #[has_origin(origin = Asset)]
         /// Event describing changes to an individual asset.
+        #[norito_schema(name = "iroha_data_model::events::data::events::asset::AssetEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::asset::AssetEventSet")]
         pub enum AssetEvent {
             #[has_origin(asset => asset.id())]
             /// Asset instance was created.
@@ -230,6 +233,8 @@ mod asset {
     data_event! {
         #[has_origin(origin = AssetDefinition)]
         /// Event describing lifecycle of an asset definition.
+        #[norito_schema(name = "iroha_data_model::events::data::events::asset::AssetDefinitionEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::asset::AssetDefinitionEventSet")]
         pub enum AssetDefinitionEvent {
             #[has_origin(asset_definition => asset_definition.id())]
             /// Asset definition was registered.
@@ -433,6 +438,8 @@ pub mod bridge {
     data_event! {
         /// Bridge lane events
         #[has_origin(origin = LaneId)]
+        #[norito_schema(name = "iroha_data_model::events::data::events::bridge::BridgeEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::bridge::BridgeEventSet")]
         pub enum BridgeEvent {
             /// Emitted when a bridge receipt is recorded
             #[has_origin(receipt => &receipt.lane)]
@@ -453,6 +460,8 @@ mod nft {
     data_event! {
         #[has_origin(origin = Nft)]
         /// Event describing lifecycle changes for a single NFT.
+        #[norito_schema(name = "iroha_data_model::events::data::events::nft::NftEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::nft::NftEventSet")]
         pub enum NftEvent {
             #[has_origin(nft => nft.id())]
             /// NFT was created.
@@ -498,6 +507,8 @@ mod rwa {
     data_event! {
         #[has_origin(origin = Rwa)]
         /// Event describing lifecycle changes for a single RWA lot.
+        #[norito_schema(name = "iroha_data_model::events::data::events::rwa::RwaEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::rwa::RwaEventSet")]
         pub enum RwaEvent {
             #[has_origin(rwa => rwa.id())]
             /// Lot was created.
@@ -630,6 +641,8 @@ mod peer {
     data_event! {
         #[has_origin(origin = Peer)]
         /// Event emitted when peers join or leave the network view.
+        #[norito_schema(name = "iroha_data_model::events::data::events::peer::PeerEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::peer::PeerEventSet")]
         pub enum PeerEvent {
             /// A peer joined the topology.
             Added(PeerId),
@@ -646,6 +659,8 @@ mod role {
     data_event! {
         #[has_origin(origin = Role)]
         /// Event describing role lifecycle and permissions.
+        #[norito_schema(name = "iroha_data_model::events::data::events::role::RoleEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::role::RoleEventSet")]
         pub enum RoleEvent {
             #[has_origin(role => role.id())]
             /// Role was created.
@@ -699,6 +714,8 @@ mod account {
     data_event! {
         #[has_origin(origin = Account)]
         /// Event describing changes applied to an account.
+        #[norito_schema(name = "iroha_data_model::events::data::events::account::AccountEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::account::AccountEventSet")]
         pub enum AccountEvent {
             #[has_origin(account => account.account.id())]
             /// Account was created.
@@ -737,6 +754,8 @@ mod account {
     data_event! {
         #[has_origin(origin = Account)]
         /// Account social-recovery lifecycle event.
+        #[norito_schema(name = "iroha_data_model::events::data::events::account::AccountRecoveryEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::account::AccountRecoveryEventSet")]
         pub enum AccountRecoveryEvent {
             #[has_origin(event => &event.account)]
             /// Recovery policy was set or replaced.
@@ -922,6 +941,8 @@ mod repo_account {
     data_event! {
         #[has_origin(origin = Account)]
         /// Repo agreement lifecycle event emitted for a specific account perspective.
+        #[norito_schema(name = "iroha_data_model::events::data::events::repo_account::RepoAccountEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::repo_account::RepoAccountEventSet")]
         pub enum RepoAccountEvent {
             #[has_origin(initiated => &initiated.account)]
             /// The account participated in a newly initiated repo agreement.
@@ -1088,6 +1109,8 @@ mod domain {
     data_event! {
         #[has_origin(origin = Domain)]
         /// Event describing changes within a domain.
+        #[norito_schema(name = "iroha_data_model::events::data::events::domain::DomainEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::domain::DomainEventSet")]
         pub enum DomainEvent {
             #[has_origin(domain => domain.id())]
             /// Domain was created.
@@ -2111,6 +2134,8 @@ mod trigger {
     data_event! {
         #[has_origin(origin = Trigger)]
         /// Event describing trigger lifecycle updates.
+        #[norito_schema(name = "iroha_data_model::events::data::events::trigger::TriggerEvent")]
+        #[event_set(schema_name = "iroha_data_model::events::data::events::trigger::TriggerEventSet")]
         pub enum TriggerEvent {
             /// Trigger was created.
             Created(TriggerId),
@@ -2209,6 +2234,9 @@ mod config {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         /// Event emitted when a configuration parameter changes.
+        #[event_set(
+            schema_name = "iroha_data_model::events::data::events::config::model::ConfigurationEventSet"
+        )]
         pub enum ConfigurationEvent {
             /// Configuration parameter value changed.
             Changed(ParameterChanged),
@@ -2252,6 +2280,9 @@ mod executor {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
         #[repr(transparent)]
         /// Event emitted when the executor data model is upgraded.
+        #[event_set(
+            schema_name = "iroha_data_model::events::data::events::executor::model::ExecutorEventSet"
+        )]
         pub enum ExecutorEvent {
             /// Executor data model was upgraded.
             Upgraded(ExecutorUpgrade),

@@ -140,11 +140,12 @@ use iroha_data_model::{
     block::{
         AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
+            CertPhase, LaneBlockCertificateV1, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
             LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
+            NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            compute_native_amx_participant_settlement_hash,
         },
         consensus_v2 as wire, decode_versioned_signed_block,
     },
@@ -1247,7 +1248,7 @@ impl NativeRequestSlotKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NativeRequestSlotClaim {
     participant_proposal_hash: Hash,
-    participant_settlement_commitment: Hash,
+    participant_settlement_commitment: HashOf<NativeAmxParticipantSettlement>,
 }
 impl NativeRequestSlotClaim {
     const fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
@@ -1260,7 +1261,7 @@ impl NativeRequestSlotClaim {
 #[derive(Clone, Debug)]
 struct NativeParticipantControl {
     proposal: LaneBlockProposalV1,
-    settlement: LaneBlockCommitment,
+    settlement: NativeAmxParticipantSettlement,
 }
 type NativeParticipantControlMap = BTreeMap<(LaneId, DataSpaceId), NativeParticipantControl>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1871,6 +1872,62 @@ fn validate_winning_lane_qc(
         return Err("winning lane QC differs from the exact durable proposal".to_owned());
     }
     validate_lane_block_qc_aggregate(qc, signer_pops).map_err(|error| error.to_string())
+}
+/// Match a terminal replay's execution role to its exact canonical payload.
+fn validate_terminal_autonomous_availability(
+    phase: CertPhase,
+    actual: Option<&iroha_data_model::block::consensus::LanePayloadAvailabilityBodyV1>,
+    payload: &LaneExecutablePayloadV1,
+) -> Result<(), String> {
+    match (phase, actual) {
+        (CertPhase::Prepare, Some(actual)) => {
+            let expected = lane_payload_availability_body(
+                payload,
+                &payload.origin_proposal,
+                payload.network_id,
+                payload.epoch,
+            )
+            .map_err(|error| error.to_string())?;
+            if *actual != expected {
+                return Err(
+                    "terminal autonomous READY differs from its canonical payload".to_owned(),
+                );
+            }
+            Ok(())
+        }
+        (CertPhase::Commit, None) => Ok(()),
+        _ => Err("terminal autonomous message has an invalid execution role".to_owned()),
+    }
+}
+/// Authenticate a completed proposal's vote without creating a live session.
+fn validate_terminal_autonomous_vote(
+    vote: &LaneBlockVoteV1,
+    payload: &LaneExecutablePayloadV1,
+) -> Result<(), String> {
+    crate::lane_consensus::validate_vote_matches_proposal(vote, &payload.origin_proposal)
+        .map_err(|error| error.to_string())?;
+    vote.validate_ingress(vote.body.phase)
+        .map_err(|error| error.to_string())?;
+    validate_terminal_autonomous_availability(
+        vote.body.phase,
+        vote.payload_availability_vote
+            .as_ref()
+            .map(|ready| &ready.body),
+        payload,
+    )
+}
+/// Authenticate a completed proposal's QC without creating a live session or lock.
+fn validate_terminal_autonomous_qc(
+    qc: &LaneBlockQcV1,
+    payload: &LaneExecutablePayloadV1,
+    signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(), String> {
+    validate_winning_lane_qc(qc, &payload.origin_proposal, signer_pops)?;
+    validate_terminal_autonomous_availability(
+        qc.body.phase,
+        qc.payload_availability_qc.as_ref().map(|ready| &ready.body),
+        payload,
+    )
 }
 /// Bind the certificate's execution role to the kind of canonical anchor.
 ///
@@ -6503,6 +6560,7 @@ impl V2LaneWorkAdapter {
         // ownerships at the rollover boundary so a validator which missed the
         // lane CommitQC retains a bounded proposal source for certificate
         // recovery instead of waiting forever with an already-applied block.
+        self.retire_applied_autonomous_sessions()?;
         self.hydrate_canonical_lane_artifacts()?;
         self.collect_committed_lane_sessions();
         let mut sessions = self
@@ -12936,6 +12994,19 @@ impl V2LaneWorkAdapter {
         {
             return V2LaneIngressOutcome::Rejected;
         }
+        if let Some(payload) = finalized_payload.as_ref()
+            && self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(
+                    &payload.origin_proposal,
+                )
+        {
+            return if validate_terminal_autonomous_vote(&vote, payload).is_ok() {
+                V2LaneIngressOutcome::Duplicate
+            } else {
+                V2LaneIngressOutcome::Rejected
+            };
+        }
         let mut next_sessions = self.lane_sessions.clone();
         let observer_proposal = match self.hydrate_finalized_autonomous_observer_session(
             &mut next_sessions,
@@ -12972,6 +13043,19 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         }
         let pops = self.pops_for_lane_qc(&qc);
+        if let Some(payload) = finalized_payload.as_ref()
+            && self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(
+                    &payload.origin_proposal,
+                )
+        {
+            return if validate_terminal_autonomous_qc(&qc, payload, &pops).is_ok() {
+                V2LaneIngressOutcome::Duplicate
+            } else {
+                V2LaneIngressOutcome::Rejected
+            };
+        }
         let mut next_sessions = self.lane_sessions.clone();
         let observer_proposal = match self.hydrate_finalized_autonomous_observer_session(
             &mut next_sessions,
@@ -13097,6 +13181,23 @@ impl V2LaneWorkAdapter {
         if finalized_payload
             .as_ref()
             .is_some_and(|payload| payload.origin_proposal != proposal)
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if let Some(payload) = finalized_payload.as_ref()
+            && [
+                (&prepare_qc, CertPhase::Prepare),
+                (&commit_qc, CertPhase::Commit),
+            ]
+            .into_iter()
+            .any(|(qc, phase)| {
+                validate_terminal_autonomous_availability(
+                    phase,
+                    qc.payload_availability_qc.as_ref().map(|ready| &ready.body),
+                    payload,
+                )
+                .is_err()
+            })
         {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -13343,7 +13444,108 @@ impl V2LaneWorkAdapter {
                     .is_some_and(|proposal| proposal.descriptor.validator_set == qc.validator_set)
         }
     }
+    /// Retire only cache slots whose exact autonomous application is proven.
+    ///
+    /// Resolve the bounded retained inventory against public finalized carriers
+    /// and read-only certified slots. Missing authority preserves its owner;
+    /// corrupt authority or a conflicting quorum fails before any mutation.
+    /// Output queues retain their separate handoff ownership.
+    fn retire_applied_autonomous_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
+        let mut candidates = Vec::new();
+        for body in self.lane_sessions.retained_vote_bodies() {
+            if let Some(payload) = self
+                .canonical_finalized_autonomous_payload_for_vote_body(&body)
+                .map_err(V2LaneWorkError::Persistence)?
+            {
+                candidates.push(payload.origin_proposal);
+            }
+        }
+        // Drained sessions can leave signer locks without a retained vote body.
+        // An absent active namespace cannot supply authority for those locks.
+        let nexus = self.state.nexus_snapshot();
+        for (lane_id, lane_block_height) in self.lane_sessions.rollover_slots() {
+            if !nexus
+                .lane_config
+                .entries()
+                .iter()
+                .any(|entry| entry.lane_id == lane_id)
+            {
+                continue;
+            }
+            let Some(artifact) = self.consensus_storage_read(
+                self.kura
+                    .read_certified_lane_block_artifact_read_only(lane_id, lane_block_height),
+            )?
+            else {
+                continue;
+            };
+            Kura::validate_certified_lane_block_artifact(&artifact)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_owned()))?;
+            if artifact.prepare_qc.payload_availability_qc.is_none() {
+                continue;
+            }
+            if let Some(payload) = self
+                .canonical_finalized_autonomous_payload_for_proposal(&artifact.proposal)
+                .map_err(V2LaneWorkError::Persistence)?
+            {
+                for qc in [&artifact.prepare_qc, &artifact.commit_qc] {
+                    validate_terminal_autonomous_availability(
+                        qc.body.phase,
+                        qc.payload_availability_qc.as_ref().map(|ready| &ready.body),
+                        &payload,
+                    )
+                    .map_err(V2LaneWorkError::Persistence)?;
+                }
+                candidates.push(artifact.proposal);
+            }
+        }
+        let mut applied = BTreeMap::new();
+        for proposal in candidates {
+            if !self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(&proposal)
+            {
+                continue;
+            }
+            let key = AutonomousLanePayloadKey::from(&proposal);
+            if applied
+                .get(&key)
+                .is_some_and(|existing| existing != &proposal)
+            {
+                return Err(V2LaneWorkError::Persistence(
+                    "canonical applied autonomous proposals conflict at one exact slot".to_owned(),
+                ));
+            }
+            applied.insert(key, proposal);
+        }
+        let proposals = applied.values().cloned().collect::<Vec<_>>();
+        let retired = self
+            .lane_sessions
+            .retire_applied_proposals(&proposals)
+            .map_err(|error| {
+                V2LaneWorkError::Persistence(format!(
+                    "applied autonomous lane retirement conflicts with retained evidence: {error}"
+                ))
+            })?;
+        self.lane_ready_authorizations.retain(|key, _| {
+            !applied.contains_key(&AutonomousLanePayloadKey {
+                lane_id: key.lane_id,
+                dataspace_id: key.dataspace_id,
+                lane_incarnation: key.lane_incarnation,
+                lane_block_height: key.lane_block_height,
+            })
+        });
+        for key in applied.into_keys() {
+            self.discard_volatile_autonomous_payload(key);
+        }
+        Ok(retired)
+    }
     fn drive_lane_sessions(&mut self) {
+        if let Err(error) = self.retire_applied_autonomous_sessions() {
+            iroha_logger::error!(%error, "applied autonomous lane cache retirement failed closed");
+            self.output_guard.close_admission_for_restart();
+            return;
+        }
         self.prune_lane_ready_authorizations();
         let proposals = self
             .lane_sessions
@@ -14314,10 +14516,18 @@ impl V2LaneWorkAdapter {
         let historical = self
             .historical_autonomous_recovery_record_for_proposal(proposal)
             .is_some();
-        let finalized_observer = !self.local_can_own_autonomous_payload(proposal)
+        let finalized_autonomous = self
+            .canonical_finalized_autonomous_payload_for_proposal(proposal)
+            .is_ok_and(|payload| payload.is_some());
+        let finalized_observer =
+            !self.local_can_own_autonomous_payload(proposal) && finalized_autonomous;
+        if (historical || self.autonomous_payload_is_expected_for(proposal) || finalized_autonomous)
             && self
-                .canonical_finalized_autonomous_payload_for_proposal(proposal)
-                .is_ok_and(|payload| payload.is_some());
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(proposal)
+        {
+            return false;
+        }
         if proposal.descriptor.proposal_height != self.context.height
             && !historical
             && !finalized_observer
@@ -15170,9 +15380,6 @@ impl V2LaneWorkAdapter {
                     key.reservation_owner_hash != reservation_identity.0
                         || key.proposal_identity_hash != reservation_identity.1
                 })
-                || !self
-                    .state
-                    .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(origin)
             {
                 return Err(
                     "finalized autonomous carrier contains a context-invalid payload".to_owned(),
@@ -15189,6 +15396,23 @@ impl V2LaneWorkAdapter {
                 })?;
             let proposal = &payload.origin_proposal;
             let descriptor = &proposal.descriptor;
+            // A completed source can outlive its predecessor receipt and frontier.
+            // Check the fully attached proposal so an exact historical merge receipt
+            // remains usable after the replicated frontier advances again.
+            if !self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(proposal)
+                && !self
+                    .state
+                    .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
+                        proposal,
+                    )
+            {
+                return Err(
+                    "finalized autonomous carrier has neither exact application nor an applied predecessor"
+                        .to_owned(),
+                );
+            }
             if !proposal_hashes.insert(proposal.proposal_hash) {
                 return Err(
                     "finalized carrier repeats a proposal across ordinary/autonomous payloads"
@@ -16083,7 +16307,7 @@ impl V2LaneWorkAdapter {
                     timestamp_ms: self.context.height,
                 })
                 .collect::<Vec<_>>();
-            let settlement = LaneBlockCommitment {
+            let settlement = NativeAmxParticipantSettlement {
                 block_height: proposal.descriptor.lane_block_height,
                 lane_id: route.lane_id,
                 lane_incarnation: participant_lane_incarnation,
@@ -16096,7 +16320,6 @@ impl V2LaneWorkAdapter {
                 swap_metadata: None,
                 receipts,
                 nexus_fee_receipts: Vec::new(),
-                native_amx_receipts: Vec::new(),
             };
             controls.insert(
                 (route.lane_id, route.dataspace_id),
@@ -16188,7 +16411,7 @@ impl V2LaneWorkAdapter {
             }
             let participant_settlement = participant_control.settlement.clone();
             let participant_settlement_hash =
-                iroha_data_model::nexus::compute_settlement_hash(&participant_settlement).ok()?;
+                compute_native_amx_participant_settlement_hash(&participant_settlement).ok()?;
             let prepare_body = NativeAmxAttestationBodyV2 {
                 round,
                 epoch: self.context.epoch,
@@ -16210,7 +16433,7 @@ impl V2LaneWorkAdapter {
                 participant_lane_block_height: participant_descriptor.lane_block_height,
                 participant_lane_block_view: participant_descriptor.lane_block_view,
                 participant_proposal_hash: participant_proposal.proposal_hash,
-                participant_settlement_commitment: Hash::from(participant_settlement_hash),
+                participant_settlement_commitment: participant_settlement_hash,
                 participant_validator_set_hash: HashOf::new(&validators),
                 participant_validator_count: u32::try_from(validators.len()).ok()?,
                 participant_min_quorum: u32::try_from(min_signers).ok()?,
@@ -16348,9 +16571,7 @@ impl V2LaneWorkAdapter {
                 dataspace_id: participant.route.dataspace_id,
                 participant_proposal: commit_request.participant_proposal,
                 participant_settlement: commit_request.participant_settlement,
-                participant_settlement_hash: HashOf::from_untyped_unchecked(
-                    commit_body.participant_settlement_commitment,
-                ),
+                participant_settlement_hash: commit_body.participant_settlement_commitment,
                 prepare_qc,
                 commit_qc,
             });
@@ -27102,7 +27323,9 @@ pub(super) mod tests {
             participant_lane_block_height: 1,
             participant_lane_block_view: 0,
             participant_proposal_hash: Hash::new(b"native-amx-test-participant-proposal"),
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -27161,10 +27384,9 @@ pub(super) mod tests {
         let participant_settlement = body
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
-        body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("fixture native AMX settlement hash"),
-        );
+        body.participant_settlement_commitment =
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         let mut participant_proposal = proposal.clone();
         participant_proposal.payload_block_hint = None;
         NativeAmxAttestationRequestV2 {
@@ -27280,10 +27502,9 @@ pub(super) mod tests {
         let participant_settlement = body
             .computed_grouped_participant_settlement(&[body.source_id])
             .expect("single-source distinct-participant settlement is valid");
-        body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("fixture distinct-participant settlement hash"),
-        );
+        body.participant_settlement_commitment =
+            compute_native_amx_participant_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement encodes canonically");
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),

@@ -24,88 +24,80 @@ mod model {
 }
 impl ncore::NoritoSerialize for Metadata {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let len = self.0.len();
-        ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(writer, len as u64)?;
+        ncore::write_seq_len(
+            writer,
+            u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?,
+        )?;
         if ncore::use_packed_seq() {
-            let mut offsets: Vec<u64> = Vec::with_capacity(len + 1);
-            let mut data = Vec::new();
-            let mut entry_buf = Vec::new();
-            let mut total: u64 = 0;
+            let allocation_bytes = self
+                .0
+                .len()
+                .checked_mul(core::mem::size_of::<usize>())
+                .and_then(|bytes| u64::try_from(bytes).ok())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let mut lengths = Vec::new();
+            lengths.try_reserve_exact(self.0.len()).map_err(|_| {
+                ncore::Error::AllocationFailed {
+                    bytes: allocation_bytes,
+                }
+            })?;
             for (name, json) in &self.0 {
-                offsets.push(total);
-                entry_buf.clear();
-                serialize_entry(&mut entry_buf, name, json)?;
-                total = total.wrapping_add(entry_buf.len() as u64);
-                data.extend_from_slice(&entry_buf);
+                lengths.push(ncore::encoded_payload_len(&MetadataEntryRef(name, json))?);
             }
-            offsets.push(total);
-            let mut offs_bytes = Vec::with_capacity(offsets.len() * 8);
-            for off in offsets {
-                offs_bytes.extend_from_slice(&off.to_le_bytes());
+            ncore::note_fixed_offsets_emitted();
+            ncore::write_fixed_offsets(writer, &lengths)?;
+            for ((name, json), length) in self.0.iter().zip(lengths) {
+                ncore::serialize_to_writer_exact(&MetadataEntryRef(name, json), writer, length)?;
             }
-            std::io::Write::write_all(writer, &offs_bytes)?;
-            std::io::Write::write_all(writer, &data)?;
             return Ok(());
         }
-        let mut entry_buf = Vec::new();
+        // Use canonical field writers so entry lengths inherit the exact frame layout.
+        let mut scratch = ncore::DeriveSmallBuf::new();
         for (name, json) in &self.0 {
-            entry_buf.clear();
-            serialize_entry(&mut entry_buf, name, json)?;
-            if ncore::use_compact_len() {
-                ncore::write_len(writer, entry_buf.len() as u64)?;
-            } else {
-                ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(
-                    writer,
-                    entry_buf.len() as u64,
-                )?;
-            }
-            std::io::Write::write_all(writer, &entry_buf)?;
+            ncore::write_len_prefixed(writer, &MetadataEntryRef(name, json), &mut scratch)?;
         }
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        let mut total: usize = 8;
-        if ncore::use_packed_seq() {
-            let len = self.0.len();
-            let mut data_total = 0usize;
-            for (name, json) in &self.0 {
-                let entry = entry_len_hint(name, json)?;
-                data_total = data_total.saturating_add(entry);
-            }
-            total = total
-                .saturating_add(8usize.saturating_mul(len.saturating_add(1)))
-                .saturating_add(data_total);
-            return Some(total);
-        }
-        for (name, json) in &self.0 {
-            let entry = entry_len_hint(name, json)?;
-            total = total.saturating_add(8).saturating_add(entry);
-        }
-        Some(total)
+        self.encoded_len_exact()
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        let len = self.0.len();
-        let mut total: usize = 8;
-        if ncore::use_packed_seq() {
-            let mut data_total = 0usize;
-            for (name, json) in &self.0 {
-                let entry = entry_len_exact(name, json)?;
-                data_total = data_total.saturating_add(entry);
-            }
-            total = total
-                .saturating_add(8usize.saturating_mul(len.saturating_add(1)))
-                .saturating_add(data_total);
-            return Some(total);
-        }
-        for (name, json) in &self.0 {
-            let entry = entry_len_exact(name, json)?;
-            total = total
-                .saturating_add(ncore::len_prefix_len(entry))
-                .saturating_add(entry);
-        }
-        Some(total)
+        let packed = ncore::use_packed_seq();
+        let overhead = if packed {
+            8_usize.checked_add(self.0.len().checked_add(1)?.checked_mul(8)?)?
+        } else {
+            8
+        };
+        self.0.iter().try_fold(overhead, |total, (name, json)| {
+            let len = MetadataEntryRef(name, json).encoded_len_exact()?;
+            let prefix = if packed {
+                0
+            } else {
+                ncore::len_prefix_len(len)
+            };
+            total.checked_add(prefix)?.checked_add(len)
+        })
     }
 }
+// Payload-only borrowed tuple view; never used as a separately framed wire record.
+struct MetadataEntryRef<'a>(&'a Name, &'a Json);
+
+impl ncore::NoritoSerialize for MetadataEntryRef<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
+        let mut scratch = ncore::DeriveSmallBuf::new();
+        ncore::write_len_prefixed(writer, self.0, &mut scratch)?;
+        ncore::write_len_prefixed(writer, self.1, &mut scratch)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let name = self.0.encoded_len_exact()?;
+        let json = self.1.encoded_len_exact()?;
+        ncore::len_prefix_len(name)
+            .checked_add(name)?
+            .checked_add(ncore::len_prefix_len(json))?
+            .checked_add(json)
+    }
+}
+
 impl<'de> ncore::NoritoDeserialize<'de> for Metadata {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         let entries: Vec<(Name, Json)> =
@@ -127,57 +119,6 @@ impl<'de> ncore::NoritoDeserialize<'de> for Metadata {
         }
         Ok(Metadata(map))
     }
-}
-fn serialize_entry<W: std::io::Write>(
-    writer: &mut W,
-    name: &Name,
-    json: &Json,
-) -> Result<(), ncore::Error> {
-    let current = ncore::get_decode_flags();
-    let merged = if current == 0 {
-        ncore::default_encode_flags()
-    } else {
-        current | ncore::default_encode_flags()
-    };
-    let _guard = ncore::DecodeFlagsGuard::enter(merged);
-    let mut buf = ncore::DeriveSmallBuf::new();
-    buf.clear();
-    ncore::serialize_to_writer(name, &mut buf)?;
-    if ncore::use_compact_len() {
-        ncore::write_len(writer, buf.len() as u64)?;
-    } else {
-        ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(writer, buf.len() as u64)?;
-    }
-    std::io::Write::write_all(writer, buf.as_slice())?;
-    buf.clear();
-    ncore::serialize_to_writer(json, &mut buf)?;
-    if ncore::use_compact_len() {
-        ncore::write_len(writer, buf.len() as u64)?;
-    } else {
-        ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(writer, buf.len() as u64)?;
-    }
-    std::io::Write::write_all(writer, buf.as_slice())?;
-    Ok(())
-}
-fn entry_len_hint(name: &Name, json: &Json) -> Option<usize> {
-    let key = <Name as ncore::NoritoSerialize>::encoded_len_hint(name)?;
-    let value = <Json as ncore::NoritoSerialize>::encoded_len_hint(json)?;
-    Some(
-        8usize
-            .saturating_add(key)
-            .saturating_add(8usize)
-            .saturating_add(value),
-    )
-}
-fn entry_len_exact(name: &Name, json: &Json) -> Option<usize> {
-    let key = <Name as ncore::NoritoSerialize>::encoded_len_exact(name)?;
-    let value = <Json as ncore::NoritoSerialize>::encoded_len_exact(json)?;
-    Some(
-        ncore::len_prefix_len(key)
-            .saturating_add(key)
-            .saturating_add(ncore::len_prefix_len(value))
-            .saturating_add(value),
-    )
 }
 #[cfg(test)]
 mod tests {
@@ -229,6 +170,59 @@ mod tests {
         let bytes = encode_adaptive(&metadata);
         let decoded: Metadata = decode_adaptive(&bytes).expect("decode metadata");
         assert_eq!(decoded, metadata);
+    }
+
+    #[test]
+    fn metadata_entries_preserve_the_enclosing_layout() {
+        use ncore::{DecodeFlagsGuard, NoritoSerialize, header_flags};
+
+        let mut metadata = Metadata::default();
+        metadata.insert("alpha".parse().unwrap(), Json::new("value"));
+        metadata.insert("beta".parse().unwrap(), Json::new(vec![1, 2, 3]));
+        let reference: Vec<_> = metadata
+            .0
+            .iter()
+            .map(|(name, json)| (name.clone(), json.clone()))
+            .collect();
+        for requested in [
+            0,
+            header_flags::COMPACT_LEN,
+            header_flags::PACKED_SEQ,
+            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+            header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+            header_flags::PACKED_STRUCT
+                | header_flags::PACKED_SEQ
+                | header_flags::COMPACT_LEN
+                | header_flags::FIELD_BITSET,
+        ] {
+            let _layout = DecodeFlagsGuard::enter(requested);
+            let (payload, flags) = norito::codec::encode_with_header_flags(&metadata);
+            assert_eq!(
+                flags & header_flags::COMPACT_LEN,
+                requested & header_flags::COMPACT_LEN,
+                "metadata entries must not change the enclosing length format"
+            );
+            assert_eq!(
+                (payload.clone(), flags),
+                norito::codec::encode_with_header_flags(&reference),
+                "metadata must preserve its canonical sequence-of-tuples layout"
+            );
+            assert_eq!(metadata.encoded_len_exact(), Some(payload.len()));
+            assert!(metadata.encoded_len_hint().unwrap() >= payload.len());
+            let frame = ncore::frame_bare_with_header_flags::<Metadata>(&payload, flags).unwrap();
+            assert_eq!(
+                norito::decode_from_bytes::<Metadata>(&frame).unwrap(),
+                metadata
+            );
+
+            // Siblings on both sides expose a nested serializer changing the frame flags
+            // after the first field has already emitted its length prefix.
+            let parent = (17_u64, metadata.clone(), vec![3_u8, 5, 7]);
+            let bytes = norito::to_bytes(&parent).unwrap();
+            let decoded: (u64, Metadata, Vec<u8>) = norito::decode_from_bytes(&bytes).unwrap();
+            assert_eq!(decoded, parent);
+            assert_eq!(norito::to_bytes(&decoded).unwrap(), bytes);
+        }
     }
 }
 #[cfg(feature = "json")]

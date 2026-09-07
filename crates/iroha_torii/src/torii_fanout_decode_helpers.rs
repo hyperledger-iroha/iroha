@@ -475,7 +475,7 @@ impl QueryFanoutMemoryEnvelope {
             encoded_len,
             element_limit,
             max_allocated_bytes,
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
         ))
     }
 }

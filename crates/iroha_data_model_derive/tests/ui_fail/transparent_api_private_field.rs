@@ -1,3 +1,4 @@
+//! A public account type does not expose its private signatory field.
 use account::AccountId;
 mod account {
     use core::str::FromStr;

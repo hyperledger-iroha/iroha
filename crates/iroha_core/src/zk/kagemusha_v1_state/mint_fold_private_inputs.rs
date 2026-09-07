@@ -151,16 +151,19 @@ impl KagemushaMintFoldPrivateInputsV1 {
     }
 
     /// Exact authorization, including the proof whose assigned bytes the circuit must hash.
+    #[cfg(test)]
     pub(crate) fn authorization(&self) -> &KagemushaMintAuthorizationV1 {
         &self.authorization
     }
 
     /// Original enrolled credential; ordinary rotation must not rewrite committed provenance.
+    #[cfg(test)]
     pub(crate) fn recipient_credential(&self) -> &KagemushaHardwareCredentialV1 {
         &self.recipient_credential
     }
 
     /// Plaintext commitment openings known only after authenticated recipient decryption.
+    #[cfg(test)]
     pub(crate) fn credit_opening(&self) -> &KagemushaCreditOpeningV1 {
         &self.credit_opening
     }
@@ -168,11 +171,6 @@ impl KagemushaMintFoldPrivateInputsV1 {
     /// Exact finalized credit whose complete canonical envelope enters the replay leaf.
     pub(crate) fn credit(&self) -> &KagemushaMintCreditV1 {
         &self.credit
-    }
-
-    /// Original irreversible staging evidence, retained byte-for-byte across recovery.
-    pub(crate) fn stage_certificate(&self) -> &MintStageCertificateV1 {
-        &self.stage_certificate
     }
 
     /// Borrow the sole public capability derived from this checked pending entry.

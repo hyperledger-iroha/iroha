@@ -5764,6 +5764,7 @@ impl MergeSidecarTransport {
     }
     /// Register a block whose exact sidecar is missing and begin a bounded
     /// request to one holder selected by its QC bitmap.
+    #[cfg(test)]
     pub(crate) fn defer_block(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -5790,6 +5791,7 @@ impl MergeSidecarTransport {
     /// Register a decided carrier using capacity reserved from ordinary
     /// validation work, so unsigned same-hash reference variants cannot crowd
     /// the exact finality dependency out of global or per-holder limits.
+    #[cfg(test)]
     pub(crate) fn defer_decided_block(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -5818,6 +5820,7 @@ impl MergeSidecarTransport {
     /// Unlike executor-owned decided work, this exact carrier is not named by
     /// the generic executor pending census and must survive that cleanup until
     /// its sealed lifecycle owner retries or the height commits.
+    #[cfg(test)]
     pub(crate) fn defer_lifecycle_decided_block(
         &mut self,
         block_hash: HashOf<BlockHeader>,

@@ -59,6 +59,12 @@ bytes. Release wrappers verify the lock already present in each isolated Git
 clone. All Cargo work remains behind the shared `+1.93.1`, `--locked`,
 `--offline`, `-j1` policy and its same-snapshot guard.
 
+An unsigned dirty-tree replay may repair a stale pin only while `Cargo.lock`
+still matches the mode-`100644` blob shared by `HEAD` and the index. The working
+pin must exactly match the bytes compiled into `xtask`, and the dirty-source
+digest binds that repair. Signed generation and clean release provenance still
+require the committed lock and pin to agree.
+
 ## Staging-safe development replay
 
 Update `artifacts/openapi/torii.json` and its package-local mirror together,

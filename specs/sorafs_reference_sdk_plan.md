@@ -21,7 +21,7 @@ Remaining SF-11 work is native qualification, release evidence, and SDK
 distribution: clean five-target ABI-23 rebuilds, skip-free parity replay,
 published archives and bindings, signed manifests, and live operator smokes.
 The checked-in, test-only signed and sealed cross-domain fixture inventory binds
-82 payload artifacts, 32 `ValidationOutcomeV1` outcomes, and 38 negative
+85 payload artifacts, 35 `ValidationOutcomeV1` outcomes, and 40 negative
 payload vectors across twelve exact parity profiles. All eight generated
 `CancelAssetLock` positive/negative files are checked in under
 `fixtures/sorafs_manifest/appeal_finance/`, are mandatory inputs to the
@@ -40,14 +40,16 @@ vulnerability report, and provenance bundle. The supply-chain artifact requires
 exact ordered coverage of all five native targets, with binary smoke,
 deterministic archive replay, installation, rollback, yank, SBOM, zero
 critical/high vulnerability, OIDC identity, and cosign provenance checks for
-every target. Signed-manifest evidence must declare the governed Ed25519
-release signature algorithm (`ed25519`) and exact
-`authenticated_external_signer` provider plus `software` signing backend
-contract. A valid signed-manifest result is exactly `software-key-qualified`.
-The payload-free canary builder
-rejects unsupported `--signature-algorithm` values, legacy signer labels, and
-missing or non-software backends and provider revisions before writing evidence
-JSON. The
+every target. Signed-manifest evidence requires the exact raw Ed25519 signature
+and a hardware `release_manifest` operation receipt. The builder and checker
+independently authenticate the SHA-256-pinned source context, exact policy and
+custody trust, separately signed finalized-state observation, and completed
+operation through `sorafs-validate release-manifest-receipt`. Every canary
+identity, digest, revision, and hardware/custody fact comes from that closed
+native result. Caller-supplied signer labels, software receipts, or metadata
+claims cannot qualify a release. The service producer and verifier are
+implemented; genuine hardware and finalized-state adapters and the remaining
+release coordinator integration are open G02 work in the closure ledger. The
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
 collection planner/runner with dry-run `evidence_contract` output for each
 selected release evidence schema and required payload field. The JavaScript SDK
@@ -76,7 +78,7 @@ share the deterministic
 schema-closed release-wide inventory for appeal finance, routing/provider
 admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. It binds the exact
 sorted path set, byte lengths, SHA-256 digests, and canonical JSON/Norito bytes
-for 82 payload artifacts, including 38 negative payload vectors, and 32
+for 85 payload artifacts, including 40 negative payload vectors, and 32
 `ValidationOutcomeV1` files. Its offline checker verifies the trusted
 fingerprint and signature and rejects duplicate or nonfinite JSON, path
 traversal, missing/extra/substituted files, symlinks, hardlinks, and parent
@@ -442,8 +444,8 @@ convert decoded or raw Norito payloads into the shared validation functions.
 - **Cross-SDK canonical fixtures:** the ordered `cancel_asset_lock_fixtures`,
   `generate_pdp_fixtures`, and `generate_por_fixtures` pipeline deterministically
   regenerates the closed fixture tree and signed inventory under
-  `fixtures/sorafs_manifest/`. The checked-in inventory binds 82 payload
-  artifacts, 32 exact outcome files, and 38 negative payload vectors. The
+  `fixtures/sorafs_manifest/`. The checked-in inventory binds 85 payload
+  artifacts, 32 exact outcome files, and 40 negative payload vectors. The
   typed `cancel_asset_lock_fixtures` generator and SDK tests freeze the
   appeal-finance
   `CancelAssetLock { escrow_id, expected_remaining_amount }` hard cut and its
@@ -482,10 +484,10 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke checks, records per-file, binary, FFI-header, archive, and manifest
   digests under an untracked output directory. It emits no signature or public
   key. The release coordinator adds every target manifest and checksum to the
-  final aggregate `release_manifest.json`; the governed authenticated external
-  software signer signs that one evidence-complete inventory, and the pinned
-  native validator
-  verifies the raw Ed25519 signature and reviewed public-key fingerprint.
+  final aggregate `release_manifest.json`. Qualification requires the hardware
+  release-manifest producer to sign those exact bytes and commit its receipt,
+  followed by the pinned native signature and receipt verifiers. The remaining
+  coordinator and deployment adapters are recorded as open G02 work.
 - **CI guard:** PR checks can run `sorafs-validate bundle` and the cookbook
   script against committed fixtures; `ci/check_sorafs_reference_ffi_header.sh`
   fails if Rust FFI exports, selector constants, or C signatures drift from the
@@ -597,14 +599,19 @@ and the `release_manifest_digest_hex` it was built against.
   detached package-manifest signatures.
 - The reference production path adds the package manifest and checksums to the
   canonical aggregate `release_manifest.json` after every target and rollout
-  evidence input is final. The governed authenticated external software signer
-  signs only those final aggregate bytes through
-  `scripts/release_manifest_signing.py`; the
-  SHA256-pinned native `sorafs-validate release-manifest` verifier authenticates
-  the raw signature and independently reviewed raw-key fingerprint.
-  Production release keys remain in the authenticated external signer. Its
-  implementation is deployment-owned. Repository builders and validators never load or export
-  private key material.
+  evidence input is final. `scripts/release_manifest_signing.py` authenticates
+  the exact raw signature and independently reviewed public-key fingerprint
+  through the SHA-256-pinned native `sorafs-validate release-manifest` verifier.
+  SF-11 additionally requires `release-manifest-receipt` to verify hardware
+  custody, independent attester and state-observer trust, current revocation
+  state, and the exact finalized completion. Its independently pinned source
+  context supplies all eight input identities, including the native executable;
+  the caller supplies the trusted current clock separately. The daemon's
+  purpose-bound producer retains a private immutable receipt before committing
+  the operation and never retries hardware during completed-operation recovery.
+  Hardware keys must be generated non-exportable and never previously exported.
+  Genuine vendor and finalized-state adapters, plus coordinator integration,
+  remain open; raw signature verification alone cannot close this release gate.
 - The mandatory native release matrix is
   `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
   `x86_64-apple-darwin`, and `aarch64-apple-darwin`; the additional Windows
@@ -651,8 +658,8 @@ targets, duplicate or unknown release-target entries, `target_count` values that
 match the unique target list, missing binary/archive checksums, missing
 deterministic-archive proof, tracked generated `dist/*` artifacts beyond
 `dist/.gitkeep`, unsigned or unverified release manifests, missing governed
-release-key fingerprints, unauthenticated, non-software, or unrevisioned
-external signing, exported private keys, incomplete five-target binary
+release-key fingerprints, unauthenticated hardware custody, mismatched or
+revoked completed operations, stale state observations, exported private keys, incomplete five-target binary
 smoke/install/rollback/yank or
 archive replay, missing per-target SBOMs, non-zero critical/high vulnerability
 counts, missing OIDC identity or cosign provenance verification, missing
@@ -710,10 +717,11 @@ target/package inventories
 closed to unknown values,
 duplicate-free target/package inventories
 whose count fields match their unique entries, release-manifest digest bindings,
-positive integer threshold-reviewed smoke duration, signed-manifest policy
-digests, an explicit `authenticated_external_signer` provider, exact `software`
-backend, and positive revision,
-governance approval policy and `--public-key-fingerprint-hex` inputs,
+positive integer threshold-reviewed smoke duration, and an independently
+pinned signed-manifest source context. Signed-manifest policy, key, hardware
+backend, positive revisions, and finalized operation anchors are derived only
+from a freshly verified native hardware receipt. Governance approval separately
+requires policy and `--public-key-fingerprint-hex` inputs,
 governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks or output directories.
 The SF-11 checker additionally requires the exact L1 topology summary and a
@@ -764,8 +772,8 @@ Implemented locally:
   PDP fixture members, with `crates/sorafs_manifest/include/sorafs_reference.h`
   and `ci/check_sorafs_reference_ffi_header.sh` providing the local binding
   contract guard.
-- The test-only signed, schema-closed reference SDK inventory with 82 payload
-  artifacts, 32 outcomes, 38 negative payload vectors, and twelve exact profiles,
+- The test-only signed, schema-closed reference SDK inventory with 85 payload
+  artifacts, 35 outcomes, 40 negative payload vectors, and twelve exact profiles,
   including the dedicated moderation governance-log-node validator and
   source-level coverage across JavaScript/TypeScript, Python, Swift,
   Kotlin/JVM, mirrored Java Android, and C#.
@@ -773,8 +781,9 @@ Implemented locally:
 - Release-packaging helper that stages binary/archive/manifest digests and
   unsigned package manifests under untracked
   `dist/sorafs-validate-release/`. It rejects retired per-package signature
-  inputs; the governed authenticated external software signer signs the final
-  aggregate release manifest after every target and evidence input is fixed.
+  inputs. Hardware signature and completed-operation receipt qualification
+  apply to the final aggregate manifest after every target and evidence input
+  is fixed; deployment and coordinator integration remain open.
 - Published operator, metrics, and binding-generation guidance for packaging,
   telemetry extraction, C FFI header synchronization, downstream selector
   parity, and SF-11 release evidence handoff.

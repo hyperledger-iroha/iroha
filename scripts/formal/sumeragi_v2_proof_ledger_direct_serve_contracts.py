@@ -1357,3 +1357,710 @@ Ok(())
         ),
     ):
         _require_rust_token_sequence(lane_path, hydration, expected, description, errors)
+
+
+# Independent canonical owners: no test helper or adapter-local lookalike may
+# satisfy the terminal replay/retirement boundary.
+_TERMINAL_LANE_SOURCE_OWNERS = {
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
+        ("", "validate_terminal_autonomous_availability"),
+        ("", "validate_terminal_autonomous_vote"),
+        ("", "validate_terminal_autonomous_qc"),
+        ("V2LaneWorkAdapter", "insert_lane_vote"),
+        ("V2LaneWorkAdapter", "insert_lane_qc"),
+        ("V2LaneWorkAdapter", "insert_lane_certificate"),
+        ("V2LaneWorkAdapter", "canonical_finalized_autonomous_payload_for_vote_body"),
+        ("V2LaneWorkAdapter", "retire_applied_autonomous_sessions"),
+        ("V2LaneWorkAdapter", "drive_lane_sessions"),
+        ("V2LaneWorkAdapter", "persist_anchored_sessions"),
+        ("V2LaneWorkAdapter", "proposal_can_progress"),
+        ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey", "from"),
+    ),
+    "crates/iroha_core/src/lane_consensus.rs": (
+        ("LaneBlockSessionCache", "retained_vote_bodies"),
+        ("LaneBlockSessionCache", "preflight_canonical_evidence"),
+        ("LaneBlockSessionCache", "retire_applied_proposals"),
+        ("LaneBlockSessionCache", "retain_canonical_rollover_evidence"),
+        ("", "validate_vote_matches_proposal"),
+    ),
+    "crates/iroha_core/src/state/autonomous_predecessor_application.rs": (
+        ("State", "certified_autonomous_lane_block_is_globally_applied_cached"),
+    ),
+}
+
+_TERMINAL_LANE_SOURCE_CONTRACTS = (
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from", True,
+     "terminal retirement selection must retain the full proposal route, incarnation, and lane height",
+        """
+fn from(proposal: &LaneBlockProposalV1) -> Self {
+    let descriptor = &proposal.descriptor;
+    Self {
+        lane_id: descriptor.lane_id,
+        dataspace_id: descriptor.dataspace_id,
+        lane_incarnation: descriptor.lane_incarnation,
+        lane_block_height: descriptor.lane_block_height,
+    }
+}
+"""),
+    ('validate_terminal_autonomous_availability', True,
+     'terminal availability must bind Prepare READY to the exact canonical executable payload and require Commit without READY',
+        """
+fn validate_terminal_autonomous_availability(
+    phase: CertPhase,
+    actual: Option<&iroha_data_model::block::consensus::LanePayloadAvailabilityBodyV1>,
+    payload: &LaneExecutablePayloadV1,
+) -> Result<(), String> {
+    match (phase, actual) {
+        (CertPhase::Prepare, Some(actual)) => {
+            let expected = lane_payload_availability_body(
+                payload,
+                &payload.origin_proposal,
+                payload.network_id,
+                payload.epoch,
+            )
+            .map_err(|error| error.to_string())?;
+            if *actual != expected {
+                return Err(
+                    "terminal autonomous READY differs from its canonical payload".to_owned(),
+                );
+            }
+            Ok(())
+        }
+        (CertPhase::Commit, None) => Ok(()),
+        _ => Err("terminal autonomous message has an invalid execution role".to_owned()),
+    }
+}
+"""),
+    ('validate_terminal_autonomous_vote', True,
+     'terminal votes must authenticate the exact proposal, READY committee PoPs, outer signature, and exact availability before success',
+        """
+fn validate_terminal_autonomous_vote(
+    vote: &LaneBlockVoteV1,
+    payload: &LaneExecutablePayloadV1,
+) -> Result<(), String> {
+    crate::lane_consensus::validate_vote_matches_proposal(vote, &payload.origin_proposal)
+        .map_err(|error| error.to_string())?;
+    vote.validate_ingress(vote.body.phase)
+        .map_err(|error| error.to_string())?;
+    validate_terminal_autonomous_availability(
+        vote.body.phase,
+        vote.payload_availability_vote
+            .as_ref()
+            .map(|ready| &ready.body),
+        payload,
+    )
+}
+"""),
+    ('validate_terminal_autonomous_qc', True,
+     'terminal QCs must authenticate the exact proposal and complete aggregate before exact availability success',
+        """
+fn validate_terminal_autonomous_qc(
+    qc: &LaneBlockQcV1,
+    payload: &LaneExecutablePayloadV1,
+    signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(), String> {
+    validate_winning_lane_qc(qc, &payload.origin_proposal, signer_pops)?;
+    validate_terminal_autonomous_availability(
+        qc.body.phase,
+        qc.payload_availability_qc.as_ref().map(|ready| &ready.body),
+        payload,
+    )
+}
+"""),
+    ('V2LaneWorkAdapter::retire_applied_autonomous_sessions', True,
+     'terminal retirement must authenticate bounded read-only candidates and exact application, preflight full slots atomically, then clean only selected volatile owners without consuming outputs',
+        """
+fn retire_applied_autonomous_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
+    let mut candidates = Vec::new();
+    for body in self.lane_sessions.retained_vote_bodies() {
+        if let Some(payload) = self
+            .canonical_finalized_autonomous_payload_for_vote_body(&body)
+            .map_err(V2LaneWorkError::Persistence)?
+        {
+            candidates.push(payload.origin_proposal);
+        }
+    }
+    // Drained sessions can leave signer locks without a retained vote body.
+    // An absent active namespace cannot supply authority for those locks.
+    let nexus = self.state.nexus_snapshot();
+    for (lane_id, lane_block_height) in self.lane_sessions.rollover_slots() {
+        if !nexus
+            .lane_config
+            .entries()
+            .iter()
+            .any(|entry| entry.lane_id == lane_id)
+        {
+            continue;
+        }
+        let Some(artifact) = self.consensus_storage_read(
+            self.kura
+                .read_certified_lane_block_artifact_read_only(lane_id, lane_block_height),
+        )?
+        else {
+            continue;
+        };
+        Kura::validate_certified_lane_block_artifact(&artifact)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_owned()))?;
+        if artifact.prepare_qc.payload_availability_qc.is_none() {
+            continue;
+        }
+        if let Some(payload) = self
+            .canonical_finalized_autonomous_payload_for_proposal(&artifact.proposal)
+            .map_err(V2LaneWorkError::Persistence)?
+        {
+            for qc in [&artifact.prepare_qc, &artifact.commit_qc] {
+                validate_terminal_autonomous_availability(
+                    qc.body.phase,
+                    qc.payload_availability_qc.as_ref().map(|ready| &ready.body),
+                    &payload,
+                )
+                .map_err(V2LaneWorkError::Persistence)?;
+            }
+            candidates.push(artifact.proposal);
+        }
+    }
+    let mut applied = BTreeMap::new();
+    for proposal in candidates {
+        if !self
+            .state
+            .certified_autonomous_lane_block_is_globally_applied_cached(&proposal)
+        {
+            continue;
+        }
+        let key = AutonomousLanePayloadKey::from(&proposal);
+        if applied
+            .get(&key)
+            .is_some_and(|existing| existing != &proposal)
+        {
+            return Err(V2LaneWorkError::Persistence(
+                "canonical applied autonomous proposals conflict at one exact slot".to_owned(),
+            ));
+        }
+        applied.insert(key, proposal);
+    }
+    let proposals = applied.values().cloned().collect::<Vec<_>>();
+    let retired = self
+        .lane_sessions
+        .retire_applied_proposals(&proposals)
+        .map_err(|error| {
+            V2LaneWorkError::Persistence(format!(
+                "applied autonomous lane retirement conflicts with retained evidence: {error}"
+            ))
+        })?;
+    self.lane_ready_authorizations.retain(|key, _| {
+        !applied.contains_key(&AutonomousLanePayloadKey {
+            lane_id: key.lane_id,
+            dataspace_id: key.dataspace_id,
+            lane_incarnation: key.lane_incarnation,
+            lane_block_height: key.lane_block_height,
+        })
+    });
+    for key in applied.into_keys() {
+        self.discard_volatile_autonomous_payload(key);
+    }
+    Ok(retired)
+}
+"""),
+    ('LaneBlockSessionCache::retained_vote_bodies', True,
+     'terminal inventory must project every retained proposal or vote/QC body in stable order without mutation or inferred global heights',
+        """
+pub(crate) fn retained_vote_bodies(&self) -> Vec<LaneBlockVoteBodyV1> {
+    self.sessions
+        .values()
+        .filter_map(|session| {
+            session
+                .proposal
+                .as_ref()
+                .map(|proposal| proposal.vote_body(CertPhase::Prepare))
+                .or_else(|| session.prepare_qc.as_ref().map(|qc| qc.body.clone()))
+                .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.clone()))
+                .or_else(|| {
+                    session
+                        .prepare_votes
+                        .values()
+                        .next()
+                        .map(|vote| vote.body.clone())
+                })
+                .or_else(|| {
+                    session
+                        .commit_votes
+                        .values()
+                        .next()
+                        .map(|vote| vote.body.clone())
+                })
+        })
+        .collect()
+}
+"""),
+    ('LaneBlockSessionCache::preflight_canonical_evidence', True,
+     'shared canonical preflight must reject exact-committee orphan Commit quorums and conflicting proposal-less Prepare or Commit QCs before mutation',
+        """
+fn preflight_canonical_evidence<'a>(
+    &self,
+    canonical_proposal: impl Fn(LaneBlockCommitSlotKey) -> Option<&'a LaneBlockProposalV1>,
+) -> Result<(), LaneBlockSessionError> {
+    // A drained session can leave independent signer locks behind. Only
+    // exact-route signers from the canonical committee contribute a quorum.
+    let mut conflicting_lock_quorums =
+        BTreeMap::<(LaneBlockCommitSlotKey, Hash), BTreeSet<PeerId>>::new();
+    for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {
+        let Some(canonical) = canonical_proposal(*slot) else {
+            continue;
+        };
+        let descriptor = &canonical.descriptor;
+        if descriptor.lane_id != slot.lane_id
+            || descriptor.dataspace_id != slot.dataspace_id
+            || descriptor.lane_incarnation != slot.lane_incarnation
+            || descriptor.lane_block_height != slot.lane_block_height
+            || canonical.proposal_hash == *locked_proposal_hash
+            || descriptor.validator_set.binary_search(signer).is_err()
+        {
+            continue;
+        }
+        conflicting_lock_quorums
+            .entry((*slot, *locked_proposal_hash))
+            .or_default()
+            .insert(signer.clone());
+    }
+    if conflicting_lock_quorums.iter().any(|((slot, _), signers)| {
+        canonical_proposal(*slot).is_some_and(|canonical| {
+            usize::try_from(canonical.descriptor.min_quorum)
+                .is_ok_and(|quorum| signers.len() >= quorum)
+        })
+    }) {
+        return Err(LaneBlockSessionError::ConflictingProposal);
+    }
+    for (key, session) in &self.sessions {
+        let slot = LaneBlockCommitSlotKey {
+            lane_id: key.lane_id,
+            dataspace_id: key.dataspace_id,
+            lane_incarnation: key.lane_incarnation,
+            lane_block_height: key.lane_block_height,
+        };
+        let Some(canonical) = canonical_proposal(slot) else {
+            continue;
+        };
+        let proposal_conflicts = session
+            .proposal
+            .as_ref()
+            .is_some_and(|proposal| !proposal.same_consensus_identity(canonical));
+        let certified_body_conflicts = session
+            .prepare_qc
+            .as_ref()
+            .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err())
+            || session
+                .commit_qc
+                .as_ref()
+                .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err());
+        if session_has_quorum_certificate(session)
+            && (LaneBlockSessionKey::from_proposal(canonical) != *key
+                || proposal_conflicts
+                || certified_body_conflicts)
+        {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+    }
+    Ok(())
+}
+"""),
+    ('LaneBlockSessionCache::retire_applied_proposals', True,
+     'applied cache retirement must validate the complete exact full-slot target set before mutation and preserve unselected sessions, locks, claims, recency, and capacity',
+        """
+pub(crate) fn retire_applied_proposals(
+    &mut self,
+    proposals: &[LaneBlockProposalV1],
+) -> Result<usize, LaneBlockSessionError> {
+    let mut canonical = BTreeMap::new();
+    for proposal in proposals {
+        validate_lane_block_proposal(proposal)
+            .map_err(LaneBlockSessionError::InvalidProposal)?;
+        let descriptor = &proposal.descriptor;
+        let slot = LaneBlockCommitSlotKey {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+        };
+        if canonical
+            .insert(slot, proposal)
+            .is_some_and(|existing| existing != proposal)
+        {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+    }
+    if canonical.is_empty() {
+        return Ok(0);
+    }
+    self.preflight_canonical_evidence(|slot| canonical.get(&slot).copied())?;
+    let before = self
+        .sessions
+        .len()
+        .saturating_add(self.commit_vote_locks.len());
+    self.sessions.retain(|key, _| {
+        !canonical.contains_key(&LaneBlockCommitSlotKey {
+            lane_id: key.lane_id,
+            dataspace_id: key.dataspace_id,
+            lane_incarnation: key.lane_incarnation,
+            lane_block_height: key.lane_block_height,
+        })
+    });
+    self.commit_vote_locks
+        .retain(|(slot, _), _| !canonical.contains_key(slot));
+    self.slot_proposals.retain(|slot, _| {
+        !canonical.contains_key(&LaneBlockCommitSlotKey {
+            lane_id: slot.lane_id,
+            dataspace_id: slot.dataspace_id,
+            lane_incarnation: slot.lane_incarnation,
+            lane_block_height: slot.lane_block_height,
+        })
+    });
+    let retained_sessions = &self.sessions;
+    self.order.retain(|key| retained_sessions.contains_key(key));
+    // Preserve the selected owner of every unrelated shared-payload claim.
+    // A complete rebuild could move that claim between retained views.
+    self.entrypoint_claims
+        .retain(|_, key| retained_sessions.contains_key(key));
+    for (key, session) in retained_sessions {
+        let Some(proposal) = &session.proposal else {
+            continue;
+        };
+        for entrypoint_hash in &proposal.descriptor.accepted_transaction_hashes {
+            self.entrypoint_claims
+                .entry(*entrypoint_hash)
+                .or_insert(*key);
+        }
+    }
+    let after = self
+        .sessions
+        .len()
+        .saturating_add(self.commit_vote_locks.len());
+    Ok(before.saturating_sub(after))
+}
+"""),
+    ('validate_vote_matches_proposal', True,
+     'terminal vote proposal authentication must bind the signer and validate paired READY against the exact complete committee and its PoPs',
+        """
+pub(crate) fn validate_vote_matches_proposal(
+    vote: &LaneBlockVoteV1,
+    proposal: &LaneBlockProposalV1,
+) -> Result<(), LaneBlockSessionError> {
+    if vote.body != proposal_vote_body(proposal, vote.body.phase) {
+        return Err(LaneBlockSessionError::VoteProposalMismatch);
+    }
+    if !proposal.descriptor.validator_set.contains(&vote.signer) {
+        return Err(LaneBlockSessionError::VoteSignerNotInValidatorSet);
+    }
+    match &vote.payload_availability_vote {
+        Some(availability_vote) => {
+            if vote.body.phase != CertPhase::Prepare
+                || availability_vote.signer != vote.signer
+                || validate_availability_body_matches_proposal(&availability_vote.body, proposal)
+                    .is_err()
+                || availability_vote
+                    .validate_against_validator_set(&proposal.descriptor.validator_set)
+                    .is_err()
+            {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+        }
+        None => {}
+    }
+    Ok(())
+}
+"""),
+    ('State::certified_autonomous_lane_block_is_globally_applied_cached', True,
+     'terminal application must require exact route/incarnation frontier identity or an exact authenticated merge receipt and fail closed on malformed frontier bytes',
+        """
+pub(crate) fn certified_autonomous_lane_block_is_globally_applied_cached(
+    &self,
+    proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+) -> bool {
+    let descriptor = &proposal.descriptor;
+    if descriptor.lane_block_height == 0 {
+        return false;
+    }
+    let world = self.world.view();
+    let Ok(frontier) = Self::canonical_merged_lane_frontier_from_world(
+        &world,
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+    ) else {
+        return false;
+    };
+    frontier
+        == (
+            descriptor.lane_block_height,
+            Some(descriptor.descriptor_hash),
+        )
+        || self
+            .kura
+            .autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal)
+}
+"""),
+    ('V2LaneWorkAdapter::insert_lane_vote', False,
+     'terminal vote ingress must validate canonical authority and authenticate exact applied replay before the first cache clone or hydration',
+        """
+fn insert_lane_vote(
+        &mut self,
+        vote: LaneBlockVoteV1,
+        sender: Option<&PeerId>,
+        active_view: wire::View,
+    ) -> V2LaneIngressOutcome {
+        if sender != Some(&vote.signer) {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let finalized_payload =
+            match self.finalized_autonomous_ingress_payload_or_fail_stop(&vote.body) {
+                Ok(payload) => payload,
+                Err(()) => return V2LaneIngressOutcome::Rejected,
+            };
+        if !self.lane_vote_body_available(&vote.body)
+            || !self.lane_vote_authorized(&vote, active_view)
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if let Some(payload) = finalized_payload.as_ref()
+            && self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(
+                    &payload.origin_proposal,
+                )
+        {
+            return if validate_terminal_autonomous_vote(&vote, payload).is_ok() {
+                V2LaneIngressOutcome::Duplicate
+            } else {
+                V2LaneIngressOutcome::Rejected
+            };
+        }
+        let mut next_sessions = self.lane_sessions.clone();
+"""),
+    ('V2LaneWorkAdapter::insert_lane_qc', False,
+     'terminal qc ingress must validate canonical authority and authenticate exact applied replay before the first cache clone or hydration',
+        """
+fn insert_lane_qc(
+        &mut self,
+        qc: LaneBlockQcV1,
+        active_view: wire::View,
+    ) -> V2LaneIngressOutcome {
+        let finalized_payload =
+            match self.finalized_autonomous_ingress_payload_or_fail_stop(&qc.body) {
+                Ok(payload) => payload,
+                Err(()) => return V2LaneIngressOutcome::Rejected,
+            };
+        if !self.lane_vote_body_available(&qc.body) || !self.lane_qc_authorized(&qc, active_view) {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let pops = self.pops_for_lane_qc(&qc);
+        if let Some(payload) = finalized_payload.as_ref()
+            && self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(
+                    &payload.origin_proposal,
+                )
+        {
+            return if validate_terminal_autonomous_qc(&qc, payload, &pops).is_ok() {
+                V2LaneIngressOutcome::Duplicate
+            } else {
+                V2LaneIngressOutcome::Rejected
+            };
+        }
+        let mut next_sessions = self.lane_sessions.clone();
+"""),
+    ('V2LaneWorkAdapter::insert_lane_certificate', False,
+     'complete autonomous certificates must require exact Prepare and Commit availability before any historical shortcut',
+        """
+let finalized_payload =
+            match self.finalized_autonomous_ingress_payload_or_fail_stop(&prepare_qc.body) {
+                Ok(payload) => payload,
+                Err(()) => return V2LaneIngressOutcome::Rejected,
+            };
+        if finalized_payload
+            .as_ref()
+            .is_some_and(|payload| payload.origin_proposal != proposal)
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if let Some(payload) = finalized_payload.as_ref()
+            && [
+                (&prepare_qc, CertPhase::Prepare),
+                (&commit_qc, CertPhase::Commit),
+            ]
+            .into_iter()
+            .any(|(qc, phase)| {
+                validate_terminal_autonomous_availability(
+                    phase,
+                    qc.payload_availability_qc.as_ref().map(|ready| &ready.body),
+                    payload,
+                )
+                .is_err()
+            })
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if proposal.descriptor.proposal_height < self.context.height {
+"""),
+    ('V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body', False,
+     'finalized reader must attach the exact global hint before accepting either exact own application or the exact applied predecessor',
+        """
+let payload = payload
+                .attach_global_hint_exact(
+                    carrier_hint,
+                    height_context.network_id,
+                    height_context.epoch,
+                )
+                .map_err(|error| {
+                    format!("finalized autonomous carrier has an invalid global hint: {error}")
+                })?;
+            let proposal = &payload.origin_proposal;
+            let descriptor = &proposal.descriptor;
+            // A completed source can outlive its predecessor receipt and frontier.
+            // Check the fully attached proposal so an exact historical merge receipt
+            // remains usable after the replicated frontier advances again.
+            if !self
+                .state
+                .certified_autonomous_lane_block_is_globally_applied_cached(proposal)
+                && !self
+                    .state
+                    .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
+                        proposal,
+                    )
+            {
+                return Err(
+                    "finalized autonomous carrier has neither exact application nor an applied predecessor"
+                        .to_owned(),
+                );
+            }
+            if !proposal_hashes.insert(proposal.proposal_hash) {
+"""),
+    ('V2LaneWorkAdapter::drive_lane_sessions', False,
+     'lane drive must retire applied owners and close admission on failure before its first signing work',
+        """
+fn drive_lane_sessions(&mut self) {
+        if let Err(error) = self.retire_applied_autonomous_sessions() {
+            iroha_logger::error!(%error, "applied autonomous lane cache retirement failed closed");
+            self.output_guard.close_admission_for_restart();
+            return;
+        }
+        self.prune_lane_ready_authorizations();
+"""),
+    ('V2LaneWorkAdapter::persist_anchored_sessions', False,
+     'anchored persistence must retire applied owners inside its fail-stop operation before hydration and collection',
+        """
+pub(crate) fn persist_anchored_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
+        // Block sync can deliver and apply the current canonical body after
+        // this height's adapter was constructed. Rehydrate its exact Kura
+        // ownerships at the rollover boundary so a validator which missed the
+        // lane CommitQC retains a bounded proposal source for certificate
+        // recovery instead of waiting forever with an already-applied block.
+        self.retire_applied_autonomous_sessions()?;
+        self.hydrate_canonical_lane_artifacts()?;
+        self.collect_committed_lane_sessions();
+"""),
+    ('V2LaneWorkAdapter::proposal_can_progress', True,
+     'lane progress must reject exact own application only for authenticated autonomous roles and preserve ordinary recovery eligibility',
+        """
+fn proposal_can_progress(&self, proposal: &LaneBlockProposalV1) -> bool {
+    let historical = self
+        .historical_autonomous_recovery_record_for_proposal(proposal)
+        .is_some();
+    let finalized_autonomous = self
+        .canonical_finalized_autonomous_payload_for_proposal(proposal)
+        .is_ok_and(|payload| payload.is_some());
+    let finalized_observer =
+        !self.local_can_own_autonomous_payload(proposal) && finalized_autonomous;
+    if (historical || self.autonomous_payload_is_expected_for(proposal) || finalized_autonomous)
+        && self
+            .state
+            .certified_autonomous_lane_block_is_globally_applied_cached(proposal)
+    {
+        return false;
+    }
+    if proposal.descriptor.proposal_height != self.context.height
+        && !historical
+        && !finalized_observer
+    {
+        return false;
+    }
+    !self.kura.lane_block_application_receipt_available(proposal)
+        && self.proposal_body_available(proposal)
+        && (historical
+            || finalized_observer
+            || !self.decision_pending()
+            || self.proposal_is_bound_to_decided_carrier(proposal))
+        && self.proposal_predecessor_is_ready_for_progress(proposal)
+}
+"""),
+    ('LaneBlockSessionCache::retain_canonical_rollover_evidence', False,
+     'rollover must share the complete canonical quorum preflight before any retained-session mutation',
+        """
+self.preflight_canonical_evidence(|slot| {
+            let evidence_slot = (
+                slot.lane_id,
+                slot.dataspace_id,
+                slot.lane_incarnation,
+                slot.lane_block_height,
+            );
+            if active_slots.get(&evidence_slot) != Some(&true) {
+                return None;
+            }
+            canonical_proposals
+                .get(&(slot.lane_id, slot.lane_block_height))
+                .and_then(Option::as_ref)
+        })?;
+        let mut retained_sessions = BTreeMap::new();
+"""),
+)
+
+
+def _terminal_lane_source_fidelity_errors(repo_root: Path = ROOT_DIR) -> list[str]:
+    """Load terminal replay owners independently from their canonical source files."""
+
+    errors: list[str] = []
+    for relative, declarations in _TERMINAL_LANE_SOURCE_OWNERS.items():
+        path, source = _read_reviewed_rust_source(
+            repo_root, relative, errors, "terminal lane replay and retirement source",
+        )
+        items = {}
+        for owner, name in declarations:
+            qualified = f"{owner}::{name}" if owner else name
+            item = _require_terminal_lane_owner(path, source, owner, name, errors)
+            items[qualified] = item
+            digest = _PRODUCTION_TERMINAL_LANE_ITEM_SHA256.get(qualified)
+            if digest is not None:
+                _require_rust_item_token_sha256(path, item, digest, qualified, errors)
+        _require_terminal_lane_source_contracts(path, items, errors)
+    return errors
+
+
+def _require_terminal_lane_owner(
+    path: Path, source: str, owner: str, name: str, errors: list[str],
+):
+    """Resolve an exact free, inherent, or trait item without test/macro substitutes."""
+
+    context = (rust_code_tokens(f"impl {owner}"),) if owner else ()
+    qualified = f"{owner}::{name}" if owner else name
+    matches = [item for item in rust_items(source, name) if item.brace_context == context]
+    if len(matches) != 1:
+        errors.append(f"{path}: require exactly one canonical terminal lane owner {qualified}; found {len(matches)}")
+        return None
+    item = matches[0]
+    _require_rust_item_context(path, item, context, qualified, errors)
+    return item
+
+
+def _require_terminal_lane_source_contracts(
+    path: Path, items: dict, errors: list[str],
+) -> None:
+    """Keep semantic ordering and authority contracts independent of refreshed seals."""
+
+    for qualified, whole_item, description, expected in _TERMINAL_LANE_SOURCE_CONTRACTS:
+        item = items.get(qualified)
+        if item is None:
+            continue
+        require = _require_exact_rust_tokens if whole_item else _require_rust_token_sequence
+        require(path, item, expected, description, errors)

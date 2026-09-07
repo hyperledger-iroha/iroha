@@ -4,6 +4,7 @@ use crate::confidential::{
 };
 isi! {
     /// Publish a new Pedersen parameter set into the registry.
+    #[norito_schema(name = "iroha_data_model::isi::confidential::PublishPedersenParams")]
     pub struct PublishPedersenParams {
         /// Parameter set descriptor to insert.
         pub params: PedersenParams,
@@ -11,6 +12,7 @@ isi! {
 }
 isi! {
     /// Update lifecycle metadata for an existing Pedersen parameter set.
+    #[norito_schema(name = "iroha_data_model::isi::confidential::SetPedersenParamsLifecycle")]
     pub struct SetPedersenParamsLifecycle {
         /// Identifier of the parameter set to update.
         pub params_id: ConfidentialParamsId,
@@ -24,6 +26,7 @@ isi! {
 }
 isi! {
     /// Publish a new Poseidon parameter set into the registry.
+    #[norito_schema(name = "iroha_data_model::isi::confidential::PublishPoseidonParams")]
     pub struct PublishPoseidonParams {
         /// Parameter set descriptor to insert.
         pub params: PoseidonParams,
@@ -31,6 +34,7 @@ isi! {
 }
 isi! {
     /// Update lifecycle metadata for an existing Poseidon parameter set.
+    #[norito_schema(name = "iroha_data_model::isi::confidential::SetPoseidonParamsLifecycle")]
     pub struct SetPoseidonParamsLifecycle {
         /// Identifier of the parameter set to update.
         pub params_id: ConfidentialParamsId,

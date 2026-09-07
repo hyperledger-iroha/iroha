@@ -189,7 +189,7 @@ impl ToriiRoutedReadMemoryBudget {
                 phase_bytes,
                 phase_bytes,
                 phase_bytes,
-                norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
             ),
             canonical_limit_bytes: self.canonical_remaining()?,
         })
@@ -384,7 +384,7 @@ impl ToriiRoutedReadMemoryBudget {
             allocation_limit,
             allocation_limit,
             allocation_limit,
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
         );
         let (typed, usage) = norito::core::with_decode_limits_measured(limits, || decode(value));
         let typed = typed.map_err(|error| {

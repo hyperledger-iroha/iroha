@@ -63,7 +63,7 @@ fn predicate_json_decode_limits(bounds: PredicateJsonExecutionBounds) -> norito:
         bounds.body_bytes,
         total_elements,
         bounds.allocation_bytes,
-        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        norito::core::MAX_VALUE_NESTING_DEPTH,
     )
 }
 /// Materialize one predicate candidate through the checked JSON writer when a

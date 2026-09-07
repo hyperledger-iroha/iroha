@@ -247,7 +247,8 @@ async fn proofs_list_rejects_zero_and_over_limit() {
         Duration::from_millis(50),
         Duration::from_secs(defaults::torii::PROOF_CACHE_MAX_AGE_SECS),
         Duration::from_secs(defaults::torii::PROOF_RETRY_AFTER_SECS),
-        defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+        usize::try_from(defaults::torii::PROOF_MAX_BODY_BYTES.get())
+            .expect("default proof body limit fits usize"),
         Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS),
     );
     for limit in [0, 50] {
@@ -278,7 +279,8 @@ async fn proofs_list_rejects_excessive_ordered_window() {
         Duration::from_millis(50),
         Duration::from_secs(defaults::torii::PROOF_CACHE_MAX_AGE_SECS),
         Duration::from_secs(defaults::torii::PROOF_RETRY_AFTER_SECS),
-        defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+        usize::try_from(defaults::torii::PROOF_MAX_BODY_BYTES.get())
+            .expect("default proof body limit fits usize"),
         Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS),
     );
     let result = iroha_torii::handle_list_proofs(

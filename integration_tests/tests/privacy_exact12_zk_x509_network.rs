@@ -18,7 +18,7 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::HashOf,
     data_model::{
         Level, ValidationFail,
@@ -509,7 +509,7 @@ async fn submit_signed_transaction(
     let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_blocking(&transaction)),
+        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?

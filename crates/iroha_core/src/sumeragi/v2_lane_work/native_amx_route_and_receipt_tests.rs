@@ -151,7 +151,7 @@ fn native_amx_request_accepts_exact_autonomous_lane_author() {
     }));
 }
 #[test]
-fn native_amx_request_keeps_global_leader_authority_on_the_ordinary_path() {
+fn native_amx_request_rejects_global_leader_without_frozen_lane_authority() {
     let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     let request = native_request(&adapter, &keys);
     let leader = usize::try_from(adapter.context.leader(request.body.round.view))
@@ -168,7 +168,10 @@ fn native_amx_request_keeps_global_leader_authority_on_the_ordinary_path() {
         .find(|peer| peer != &leader)
         .expect("fixture has a non-leader validator");
 
-    assert!(adapter.native_request_sender_authorized(&request, &leader));
+    assert!(
+        !adapter.native_request_sender_authorized(&request, &leader),
+        "global leadership alone cannot authorize a Native AMX coordinator request"
+    );
     assert!(!adapter.native_request_sender_authorized(&request, &non_leader));
 }
 #[test]
@@ -199,10 +202,11 @@ fn native_amx_request_respects_the_configured_source_bound() {
         .body
         .computed_grouped_participant_settlement(&[second_source, request.body.source_id])
         .expect("build a canonical two-source settlement");
-    request.body.participant_settlement_commitment = Hash::from(
-        iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
-            .expect("hash the canonical two-source settlement"),
-    );
+    request.body.participant_settlement_commitment =
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &request.participant_settlement,
+        )
+        .expect("fixture participant settlement encodes canonically");
     assert!(request.validate_plan_binding().is_ok());
     assert!(!adapter.native_request_matches_context(&request, request.body.round.view));
 }
@@ -349,7 +353,7 @@ fn native_request_claims_reject_recomputed_source_and_slot_bodies_within_view() 
     changed_slot.source_id = [0xD4; Hash::LENGTH];
     changed_slot.participant_proposal_hash = Hash::new(b"recomputed participant proposal");
     changed_slot.participant_settlement_commitment =
-        Hash::new(b"recomputed participant settlement");
+        HashOf::from_untyped_unchecked(Hash::new(b"recomputed participant settlement"));
     assert!(
         !adapter.authorize_native_request_bodies(&[changed_slot]),
         "distinct sources cannot race incompatible claims for one participant slot"

@@ -1900,10 +1900,29 @@ impl JsonDeserialize for Quantity {
             .ok_or_else(|| invalid_quantity_json("expected quantity string"))?;
         Self::from_canonical_json_text(source)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
+}
+impl json::JsonObjectKey for Quantity {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self.to_string();
+        visitor(&canonical)
+    }
+
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::visit_json_display_text(self, visitor)
+    }
+}
+impl json::JsonObjectKeyOwned for Quantity {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         Self::from_canonical_json_text(key)
     }
 }
+
 impl XorQuantity {
     /// Validate and wrap a canonical non-negative XOR quantity.
     ///
@@ -4358,9 +4377,21 @@ mod tests {
             value
         );
         assert_eq!(
-            <Quantity as JsonDeserialize>::json_from_map_key("123.45").expect("quantity map key"),
+            <Quantity as json::JsonObjectKeyOwned>::from_json_key_text("123.45")
+                .expect("quantity map key"),
             value
         );
+        let map = std::collections::BTreeMap::from([(value, 1_u8)]);
+        let expected_map = r#"{"123.45":1}"#;
+        assert_eq!(
+            json::to_json_bounded(&map, expected_map.len())
+                .expect("quantity-key map at exact bound"),
+            expected_map
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected_map.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
         for noncanonical in ["+1", "01", "-0", "1.0", "123.4500"] {
             let source = format!("\"{noncanonical}\"");
             assert!(

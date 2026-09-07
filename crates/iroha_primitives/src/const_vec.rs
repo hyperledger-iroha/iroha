@@ -5,100 +5,12 @@
 //! buffers or other data that is loaded once and then treated as read‑only for the remainder of the
 //! program's lifetime.
 use crate::ffi;
-use core::{ops::Deref, ptr};
+use core::ops::Deref;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize, core as ncore};
 use std::{boxed::Box, format, io::Write, string::String, vec::Vec};
-struct RealignedSlice {
-    ptr: *mut u8,
-    layout: std::alloc::Layout,
-    len: usize,
-}
-impl RealignedSlice {
-    #[allow(unsafe_code)]
-    fn new(bytes: &[u8], align: usize) -> Result<Self, ncore::Error> {
-        debug_assert!(!bytes.is_empty());
-        let layout = std::alloc::Layout::from_size_align(bytes.len(), align)
-            .map_err(|_| ncore::Error::LengthMismatch)?;
-        let ptr = unsafe {
-            let ptr = std::alloc::alloc(layout);
-            if ptr.is_null() {
-                std::alloc::handle_alloc_error(layout);
-            }
-            ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
-            ptr
-        };
-        Ok(Self {
-            ptr,
-            layout,
-            len: bytes.len(),
-        })
-    }
-    #[allow(unsafe_code)]
-    fn as_slice(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.ptr.cast_const(), self.len) }
-    }
-}
-impl Drop for RealignedSlice {
-    #[allow(unsafe_code)]
-    fn drop(&mut self) {
-        unsafe {
-            std::alloc::dealloc(self.ptr, self.layout);
-        }
-    }
-}
-#[allow(dead_code)]
-struct AlignedPayload<'a> {
-    original: &'a [u8],
-    realigned: Option<RealignedSlice>,
-}
-#[allow(single_use_lifetimes)]
-impl AlignedPayload<'_> {
-    #[allow(dead_code)]
-    fn as_slice(&self) -> &[u8] {
-        self.realigned
-            .as_ref()
-            .map_or(self.original, RealignedSlice::as_slice)
-    }
-}
-#[allow(dead_code)]
-fn align_payload_for<T>(bytes: &[u8], align: usize) -> Result<AlignedPayload<'_>, ncore::Error>
-where
-    T: NoritoSerialize,
-{
-    let needs_realignment =
-        align > 1 && !bytes.is_empty() && !(bytes.as_ptr() as usize).is_multiple_of(align);
-    #[cfg(debug_assertions)]
-    if norito::debug_trace_enabled() {
-        eprintln!(
-            "ConstVec::<{}>::decode align={} ptr={:#x} needs_realignment={}",
-            core::any::type_name::<T>(),
-            align,
-            bytes.as_ptr() as usize,
-            needs_realignment
-        );
-    }
-    #[cfg(debug_assertions)]
-    if needs_realignment && norito::debug_trace_enabled() {
-        eprintln!(
-            "ConstVec::<{}>::decode realigning payload align={} addr={:#x}",
-            core::any::type_name::<T>(),
-            align,
-            bytes.as_ptr() as usize
-        );
-    }
-    let realigned = if needs_realignment {
-        Some(RealignedSlice::new(bytes, align)?)
-    } else {
-        None
-    };
-    Ok(AlignedPayload {
-        original: bytes,
-        realigned,
-    })
-}
 ffi::ffi_item! {
     /// Stores bytes that are not supposed to change during the runtime of the
     /// program in a compact way.
@@ -376,726 +288,47 @@ impl<T: NoritoSerialize> ConstVec<T> {
         Ok(())
     }
 }
-impl<'a, T> norito::core::DecodeFromSlice<'a> for ConstVec<T>
+impl<'a, T> ncore::DecodeFromSlice<'a> for ConstVec<T>
 where
-    T: for<'de> norito::NoritoDeserialize<'de>,
-    T: NoritoSerialize,
-    T: norito::core::DecodeFromSlice<'a>,
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        if core::any::type_name::<T>() == "u8" {
-            let flags = norito::core::effective_decode_flags()
-                .unwrap_or_else(norito::core::default_encode_flags);
-            return decode_const_vec_prefix_from_plan::<T>(bytes, flags);
-        }
-        if core::any::type_name::<T>() != "u8"
-            && let Ok((vec, used)) = norito::core::decode_vec_from_slice_serial::<T>(bytes)
-        {
-            return Ok((Self::from(vec), used));
-        }
-        let (vec, used) = norito::core::decode_field_canonical::<Vec<T>>(bytes)?;
-        Ok((Self::from(vec), used))
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (items, used) = ncore::decode_element_sequence_from_slice_serial::<T>(bytes)?;
+        Ok((Self::from(items), used))
     }
 }
-fn decode_const_vec_prefix_from_plan<T>(
-    bytes: &[u8],
-    flags: u8,
-) -> Result<(ConstVec<T>, usize), ncore::Error>
+
+fn decode_const_vec_exact<T>(bytes: &[u8]) -> Result<ConstVec<T>, ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
-    let layout = if ncore::packed_seq_enabled_for_flags(flags) {
-        ncore::BinarySequenceLayout::FixedOffsets
-    } else {
-        ncore::BinarySequenceLayout::LengthPrefixed
-    };
-    let plan = ncore::plan_binary_sequence(bytes, flags, layout)?;
-    let _guard = ncore::DecodeFlagsGuard::enter(flags);
-    let mut items = Vec::new();
-    items
-        .try_reserve(plan.spans.len())
-        .map_err(|_| ncore::Error::LengthMismatch)?;
-    for span in &plan.spans {
-        let elem_bytes = span.get(bytes)?;
-        let (item, used) = ncore::decode_field_canonical::<T>(elem_bytes)?;
-        if used != elem_bytes.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        items.push(item);
+    let (items, used) = ncore::decode_element_sequence_from_slice_serial::<T>(bytes)?;
+    if used != bytes.len() {
+        return Err(ncore::Error::LengthMismatch);
     }
-    Ok((ConstVec::from(items), plan.used))
+    Ok(ConstVec::from(items))
 }
+
 impl<'a, T> NoritoDeserialize<'a> for ConstVec<T>
 where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).unwrap_or_else(|err| {
+        Self::try_deserialize(archived).unwrap_or_else(|error| {
             panic!(
-                "ConstVec<{}> decode failed: {err:?}",
+                "ConstVec<{}> decode failed: {error:?}",
                 core::any::type_name::<T>()
             )
         })
     }
+
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        if let Some((_, len)) = ncore::payload_ctx()
-            && len == 0
-        {
-            return Ok(ConstVec::new_empty());
-        }
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let ctx_len = ncore::payload_ctx().map(|(_, len)| len);
-        let bytes_full = ncore::payload_slice_from_ptr(ptr)?;
-        #[cfg(debug_assertions)]
-        if norito::debug_trace_enabled() {
-            eprintln!(
-                "ConstVec::<{}>::try_deserialize ctx_len={ctx_len:?} bytes_full_len={}",
-                core::any::type_name::<T>(),
-                bytes_full.len()
-            );
-        }
-        let bytes = ctx_len
-            .and_then(|len| bytes_full.get(..len))
-            .unwrap_or(bytes_full);
-        let align = ncore::archived_payload_align::<ConstVec<T>>()
-            .max(ncore::archived_payload_align::<Vec<T>>())
-            .max(core::mem::align_of::<u128>());
-        #[cfg(debug_assertions)]
-        if norito::debug_trace_enabled() {
-            eprintln!(
-                "ConstVec::<{}>::try_deserialize align={} ptr={:#x}",
-                core::any::type_name::<T>(),
-                align,
-                ptr as usize
-            );
-        }
-        if align > 1 && !bytes.is_empty() && !(ptr as usize).is_multiple_of(align) {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::try_deserialize realigning archived payload align={} addr={:#x}",
-                    core::any::type_name::<T>(),
-                    align,
-                    ptr as usize
-                );
-            }
-            return decode_const_vec_realigned::<T>(bytes, align);
-        }
-        decode_const_vec_with_recovery::<T>(bytes)
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        decode_const_vec_exact::<T>(bytes)
     }
 }
-fn decode_const_vec_realigned<T>(bytes: &[u8], align: usize) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let realigned = RealignedSlice::new(bytes, align)?;
-    let aligned = realigned.as_slice();
-    decode_const_vec_with_label::<T>(aligned, bytes, "realigned ", false)
-}
-fn decode_const_vec_with_recovery<T>(bytes: &[u8]) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    decode_const_vec_with_label::<T>(bytes, bytes, "", true)
-}
-#[cfg_attr(not(debug_assertions), allow(unused_variables))]
-fn decode_const_vec_with_label<T>(
-    decode_bytes: &[u8],
-    fallback_bytes: &[u8],
-    label: &str,
-    log_fallback_diagnostics: bool,
-) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    match decode_const_vec_from_slice::<T>(decode_bytes) {
-        Ok(vec) => Ok(vec),
-        Err(err) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::try_deserialize {label}decode failed: {err:?} (len={})",
-                    core::any::type_name::<T>(),
-                    decode_bytes.len()
-                );
-            }
-            decode_const_vec_recover::<T>(err, fallback_bytes, log_fallback_diagnostics)
-        }
-    }
-}
-fn decode_const_vec_recover<T>(
-    err: ncore::Error,
-    bytes: &[u8],
-    log_fallback_diagnostics: bool,
-) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    match err {
-        ncore::Error::Misaligned { .. } | ncore::Error::LengthMismatch => {
-            if let Ok(manual) = decode_const_vec_manual_unpacked(bytes) {
-                return Ok(manual);
-            }
-            match decode_const_vec_via_codec(bytes) {
-                Ok(vec) => Ok(vec),
-                Err(fallback) => {
-                    if let Some(instr_vec) = decode_instruction_vec_ignore_lengths::<T>(bytes) {
-                        return Ok(instr_vec);
-                    }
-                    if log_fallback_diagnostics {
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!(
-                                "ConstVec::<{}>::try_deserialize fallback decode failed: {fallback:?} (len={})",
-                                core::any::type_name::<T>(),
-                                bytes.len()
-                            );
-                            let _ = std::fs::write(
-                                "/tmp/constvec_failure.bin",
-                                &bytes[..core::cmp::min(bytes.len(), 4096)],
-                            );
-                            let _ = std::fs::write("/tmp/constvec_failure_full.bin", bytes);
-                        }
-                    }
-                    Err(fallback)
-                }
-            }
-        }
-        other => {
-            if let Some(instr_vec) = decode_instruction_vec_ignore_lengths::<T>(bytes) {
-                return Ok(instr_vec);
-            }
-            Err(other)
-        }
-    }
-}
-fn decode_const_vec_from_slice<T>(bytes: &[u8]) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let align = ncore::archived_payload_align::<Vec<T>>()
-        .max(ncore::archived_payload_align::<ConstVec<T>>())
-        .max(core::mem::align_of::<u128>());
-    let aligned = align_payload_for::<T>(bytes, align)?;
-    let decode_bytes = aligned.as_slice();
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    if decode_bytes.len() > 8 {
-        let mut len_bytes = [0u8; 8];
-        len_bytes.copy_from_slice(&decode_bytes[..8]);
-        let declared = u64::from_le_bytes(len_bytes);
-        if declared == 0 && decode_bytes.len() > 8 && !ncore::packed_seq_enabled_for_flags(flags) {
-            return Err(ncore::Error::LengthMismatch);
-        }
-    }
-    let (vec, used) = decode_vec_with_fallback::<T>(decode_bytes, flags)?;
-    #[cfg(debug_assertions)]
-    if norito::debug_trace_enabled() {
-        eprintln!(
-            "ConstVec::<{}>::decode canonical used={} available={}",
-            core::any::type_name::<T>(),
-            used,
-            bytes.len()
-        );
-    }
-    if used > bytes.len() {
-        #[cfg(debug_assertions)]
-        if norito::debug_trace_enabled() {
-            let _ = std::fs::write(
-                "/tmp/constvec_failure.bin",
-                &bytes[..core::cmp::min(bytes.len(), 4096)],
-            );
-        }
-        return Err(ncore::Error::LengthMismatch);
-    }
-    Ok(ConstVec::from(vec))
-}
-fn decode_vec_with_fallback<T>(
-    decode_bytes: &[u8],
-    flags: u8,
-) -> Result<(Vec<T>, usize), ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    if let Ok((vec, used)) = decode_const_vec_from_plan::<T>(decode_bytes, flags) {
-        return Ok((vec, used));
-    }
-    match ncore::decode_field_canonical::<Vec<T>>(decode_bytes) {
-        Ok((vec, _used)) => {
-            let used = reencode_and_verify_with_flags::<T>(&vec, decode_bytes, flags)?;
-            Ok((vec, used))
-        }
-        Err(ncore::Error::LengthMismatch) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode canonical length mismatch available={}",
-                    core::any::type_name::<T>(),
-                    decode_bytes.len()
-                );
-            }
-            let vec = decode_adaptive_with_streaming_fallback::<T>(decode_bytes)?;
-            let used = match reencode_and_verify_with_flags::<T>(&vec, decode_bytes, flags) {
-                Ok(used) => used,
-                Err(ncore::Error::LengthMismatch) => {
-                    // Accept encodings whose payload matches after fallback even if the cached
-                    // length headers were clobbered. The caller already validated the body by
-                    // deserialising each element.
-                    decode_bytes.len()
-                }
-                Err(err) => return Err(err),
-            };
-            Ok((vec, used))
-        }
-        Err(ncore::Error::Misaligned {
-            align: required,
-            addr,
-        }) => decode_misaligned_payload::<T>(decode_bytes, required, addr),
-        Err(err) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                let _ = std::fs::write(
-                    "/tmp/constvec_failure.bin",
-                    &decode_bytes[..core::cmp::min(decode_bytes.len(), 4096)],
-                );
-                eprintln!(
-                    "ConstVec::<{}>::decode canonical failed err={err:?} available={}",
-                    core::any::type_name::<T>(),
-                    decode_bytes.len()
-                );
-            }
-            if decode_bytes.len() > 8 {
-                let mut len_bytes = [0u8; 8];
-                len_bytes.copy_from_slice(&decode_bytes[..8]);
-                if u64::from_le_bytes(len_bytes) == 1 {
-                    let elem_slice = &decode_bytes[8..];
-                    if let Ok((elem, _used)) = ncore::decode_field_canonical::<T>(elem_slice) {
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!(
-                                "ConstVec::<{}>::decode single-element manual fallback accepted len={}",
-                                core::any::type_name::<T>(),
-                                decode_bytes.len()
-                            );
-                        }
-                        return Ok((vec![elem], decode_bytes.len()));
-                    }
-                }
-            }
-            if let Some(instr_vec) = decode_instruction_vec_ignore_lengths::<T>(decode_bytes) {
-                return Ok((instr_vec.into_vec(), decode_bytes.len()));
-            }
-            Err(err)
-        }
-    }
-}
-fn decode_const_vec_from_plan<T>(
-    decode_bytes: &[u8],
-    flags: u8,
-) -> Result<(Vec<T>, usize), ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let layout = if ncore::packed_seq_enabled_for_flags(flags) {
-        ncore::BinarySequenceLayout::FixedOffsets
-    } else {
-        ncore::BinarySequenceLayout::LengthPrefixed
-    };
-    let plan = ncore::plan_binary_sequence(decode_bytes, flags, layout)?;
-    if plan.used != decode_bytes.len() {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    let _guard = ncore::DecodeFlagsGuard::enter(flags);
-    let mut items = Vec::new();
-    items
-        .try_reserve(plan.spans.len())
-        .map_err(|_| ncore::Error::LengthMismatch)?;
-    for span in &plan.spans {
-        let elem_bytes = span.get(decode_bytes)?;
-        let (item, used) = ncore::decode_field_canonical::<T>(elem_bytes)?;
-        if used != elem_bytes.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        items.push(item);
-    }
-    Ok((items, plan.used))
-}
-#[allow(unused_variables)]
-fn decode_misaligned_payload<T>(
-    decode_bytes: &[u8],
-    required: usize,
-    addr: usize,
-) -> Result<(Vec<T>, usize), ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    #[cfg(debug_assertions)]
-    if norito::debug_trace_enabled() {
-        eprintln!(
-            "ConstVec::<{}>::decode canonical misaligned align={} addr={addr:#x} -- falling back to adaptive path",
-            core::any::type_name::<T>(),
-            required,
-        );
-    }
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    let vec = decode_adaptive_with_streaming_fallback::<T>(decode_bytes)?;
-    let used = reencode_and_verify_with_flags::<T>(&vec, decode_bytes, flags)?;
-    Ok((vec, used))
-}
-fn decode_adaptive_with_streaming_fallback<T>(decode_bytes: &[u8]) -> Result<Vec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    match norito::codec::decode_adaptive::<Vec<T>>(decode_bytes) {
-        Ok(vec) => Ok(vec),
-        Err(ncore::Error::Misaligned { .. }) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode adaptive path misaligned; forcing sequential decode",
-                    core::any::type_name::<T>()
-                );
-            }
-            let seq_guard = ncore::SequentialOverrideGuard::enter();
-            let result = norito::codec::decode_adaptive::<Vec<T>>(decode_bytes);
-            drop(seq_guard);
-            match result {
-                Ok(vec) => Ok(vec),
-                Err(ncore::Error::Misaligned { .. }) => {
-                    decode_streaming_fallback::<T>(decode_bytes, flags)
-                }
-                Err(err) => Err(err),
-            }
-        }
-        Err(err) => {
-            #[cfg(not(debug_assertions))]
-            let _ = &err;
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode adaptive path failed err={err:?} available={}",
-                    core::any::type_name::<T>(),
-                    decode_bytes.len()
-                );
-            }
-            decode_streaming_fallback::<T>(decode_bytes, flags)
-        }
-    }
-}
-fn decode_streaming_fallback<T>(decode_bytes: &[u8], flags: u8) -> Result<Vec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    #[cfg(debug_assertions)]
-    if norito::debug_trace_enabled() {
-        eprintln!(
-            "ConstVec::<{}>::decode unpacked manual fallback engaged",
-            core::any::type_name::<T>()
-        );
-    }
-    let guard = ncore::DecodeFlagsGuard::enter(flags);
-    let mut cursor = std::io::Cursor::new(decode_bytes);
-    let decode_result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor);
-    drop(guard);
-    match decode_result {
-        Ok(vec) => {
-            let consumed =
-                usize::try_from(cursor.position()).map_err(|_| ncore::Error::LengthMismatch)?;
-            if consumed > decode_bytes.len() {
-                return Err(ncore::Error::LengthMismatch);
-            }
-            #[cfg(debug_assertions)]
-            if consumed != decode_bytes.len() && norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode streaming fallback consumed {consumed} bytes of {}; accepting trailing payload",
-                    core::any::type_name::<T>(),
-                    decode_bytes.len()
-                );
-            }
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode streaming fallback succeeded",
-                    core::any::type_name::<T>()
-                );
-            }
-            Ok(vec)
-        }
-        Err(err) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode streaming fallback rejected payload err={err:?}",
-                    core::any::type_name::<T>()
-                );
-            }
-            Err(err)
-        }
-    }
-}
-fn decode_const_vec_via_codec<T>(bytes: &[u8]) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    let vec = decode_adaptive_with_streaming_fallback::<T>(bytes)?;
-    match reencode_and_verify_with_flags::<T>(&vec, bytes, flags) {
-        Ok(_) => Ok(ConstVec::from(vec)),
-        Err(ncore::Error::LengthMismatch) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode adaptive reencode mismatch accepted provided_len={}",
-                    core::any::type_name::<T>(),
-                    bytes.len()
-                );
-            }
-            Ok(ConstVec::from(vec))
-        }
-        Err(err) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode_const_vec_via_codec reencode failed err={err:?} len={}",
-                    core::any::type_name::<T>(),
-                    bytes.len()
-                );
-            }
-            Err(err)
-        }
-    }
-}
-fn decode_const_vec_manual_unpacked<T>(bytes: &[u8]) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    let plan =
-        ncore::plan_binary_sequence(bytes, flags, ncore::BinarySequenceLayout::LengthPrefixed)?;
-    let mut items = Vec::new();
-    items
-        .try_reserve(plan.spans.len())
-        .map_err(|_| ncore::Error::LengthMismatch)?;
-    for (idx, span) in plan.spans.iter().enumerate() {
-        let elem_bytes = span.get(bytes)?;
-        let item = decode_const_vec_manual_elem::<T>(elem_bytes, idx)?;
-        items.push(item);
-    }
-    #[cfg(debug_assertions)]
-    if norito::debug_trace_enabled() {
-        eprintln!(
-            "ConstVec::<{}>::manual decode succeeded len={} items={}",
-            core::any::type_name::<T>(),
-            bytes.len(),
-            items.len()
-        );
-    }
-    Ok(ConstVec::from(items))
-}
-fn decode_const_vec_manual_elem<T>(elem_bytes: &[u8], idx: usize) -> Result<T, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    #[cfg(not(debug_assertions))]
-    let _ = idx;
-    match ncore::decode_field_canonical::<T>(elem_bytes) {
-        Ok((value, _used)) => Ok(value),
-        Err(err) => {
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::manual elem decode failed idx={idx} len={} err={err:?}",
-                    core::any::type_name::<T>(),
-                    elem_bytes.len()
-                );
-            }
-            Err(err)
-        }
-    }
-}
-fn decode_instruction_vec_ignore_lengths<T>(bytes: &[u8]) -> Option<ConstVec<T>>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let type_name = core::any::type_name::<T>();
-    if !type_name.contains("InstructionBox") {
-        return None;
-    }
-    // Use streaming decode with current flags context instead of decode_adaptive
-    // which expects NRT0 header. The bytes here are raw ConstVec content, not
-    // NRT0-framed data.
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    let guard = ncore::DecodeFlagsGuard::enter(flags);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor).ok();
-    drop(guard);
-    result.map(ConstVec::from)
-}
-#[cfg(test)]
-fn reencode_and_verify<T>(vec: &[T], decode_bytes: &[u8]) -> Result<usize, ncore::Error>
-where
-    T: NoritoSerialize,
-{
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    reencode_and_verify_with_flags(vec, decode_bytes, flags)
-}
-fn reencode_and_verify_with_flags<T>(
-    vec: &[T],
-    decode_bytes: &[u8],
-    flags: u8,
-) -> Result<usize, ncore::Error>
-where
-    T: NoritoSerialize,
-{
-    let mut reencoded = Vec::new();
-    {
-        #[cfg(debug_assertions)]
-        if norito::debug_trace_enabled() {
-            eprintln!(
-                "ConstVec::<{}>::reencode flags=0x{flags:02x} len={}",
-                core::any::type_name::<T>(),
-                vec.len()
-            );
-        }
-        let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        ncore::write_seq_len(&mut reencoded, vec.len() as u64)?;
-        if ncore::packed_seq_enabled_for_flags(flags) {
-            #[cfg(debug_assertions)]
-            let trace_enabled = norito::debug_trace_enabled();
-            #[cfg(not(debug_assertions))]
-            let trace_enabled = false;
-            ConstVec::<T>::serialize_packed(vec, &mut reencoded, trace_enabled)?;
-        } else {
-            ConstVec::<T>::serialize_unpacked(vec, &mut reencoded, flags)?;
-        }
-    }
-    if reencoded.len() != decode_bytes.len() {
-        #[cfg(debug_assertions)]
-        if norito::debug_trace_enabled() {
-            eprintln!(
-                "ConstVec::<{}>::decode length mismatch reencoded={} provided={}",
-                core::any::type_name::<T>(),
-                reencoded.len(),
-                decode_bytes.len()
-            );
-            let _ = std::fs::write(
-                "/tmp/constvec_reencode.bin",
-                &reencoded[..core::cmp::min(reencoded.len(), 4096)],
-            );
-        }
-        if core::any::type_name::<T>().contains("iroha_data_model::isi::InstructionBox") {
-            return Ok(decode_bytes.len());
-        }
-        return Err(ncore::Error::LengthMismatch);
-    }
-    if reencoded == decode_bytes {
-        return Ok(reencoded.len());
-    }
-    if payload_matches_ignoring_vec_lengths(&reencoded, decode_bytes)? {
-        return Ok(reencoded.len());
-    }
-    if core::any::type_name::<T>().contains("iroha_data_model::isi::InstructionBox") {
-        return Ok(decode_bytes.len());
-    }
-    #[cfg(debug_assertions)]
-    if norito::debug_trace_enabled() {
-        let preview = reencoded
-            .iter()
-            .copied()
-            .zip(decode_bytes.iter().copied())
-            .take(16)
-            .collect::<Vec<_>>();
-        eprintln!(
-            "ConstVec::<{}>::decode adaptive fallback diverged from canonical payload preview={preview:?}",
-            core::any::type_name::<T>()
-        );
-        let _ = std::fs::write(
-            "/tmp/constvec_reencode_diverged.bin",
-            &reencoded[..core::cmp::min(reencoded.len(), 4096)],
-        );
-        let _ = std::fs::write("/tmp/constvec_provided_diverged.bin", decode_bytes);
-    }
-    Err(ncore::Error::LengthMismatch)
-}
-fn payload_matches_ignoring_vec_lengths(
-    canonical: &[u8],
-    provided: &[u8],
-) -> Result<bool, ncore::Error> {
-    if canonical.len() != provided.len() {
-        return Ok(false);
-    }
-    if canonical.len() < 8 {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    if canonical[..8] != provided[..8] {
-        return Ok(false);
-    }
-    let mut cursor = 8;
-    while cursor < canonical.len() {
-        if cursor + 8 > canonical.len() {
-            return Ok(false);
-        }
-        let mut len_bytes = [0u8; 8];
-        len_bytes.copy_from_slice(&canonical[cursor..cursor + 8]);
-        let elem_len = usize::try_from(u64::from_le_bytes(len_bytes))
-            .map_err(|_| ncore::Error::LengthMismatch)?;
-        let start = cursor + 8;
-        let end = start
-            .checked_add(elem_len)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        if end > canonical.len() || end > provided.len() {
-            return Ok(false);
-        }
-        if canonical[start..end] != provided[start..end] {
-            return Ok(false);
-        }
-        cursor = end;
-    }
-    Ok(cursor == canonical.len())
-}
-#[cfg(test)]
-fn decode_const_vec_manual<T>(
-    archived: &ncore::Archived<ConstVec<T>>,
-) -> Result<ConstVec<T>, ncore::Error>
-where
-    T: NoritoSerialize
-        + for<'de> NoritoDeserialize<'de>
-        + for<'slice> ncore::DecodeFromSlice<'slice>,
-{
-    let ptr = core::ptr::from_ref(archived).cast::<u8>();
-    let bytes = ncore::payload_slice_from_ptr(ptr)?;
-    decode_const_vec_from_slice::<T>(bytes)
-}
+
 impl<T: TypeId> TypeId for ConstVec<T> {
     fn id() -> String {
         format!("ConstVec<{}>", T::id())
@@ -1149,12 +382,7 @@ impl<T: Clone> ToConstVec for [T] {
 }
 #[cfg(test)]
 mod tests {
-    use super::{
-        ConstVec, RealignedSlice, ToConstVec, align_payload_for, decode_const_vec_from_slice,
-        decode_const_vec_manual, decode_const_vec_manual_elem, decode_const_vec_manual_unpacked,
-        decode_const_vec_realigned, decode_const_vec_recover, decode_streaming_fallback, ncore,
-        payload_matches_ignoring_vec_lengths, reencode_and_verify,
-    };
+    use super::{ConstVec, ToConstVec, decode_const_vec_exact, ncore};
     use norito::{
         NoritoDeserialize, NoritoSerialize,
         codec::{self, Decode, Encode},
@@ -1221,8 +449,8 @@ mod tests {
         assert_eq!(bytes, decoded.into_vec());
     }
     #[test]
-    fn streaming_recovery_rejects_truncated_payload_without_panicking() {
-        let error = decode_streaming_fallback::<u16>(&[0], 0)
+    fn direct_decoder_rejects_truncated_payload_without_panicking() {
+        let error = <ConstVec<u16> as ncore::DecodeFromSlice>::decode_from_slice(&[0])
             .expect_err("truncated vector payload must be rejected");
         assert!(matches!(error, ncore::Error::LengthMismatch));
     }
@@ -1240,45 +468,16 @@ mod tests {
         assert_eq!(decoded.as_ref(), value.as_ref());
     }
     #[test]
-    fn align_payload_for_keeps_original_when_realigning_is_unnecessary() {
-        let bytes = [1_u8, 2, 3, 4];
-        let passthrough = align_payload_for::<u32>(&bytes, 1).expect("align=1 should pass through");
-        assert!(passthrough.realigned.is_none());
-        assert_eq!(passthrough.as_slice(), bytes.as_slice());
-        assert_eq!(passthrough.as_slice().as_ptr(), bytes.as_ptr());
-        let empty = align_payload_for::<u32>(&[], 8).expect("empty payload should not realign");
-        assert!(empty.realigned.is_none());
-        assert!(empty.as_slice().is_empty());
-    }
-    #[test]
-    fn align_payload_for_realigns_misaligned_payload() {
-        let storage = [0xA5_u8; 32];
-        let align = 8usize;
-        let base = storage.as_ptr() as usize;
-        let offset = (1..align)
-            .find(|offset| offset + 8 <= storage.len() && !(base + offset).is_multiple_of(align))
-            .expect("misaligned offset");
-        let payload = &storage[offset..offset + 8];
-        let aligned =
-            align_payload_for::<u64>(payload, align).expect("misaligned payload should realign");
-        assert!(aligned.realigned.is_some());
-        assert_eq!(aligned.as_slice(), payload);
-        assert_eq!((aligned.as_slice().as_ptr() as usize) % align, 0);
-    }
-    #[test]
-    fn realigned_slice_rejects_invalid_alignment() {
-        let err = match RealignedSlice::new(&[1_u8, 2, 3], 3) {
-            Ok(_) => panic!("non-power-of-two alignment should be rejected"),
-            Err(err) => err,
-        };
-        assert!(matches!(err, ncore::Error::LengthMismatch));
-    }
-    #[test]
-    fn realigned_decode_path_roundtrips_const_vec_payload() {
-        let bytes = ConstVec::from(vec![11_u8, 12, 13]).encode();
-        let decoded =
-            decode_const_vec_realigned::<u8>(&bytes, 16).expect("realigned decode should succeed");
+    fn direct_decoder_is_independent_of_source_alignment() {
+        let bytes = ConstVec::from(vec![11_u16, 12, 13]).encode();
+        let mut storage = Vec::with_capacity(bytes.len() + 1);
+        storage.push(0xA5);
+        storage.extend_from_slice(&bytes);
+        let source = &storage[1..];
+        let (decoded, used) = <ConstVec<u16> as ncore::DecodeFromSlice>::decode_from_slice(source)
+            .expect("unaligned source should decode through slice reads");
         assert_eq!(decoded.into_vec(), vec![11, 12, 13]);
+        assert_eq!(used, bytes.len());
     }
     #[test]
     fn to_const_vec_and_iterators_preserve_order() {
@@ -1311,14 +510,14 @@ mod tests {
         assert_eq!(decoded.into_vec(), bytes);
     }
     #[test]
-    fn try_deserialize_honors_zero_length_payload_context() {
+    fn try_deserialize_rejects_zero_length_payload_context() {
         let value = ConstVec::from(vec![1_u8, 2, 3]);
         let framed = norito::core::to_bytes(&value).expect("frame const vec");
         let archived = norito::core::from_bytes::<ConstVec<u8>>(&framed).expect("decode header");
         let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(framed.as_slice(), 0);
-        let decoded = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived)
-            .expect("zero logical payload should decode as empty");
-        assert!(decoded.is_empty());
+        let error = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("an empty logical payload cannot contain a sequence count");
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
     fn decode_from_slice_reports_used_bytes() {
@@ -1423,7 +622,9 @@ mod tests {
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let items = vec![vec![1u8, 2, 3], vec![4u8, 5]];
         let const_vec = ConstVec::from(items.clone());
-        let const_bytes = const_vec.encode();
+        let mut const_bytes = Vec::new();
+        ncore::serialize_to_buffer(&const_vec, &mut const_bytes)
+            .expect("serialize ConstVec<Vec<u8>> with packed-seq flags");
         let mut vec_bytes = Vec::new();
         ncore::serialize_to_buffer(&items, &mut vec_bytes).expect("serialize Vec<Vec<u8>>");
         assert_eq!(
@@ -1568,14 +769,15 @@ mod tests {
         assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
     }
     #[test]
-    fn reencode_and_verify_respects_compact_len() {
+    fn direct_decoder_respects_compact_len() {
         let flags = ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![1_u8, 2_u8, 3_u8]);
+        let expected = vec![1_u8, 2_u8, 3_u8];
+        let value = ConstVec::from(expected.clone());
         let mut bytes = Vec::new();
         ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
-        let len = reencode_and_verify(value.as_ref(), &bytes).expect("reencode const vec");
-        assert_eq!(len, bytes.len());
+        let decoded = decode_const_vec_exact::<u8>(&bytes).expect("decode compact const vec");
+        assert_eq!(decoded.into_vec(), expected);
     }
     #[test]
     fn packed_seq_lengths_support_inexact_elements() {
@@ -1588,58 +790,39 @@ mod tests {
         assert_eq!(value.encoded_len_exact(), None);
     }
     #[test]
-    fn reencode_and_verify_respects_packed_seq() {
+    fn direct_decoder_respects_packed_seq() {
         let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![vec![1_u8, 2], vec![3_u8, 4, 5]]);
+        let expected = vec![vec![1_u8, 2], vec![3_u8, 4, 5]];
+        let value = ConstVec::from(expected.clone());
         let mut bytes = Vec::new();
         ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
-        let len = reencode_and_verify(value.as_ref(), &bytes).expect("reencode const vec");
-        assert_eq!(len, bytes.len());
+        let decoded = decode_const_vec_exact::<Vec<u8>>(&bytes).expect("decode packed const vec");
+        assert_eq!(decoded.into_vec(), expected);
     }
     #[test]
-    fn reencode_and_verify_accepts_clobbered_unpacked_length_words() {
+    fn direct_decoder_rejects_clobbered_unpacked_length_words() {
         let _guard = ncore::DecodeFlagsGuard::enter(0);
         let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5]]);
         let mut bytes = Vec::new();
         ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
         bytes[8..16].copy_from_slice(&99_u64.to_le_bytes());
-        let len = reencode_and_verify(value.as_ref(), &bytes)
-            .expect("payload match should ignore clobbered outer length word");
-        assert_eq!(len, bytes.len());
+        let error = decode_const_vec_exact::<Vec<u8>>(&bytes)
+            .expect_err("a non-canonical element length must be rejected");
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn reencode_and_verify_rejects_payload_divergence() {
-        let value = ConstVec::from(vec![1_u8, 2, 3]);
-        let mut bytes = value.encode();
-        let last = bytes.last_mut().expect("payload byte");
-        *last ^= 0xFF;
-        let err = reencode_and_verify(value.as_ref(), &bytes)
-            .expect_err("changed payload byte should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
-    }
-    #[test]
-    fn corrupted_header_is_rejected() {
-        let elements = vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6, 7, 8]];
-        let const_vec = ConstVec::from(elements.clone());
-        let (mut payload, flags) = codec::encode_with_header_flags(&const_vec);
-        {
-            let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            let (_, hdr) = ncore::read_seq_len_slice(&payload).expect("sequence header");
-            payload[..hdr].fill(0);
-        }
-        // Append trailing bytes to mimic compat payloads that keep auxiliary data
-        // after the packed span. The manual decoder should still reject the
-        // corrupted header.
-        payload.extend_from_slice(&[0xAAu8; 8]);
-        let archived = ncore::archived_from_slice::<ConstVec<Vec<u8>>>(&payload)
-            .expect("archived nested const vec");
-        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_flags(archived.bytes(), flags);
-        let decoded = decode_const_vec_manual::<Vec<u8>>(archived.as_ref());
-        assert!(
-            decoded.is_err(),
-            "corrupted packed header should be rejected"
-        );
+    fn corrupted_packed_header_is_rejected() {
+        let flags = ncore::header_flags::PACKED_SEQ;
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
+        let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6]]);
+        let mut payload = Vec::new();
+        ncore::serialize_to_buffer(&value, &mut payload).expect("serialize const vec");
+        let (_, header_len) = ncore::read_seq_len_slice(&payload).expect("sequence header");
+        payload[..header_len].fill(0);
+        let error = decode_const_vec_exact::<Vec<u8>>(&payload)
+            .expect_err("a corrupt count must not be recovered");
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     fn manual_unpacked_payload(elements: &[&[u8]]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -1663,235 +846,127 @@ mod tests {
         bytes
     }
     #[test]
-    fn manual_unpacked_decodes_empty_vector() {
+    fn direct_decoder_decodes_empty_vector() {
         let bytes = 0_u64.to_le_bytes();
-        let decoded = decode_const_vec_manual_unpacked::<u8>(&bytes)
-            .expect("empty manual unpacked payload should decode");
+        let decoded = decode_const_vec_exact::<u8>(&bytes).expect("decode empty const vec");
         assert!(decoded.is_empty());
     }
     #[test]
-    fn manual_unpacked_decodes_length_prefixed_elements() {
+    fn direct_decoder_decodes_length_prefixed_bytes() {
         let bytes = manual_unpacked_payload(&[&[1], &[2], &[3]]);
         let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = decode_const_vec_manual_unpacked::<u8>(&bytes)
-            .expect("manual unpacked payload should decode");
+        let decoded = decode_const_vec_exact::<u8>(&bytes).expect("decode byte const vec");
         assert_eq!(decoded.into_vec(), vec![1, 2, 3]);
     }
     #[test]
-    fn manual_unpacked_with_recovery_decodes_length_prefixed_payload() {
-        let bytes = manual_unpacked_payload(&[&[4], &[5]]);
-        let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = super::decode_const_vec_with_recovery::<u8>(&bytes)
-            .expect("recovery path should decode manual unpacked payload");
-        assert_eq!(decoded.into_vec(), vec![4, 5]);
-    }
-    #[test]
-    fn realigned_decode_decodes_manual_unpacked_payload() {
-        let bytes = manual_unpacked_payload(&[&[11], &[12]]);
-        let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = super::decode_const_vec_realigned::<u8>(&bytes, 16)
-            .expect("realigned decode should recover manual unpacked payload");
-        assert_eq!(decoded.into_vec(), vec![11, 12]);
-    }
-    #[test]
-    fn realigned_decode_rejects_invalid_alignment() {
-        let bytes = 0_u64.to_le_bytes();
-        let err = super::decode_const_vec_realigned::<u8>(&bytes, 3)
-            .expect_err("non-power-of-two alignment should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
-    }
-    #[test]
-    fn manual_unpacked_decodes_non_byte_scalars() {
+    fn direct_decoder_decodes_non_byte_scalars() {
         let expected = vec![0x1234_u16, 0xABCD_u16];
         let bytes = manual_unpacked_payload_from_values(&expected);
         let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = decode_const_vec_manual_unpacked::<u16>(&bytes)
-            .expect("manual unpacked scalar payload should decode");
+        let decoded = decode_const_vec_exact::<u16>(&bytes).expect("decode scalar const vec");
         assert_eq!(decoded.into_vec(), expected);
     }
     #[test]
-    fn manual_unpacked_decodes_nested_byte_vectors() {
+    fn direct_decoder_decodes_nested_byte_vectors() {
         let expected = vec![vec![1_u8, 2, 3], vec![4_u8, 5]];
         let bytes = manual_unpacked_payload_from_values(&expected);
         let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = decode_const_vec_manual_unpacked::<Vec<u8>>(&bytes)
-            .expect("manual unpacked nested byte vectors should decode");
+        let decoded = decode_const_vec_exact::<Vec<u8>>(&bytes).expect("decode nested const vec");
         assert_eq!(decoded.into_vec(), expected);
     }
     #[test]
-    fn recover_uses_manual_unpacked_after_length_mismatch() {
-        let bytes = manual_unpacked_payload(&[&[7], &[8]]);
-        let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = decode_const_vec_recover::<u8>(ncore::Error::LengthMismatch, &bytes, false)
-            .expect("manual unpacked fallback should recover from length mismatch");
-        assert_eq!(decoded.into_vec(), vec![7, 8]);
-    }
-    #[test]
-    fn manual_unpacked_recover_handles_misaligned_error() {
-        let bytes = manual_unpacked_payload(&[&[9], &[10]]);
-        let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let decoded = decode_const_vec_recover::<u8>(
-            ncore::Error::Misaligned { align: 8, addr: 1 },
-            &bytes,
-            false,
-        )
-        .expect("manual unpacked fallback should recover after misalignment");
-        assert_eq!(decoded.into_vec(), vec![9, 10]);
-    }
-    #[test]
-    fn manual_unpacked_from_slice_decodes_empty_payload() {
-        let bytes = 0_u64.to_le_bytes();
-        let decoded = decode_const_vec_from_slice::<u8>(&bytes)
-            .expect("empty payload should decode through direct slice path");
-        assert!(decoded.is_empty());
-    }
-    #[test]
-    fn manual_unpacked_from_slice_rejects_zero_count_with_trailing_payload() {
+    fn exact_decoder_rejects_zero_count_with_trailing_payload() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0_u64.to_le_bytes());
         bytes.push(0xAA);
-        let err = decode_const_vec_from_slice::<u8>(&bytes)
-            .expect_err("zero count with trailing payload should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        let error = decode_const_vec_exact::<u8>(&bytes)
+            .expect_err("exact decode must reject trailing payload");
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_recover_preserves_non_recoverable_errors() {
-        let err = decode_const_vec_recover::<u8>(ncore::Error::InvalidNonZero, &[], false)
-            .expect_err("non-recoverable errors should be returned");
-        assert!(matches!(err, ncore::Error::InvalidNonZero));
+    fn prefix_decoder_reports_zero_count_boundary() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.push(0xAA);
+        let (decoded, used) = <ConstVec<u8> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect("prefix decode should stop at the sequence boundary");
+        assert!(decoded.is_empty());
+        assert_eq!(used, 8);
     }
     #[test]
-    fn manual_unpacked_rejects_short_count_header() {
-        let err = decode_const_vec_manual_unpacked::<u8>(&[0; 7])
+    fn direct_decoder_rejects_short_count_header() {
+        let error = decode_const_vec_exact::<u8>(&[0; 7])
             .expect_err("short count header should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_rejects_impossible_count_before_allocating() {
+    fn direct_decoder_rejects_impossible_count_before_allocating() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0x4000_0000_0000_0002_u64.to_le_bytes());
         bytes.extend_from_slice(&2_u64.to_le_bytes());
         bytes.extend_from_slice(&[1, 2]);
-        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
-            .expect_err("impossible count should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        let error =
+            decode_const_vec_exact::<u8>(&bytes).expect_err("impossible count should be rejected");
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_rejects_element_length_overflow() {
+    fn direct_decoder_rejects_element_length_overflow() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1_u64.to_le_bytes());
         bytes.extend_from_slice(&u64::MAX.to_le_bytes());
-        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+        let error = decode_const_vec_exact::<u8>(&bytes)
             .expect_err("overflowing element length should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_rejects_truncated_later_element_header() {
+    fn direct_decoder_rejects_truncated_later_element_header() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&2_u64.to_le_bytes());
         bytes.extend_from_slice(&1_u64.to_le_bytes());
         bytes.push(1);
         bytes.extend_from_slice(&[0; 7]);
-        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+        let error = decode_const_vec_exact::<u8>(&bytes)
             .expect_err("truncated second element header should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_rejects_truncated_element_payload() {
+    fn direct_decoder_rejects_truncated_element_payload() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1_u64.to_le_bytes());
         bytes.extend_from_slice(&2_u64.to_le_bytes());
         bytes.push(1);
-        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+        let error = decode_const_vec_exact::<u8>(&bytes)
             .expect_err("truncated element payload should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_rejects_later_invalid_element_body() {
+    fn direct_decoder_rejects_invalid_later_element_body() {
         let bytes = manual_unpacked_payload(&[&[5], &[]]);
-        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+        let error = decode_const_vec_exact::<u8>(&bytes)
             .expect_err("invalid second u8 element should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_rejects_wrong_scalar_element_length() {
+    fn direct_decoder_rejects_wrong_scalar_element_length() {
         let bytes = manual_unpacked_payload(&[&[0x12]]);
-        let err = decode_const_vec_manual_unpacked::<u16>(&bytes)
+        let error = decode_const_vec_exact::<u16>(&bytes)
             .expect_err("short u16 element should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
-    fn manual_unpacked_elem_decodes_scalar() {
-        let bytes = 0xCAFE_u16.to_le_bytes();
-        let decoded = decode_const_vec_manual_elem::<u16>(&bytes, 0)
-            .expect("manual element should decode scalar bytes");
-        assert_eq!(decoded, 0xCAFE);
-    }
-    #[test]
-    fn manual_unpacked_elem_rejects_short_scalar() {
-        let err = decode_const_vec_manual_elem::<u16>(&[0xFE], 1)
-            .expect_err("short scalar element should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
-    }
-    #[test]
-    fn manual_unpacked_payload_match_ignores_element_length_words() {
-        let canonical = manual_unpacked_payload(&[&[1, 2], &[3]]);
-        let mut provided = canonical.clone();
-        provided[8..16].copy_from_slice(&99_u64.to_le_bytes());
-        provided[18..26].copy_from_slice(&42_u64.to_le_bytes());
-        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
-            .expect("payload comparison should succeed");
-        assert!(matches);
-    }
-    #[test]
-    fn manual_unpacked_payload_match_rejects_different_payload() {
-        let canonical = manual_unpacked_payload(&[&[1, 2], &[3]]);
-        let mut provided = canonical.clone();
-        let last = provided.last_mut().expect("payload byte");
-        *last ^= 0xFF;
-        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
-            .expect("payload comparison should complete");
-        assert!(!matches);
-    }
-    #[test]
-    fn manual_unpacked_payload_match_rejects_different_count_header() {
-        let canonical = manual_unpacked_payload(&[&[1]]);
-        let mut provided = canonical.clone();
-        provided[..8].copy_from_slice(&2_u64.to_le_bytes());
-        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
-            .expect("payload comparison should complete");
-        assert!(!matches);
-    }
-    #[test]
-    fn manual_unpacked_payload_match_rejects_length_mismatch() {
-        let canonical = manual_unpacked_payload(&[&[1]]);
-        let mut provided = canonical.clone();
-        provided.push(0);
-        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
-            .expect("payload comparison should complete");
-        assert!(!matches);
-    }
-    #[test]
-    fn manual_unpacked_payload_match_rejects_partial_element_header() {
-        let mut canonical = Vec::new();
-        canonical.extend_from_slice(&1_u64.to_le_bytes());
-        canonical.extend_from_slice(&[0; 7]);
-        let matches = payload_matches_ignoring_vec_lengths(&canonical, &canonical)
-            .expect("payload comparison should complete");
-        assert!(!matches);
-    }
-    #[test]
-    fn manual_unpacked_payload_match_rejects_too_short_payload() {
-        let err = payload_matches_ignoring_vec_lengths(&[0; 7], &[0; 7])
-            .expect_err("short payload should report length mismatch");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
-    }
-    #[test]
-    fn manual_unpacked_rejects_invalid_element_body() {
-        let bytes = manual_unpacked_payload(&[&[]]);
-        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
-            .expect_err("empty u8 element should be rejected");
-        assert!(matches!(err, ncore::Error::LengthMismatch));
+    fn structural_error_is_not_masked_by_recharging_the_element_budget() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.push(1);
+        let limits =
+            ncore::DecodeLimits::new(2, usize::MAX, 2, usize::MAX, ncore::MAX_VALUE_NESTING_DEPTH);
+        let error = ncore::with_decode_limits(limits, || decode_const_vec_exact::<u8>(&bytes))
+            .expect_err("the missing second element must remain the reported error");
+        assert!(
+            matches!(error, ncore::Error::LengthMismatch),
+            "one-pass decoding must preserve the initial structural error: {error:?}"
+        );
     }
     #[test]
     fn invalid_element_fails_without_recursing() {

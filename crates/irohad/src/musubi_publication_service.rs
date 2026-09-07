@@ -1,7 +1,7 @@
 //! Supervised deployment boundary for the private Musubi publication service.
 //!
 //! The stock daemon injects nothing and therefore opens no publication listener. A deployment
-//! may construct the transport-independent service from `iroha::musubi_runtime`, retain its TLS
+//! may construct the transport-independent service from `iroha_musubi_service`, retain its TLS
 //! and signing material outside argv and repository configuration, and inject an authenticated
 //! HTTPS ingress here. This module never routes through Torii or the daemon-private runtime
 //! provider broker.
@@ -169,7 +169,7 @@ pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// Implementations must enforce TLS, reject duplicate security-sensitive headers, bound the
     /// body before allocation, strip only their configured private mount prefix, and pass the
     /// exact uppercase method plus path/header/body values to
-    /// `iroha::musubi_runtime::MusubiPublicationPrivateServiceV1`.
+    /// `iroha_musubi_service::MusubiPublicationPrivateServiceV1`.
     /// The runner owns that core together with its injected durable journal, signer, and
     /// `SoraFS` backends; `irohad` never receives those secrets or dependency objects.
     fn serve(self: Box<Self>, shutdown: ShutdownSignal) -> MusubiPublicationPrivateIngressFutureV1;

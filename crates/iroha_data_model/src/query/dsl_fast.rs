@@ -521,8 +521,15 @@ impl<T> CompoundPredicate<T> {
         predicate_json_applies(predicate, &value)
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::query::dsl::CompoundPredicateWire")]
 enum CompoundPredicateWire {
     Pass,
@@ -555,12 +562,12 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
                 if norito::core::use_packed_struct() {
                     norito::core::NoritoSerialize::serialize(raw, writer)
                 } else {
-                    norito::core::write_len_prefixed_exact(writer, raw, &mut field)
+                    norito::core::write_len_prefixed(writer, raw, &mut field)
                 }
             }
             Self::TxPredicate(tree) => {
                 norito::core::NoritoSerialize::serialize(&2_u32, writer)?;
-                norito::core::write_len_prefixed_exact(writer, *tree, &mut field)
+                norito::core::write_len_prefixed(writer, *tree, &mut field)
             }
         }
     }

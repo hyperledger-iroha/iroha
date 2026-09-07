@@ -1653,7 +1653,7 @@ impl norito::NoritoSerialize for ProofAttachment {
             value: &T,
             scratch: &mut ncore::DeriveSmallBuf,
         ) -> Result<(), ncore::Error> {
-            ncore::write_len_prefixed_exact(writer, value, scratch)
+            ncore::write_len_prefixed(writer, value, scratch)
         }
         let mut scratch = ncore::DeriveSmallBuf::new();
         write_prefixed(writer, &self.backend, &mut scratch)?;

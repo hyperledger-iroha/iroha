@@ -18,17 +18,17 @@ use core::{array, fmt};
 use halo2_proofs::{
     circuit::{Cell, Layouter, SimpleFloorPlanner, Value},
     halo2curves::ff::{Field, PrimeField},
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Instance, Selector},
+    plonk::{Circuit, ConstraintSystem, Error, Expression, Selector},
     poly::Rotation,
 };
-use zeroize::{DefaultIsZeroes, Zeroizing};
+use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod tests;
 
-use super::{
-    KaigiPoseidonConfig, POSEIDON_FULL_ROUNDS, POSEIDON_PARTIAL_ROUNDS, POSEIDON_ROUNDS, Scalar,
-    configure_poseidon, poseidon_constants, poseidon_round, poseidon_round_value,
+use super::{POSEIDON_ROUNDS, Scalar};
+use crate::relation_v1::{
+    AssignedValue, KaigiRelationConfigV1, ScalarSlots, assign_range, assign_sponge, sponge,
 };
 
 /// Fixed log2 domain size for the complete authorization relation.
@@ -37,10 +37,12 @@ pub const KAIGI_AUTHORIZATION_CIRCUIT_K_V1: u32 = 13;
 pub const KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1: usize = 31;
 /// Canonical circuit identity for the final authorization relation.
 pub const KAIGI_AUTHORIZATION_CIRCUIT_ID_V1: &str = "halo2/pasta/ipa/kaigi-authorization-v1";
+/// Internal dispatcher key obtained from the canonical IPA circuit identifier.
+pub const KAIGI_AUTHORIZATION_BACKEND_V1: &str = "halo2/pasta/kaigi-authorization-v1";
 /// Canonical public-input schema for the final authorization relation.
 pub const KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = b"kaigi-authorization-v1";
 /// Goldilocks modulus; every identity limb is strictly below this value.
-pub const KAIGI_IDENTITY_FIELD_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
+pub const KAIGI_IDENTITY_FIELD_MODULUS_V1: u64 = crate::relation_v1::GOLDILOCKS_MODULUS_V1;
 
 const CONTEXT_WORDS: usize = 28;
 const SEQUENCE_ROW: usize = 22;
@@ -167,7 +169,7 @@ impl KaigiAuthorizationContextV1 {
         Ok(())
     }
 
-    fn words(&self) -> [Scalar; CONTEXT_WORDS] {
+    pub(super) fn words(&self) -> [Scalar; CONTEXT_WORDS] {
         let mut words = [Scalar::ZERO; CONTEXT_WORDS];
         for (index, chunk) in self.network_id.chunks_exact(8).enumerate() {
             words[index] = Scalar::from(u64::from_le_bytes(chunk.try_into().expect("fixed limb")));
@@ -208,8 +210,15 @@ impl KaigiAuthorizationWitnessV1 {
         Ok(witness)
     }
 
-    fn scalar(&self) -> Scalar {
+    pub(super) fn scalar(&self) -> Scalar {
         Option::<Scalar>::from(Scalar::from_repr(*self.bytes)).expect("validated blinding")
+    }
+
+    #[cfg(test)]
+    pub(super) fn unchecked_for_constraint_test(value: Scalar) -> Self {
+        Self {
+            bytes: Box::new(value.to_repr()),
+        }
     }
 
     fn clear(&mut self) {
@@ -280,44 +289,11 @@ impl KaigiAuthorizationPublicInputsV1 {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ScalarSlots<const N: usize>([Scalar; N]);
-impl<const N: usize> Default for ScalarSlots<N> {
-    fn default() -> Self {
-        Self([Scalar::ZERO; N])
-    }
-}
-// Every byte of these concrete Pasta field slots is replaced by field ZERO.
-impl<const N: usize> DefaultIsZeroes for ScalarSlots<N> {}
-
-fn sponge(domain: u64, payload: &[Scalar]) -> Scalar {
-    // Fixed role, exact payload length, terminator one, then at most one rate pad.
-    let mut state = Zeroizing::new(ScalarSlots([
-        Scalar::ZERO,
-        Scalar::ZERO,
-        Scalar::from(domain),
-    ]));
-    let mut input = payload.iter().copied().chain(core::iter::once(Scalar::ONE));
-    let mut first = Some(Scalar::from(payload.len() as u64));
-    loop {
-        let Some(left) = first.take().or_else(|| input.next()) else {
-            break;
-        };
-        let right = input.next().unwrap_or(Scalar::ZERO);
-        state.0[0] += left;
-        state.0[1] += right;
-        for round in 0..POSEIDON_ROUNDS {
-            state.0 = poseidon_round(state.0, round);
-        }
-    }
-    state.0[0]
-}
-
 fn compute_words(words: &[Scalar; CONTEXT_WORDS], blinding: Scalar) -> KaigiAuthorizationOutputsV1 {
+    let commitment =
+        compute_identity_commitment_v1(words[..23].try_into().expect("fixed identity"), blinding);
     let mut payload = Zeroizing::new(ScalarSlots::<31>::default());
     payload.0[..23].copy_from_slice(&words[..23]);
-    payload.0[23] = blinding;
-    let commitment = sponge(DOMAIN_COMMITMENT, &payload.0[..24]);
     payload.0[23] = words[ACTION_ROW];
     let nullifier = sponge(DOMAIN_NULLIFIER, &payload.0[..24]);
     payload.0[24..28].copy_from_slice(&words[ROOT_ROW..CONTEXT_WORDS]);
@@ -330,6 +306,25 @@ fn compute_words(words: &[Scalar; CONTEXT_WORDS], blinding: Scalar) -> KaigiAuth
         nullifier,
         authorization,
     }
+}
+
+pub(super) fn compute_identity_commitment_v1(identity: &[Scalar; 23], blinding: Scalar) -> Scalar {
+    let mut payload = Zeroizing::new(ScalarSlots::<24>::default());
+    payload.0[..23].copy_from_slice(identity);
+    payload.0[23] = blinding;
+    sponge(DOMAIN_COMMITMENT, &payload.0)
+}
+
+pub(super) fn assign_identity_commitment_v1(
+    layouter: &mut impl Layouter<Scalar>,
+    shared: &KaigiRelationConfigV1,
+    offset: usize,
+    identity: &[AssignedValue; 23],
+    secret: AssignedValue,
+) -> Result<AssignedValue, Error> {
+    let mut payload = identity.to_vec();
+    payload.push(secret);
+    assign_sponge(layouter, shared, offset, DOMAIN_COMMITMENT, &payload)
 }
 
 /// Compute the same fixed framed relation as the circuit after checking its public roles.
@@ -345,16 +340,7 @@ pub fn compute_authorization_v1(
 /// Configuration of the fixed single-column authorization circuit.
 #[derive(Clone, Debug)]
 pub struct KaigiAuthorizationConfigV1 {
-    poseidon: KaigiPoseidonConfig,
-    instance: Column<Instance>,
-    value: Column<Advice>,
-    previous: [Column<Advice>; 3],
-    input: [Column<Advice>; 2],
-    range_accumulator: Column<Advice>,
-    range_bit: Column<Advice>,
-    q_absorb: Selector,
-    q_range: Selector,
-    q_goldilocks: Selector,
+    shared: KaigiRelationConfigV1,
     q_host_identity: Selector,
     q_identity_difference: Selector,
     q_role: Selector,
@@ -404,63 +390,13 @@ impl Circuit<Scalar> for KaigiAuthorizationCircuitV1 {
     }
 
     fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        let poseidon = configure_poseidon(meta);
-        let instance = meta.instance_column();
-        meta.enable_equality(instance);
-        let value = meta.advice_column();
-        let previous = array::from_fn(|_| meta.advice_column());
-        let input = array::from_fn(|_| meta.advice_column());
-        let range_accumulator = meta.advice_column();
-        let range_bit = meta.advice_column();
-        for column in [value, range_accumulator]
-            .into_iter()
-            .chain(previous)
-            .chain(input)
-        {
-            meta.enable_equality(column);
-        }
-        let constants = meta.fixed_column();
-        meta.enable_constant(constants);
-        let q_absorb = meta.selector();
-        let q_range = meta.selector();
-        let q_goldilocks = meta.selector();
+        let shared = KaigiRelationConfigV1::configure(meta);
+        let value = shared.value;
+        let previous = shared.previous;
+        let input = shared.input;
         let q_host_identity = meta.selector();
         let q_identity_difference = meta.selector();
         let q_role = meta.selector();
-        meta.create_gate("Kaigi framed sponge absorption", |meta| {
-            let q = meta.query_selector(q_absorb);
-            (0..3)
-                .map(|index| {
-                    let absorbed = if index < 2 {
-                        meta.query_advice(input[index], Rotation::cur())
-                    } else {
-                        Expression::Constant(Scalar::ZERO)
-                    };
-                    q.clone()
-                        * (meta.query_advice(poseidon.state[index], Rotation::cur())
-                            - meta.query_advice(previous[index], Rotation::cur())
-                            - absorbed)
-                })
-                .collect::<Vec<_>>()
-        });
-        meta.create_gate("Kaigi exact u64 limb", |meta| {
-            let q = meta.query_selector(q_range);
-            let bit = meta.query_advice(range_bit, Rotation::cur());
-            let acc = meta.query_advice(range_accumulator, Rotation::cur());
-            let next = meta.query_advice(range_accumulator, Rotation::next());
-            vec![
-                q.clone() * bit.clone() * (bit.clone() - Expression::Constant(Scalar::ONE)),
-                q * (acc - bit - next * Scalar::from(2)),
-            ]
-        });
-        meta.create_gate("Kaigi canonical Goldilocks limb", |meta| {
-            vec![
-                meta.query_selector(q_goldilocks)
-                    * (meta.query_advice(previous[0], Rotation::cur())
-                        + meta.query_advice(previous[1], Rotation::cur())
-                        - Expression::Constant(Scalar::from(KAIGI_IDENTITY_FIELD_MODULUS_V1 - 1))),
-            ]
-        });
         meta.create_gate("Kaigi host identity", |meta| {
             vec![
                 meta.query_selector(q_host_identity)
@@ -504,16 +440,7 @@ impl Circuit<Scalar> for KaigiAuthorizationCircuitV1 {
             ]
         });
         KaigiAuthorizationConfigV1 {
-            poseidon,
-            instance,
-            value,
-            previous,
-            input,
-            range_accumulator,
-            range_bit,
-            q_absorb,
-            q_range,
-            q_goldilocks,
+            shared,
             q_host_identity,
             q_identity_difference,
             q_role,
@@ -536,49 +463,89 @@ impl Circuit<Scalar> for KaigiAuthorizationCircuitV1 {
             || "Kaigi typed context",
             |mut region| {
                 let cells = array::from_fn(|row| {
-                    region.assign_advice(config.value, row, words[row]).cell()
+                    region
+                        .assign_advice(config.shared.value, row, words[row])
+                        .cell()
                 });
                 let secret = region
-                    .assign_advice(config.value, CONTEXT_WORDS, blinding)
+                    .assign_advice(config.shared.value, CONTEXT_WORDS, blinding)
                     .cell();
                 Ok((cells, secret))
             },
         )?;
         let cells: [Cell; CONTEXT_WORDS] = cells;
         for (row, cell) in cells.iter().enumerate() {
-            layouter.constrain_instance(*cell, config.instance, row);
+            layouter.constrain_instance(*cell, config.shared.instance, row);
         }
+        // The pinned Axiom SimpleFloorPlanner uses absolute assignment rows.
+        // Reserve disjoint offsets explicitly for every fixed-shape gadget.
+        let mut offset = CONTEXT_WORDS + 1;
         for row in (0..CONTEXT_WORDS).filter(|row| *row != ACTION_ROW) {
-            assign_range64(&mut layouter, &config, (cells[row], words[row]))?;
+            assign_range::<64>(
+                &mut layouter,
+                &config.shared,
+                offset,
+                (cells[row], words[row]),
+            )?;
+            offset += 65;
             if (4..22).contains(&row) {
                 let complement = words[row]
                     .map(|value| Scalar::from(KAIGI_IDENTITY_FIELD_MODULUS_V1 - 1) - value);
                 let complement_cell = layouter.assign_region(
                     || "Kaigi Goldilocks complement",
                     |mut region| {
-                        config.q_goldilocks.enable(&mut region, 0)?;
+                        config.shared.q_goldilocks.enable(&mut region, offset)?;
                         let value = region
-                            .assign_advice(config.previous[0], 0, words[row])
+                            .assign_advice(config.shared.previous[0], offset, words[row])
                             .cell();
                         region.constrain_equal(value, cells[row]);
                         Ok(region
-                            .assign_advice(config.previous[1], 0, complement)
+                            .assign_advice(config.shared.previous[1], offset, complement)
                             .cell())
                     },
                 )?;
-                assign_range64(&mut layouter, &config, (complement_cell, complement))?;
+                offset += 1;
+                assign_range::<64>(
+                    &mut layouter,
+                    &config.shared,
+                    offset,
+                    (complement_cell, complement),
+                )?;
+                offset += 65;
             }
         }
-        assign_roles(&mut layouter, &config, &cells, &words, (secret, blinding))?;
+        assign_roles(
+            &mut layouter,
+            &config,
+            offset,
+            &cells,
+            &words,
+            (secret, blinding),
+        )?;
+        offset += 7;
         let mut payload = cells[..23]
             .iter()
             .copied()
             .zip(words[..23].iter().copied())
             .collect::<Vec<_>>();
         payload.push((secret, blinding));
-        let commitment = assign_sponge(&mut layouter, &config, DOMAIN_COMMITMENT, &payload)?;
+        let commitment = assign_identity_commitment_v1(
+            &mut layouter,
+            &config.shared,
+            offset,
+            payload[..23].try_into().expect("fixed identity"),
+            (secret, blinding),
+        )?;
+        offset += (payload.len() + 2).div_ceil(2) * (POSEIDON_ROUNDS + 1);
         payload[23] = (cells[ACTION_ROW], words[ACTION_ROW]);
-        let nullifier = assign_sponge(&mut layouter, &config, DOMAIN_NULLIFIER, &payload)?;
+        let nullifier = assign_sponge(
+            &mut layouter,
+            &config.shared,
+            offset,
+            DOMAIN_NULLIFIER,
+            &payload,
+        )?;
+        offset += (payload.len() + 2).div_ceil(2) * (POSEIDON_ROUNDS + 1);
         payload.extend(
             cells[ROOT_ROW..]
                 .iter()
@@ -586,56 +553,28 @@ impl Circuit<Scalar> for KaigiAuthorizationCircuitV1 {
                 .zip(words[ROOT_ROW..].iter().copied()),
         );
         payload.extend([commitment, nullifier, (secret, blinding)]);
-        let authorization = assign_sponge(&mut layouter, &config, DOMAIN_AUTHORIZATION, &payload)?;
+        let authorization = assign_sponge(
+            &mut layouter,
+            &config.shared,
+            offset,
+            DOMAIN_AUTHORIZATION,
+            &payload,
+        )?;
         for (row, (cell, _)) in [
             (COMMITMENT_ROW, commitment),
             (NULLIFIER_ROW, nullifier),
             (AUTHORIZATION_ROW, authorization),
         ] {
-            layouter.constrain_instance(cell, config.instance, row);
+            layouter.constrain_instance(cell, config.shared.instance, row);
         }
         Ok(())
     }
 }
 
-type AssignedValue = (Cell, Value<Scalar>);
-
-fn assign_range64(
-    layouter: &mut impl Layouter<Scalar>,
-    config: &KaigiAuthorizationConfigV1,
-    source: AssignedValue,
-) -> Result<(), Error> {
-    layouter.assign_region(
-        || "Kaigi u64 range",
-        |mut region| {
-            let mut accumulator = source.1;
-            let initial = region
-                .assign_advice(config.range_accumulator, 0, accumulator)
-                .cell();
-            region.constrain_equal(initial, source.0);
-            for bit_index in 0..64 {
-                config.q_range.enable(&mut region, bit_index)?;
-                let bit = source.1.map(|value| {
-                    let repr = value.to_repr();
-                    Scalar::from(u64::from((repr[bit_index / 8] >> (bit_index % 8)) & 1))
-                });
-                region.assign_advice(config.range_bit, bit_index, bit);
-                accumulator = (accumulator - bit) * Value::known(Scalar::from(2).invert().unwrap());
-                let cell = region
-                    .assign_advice(config.range_accumulator, bit_index + 1, accumulator)
-                    .cell();
-                if bit_index == 63 {
-                    region.constrain_constant(cell, Scalar::ZERO)?;
-                }
-            }
-            Ok(())
-        },
-    )
-}
-
 fn assign_roles(
     layouter: &mut impl Layouter<Scalar>,
     config: &KaigiAuthorizationConfigV1,
+    offset: usize,
     cells: &[Cell; CONTEXT_WORDS],
     words: &[Value<Scalar>; CONTEXT_WORDS],
     secret: AssignedValue,
@@ -647,14 +586,15 @@ fn assign_roles(
             let mut sum = Value::known(Scalar::ZERO);
             let mut previous_sum = None;
             for index in 0..6 {
-                config.q_host_identity.enable(&mut region, index)?;
-                config.q_identity_difference.enable(&mut region, index)?;
+                let row = offset + index;
+                config.q_host_identity.enable(&mut region, row)?;
+                config.q_identity_difference.enable(&mut region, row)?;
                 for (column, source) in [
-                    (config.value, ACTION_ROW),
-                    (config.previous[0], 10 + index),
-                    (config.previous[1], 16 + index),
+                    (config.shared.value, ACTION_ROW),
+                    (config.shared.previous[0], 10 + index),
+                    (config.shared.previous[1], 16 + index),
                 ] {
-                    let cell = region.assign_advice(column, index, words[source]).cell();
+                    let cell = region.assign_advice(column, row, words[source]).cell();
                     region.constrain_equal(cell, cells[source]);
                 }
                 let difference = words[10 + index] - words[16 + index];
@@ -668,142 +608,50 @@ fn assign_roles(
                 selected = selected
                     .zip(difference)
                     .map(|(selected, difference)| selected || !bool::from(difference.is_zero()));
-                region.assign_advice(config.previous[2], index, inverse);
-                let before = region.assign_advice(config.input[0], index, sum).cell();
+                region.assign_advice(config.shared.previous[2], row, inverse);
+                let before = region
+                    .assign_advice(config.shared.input[0], row, sum)
+                    .cell();
                 if let Some(previous) = previous_sum {
                     region.constrain_equal(before, previous);
                 } else {
                     region.constrain_constant(before, Scalar::ZERO)?;
                 }
                 sum = sum + difference * inverse;
-                previous_sum = Some(region.assign_advice(config.input[1], index, sum).cell());
+                previous_sum = Some(
+                    region
+                        .assign_advice(config.shared.input[1], row, sum)
+                        .cell(),
+                );
             }
-            let row = 6;
+            let row = offset + 6;
             config.q_role.enable(&mut region, row)?;
             for (column, source) in [
-                (config.value, ACTION_ROW),
-                (config.previous[0], SEQUENCE_ROW),
+                (config.shared.value, ACTION_ROW),
+                (config.shared.previous[0], SEQUENCE_ROW),
             ] {
                 let cell = region.assign_advice(column, row, words[source]).cell();
                 region.constrain_equal(cell, cells[source]);
             }
             region.assign_advice(
-                config.previous[1],
+                config.shared.previous[1],
                 row,
                 words[SEQUENCE_ROW].map(|v| v.invert().unwrap_or(Scalar::ZERO)),
             );
             let blind = region
-                .assign_advice(config.previous[2], row, secret.1)
+                .assign_advice(config.shared.previous[2], row, secret.1)
                 .cell();
             region.constrain_equal(blind, secret.0);
             region.assign_advice(
-                config.input[1],
+                config.shared.input[1],
                 row,
                 secret.1.map(|v| v.invert().unwrap_or(Scalar::ZERO)),
             );
-            let difference = region.assign_advice(config.input[0], row, sum).cell();
+            let difference = region
+                .assign_advice(config.shared.input[0], row, sum)
+                .cell();
             region.constrain_equal(difference, previous_sum.expect("six fixed identity limbs"));
             Ok(())
-        },
-    )
-}
-
-fn assign_sponge(
-    layouter: &mut impl Layouter<Scalar>,
-    config: &KaigiAuthorizationConfigV1,
-    domain: u64,
-    payload: &[AssignedValue],
-) -> Result<AssignedValue, Error> {
-    layouter.assign_region(
-        || "Kaigi framed Poseidon sponge",
-        |mut region| {
-            let mut framed = Vec::with_capacity(payload.len() + 3);
-            framed.push((None, Value::known(Scalar::from(payload.len() as u64))));
-            framed.extend(payload.iter().map(|(cell, value)| (Some(*cell), *value)));
-            framed.push((None, Value::known(Scalar::ONE)));
-            if framed.len() % 2 != 0 {
-                framed.push((None, Value::known(Scalar::ZERO)));
-            }
-            let mut state = [
-                Value::known(Scalar::ZERO),
-                Value::known(Scalar::ZERO),
-                Value::known(Scalar::from(domain)),
-            ];
-            let mut state_cells: Option<[Cell; 3]> = None;
-            for (block, pair) in framed.chunks_exact(2).enumerate() {
-                let start = block * (POSEIDON_ROUNDS + 1);
-                config.q_absorb.enable(&mut region, start)?;
-                for index in 0..3 {
-                    let cell = region
-                        .assign_advice(config.previous[index], start, state[index])
-                        .cell();
-                    if let Some(previous) = state_cells {
-                        region.constrain_equal(cell, previous[index]);
-                    } else {
-                        region.constrain_constant(
-                            cell,
-                            if index == 2 {
-                                Scalar::from(domain)
-                            } else {
-                                Scalar::ZERO
-                            },
-                        )?;
-                    }
-                }
-                for index in 0..2 {
-                    let cell = region
-                        .assign_advice(config.input[index], start, pair[index].1)
-                        .cell();
-                    if let Some(source) = pair[index].0 {
-                        region.constrain_equal(cell, source);
-                    } else {
-                        let constant = if block == 0 && index == 0 {
-                            Scalar::from(payload.len() as u64)
-                        } else if block * 2 + index == payload.len() + 1 {
-                            Scalar::ONE
-                        } else {
-                            Scalar::ZERO
-                        };
-                        region.constrain_constant(cell, constant)?;
-                    }
-                    state[index] = state[index] + pair[index].1;
-                }
-                for index in 0..3 {
-                    region.assign_advice(config.poseidon.state[index], start, state[index]);
-                }
-                for round in 0..POSEIDON_ROUNDS {
-                    for index in 0..3 {
-                        region.assign_fixed(
-                            config.poseidon.round_constants[index],
-                            start + round,
-                            poseidon_constants().round_constants[round][index],
-                        );
-                    }
-                    let half = POSEIDON_FULL_ROUNDS / 2;
-                    if round < half || round >= half + POSEIDON_PARTIAL_ROUNDS {
-                        config
-                            .poseidon
-                            .q_full_round
-                            .enable(&mut region, start + round)?;
-                    } else {
-                        config
-                            .poseidon
-                            .q_partial_round
-                            .enable(&mut region, start + round)?;
-                    }
-                    state = poseidon_round_value(state, round);
-                    state_cells = Some(array::from_fn(|index| {
-                        region
-                            .assign_advice(
-                                config.poseidon.state[index],
-                                start + round + 1,
-                                state[index],
-                            )
-                            .cell()
-                    }));
-                }
-            }
-            Ok((state_cells.expect("fixed nonempty frame")[0], state[0]))
         },
     )
 }

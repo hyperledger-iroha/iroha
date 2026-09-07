@@ -7,6 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
+    kaigi::scalar::KaigiAuthorizationScalarV1,
     kaigi::{
         KAIGI_MAX_PARTICIPANTS_V1, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
         KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
@@ -31,7 +32,7 @@ use std::{
 pub enum Command {
     /// Create a new Kaigi session.
     Create(CreateArgs),
-    /// Bootstrap a Kaigi session for demos and shareable testing metadata.
+    /// Bootstrap a transparent Kaigi session and shareable testing metadata.
     Quickstart(QuickstartArgs),
     /// Register or update a Kaigi relay descriptor.
     RegisterRelay(RegisterRelayArgs),
@@ -108,18 +109,12 @@ pub struct CreateArgs {
     /// Path to a JSON file providing additional metadata (object with string keys).
     #[arg(long, value_name = "PATH")]
     pub metadata_json: Option<String>,
-    /// Commitment hash (hex) for privacy mode creation.
+    /// Canonical Pasta commitment (little-endian hex) for privacy mode creation.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Reserved on-chain alias tag; must be omitted to avoid ledger disclosure.
-    #[arg(long)]
-    pub commitment_alias: Option<String>,
-    /// Nullifier hash (hex) preventing proof replay (privacy mode).
+    /// Canonical Pasta nullifier (little-endian hex) preventing proof replay (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Reserved on-chain timing field; must be omitted or zero.
-    #[arg(long, value_name = "U64")]
-    pub nullifier_issued_at_ms: Option<u64>,
     /// Roster Merkle root bound into the proof transcript (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub roster_root_hex: Option<String>,
@@ -158,9 +153,7 @@ impl Run for CreateArgs {
         }
         let privacy = parse_optional_privacy_artifacts(
             self.commitment_hex.as_deref(),
-            self.commitment_alias.as_deref(),
             self.nullifier_hex.as_deref(),
-            self.nullifier_issued_at_ms,
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
@@ -187,9 +180,6 @@ pub struct QuickstartArgs {
     /// Host account identifier responsible for the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: Option<String>,
-    /// Privacy mode for the session (defaults to `transparent`).
-    #[arg(long, value_enum, default_value_t = PrivacyModeArg::Transparent)]
-    pub privacy_mode: PrivacyModeArg,
     /// Room access policy controlling viewer authentication.
     #[arg(long, value_enum, default_value_t = RoomPolicyArg::Authenticated)]
     pub room_policy: RoomPolicyArg,
@@ -213,7 +203,6 @@ impl Run for QuickstartArgs {
             None => context.config().account.clone(),
         };
         let mut template = NewKaigi::with_defaults(call_id.clone(), host.clone());
-        template.privacy_mode = self.privacy_mode.into();
         template.room_policy = self.room_policy.into();
         if let Some(path) = self.relay_manifest {
             template.relay_manifest = Some(read_manifest(&path)?);
@@ -277,7 +266,6 @@ fn quickstart_instructions(template: NewKaigi) -> [iroha::data_model::isi::Instr
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyModeArg {
     Transparent,
-    #[clap(alias = "zk", alias = "zk_roster_v1")]
     ZkRosterV1,
 }
 impl From<PrivacyModeArg> for KaigiPrivacyMode {
@@ -444,18 +432,12 @@ pub struct JoinArgs {
     /// Participant account joining the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
-    /// Commitment hash (hex) for privacy mode joins.
+    /// Canonical Pasta commitment (little-endian hex) for privacy mode joins.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Reserved on-chain alias tag; must be omitted to avoid ledger disclosure.
-    #[arg(long)]
-    pub commitment_alias: Option<String>,
-    /// Nullifier hash (hex) preventing duplicate joins (privacy mode).
+    /// Canonical Pasta nullifier (little-endian hex) preventing duplicate joins (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Reserved on-chain timing field; must be omitted or zero.
-    #[arg(long, value_name = "U64")]
-    pub nullifier_issued_at_ms: Option<u64>,
     /// Roster Merkle root bound into the proof transcript (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub roster_root_hex: Option<String>,
@@ -470,9 +452,7 @@ impl Run for JoinArgs {
             .wrap_err("failed to resolve participant account")?;
         let privacy = parse_optional_privacy_artifacts(
             self.commitment_hex.as_deref(),
-            self.commitment_alias.as_deref(),
             self.nullifier_hex.as_deref(),
-            self.nullifier_issued_at_ms,
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
@@ -493,12 +473,9 @@ struct KaigiCommitmentBuilder {
 }
 impl KaigiCommitmentBuilder {
     fn new(hex: &str) -> Result<Self> {
-        let hash = parse_hash(hex)?;
+        let scalar = parse_scalar(hex)?;
         Ok(Self {
-            commitment: KaigiParticipantCommitment {
-                commitment: hash,
-                alias_tag: None,
-            },
+            commitment: KaigiParticipantCommitment { commitment: scalar },
         })
     }
 }
@@ -511,27 +488,15 @@ struct ParsedKaigiPrivacyArtifacts {
 }
 fn parse_optional_privacy_artifacts(
     commitment_hex: Option<&str>,
-    commitment_alias: Option<&str>,
     nullifier_hex: Option<&str>,
-    nullifier_issued_at_ms: Option<u64>,
     roster_root_hex: Option<&str>,
     proof_hex: Option<&str>,
 ) -> Result<ParsedKaigiPrivacyArtifacts> {
-    if commitment_alias.is_some() {
-        eyre::bail!(
-            "commitment aliases are off-chain only and must be omitted from Kaigi privacy instructions"
-        );
-    }
-    if nullifier_issued_at_ms.is_some_and(|issued_at_ms| issued_at_ms != 0) {
-        eyre::bail!("nullifier issuance timestamps are off-chain only and must be omitted or zero");
-    }
     let commitment = commitment_hex
         .map(KaigiCommitmentBuilder::new)
         .transpose()?
         .map(|builder| builder.commitment);
-    let nullifier = nullifier_hex
-        .map(|hex| build_nullifier(hex, nullifier_issued_at_ms))
-        .transpose()?;
+    let nullifier = nullifier_hex.map(|hex| build_nullifier(hex)).transpose()?;
     let roster_root = roster_root_hex
         .map(|hex| parse_hash(hex).wrap_err("invalid roster root hex"))
         .transpose()?;
@@ -562,12 +527,9 @@ fn parse_optional_privacy_artifacts(
         proof,
     })
 }
-fn build_nullifier(hex: &str, issued_at_ms: Option<u64>) -> Result<KaigiParticipantNullifier> {
-    let digest = parse_hash(hex)?;
-    let issued_at_ms = issued_at_ms.unwrap_or_default();
+fn build_nullifier(hex: &str) -> Result<KaigiParticipantNullifier> {
     Ok(KaigiParticipantNullifier {
-        digest,
-        issued_at_ms,
+        digest: parse_scalar(hex)?,
     })
 }
 #[derive(Args, Debug)]
@@ -587,22 +549,18 @@ pub struct LeaveArgs {
     /// Reserved privacy-leave nullifier; must be omitted because privacy-mode leave is off-chain.
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Reserved privacy-leave timing field; must be omitted.
-    #[arg(long, value_name = "U64")]
-    pub nullifier_issued_at_ms: Option<u64>,
-    /// Reserved privacy-leave roster root; must be omitted.
+    /// Current roster root, required for private leave.
     #[arg(long, value_name = "HEX")]
     pub roster_root_hex: Option<String>,
-    /// Reserved privacy-leave proof; must be omitted.
+    /// Final authorization proof, required for private leave.
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
 impl Run for LeaveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_leave_privacy_arguments(
+        let privacy = parse_optional_privacy_artifacts(
             self.commitment_hex.as_deref(),
             self.nullifier_hex.as_deref(),
-            self.nullifier_issued_at_ms,
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
@@ -613,10 +571,10 @@ impl Run for LeaveArgs {
             Box::new(iroha::data_model::isi::kaigi::LeaveKaigi {
                 call_id,
                 participant,
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
+                commitment: privacy.commitment,
+                nullifier: privacy.nullifier,
+                roster_root: privacy.roster_root,
+                proof: privacy.proof,
             }),
         )])
     }
@@ -632,18 +590,12 @@ pub struct EndArgs {
     /// Optional end timestamp between call creation and the current block time.
     #[arg(long, value_name = "U64")]
     pub ended_at_ms: Option<u64>,
-    /// Commitment hash (hex) for privacy mode end requests.
+    /// Canonical Pasta commitment (little-endian hex) for privacy mode end requests.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Reserved on-chain alias tag; must be omitted to avoid ledger disclosure.
-    #[arg(long)]
-    pub commitment_alias: Option<String>,
-    /// Nullifier hash (hex) preventing proof replay (privacy mode).
+    /// Canonical Pasta nullifier (little-endian hex) preventing proof replay (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Reserved on-chain timing field; must be omitted or zero.
-    #[arg(long, value_name = "U64")]
-    pub nullifier_issued_at_ms: Option<u64>,
     /// Roster Merkle root bound into the proof transcript (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub roster_root_hex: Option<String>,
@@ -656,9 +608,7 @@ impl Run for EndArgs {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let privacy = parse_optional_privacy_artifacts(
             self.commitment_hex.as_deref(),
-            self.commitment_alias.as_deref(),
             self.nullifier_hex.as_deref(),
-            self.nullifier_issued_at_ms,
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
@@ -688,7 +638,7 @@ pub struct RecordUsageArgs {
     /// Gas billed for this segment.
     #[arg(long, value_name = "U64", default_value_t = 0)]
     pub billed_gas: u64,
-    /// Optional usage commitment hash (privacy mode).
+    /// Optional canonical Pasta usage commitment (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub usage_commitment_hex: Option<String>,
     /// Optional proof bytes attesting the usage delta (privacy mode).
@@ -701,7 +651,7 @@ impl Run for RecordUsageArgs {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let usage_commitment = self
             .usage_commitment_hex
-            .map(|hex| parse_hash(&hex).wrap_err("invalid usage commitment hex"))
+            .map(|hex| parse_scalar(&hex).wrap_err("invalid usage commitment hex"))
             .transpose()?;
         let proof = self
             .proof_hex
@@ -852,29 +802,18 @@ fn validate_create_privacy_artifacts(
     {
         eyre::bail!("transparent Kaigi sessions must not include privacy artifacts");
     }
-    Ok(())
-}
-fn validate_leave_privacy_arguments(
-    commitment_hex: Option<&str>,
-    nullifier_hex: Option<&str>,
-    nullifier_issued_at_ms: Option<u64>,
-    roster_root_hex: Option<&str>,
-    proof_hex: Option<&str>,
-) -> Result<()> {
-    if commitment_hex.is_some()
-        || nullifier_hex.is_some()
-        || nullifier_issued_at_ms.is_some()
-        || roster_root_hex.is_some()
-        || proof_hex.is_some()
+    if privacy_mode == KaigiPrivacyMode::ZkRosterV1
+        && (artifacts.commitment.is_none()
+            || artifacts.nullifier.is_none()
+            || artifacts.roster_root.is_none()
+            || artifacts.proof.is_none())
     {
-        eyre::bail!(
-            "Kaigi leave does not accept privacy artifacts; privacy-mode leave is off-chain only"
-        );
+        eyre::bail!("private Kaigi creation requires commitment, nullifier, roster root and proof");
     }
     Ok(())
 }
 fn validate_usage_privacy_artifacts(
-    usage_commitment: Option<&Hash>,
+    usage_commitment: Option<&KaigiAuthorizationScalarV1>,
     proof: Option<&[u8]>,
 ) -> Result<()> {
     if proof.is_some_and(|proof| proof.is_empty()) {
@@ -884,6 +823,14 @@ fn validate_usage_privacy_artifacts(
         eyre::bail!("usage commitment and privacy proof must be supplied together");
     }
     Ok(())
+}
+fn parse_scalar(hex: &str) -> Result<KaigiAuthorizationScalarV1> {
+    let bytes = decode_hex_vec(hex).wrap_err("invalid scalar hex")?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| eyre::eyre!("Kaigi scalar must be exactly 32 bytes"))?;
+    KaigiAuthorizationScalarV1::from_le_bytes(bytes)
+        .ok_or_else(|| eyre::eyre!("Kaigi scalar must be a canonical little-endian Pasta Fp value"))
 }
 fn parse_hash(hex: &str) -> Result<Hash> {
     let trimmed = hex.strip_prefix("0x").unwrap_or(hex);
@@ -937,7 +884,7 @@ mod tests {
         TestCli::parse_from(cli_argv).command
     }
     #[test]
-    fn clap_parses_create_with_privacy_alias() {
+    fn clap_parses_create_with_final_privacy_mode() {
         match parse_command(&[
             "create",
             "--domain",
@@ -947,7 +894,7 @@ mod tests {
             "--host",
             HOST_ACCOUNT,
             "--privacy-mode",
-            "zk",
+            "zk-roster-v1",
             "--gas-rate-per-minute",
             "42",
         ]) {
@@ -972,12 +919,8 @@ mod tests {
             HOST_ACCOUNT,
             "--commitment-hex",
             "0xdeadbeef",
-            "--commitment-alias",
-            "host",
             "--nullifier-hex",
             "cafebabe",
-            "--nullifier-issued-at-ms",
-            "123",
             "--roster-root-hex",
             "feedface",
             "--proof-hex",
@@ -985,9 +928,9 @@ mod tests {
         ]) {
             Command::Create(args) => {
                 assert_eq!(args.commitment_hex.as_deref(), Some("0xdeadbeef"));
-                assert_eq!(args.commitment_alias.as_deref(), Some("host"));
+
                 assert_eq!(args.nullifier_hex.as_deref(), Some("cafebabe"));
-                assert_eq!(args.nullifier_issued_at_ms, Some(123));
+
                 assert_eq!(args.roster_root_hex.as_deref(), Some("feedface"));
                 assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
             }
@@ -1006,12 +949,8 @@ mod tests {
             PARTICIPANT_ACCOUNT,
             "--commitment-hex",
             "0xdeadbeef",
-            "--commitment-alias",
-            "bob",
             "--nullifier-hex",
             "cafebabe",
-            "--nullifier-issued-at-ms",
-            "123",
             "--roster-root-hex",
             "feedface",
             "--proof-hex",
@@ -1022,9 +961,9 @@ mod tests {
                 assert_eq!(args.call_name, "daily");
                 assert_eq!(args.participant, PARTICIPANT_ACCOUNT);
                 assert_eq!(args.commitment_hex.as_deref(), Some("0xdeadbeef"));
-                assert_eq!(args.commitment_alias.as_deref(), Some("bob"));
+
                 assert_eq!(args.nullifier_hex.as_deref(), Some("cafebabe"));
-                assert_eq!(args.nullifier_issued_at_ms, Some(123));
+
                 assert_eq!(args.roster_root_hex.as_deref(), Some("feedface"));
                 assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
             }
@@ -1131,12 +1070,8 @@ mod tests {
             "daily",
             "--commitment-hex",
             "0xdeadbeef",
-            "--commitment-alias",
-            "host",
             "--nullifier-hex",
             "cafebabe",
-            "--nullifier-issued-at-ms",
-            "456",
             "--roster-root-hex",
             "feedface",
             "--proof-hex",
@@ -1144,9 +1079,9 @@ mod tests {
         ]) {
             Command::End(args) => {
                 assert_eq!(args.commitment_hex.as_deref(), Some("0xdeadbeef"));
-                assert_eq!(args.commitment_alias.as_deref(), Some("host"));
+
                 assert_eq!(args.nullifier_hex.as_deref(), Some("cafebabe"));
-                assert_eq!(args.nullifier_issued_at_ms, Some(456));
+
                 assert_eq!(args.roster_root_hex.as_deref(), Some("feedface"));
                 assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
             }
@@ -1211,6 +1146,13 @@ mod tests {
         );
     }
     #[test]
+    fn quickstart_cannot_request_a_private_call_without_host_proof_artifacts() {
+        assert!(
+            TestCli::try_parse_from(["test", "quickstart", "--privacy-mode", "zk-roster-v1"])
+                .is_err()
+        );
+    }
+    #[test]
     fn clap_parses_record_usage_with_privacy_fields() {
         match parse_command(&[
             "record-usage",
@@ -1235,11 +1177,12 @@ mod tests {
         }
     }
     #[test]
-    fn build_nullifier_defaults_to_zero_when_timestamp_missing() {
-        let hex = "ab".repeat(32);
-        let payload = format!("0x{hex}");
-        let nullifier = build_nullifier(&payload, None).expect("valid nullifier");
-        assert_eq!(nullifier.issued_at_ms, 0);
+    fn build_nullifier_preserves_the_complete_unmarked_scalar() {
+        let nullifier = build_nullifier(&"24".repeat(32)).unwrap();
+        assert_eq!(nullifier.digest.to_le_bytes(), [0x24; 32]);
+        assert!(build_nullifier(&"ff".repeat(32)).is_err());
+        assert!(build_nullifier(&"24".repeat(31)).is_err());
+        assert!(build_nullifier(&"24".repeat(33)).is_err());
     }
     #[test]
     fn local_scalar_validation_rejects_requests_core_would_refuse() {
@@ -1269,7 +1212,7 @@ mod tests {
         assert!(validate_relay_health_notes(Some(&max_notes)).is_ok());
         assert!(validate_relay_health_notes(Some(&oversized_notes)).is_err());
 
-        let hash_hex = "ab".repeat(32);
+        let hash_hex = "2b".repeat(32);
         assert!(parse_hash(&format!("0x{hash_hex}")).is_ok());
         assert!(parse_hash(&format!("0x0x{hash_hex}")).is_err());
         assert_eq!(
@@ -1341,79 +1284,62 @@ mod tests {
         assert!(validate_billing_account(&host, Some(&participant)).is_err());
     }
     #[test]
-    fn parse_optional_privacy_artifacts_builds_ledger_safe_fields() {
-        let commitment_hex = format!("0x{}", "ab".repeat(32));
-        let nullifier_hex = format!("0x{}", "cd".repeat(32));
-        let roster_root_hex = format!("0x{}", "ef".repeat(32));
+    fn parse_optional_privacy_artifacts_preserves_final_scalar_fields() {
+        let root = format!("0x{}", "ef".repeat(32));
         let artifacts = parse_optional_privacy_artifacts(
-            Some(&commitment_hex),
-            None,
-            Some(&nullifier_hex),
-            Some(0),
-            Some(&roster_root_hex),
+            Some(&"24".repeat(32)),
+            Some(&"26".repeat(32)),
+            Some(&root),
             Some("aa55"),
         )
-        .expect("valid privacy artifacts");
+        .unwrap();
         assert_eq!(
-            artifacts
-                .commitment
-                .as_ref()
-                .and_then(|commitment| commitment.alias_tag.as_deref()),
-            None
+            artifacts.commitment.unwrap().commitment.to_le_bytes(),
+            [0x24; 32]
         );
         assert_eq!(
-            artifacts
-                .nullifier
-                .as_ref()
-                .map(|nullifier| nullifier.issued_at_ms),
-            Some(0)
+            artifacts.nullifier.unwrap().digest.to_le_bytes(),
+            [0x26; 32]
         );
         assert_eq!(artifacts.proof, Some(vec![0xaa, 0x55]));
-        assert_eq!(
-            artifacts.roster_root,
-            Some(parse_hash(&roster_root_hex).unwrap())
-        );
+        assert_eq!(artifacts.roster_root, Some(parse_hash(&root).unwrap()));
     }
     #[test]
-    fn parse_optional_privacy_artifacts_rejects_clear_identity_hints() {
-        let commitment_hex = format!("0x{}", "ab".repeat(32));
-        let nullifier_hex = format!("0x{}", "cd".repeat(32));
-        let alias_error = parse_optional_privacy_artifacts(
-            Some(&commitment_hex),
-            Some("host"),
-            Some(&nullifier_hex),
-            None,
-            None,
-            None,
-        )
-        .expect_err("clear aliases must not enter ledger privacy artifacts");
-        assert!(alias_error.to_string().contains("off-chain only"));
-        let timestamp_error = parse_optional_privacy_artifacts(
-            Some(&commitment_hex),
-            None,
-            Some(&nullifier_hex),
-            Some(1),
-            None,
-            None,
-        )
-        .expect_err("clear issuance timestamps must not enter ledger privacy artifacts");
-        assert!(timestamp_error.to_string().contains("off-chain only"));
+    fn clap_rejects_retired_privacy_hint_flags() {
+        for (flag, value) in [
+            ("--commitment-alias", "host"),
+            ("--nullifier-issued-at-ms", "0"),
+        ] {
+            assert!(
+                TestCli::try_parse_from([
+                    "test",
+                    "create",
+                    "--domain",
+                    "nexus",
+                    "--call-name",
+                    "private",
+                    "--host",
+                    HOST_ACCOUNT,
+                    flag,
+                    value
+                ])
+                .is_err()
+            );
+        }
     }
     #[test]
     fn privacy_artifacts_must_be_complete_and_match_create_mode() {
-        let commitment_hex = format!("0x{}", "ab".repeat(32));
-        let nullifier_hex = format!("0x{}", "cd".repeat(32));
+        let commitment_hex = format!("0x{}", "2b".repeat(32));
+        let nullifier_hex = format!("0x{}", "2d".repeat(32));
         let roster_root_hex = format!("0x{}", "ef".repeat(32));
         let partial_error =
-            parse_optional_privacy_artifacts(Some(&commitment_hex), None, None, None, None, None)
+            parse_optional_privacy_artifacts(Some(&commitment_hex), None, None, None)
                 .expect_err("partial privacy artifacts must fail locally");
         assert!(partial_error.to_string().contains("all be omitted"));
 
         let empty_proof_error = parse_optional_privacy_artifacts(
             Some(&commitment_hex),
-            None,
             Some(&nullifier_hex),
-            Some(0),
             Some(&roster_root_hex),
             Some(""),
         )
@@ -1422,9 +1348,7 @@ mod tests {
 
         let complete = parse_optional_privacy_artifacts(
             Some(&commitment_hex),
-            None,
             Some(&nullifier_hex),
-            Some(0),
             Some(&roster_root_hex),
             Some("aa55"),
         )
@@ -1434,21 +1358,24 @@ mod tests {
         );
         assert!(validate_create_privacy_artifacts(KaigiPrivacyMode::ZkRosterV1, &complete).is_ok());
 
-        assert!(validate_leave_privacy_arguments(None, None, None, None, None).is_ok());
-        let leave_error = validate_leave_privacy_arguments(
-            Some(&commitment_hex),
-            Some(&nullifier_hex),
-            Some(0),
-            Some(&roster_root_hex),
-            Some("aa55"),
-        )
-        .expect_err("on-chain leave must reject even complete privacy artifacts");
-        assert!(leave_error.to_string().contains("off-chain only"));
-        assert!(validate_leave_privacy_arguments(None, None, Some(0), None, None).is_err());
+        assert!(parse_optional_privacy_artifacts(None, None, None, None).is_ok());
+        assert!(
+            parse_optional_privacy_artifacts(
+                Some(&commitment_hex),
+                Some(&nullifier_hex),
+                Some(&roster_root_hex),
+                Some("aa55")
+            )
+            .is_ok()
+        );
+        assert!(parse_optional_privacy_artifacts(Some(&commitment_hex), None, None, None).is_err());
+        let empty = parse_optional_privacy_artifacts(None, None, None, None).unwrap();
+        assert!(validate_create_privacy_artifacts(KaigiPrivacyMode::ZkRosterV1, &empty).is_err());
+        assert!(validate_create_privacy_artifacts(KaigiPrivacyMode::Transparent, &empty).is_ok());
     }
     #[test]
     fn usage_privacy_artifacts_must_be_supplied_together() {
-        let commitment = Hash::new(b"usage");
+        let commitment = parse_scalar(&"24".repeat(32)).unwrap();
         assert!(validate_usage_privacy_artifacts(None, None).is_ok());
         assert!(validate_usage_privacy_artifacts(Some(&commitment), Some(&[1])).is_ok());
         assert!(validate_usage_privacy_artifacts(Some(&commitment), None).is_err());

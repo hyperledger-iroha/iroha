@@ -191,7 +191,17 @@ impl norito::json::JsonDeserialize for ProxyMode {
             "proxy_mode expects a string".to_owned(),
         ))
     }
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+}
+impl norito::json::JsonObjectKey for ProxyMode {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.as_str())
+    }
+}
+impl norito::json::JsonObjectKeyOwned for ProxyMode {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         ProxyMode::parse(key)
             .ok_or_else(|| norito::json::Error::Message(format!("invalid proxy_mode `{key}`")))
     }
@@ -293,7 +303,29 @@ impl norito::json::JsonDeserialize for ProxyClientCapabilityHex {
         Self::parse(value.to_owned())
             .map_err(|message| norito::json::Error::Message(message.to_owned()))
     }
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+}
+impl norito::json::JsonObjectKey for ProxyClientCapabilityHex {
+    #[allow(unsafe_code)]
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in self.0 {
+            let encoded = [
+                LOWER_HEX[usize::from(byte >> 4)],
+                LOWER_HEX[usize::from(byte & 0x0f)],
+            ];
+            // SAFETY: both bytes are selected from the ASCII hexadecimal alphabet.
+            visitor(unsafe { core::str::from_utf8_unchecked(&encoded) })?;
+        }
+        Ok(())
+    }
+}
+impl norito::json::JsonObjectKeyOwned for ProxyClientCapabilityHex {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        norito::core::reserve_decode_allocation(key.len())
+            .map_err(norito::json::Error::from_decode_resource)?;
         Self::parse(key.to_owned())
             .map_err(|message| norito::json::Error::Message(message.to_owned()))
     }
@@ -3281,6 +3313,52 @@ mod tests {
         assert!(ProxyClientCapabilityHex::parse("00".repeat(32)).is_err());
     }
     #[test]
+    fn proxy_scalar_object_keys_preserve_canonical_text_and_decode_budget() {
+        use norito::json::{JsonObjectKey as _, JsonObjectKeyOwned as _};
+
+        let mut mode_text = String::new();
+        ProxyMode::MetadataOnly
+            .visit_json_key_text(|chunk| {
+                mode_text.push_str(chunk);
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .expect("infallible mode key visitor");
+        assert_eq!(mode_text, "metadata-only");
+        assert_eq!(
+            ProxyMode::from_json_key_text(&mode_text).expect("decode proxy mode key"),
+            ProxyMode::MetadataOnly
+        );
+
+        let literal = format!("01{}", "23".repeat(31));
+        let limits = |bytes| {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let (capability, usage) =
+            norito::core::with_decode_limits_measured(limits(literal.len()), || {
+                ProxyClientCapabilityHex::from_json_key_text(&literal)
+            });
+        let capability = capability.expect("capability key at exact budget");
+        assert_eq!(usage.total_allocated_bytes(), literal.len());
+        let mut encoded = String::new();
+        capability
+            .visit_json_key_text(|chunk| {
+                encoded.push_str(chunk);
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .expect("infallible capability key visitor");
+        assert_eq!(encoded, literal);
+
+        let (rejected, usage) =
+            norito::core::with_decode_limits_measured(limits(literal.len() - 1), || {
+                ProxyClientCapabilityHex::from_json_key_text(&literal)
+            });
+        assert!(matches!(
+            rejected,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
+    #[test]
     fn cache_tag_generation_matches_expected() {
         let config = LocalQuicProxyConfig {
             telemetry_label: Some("dev-proxy".into()),
@@ -3930,10 +4008,9 @@ mod tests {
     }
     #[test]
     fn disabled_proxy_still_validates_loopback_binding() {
-        let result = spawn_local_quic_proxy(LocalQuicProxyConfig {
-            bind_addr: "0.0.0.0:0".into(),
-            ..LocalQuicProxyConfig::default()
-        });
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "0.0.0.0:0".into();
+        let result = spawn_local_quic_proxy(config);
         match result {
             Err(ProxyError::BindAddressNotLoopback(addr)) => {
                 assert_eq!(addr, "0.0.0.0:0".parse().expect("addr"));

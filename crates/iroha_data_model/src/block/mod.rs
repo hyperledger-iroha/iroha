@@ -2889,16 +2889,24 @@ mod tests {
             &alternate_entrypoint,
         );
 
-        let structurally_decoded: SignedBlock =
-            iroha_version::codec::decode_exact_versioned(&alternate_block)
-                .expect("the alternate nested alias remains structurally decodable");
-        assert_eq!(structurally_decoded, block);
+        let canonical_decoded: SignedBlock =
+            iroha_version::codec::decode_exact_versioned(&canonical_block)
+                .expect("canonical nested instruction identifiers decode");
+        assert_eq!(canonical_decoded, block);
+        let structural_error =
+            iroha_version::codec::decode_exact_versioned::<SignedBlock>(&alternate_block)
+                .expect_err("the instruction registry rejects removed aliases directly");
+        assert!(matches!(
+            structural_error,
+            iroha_version::error::Error::NoritoCodec(reason)
+                if reason == "unknown instruction wire identifier"
+        ));
         let bare_error = SignedBlock::decode_all_versioned(&alternate_block)
             .expect_err("bare V1 blocks must reject nested instruction aliases");
         assert!(matches!(
             bare_error,
             iroha_version::error::Error::NoritoCodec(reason)
-                if reason == "non-canonical encoding"
+                if reason == "unknown instruction wire identifier"
         ));
         let framed = frame_versioned_signed_block_bytes(&alternate_block)
             .expect("frame alternate versioned block");
@@ -2907,7 +2915,7 @@ mod tests {
         assert!(matches!(
             framed_error,
             iroha_version::error::Error::NoritoCodec(reason)
-                if reason == "non-canonical encoding"
+                if reason == "unknown instruction wire identifier"
         ));
     }
     #[test]

@@ -1,5 +1,6 @@
 //! Verify `JoinKaigi` instructions roundtrip through Norito encoding.
 use iroha_crypto::Hash;
+use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     isi::{InstructionBox, kaigi::JoinKaigi},
     kaigi::{KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier},
@@ -16,12 +17,10 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
             .expect("participant account id");
     let commitment = KaigiParticipantCommitment {
-        commitment: Hash::new([0xAA; Hash::LENGTH]),
-        alias_tag: Some("alice".into()),
+        commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x2A; 32]).unwrap(),
     };
     let nullifier = KaigiParticipantNullifier {
-        digest: Hash::new([0xBB; Hash::LENGTH]),
-        issued_at_ms: 1_704_000_000_000,
+        digest: KaigiAuthorizationScalarV1::from_le_bytes([0x2B; 32]).unwrap(),
     };
     let join = JoinKaigi {
         call_id: call_id.clone(),

@@ -3,6 +3,7 @@ use super::*;
 use crate::ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy};
 isi! {
     /// Register a new generic RAM-LFE program policy.
+    #[norito_schema(name = "iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy")]
     pub struct RegisterRamLfeProgramPolicy {
         /// Program policy record to register.
         pub policy: RamLfeProgramPolicy,
@@ -11,6 +12,7 @@ isi! {
 impl crate::seal::Instruction for RegisterRamLfeProgramPolicy {}
 isi! {
     /// Activate an existing RAM-LFE program policy.
+    #[norito_schema(name = "iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy")]
     pub struct ActivateRamLfeProgramPolicy {
         /// Program policy identifier to activate.
         pub program_id: RamLfeProgramId,
@@ -19,6 +21,7 @@ isi! {
 impl crate::seal::Instruction for ActivateRamLfeProgramPolicy {}
 isi! {
     /// Deactivate an existing RAM-LFE program policy.
+    #[norito_schema(name = "iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy")]
     pub struct DeactivateRamLfeProgramPolicy {
         /// Program policy identifier to deactivate.
         pub program_id: RamLfeProgramId,

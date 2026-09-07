@@ -7,9 +7,10 @@ use norito::codec::Encode;
 const DOMAIN: &[u8] = b"iroha:sumeragi:v2:consensus-parameters-fingerprint:v1\0";
 /// Version of the canonical v2 consensus-parameters projection.
 pub const FORMAT_VERSION: u16 = 1;
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::fingerprint::ConsensusParametersFingerprintInput")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::fingerprint::ConsensusParametersFingerprintInput"
+)]
 struct ConsensusParametersFingerprintInput {
     format_version: u16,
     protocol_version: u32,
@@ -19,9 +20,10 @@ struct ConsensusParametersFingerprintInput {
     context: SumeragiV2GenesisContextParameters,
     npos: Option<NposGenesisFingerprintInput>,
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::fingerprint::NposGenesisFingerprintInput")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::fingerprint::NposGenesisFingerprintInput"
+)]
 struct NposGenesisFingerprintInput {
     epoch_length_blocks: core::num::NonZeroU64,
     epoch_seed: [u8; 32],

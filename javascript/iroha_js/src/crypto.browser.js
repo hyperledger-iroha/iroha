@@ -300,8 +300,12 @@ export function verifySm2() {
   return unsupported("verifySm2");
 }
 
-export function buildKaigiRosterJoinProof() {
-  return unsupported("buildKaigiRosterJoinProof");
+const clearKaigiBlindingV1 = Uint8Array.prototype.fill;
+
+export function buildKaigiAuthorizationProofV1(options) {
+  const blinding = options?.blinding;
+  if (blinding instanceof Uint8Array) Reflect.apply(clearKaigiBlindingV1, blinding, [0]);
+  return unsupported("buildKaigiAuthorizationProofV1");
 }
 
 export function deriveConfidentialKeyset() {

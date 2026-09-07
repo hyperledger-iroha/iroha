@@ -1,3 +1,4 @@
+import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import {
   BASE58_ALPHABET_TEXT,
@@ -4549,7 +4550,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
             ),
             usage_commitment: decodeOptionValue(
               fields.usage_commitment,
-              decodeHashValue,
+              decodeKaigiScalarValue,
               "Kaigi.RecordKaigiUsage.usage_commitment",
             ),
             proof: decodeOptionValue(
@@ -6759,7 +6760,7 @@ function encodeRecordKaigiUsagePayload(value) {
     [encodeKaigiIdValue(value.call_id, "Kaigi.RecordKaigiUsage.call_id")],
     [encodeU64NumberValue(value.duration_ms, "Kaigi.RecordKaigiUsage.duration_ms")],
     [encodeU64NumberValue(value.billed_gas, "Kaigi.RecordKaigiUsage.billed_gas")],
-    [encodeOptionValue(value.usage_commitment, encodeHashValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
+    [encodeOptionValue(value.usage_commitment, encodeKaigiScalarValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
     [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.RecordKaigiUsage.proof")],
   ]);
 }
@@ -7076,33 +7077,43 @@ function decodeNewKaigiPayload(payload, context) {
   };
 }
 
+function encodeKaigiScalarValue(value, context) {
+  return Buffer.from(kaigiScalarBytesV1(value, context));
+}
+
+function decodeKaigiScalarValue(payload, context) {
+  return Array.from(kaigiScalarBytesV1(payload, context));
+}
+
 function encodeKaigiParticipantCommitmentValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("commitment" in value)) {
+    throw new TypeError(`${context} requires only commitment`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.commitment, `${context}.commitment`)],
-    [encodeOptionValue(value.alias_tag, encodeNoritoStringValue, `${context}.alias_tag`)],
+    [encodeKaigiScalarValue(value.commitment, `${context}.commitment`)],
   ]);
 }
 
 function decodeKaigiParticipantCommitmentValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["commitment", "alias_tag"]);
+  const fields = decodeStructFields(payload, context, ["commitment"]);
   return {
-    commitment: decodeHashValue(fields.commitment, `${context}.commitment`),
-    alias_tag: decodeOptionValue(fields.alias_tag, decodeStringValue, `${context}.alias_tag`),
+    commitment: decodeKaigiScalarValue(fields.commitment, `${context}.commitment`),
   };
 }
 
 function encodeKaigiParticipantNullifierValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("digest" in value)) {
+    throw new TypeError(`${context} requires only digest`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.digest, `${context}.digest`)],
-    [encodeU64NumberValue(value.issued_at_ms, `${context}.issued_at_ms`)],
+    [encodeKaigiScalarValue(value.digest, `${context}.digest`)],
   ]);
 }
 
 function decodeKaigiParticipantNullifierValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["digest", "issued_at_ms"]);
+  const fields = decodeStructFields(payload, context, ["digest"]);
   return {
-    digest: decodeHashValue(fields.digest, `${context}.digest`),
-    issued_at_ms: decodeU64NumberValue(fields.issued_at_ms, `${context}.issued_at_ms`),
+    digest: decodeKaigiScalarValue(fields.digest, `${context}.digest`),
   };
 }
 

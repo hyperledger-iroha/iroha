@@ -4,7 +4,7 @@ use assert_matches::assert_matches;
 use eyre::{Result, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha::data_model::prelude::*;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::events::data::prelude::ProofEventFilter;
@@ -101,10 +101,10 @@ fn rejected_halo2_attachment_and_registration()
     )
 }
 fn client_with_timeout(network: &Network) -> Client {
-    let mut client = network.client();
-    client.transaction_status_timeout = CLIENT_STATUS_TIMEOUT;
-    client.transaction_ttl = Some(CLIENT_STATUS_TIMEOUT + Duration::from_secs(5));
-    client
+    integration_tests::sync::rebind_blocking_client(&network.client(), |client| {
+        client.transaction_status_timeout = CLIENT_STATUS_TIMEOUT;
+        client.transaction_ttl = Some(CLIENT_STATUS_TIMEOUT + Duration::from_secs(5));
+    })
 }
 fn proof_event_timeout(network: &Network) -> Duration {
     network.sync_timeout().max(PROOF_EVENT_TIMEOUT)
@@ -148,7 +148,9 @@ async fn verify_proof_emits_event(
     let client = client_with_timeout(network);
     let mut events = tokio::time::timeout(
         proof_event_timeout(network),
-        client.listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())]),
+        client
+            .client()
+            .listen_for_events([DataEventFilter::Proof(ProofEventFilter::new())]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening proof event stream"))??;
@@ -156,7 +158,7 @@ async fn verify_proof_emits_event(
     {
         let submit_client = client.clone();
         let submit_result = spawn_blocking(move || {
-            submit_client.submit_all_blocking(
+            submit_client.submit_all(
                 [verify],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

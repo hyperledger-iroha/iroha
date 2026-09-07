@@ -57,8 +57,9 @@ length, path bytes, u64-LE file length, and raw SHA-256 file digest. The invento
 test recomputes this closure and requires remeasurement after a mismatch; the
 offline builder separately verifies every file in the pinned vendor inventory.
 
-The composable retained-anchor and same-height message checkpoint constraints
-invalidate earlier affected R1CS definitions and their dependent artifacts.
+The canonical domain, codec, and transfer-tag alignment plus the composable
+retained-anchor and same-height message checkpoint constraints invalidate
+earlier affected R1CS definitions and their dependent artifacts.
 Unchanged positive KAT bytes do not make an earlier R1CS compatible. Fresh
 local measurements do not replace circuit-specific Phase-2 transcripts,
 proving keys, verification keys, fixed verifiers, destination deployments, or

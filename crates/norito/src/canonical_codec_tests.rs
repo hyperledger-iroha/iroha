@@ -4,6 +4,33 @@ mod canonical_codec_tests {
     use super::*;
     use crate::core::ExactSliceWriter;
     #[test]
+    fn canonical_frame_count_matches_output_and_restores_every_ambient_layout() {
+        let value = vec!["first".to_owned(), "x".repeat(257), String::new()];
+        let expected = encode_canonical(&value).expect("canonical reference frame");
+        let mut distinct_ambient_length = false;
+        for flags in 0..=u8::MAX {
+            if core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _ambient = core::DecodeFlagsGuard::enter(flags);
+            let before = core::to_bytes(&value).expect("ambient reference frame");
+            distinct_ambient_length |= before.len() != expected.len();
+            assert_eq!(
+                canonical_frame_len(&value).expect("canonical count"),
+                expected.len()
+            );
+            assert_eq!(
+                core::to_bytes(&value).expect("ambient frame after count"),
+                before,
+                "counting must restore layout {flags:#04x}"
+            );
+        }
+        assert!(
+            distinct_ambient_length,
+            "fixture exercises layout-dependent lengths"
+        );
+    }
+    #[test]
     fn canonical_scalar_and_unit_roundtrip() {
         let scalar = encode_canonical(&1_u8).expect("encode canonical scalar");
         assert_eq!(

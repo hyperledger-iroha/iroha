@@ -1,85 +1,41 @@
-//! Internal helpers for Kaigi privacy-mode execution.
+//! Canonical governed verification for final Kaigi authorization and usage.
 //!
-//! Crate unit tests can use deterministic proof stubs; enabling
-//! `kaigi_privacy_mocks` for a non-test library build is rejected at compile
-//! time. Production usage and host proofs run through the canonical verifier.
-//! Roster joins fail closed until their circuit statement binds the signed
-//! participant authority.
+//! Unit tests and production execute the same verifier. Every authorization
+//! binds the complete ledger context and uses one explicitly governed key.
 use super::{Error, privacy_error};
-use crate::state::StateTransaction;
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-use crate::zk;
+pub(super) mod authorization_v1;
+#[cfg(test)]
+pub(super) mod proof_fixture_v1;
+use crate::{state::StateTransaction, zk};
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
-use iroha_data_model::kaigi::{KaigiParticipantCommitment, KaigiParticipantNullifier};
-#[cfg(feature = "kaigi_privacy_mocks")]
-use iroha_data_model::prelude::AccountId;
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 use iroha_data_model::{
+    kaigi::{
+        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRecord,
+        scalar::KaigiAuthorizationScalarV1,
+    },
     proof::{ProofBox, VerifyingKeyId},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 use iroha_schema::Ident;
-#[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
-use kaigi_zk::KAIGI_USAGE_BACKEND;
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, roster_root_limb_values, scalar_from_hash,
-};
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
+use kaigi_zk::authorization_v1::{KAIGI_AUTHORIZATION_CIRCUIT_ID_V1, KaigiAuthorizationContextV1};
 use mv::storage::StorageReadOnly;
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 use std::str::FromStr;
 
-fn ensure_ledger_safe_identity_artifacts(
-    commitment: &KaigiParticipantCommitment,
-    nullifier: &KaigiParticipantNullifier,
-) -> Result<(), Error> {
-    if commitment.alias_tag.is_some() {
-        return Err(privacy_error(
-            "commitment alias_tag must be omitted from on-chain privacy artifacts",
-        ));
-    }
-    if nullifier.issued_at_ms != 0 {
-        return Err(privacy_error(
-            "nullifier issued_at_ms must be zero in on-chain privacy artifacts",
-        ));
-    }
-    Ok(())
-}
-
-/// Information supplied with a privacy-mode join/leave request.
+/// Instruction artifacts checked against authenticated call state.
 #[derive(Debug)]
 pub struct PrivacyArtifacts<'a> {
-    /// Roster subject represented by the proof or signed instruction.
-    #[cfg(feature = "kaigi_privacy_mocks")]
-    pub subject: &'a AccountId,
-    /// Host account responsible for the Kaigi session.
-    #[cfg(feature = "kaigi_privacy_mocks")]
-    pub host: &'a AccountId,
-    /// Optional commitment provided in the instruction.
+    /// Participant or host commitment.
     pub commitment: Option<&'a KaigiParticipantCommitment>,
-    /// Optional nullifier provided in the instruction.
+    /// Exact action nullifier.
     pub nullifier: Option<&'a KaigiParticipantNullifier>,
-    /// Optional roster root bound into the proof.
+    /// Roster root used by the proof.
     pub roster_root: Option<&'a Hash>,
-    /// Raw proof bytes (Norito-encoded `OpenVerifyEnvelope`).
+    /// Canonical Norito `OpenVerifyEnvelope`.
     pub proof: Option<&'a [u8]>,
 }
-/// Information supplied with a privacy-mode host action.
-#[derive(Debug)]
-pub struct HostPrivacyArtifacts<'a> {
-    /// Commitment describing the private host identity.
-    pub commitment: Option<&'a KaigiParticipantCommitment>,
-    /// Optional nullifier supplied by the host action.
-    pub nullifier: Option<&'a KaigiParticipantNullifier>,
-    /// Optional roster root bound into the proof.
-    pub roster_root: Option<&'a Hash>,
-    /// Raw proof bytes (Norito-encoded `OpenVerifyEnvelope`).
-    pub proof: Option<&'a [u8]>,
-}
-/// Ensure that a transparent Kaigi does not receive privacy-artifact payloads.
+
+/// Reject all privacy artifacts for explicitly transparent sessions.
 pub fn ensure_transparent_payload(artifacts: &PrivacyArtifacts<'_>) -> Result<(), Error> {
     if artifacts.commitment.is_some()
         || artifacts.nullifier.is_some()
@@ -92,244 +48,143 @@ pub fn ensure_transparent_payload(artifacts: &PrivacyArtifacts<'_>) -> Result<()
     }
     Ok(())
 }
-#[cfg(feature = "kaigi_privacy_mocks")]
-fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) -> Result<(), Error> {
-    let commitment = artifacts
-        .commitment
-        .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-    let nullifier = artifacts
-        .nullifier
-        .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
-    if artifacts.host == artifacts.subject {
-        return Err(privacy_error("host must not re-enter privacy roster"));
-    }
-    let proof = artifacts
-        .proof
-        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-    if proof.is_empty() {
-        return Err(privacy_error("privacy proof payload must be non-empty"));
-    }
-    let Some(advertised_root) = artifacts.roster_root else {
-        return Err(privacy_error("privacy mode requires roster root"));
-    };
-    if advertised_root != expected_root {
-        return Err(privacy_error("roster root mismatch"));
-    }
-    Ok(())
-}
-#[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-fn verify_usage_stub(proof: Option<&[u8]>) -> Result<(), Error> {
-    let proof_bytes = proof.ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-    if proof_bytes.is_empty() {
-        return Err(privacy_error("privacy proof payload must be non-empty"));
-    }
-    Ok(())
-}
-#[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-fn verify_host_stub(
-    artifacts: &HostPrivacyArtifacts<'_>,
-    expected_root: &Hash,
-    expected_commitment: Option<&KaigiParticipantCommitment>,
-) -> Result<(), Error> {
-    let commitment = artifacts
-        .commitment
-        .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-    let nullifier = artifacts
-        .nullifier
-        .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
-    if let Some(expected_commitment) = expected_commitment
-        && commitment.commitment != expected_commitment.commitment
-    {
-        return Err(privacy_error("host commitment mismatch"));
-    }
-    let proof = artifacts
-        .proof
-        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-    if proof.is_empty() {
-        return Err(privacy_error("privacy proof payload must be non-empty"));
-    }
-    let Some(advertised_root) = artifacts.roster_root else {
-        return Err(privacy_error("privacy mode requires roster root"));
-    };
-    if advertised_root != expected_root {
-        return Err(privacy_error("roster root mismatch"));
-    }
-    if nullifier.digest == Hash::prehashed([0u8; Hash::LENGTH]) {
-        return Err(privacy_error("privacy nullifier must be non-zero"));
-    }
-    Ok(())
-}
-fn reject_unbound_roster_join_statement() -> Result<(), Error> {
-    Err(privacy_error(
-        "Kaigi ZkRosterV1 joins are unavailable until the proof statement binds the signed participant authority",
-    ))
-}
-pub fn verify_roster_join(
-    state_transaction: &mut StateTransaction<'_, '_>,
+
+/// Verify a complete final authorization with the exact ledger-owned context.
+pub fn verify_authorization(
+    state: &mut StateTransaction<'_, '_>,
     artifacts: &PrivacyArtifacts<'_>,
-    expected_root: &Hash,
+    context: &KaigiAuthorizationContextV1,
+    expected_commitment: Option<&KaigiAuthorizationScalarV1>,
 ) -> Result<(), Error> {
-    #[cfg(feature = "kaigi_privacy_mocks")]
-    {
-        let _ = state_transaction;
-        return verify_roster_stub(artifacts, expected_root);
-    }
-    #[cfg(not(feature = "kaigi_privacy_mocks"))]
-    {
-        let _ = (state_transaction, artifacts, expected_root);
-        return reject_unbound_roster_join_statement();
-    }
-    #[allow(unreachable_code)]
-    Err(privacy_error("kaigi privacy mode unavailable"))
-}
-pub fn verify_usage_commitment(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    proof: Option<&[u8]>,
-    expected_commitment: &Hash,
-) -> Result<(), Error> {
-    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-    {
-        let _ = (state_transaction, expected_commitment);
-        return verify_usage_stub(proof);
-    }
-    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
-    {
-        let proof_bytes = proof.ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-        if proof_bytes.is_empty() {
-            return Err(privacy_error("privacy proof payload must be non-empty"));
-        }
-        let vk_cfg = state_transaction.zk.kaigi_usage_vk.clone();
-        validate_configured_verifier(
-            state_transaction,
-            proof_bytes.len(),
-            vk_cfg.as_ref(),
-            "kaigi usage",
-        )?;
-        let envelope = decode_privacy_proof_envelope(proof_bytes)?;
-        if envelope.circuit_id != KAIGI_USAGE_BACKEND {
-            return Err(privacy_error(
-                "privacy usage proof must use the canonical Kaigi usage circuit",
-            ));
-        }
-        let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
-            .ok_or_else(|| privacy_error("failed to parse usage privacy proof instances"))?;
-        verify_usage_public_input(&instance_cols, expected_commitment)?;
-        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi usage");
-    }
-    #[allow(unreachable_code)]
-    Err(privacy_error("kaigi privacy mode unavailable"))
-}
-pub fn verify_host_create(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    artifacts: &HostPrivacyArtifacts<'_>,
-    expected_root: &Hash,
-) -> Result<(), Error> {
-    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-    {
-        let _ = state_transaction;
-        return verify_host_stub(artifacts, expected_root, None);
-    }
-    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
-    {
-        let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
-        let proof_bytes = validate_host_artifacts(
-            state_transaction,
-            artifacts,
-            expected_root,
-            None,
-            vk_cfg.as_ref(),
-            "kaigi host create",
-        )?;
-        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host create");
-    }
-    #[allow(unreachable_code)]
-    Err(privacy_error("kaigi privacy mode unavailable"))
-}
-pub fn verify_host_action(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    artifacts: &HostPrivacyArtifacts<'_>,
-    expected_root: &Hash,
-    expected_commitment: &KaigiParticipantCommitment,
-) -> Result<(), Error> {
-    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-    {
-        let _ = state_transaction;
-        return verify_host_stub(artifacts, expected_root, Some(expected_commitment));
-    }
-    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
-    {
-        let vk_cfg = state_transaction
-            .zk
-            .kaigi_roster_leave_vk
-            .clone()
-            .or_else(|| state_transaction.zk.kaigi_roster_join_vk.clone());
-        let proof_bytes = validate_host_artifacts(
-            state_transaction,
-            artifacts,
-            expected_root,
-            Some(expected_commitment),
-            vk_cfg.as_ref(),
-            "kaigi host action",
-        )?;
-        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host action");
-    }
-    #[allow(unreachable_code)]
-    Err(privacy_error("kaigi privacy mode unavailable"))
-}
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-#[allow(dead_code)]
-fn validate_host_artifacts<'a>(
-    state_transaction: &StateTransaction<'_, '_>,
-    artifacts: &'a HostPrivacyArtifacts<'a>,
-    expected_root: &Hash,
-    expected_commitment: Option<&KaigiParticipantCommitment>,
-    vk_cfg: Option<&VerifyingKeyRef>,
-    purpose: &str,
-) -> Result<&'a [u8], Error> {
     let commitment = artifacts
         .commitment
         .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
-    if let Some(expected_commitment) = expected_commitment
-        && commitment.commitment != expected_commitment.commitment
-    {
-        return Err(privacy_error("host commitment mismatch"));
-    }
-    let proof_bytes = artifacts
-        .proof
-        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-    if proof_bytes.is_empty() {
-        return Err(privacy_error("privacy proof payload must be non-empty"));
-    }
-    let Some(advertised_root) = artifacts.roster_root else {
-        return Err(privacy_error("privacy mode requires roster root"));
-    };
-    if advertised_root != expected_root {
-        return Err(privacy_error("roster root mismatch"));
-    }
-    validate_configured_verifier(state_transaction, proof_bytes.len(), vk_cfg, purpose)?;
-    let envelope = decode_privacy_proof_envelope(proof_bytes)?;
-    if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
+    if expected_commitment.is_some_and(|expected| expected != &commitment.commitment) {
         return Err(privacy_error(
-            "privacy roster proof must use the canonical Kaigi roster circuit",
+            "stored commitment differs from authorization",
         ));
     }
-    let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
-        .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
-    verify_roster_public_inputs(
-        &instance_cols,
-        expected_root,
-        &commitment.commitment,
-        &nullifier.digest,
+    let root = artifacts
+        .roster_root
+        .ok_or_else(|| privacy_error("privacy mode requires roster root"))?;
+    if root.as_ref() != &context.pre_roster_root {
+        return Err(privacy_error(
+            "roster root differs from authenticated call state",
+        ));
+    }
+    let proof = artifacts
+        .proof
+        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
+    if proof.is_empty() {
+        return Err(privacy_error("privacy proof payload must be non-empty"));
+    }
+    let configured = state.zk.kaigi_authorization_vk.clone();
+    validate_configured_verifier(
+        state,
+        proof.len(),
+        configured.as_ref(),
+        "kaigi authorization",
     )?;
-    Ok(proof_bytes)
+    let envelope = decode_privacy_proof_envelope(proof)?;
+    if envelope.circuit_id != KAIGI_AUTHORIZATION_CIRCUIT_ID_V1 {
+        return Err(privacy_error(
+            "Kaigi authorization requires the full canonical V1 circuit ID",
+        ));
+    }
+    let columns = zk::extract_pasta_fp_instances(&envelope.proof_bytes)
+        .ok_or_else(|| privacy_error("failed to decode Kaigi authorization instances"))?;
+    authorization_v1::verify_public_inputs_v1(
+        &columns,
+        context,
+        commitment.commitment.as_bytes(),
+        nullifier.digest.as_bytes(),
+    )?;
+    verify_with_config(state, proof, configured, "kaigi authorization")
 }
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
+
+/// Check the final usage relation against the stored host and ledger segment.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_usage_commitment(
+    state: &mut StateTransaction<'_, '_>,
+    record: &KaigiRecord,
+    duration_ms: u64,
+    billed_gas: u64,
+    proof: Option<&[u8]>,
+    commitment: &KaigiAuthorizationScalarV1,
+) -> Result<(), Error> {
+    use crate::state::StateReadOnly as _;
+    use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
+    use iroha_data_model::kaigi::authorization::KaigiAuthorizationIdentitiesV1;
+    use kaigi_zk::usage_v1::{
+        KAIGI_USAGE_CIRCUIT_ID_V1, KAIGI_USAGE_INSTANCE_ROWS_V1, KaigiUsageContextV1,
+        KaigiUsageOutputsV1, KaigiUsagePublicInputsV1,
+    };
+    let host = record
+        .host_commitment
+        .as_ref()
+        .ok_or_else(|| privacy_error("private usage requires its original host commitment"))?;
+    let network = *state.network_id();
+    let identities =
+        KaigiAuthorizationIdentitiesV1::new(network, &record.id, &record.host, &record.host)
+            .map_err(|error| {
+                privacy_error(format!("cannot bind canonical usage identities: {error}"))
+            })?;
+    let context = KaigiUsageContextV1 {
+        network_id: *network.as_bytes(),
+        call_id: identities.call_id.words(),
+        host_id: identities.host_id.words(),
+        pre_roster_root: record.roster_root().into(),
+        segment_index: record.segments_recorded,
+        duration_ms,
+        billed_gas,
+    };
+    context
+        .validate()
+        .map_err(|error| privacy_error(format!("invalid Kaigi usage context: {error}")))?;
+    let proof = proof.ok_or_else(|| privacy_error("privacy mode requires usage proof"))?;
+    if proof.is_empty() {
+        return Err(privacy_error("privacy proof payload must be non-empty"));
+    }
+    let configured = state.zk.kaigi_usage_vk.clone();
+    validate_configured_verifier(state, proof.len(), configured.as_ref(), "kaigi usage")?;
+    let envelope = decode_privacy_proof_envelope(proof)?;
+    if envelope.circuit_id != KAIGI_USAGE_CIRCUIT_ID_V1 {
+        return Err(privacy_error(
+            "Kaigi usage requires the full canonical V1 circuit ID",
+        ));
+    }
+    let columns = zk::extract_pasta_fp_instances(&envelope.proof_bytes)
+        .ok_or_else(|| privacy_error("failed to decode Kaigi usage instances"))?;
+    let [column] = columns.as_slice() else {
+        return Err(privacy_error("Kaigi usage requires one instance column"));
+    };
+    if column.len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
+        return Err(privacy_error(
+            "Kaigi usage requires exactly 25 instance rows",
+        ));
+    }
+    let host_commitment = Option::<Fp>::from(Fp::from_repr(host.commitment.to_le_bytes()))
+        .ok_or_else(|| privacy_error("host commitment is not a canonical Pasta scalar"))?;
+    let usage_commitment = Option::<Fp>::from(Fp::from_repr(commitment.to_le_bytes()))
+        .ok_or_else(|| privacy_error("usage commitment is not a canonical Pasta scalar"))?;
+    let expected = KaigiUsagePublicInputsV1 {
+        context,
+        outputs: KaigiUsageOutputsV1 {
+            host_commitment,
+            usage_commitment,
+        },
+    }
+    .instance();
+    if column.as_slice() != expected {
+        return Err(privacy_error(
+            "Kaigi usage differs from authenticated call, host, root, segment or billed tuple",
+        ));
+    }
+    verify_with_config(state, proof, configured, "kaigi usage")
+}
 fn validate_configured_verifier(
     state_transaction: &StateTransaction<'_, '_>,
     proof_len: usize,
@@ -353,9 +208,7 @@ fn validate_configured_verifier(
     }
     enforce_verifier_proof_size(record.max_proof_bytes, proof_len, purpose)
 }
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(clippy::needless_pass_by_value)]
-#[allow(dead_code)]
 fn verify_with_config(
     state_transaction: &mut StateTransaction<'_, '_>,
     proof_bytes: &[u8],
@@ -422,7 +275,6 @@ fn verify_with_config(
     }
     Ok(())
 }
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn enforce_verifier_proof_size(
     max_proof_bytes: u32,
     proof_len: usize,
@@ -441,7 +293,6 @@ fn enforce_verifier_proof_size(
     }
     Ok(())
 }
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn decode_privacy_proof_envelope(proof_bytes: &[u8]) -> Result<OpenVerifyEnvelope, Error> {
     norito::decode_canonical(proof_bytes).map_err(|err| {
         privacy_error(format!(
@@ -449,7 +300,6 @@ fn decode_privacy_proof_envelope(proof_bytes: &[u8]) -> Result<OpenVerifyEnvelop
         ))
     })
 }
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn validate_privacy_proof_envelope_metadata(
     envelope: &OpenVerifyEnvelope,
     configured_backend: &str,
@@ -486,159 +336,10 @@ fn validate_privacy_proof_envelope_metadata(
     }
     Ok(())
 }
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-fn verify_roster_public_inputs(
-    instance_cols: &[Vec<halo2_proofs::halo2curves::pasta::Fp>],
-    expected_root: &Hash,
-    expected_commitment: &Hash,
-    expected_nullifier: &Hash,
-) -> Result<(), Error> {
-    const OFFSET: usize = 2;
-    if instance_cols.len() != OFFSET + KAIGI_ROSTER_ROOT_LIMBS {
-        return Err(privacy_error(
-            "privacy proof must expose exactly commitment, nullifier, and four roster root limbs",
-        ));
-    }
-    verify_hash_public_input(&instance_cols[0], expected_commitment, "commitment")?;
-    verify_hash_public_input(&instance_cols[1], expected_nullifier, "nullifier")?;
-    let expected_limbs = roster_root_limb_values(expected_root);
-    for (idx, expected) in expected_limbs.iter().enumerate() {
-        let column = &instance_cols[OFFSET + idx];
-        if column.len() != 1 {
-            return Err(privacy_error(
-                "privacy proof roster root limbs must be single-row columns",
-            ));
-        }
-        let limb = scalar_le_u64(column[0])
-            .ok_or_else(|| privacy_error("privacy proof roster root limb exceeds 64-bit range"))?;
-        if limb != *expected {
-            return Err(privacy_error("roster root limb mismatch"));
-        }
-    }
-    Ok(())
-}
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-fn verify_hash_public_input(
-    column: &[halo2_proofs::halo2curves::pasta::Fp],
-    expected: &Hash,
-    label: &str,
-) -> Result<(), Error> {
-    if column.len() != 1 {
-        return Err(privacy_error(format!(
-            "privacy proof {label} must be a single-row public input"
-        )));
-    }
-    let expected_scalar = scalar_from_hash(expected).ok_or_else(|| {
-        privacy_error(format!(
-            "privacy proof {label} is not a canonical Pasta scalar"
-        ))
-    })?;
-    if column[0] != expected_scalar {
-        return Err(privacy_error(format!(
-            "privacy proof {label} does not match the instruction artifact"
-        )));
-    }
-    Ok(())
-}
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-fn verify_usage_public_input(
-    instance_cols: &[Vec<halo2_proofs::halo2curves::pasta::Fp>],
-    expected_commitment: &Hash,
-) -> Result<(), Error> {
-    if instance_cols.len() != 1 {
-        return Err(privacy_error(
-            "privacy usage proof must expose exactly one commitment public input",
-        ));
-    }
-    verify_hash_public_input(&instance_cols[0], expected_commitment, "usage commitment")
-}
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
-    use halo2_proofs::halo2curves::ff::PrimeField as _;
-    let repr = value.to_repr();
-    let (lo, hi) = repr.as_ref().split_at(8);
-    if hi.iter().any(|&b| b != 0) {
-        return None;
-    }
-    let mut chunk = [0u8; 8];
-    chunk.copy_from_slice(lo);
-    Some(u64::from_le_bytes(chunk))
-}
-#[cfg(all(test, not(feature = "kaigi_privacy_mocks")))]
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use halo2_proofs::halo2curves::pasta::Fp;
-    use kaigi_zk::{
-        compute_commitment_hash, compute_nullifier_hash, compute_usage_commitment_hash,
-        empty_roster_root_hash,
-    };
-    #[test]
-    fn roster_join_fails_closed_before_candidate_proof_dispatch() {
-        let err = reject_unbound_roster_join_statement()
-            .expect_err("candidate roster join must fail closed");
-        assert!(format!("{err:?}").contains("binds the signed participant authority"));
-    }
-    #[test]
-    fn roster_public_input_validation_binds_every_instruction_artifact() {
-        let root = empty_roster_root_hash();
-        let commitment = compute_commitment_hash(11, 31);
-        let nullifier = compute_nullifier_hash(11, 57);
-        let mut columns = vec![
-            vec![scalar_from_hash(&commitment).expect("canonical commitment")],
-            vec![scalar_from_hash(&nullifier).expect("canonical nullifier")],
-        ];
-        for limb in roster_root_limb_values(&root) {
-            columns.push(vec![Fp::from(limb)]);
-        }
-        assert!(verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok());
-        let mut wrong_commitment = columns.clone();
-        wrong_commitment[0][0] += Fp::from(1u64);
-        assert!(
-            verify_roster_public_inputs(&wrong_commitment, &root, &commitment, &nullifier).is_err()
-        );
-        let mut wrong_nullifier = columns.clone();
-        wrong_nullifier[1][0] += Fp::from(1u64);
-        assert!(
-            verify_roster_public_inputs(&wrong_nullifier, &root, &commitment, &nullifier).is_err()
-        );
-        let mut wrong_root = columns.clone();
-        wrong_root[2][0] = Fp::from(999u64);
-        assert!(verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier).is_err());
-        let mut extra_column = columns;
-        extra_column.push(vec![Fp::from(0u64)]);
-        assert!(
-            verify_roster_public_inputs(&extra_column, &root, &commitment, &nullifier).is_err()
-        );
-    }
-    #[test]
-    fn usage_public_input_validation_binds_the_instruction_commitment() {
-        let commitment = compute_usage_commitment_hash(1_200, 345, 2);
-        let scalar = scalar_from_hash(&commitment).expect("canonical usage commitment");
-        assert!(verify_usage_public_input(&[vec![scalar]], &commitment).is_ok());
-        assert!(verify_usage_public_input(&[vec![scalar + Fp::from(1u64)]], &commitment).is_err());
-        let extra_column = [vec![scalar], vec![Fp::from(0u64)]];
-        assert!(verify_usage_public_input(&extra_column, &commitment).is_err());
-    }
-    #[test]
-    fn clear_identity_hints_are_rejected_from_ledger_artifacts() {
-        let safe_commitment = KaigiParticipantCommitment {
-            commitment: Hash::prehashed([1_u8; Hash::LENGTH]),
-            alias_tag: None,
-        };
-        let safe_nullifier = KaigiParticipantNullifier {
-            digest: Hash::prehashed([2_u8; Hash::LENGTH]),
-            issued_at_ms: 0,
-        };
-        ensure_ledger_safe_identity_artifacts(&safe_commitment, &safe_nullifier)
-            .expect("canonical privacy artifacts do not disclose identity hints");
-
-        let mut tagged = safe_commitment.clone();
-        tagged.alias_tag = Some("participant".to_owned());
-        assert!(ensure_ledger_safe_identity_artifacts(&tagged, &safe_nullifier).is_err());
-        let mut timestamped = safe_nullifier;
-        timestamped.issued_at_ms = 1;
-        assert!(ensure_ledger_safe_identity_artifacts(&safe_commitment, &timestamped).is_err());
-    }
     #[test]
     fn verifier_proof_size_enforces_governed_cap() {
         assert!(enforce_verifier_proof_size(8, 8, "kaigi usage").is_ok());
@@ -655,7 +356,7 @@ mod tests {
         let commitment: [u8; Hash::LENGTH] = commitment.into();
         let mut envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: "kaigi/roster".to_owned(),
+            circuit_id: KAIGI_AUTHORIZATION_CIRCUIT_ID_V1.to_owned(),
             vk_hash: commitment,
             public_inputs: Vec::new(),
             proof_bytes: Vec::new(),
@@ -664,9 +365,9 @@ mod tests {
         assert!(
             validate_privacy_proof_envelope_metadata(
                 &envelope,
-                "halo2/pasta/kaigi-roster-v1",
+                "halo2/pasta/kaigi-authorization-v1",
                 BackendTag::Halo2IpaPasta,
-                "kaigi/roster",
+                KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
                 commitment,
             )
             .is_ok()
@@ -675,7 +376,7 @@ mod tests {
             &envelope,
             "halo2/ipa:production-ready",
             BackendTag::Halo2IpaPasta,
-            "kaigi/roster",
+            KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
             commitment,
         )
         .expect_err("readiness-claim verifier backend must reject");
@@ -693,7 +394,7 @@ mod tests {
             &envelope,
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             BackendTag::Halo2IpaPasta,
-            "kaigi/roster",
+            KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
             commitment,
         )
         .expect_err("configured backend tag drift must reject");
@@ -710,9 +411,9 @@ mod tests {
         envelope.vk_hash = [0u8; Hash::LENGTH];
         let err = validate_privacy_proof_envelope_metadata(
             &envelope,
-            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kaigi-authorization-v1",
             BackendTag::Halo2IpaPasta,
-            "kaigi/roster",
+            KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
             commitment,
         )
         .expect_err("zero verifier-key hash must reject");
@@ -728,7 +429,7 @@ mod tests {
     fn privacy_proof_admission_rejects_alternate_norito_layout() {
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: "kaigi/roster".to_owned(),
+            circuit_id: KAIGI_AUTHORIZATION_CIRCUIT_ID_V1.to_owned(),
             vk_hash: [0xA5; Hash::LENGTH],
             public_inputs: vec![0x11; 32],
             proof_bytes: vec![0x22; 64],
