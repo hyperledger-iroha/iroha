@@ -3562,6 +3562,51 @@ fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
     roots.iter().any(|root| path.starts_with(root))
 }
 
+// Mark a mount namespace examined only after its evidence was read and checked.
+// An exiting representative must not suppress another live process in that namespace.
+#[cfg(any(target_os = "linux", test))]
+fn inspect_process_namespace_evidence<R: Read>(
+    roots: &[&Path],
+    namespace: Option<PathBuf>,
+    seen: &mut BTreeSet<PathBuf>,
+    open: impl FnOnce() -> std::io::Result<R>,
+) -> Result<()> {
+    if namespace
+        .as_ref()
+        .is_some_and(|namespace| seen.contains(namespace))
+    {
+        return Ok(());
+    }
+    let file = match open() {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).wrap_err("inspect vacant target process namespace");
+        }
+    };
+    let mut bytes = Vec::new();
+    file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(eyre!("vacant target namespace evidence exceeds its bound"));
+    }
+    for token in std::str::from_utf8(&bytes)?.split_ascii_whitespace() {
+        let decoded = token
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+            .replace("\\134", "\\");
+        if decoded.starts_with('/') && target_path_is_occupied(Path::new(&decoded), roots) {
+            return Err(eyre!(
+                "vacant target retains a mapped file or namespace mount"
+            ));
+        }
+    }
+    if let Some(namespace) = namespace {
+        seen.insert(namespace);
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
     // Look outside MainPID/cgroup as well: a surviving guest or escaped child
@@ -3619,44 +3664,20 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
             }
         }
         for name in ["maps", "mountinfo"] {
-            if name == "mountinfo" {
+            let namespace = if name == "mountinfo" {
                 match fs::read_link(proc_root.join("ns/mnt")) {
-                    Ok(namespace) => {
-                        if !mount_namespaces.insert(namespace) {
-                            continue;
-                        }
-                    }
+                    Ok(namespace) => Some(namespace),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => {
                         return Err(error).wrap_err("inspect vacant target mount namespace");
                     }
                 }
-            }
-            let file = match File::open(proc_root.join(name)) {
-                Ok(file) => file,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return Err(error).wrap_err("inspect vacant target process namespace");
-                }
+            } else {
+                None
             };
-            let mut bytes = Vec::new();
-            file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-            if bytes.len() > 4 * 1024 * 1024 {
-                return Err(eyre!("vacant target namespace evidence exceeds its bound"));
-            }
-            for token in std::str::from_utf8(&bytes)?.split_ascii_whitespace() {
-                let decoded = token
-                    .replace("\\040", " ")
-                    .replace("\\011", "\t")
-                    .replace("\\012", "\n")
-                    .replace("\\134", "\\");
-                if decoded.starts_with('/') && target_path_is_occupied(Path::new(&decoded), &roots)
-                {
-                    return Err(eyre!(
-                        "vacant target retains a mapped file or namespace mount"
-                    ));
-                }
-            }
+            inspect_process_namespace_evidence(&roots, namespace, &mut mount_namespaces, || {
+                File::open(proc_root.join(name))
+            })?;
         }
     }
     Ok(())
@@ -20436,6 +20457,173 @@ mod tests {
             .rposition(|key| key.action == HostAction::Restart.label())
             .expect("last local validator restart");
         assert!(last_restart < first(HostAction::EdgeVerify));
+    }
+
+    #[test]
+    fn vacant_namespace_missing_representative_does_not_hide_live_mount() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Err::<std::io::Cursor<&[u8]>, _>(std::io::ErrorKind::NotFound.into()),
+        )
+        .expect("exited representative is skipped");
+        assert!(
+            seen.is_empty(),
+            "missing evidence must not mark the namespace"
+        );
+        let mut opened_live_representative = false;
+        let result = inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || {
+                opened_live_representative = true;
+                Ok(std::io::Cursor::new(
+                    &b"36 22 0:1 /var/lib/taira/validator-1 /mnt/held rw - ext4 /dev/sda rw\n"[..],
+                ))
+            },
+        );
+        assert!(opened_live_representative);
+        assert!(result.unwrap_err().to_string().contains("namespace mount"));
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn vacant_namespace_successful_scan_deduplicates_without_opening_again() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || {
+                Ok(std::io::Cursor::new(
+                    &b"36 22 0:1 / / rw - ext4 /dev/sda rw\n"[..],
+                ))
+            },
+        )
+        .expect("unoccupied namespace checked");
+        assert!(seen.contains(Path::new("mnt:[42]")));
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || -> std::io::Result<std::io::Cursor<&[u8]>> {
+                panic!("already checked namespace must not be reopened")
+            },
+        )
+        .expect("successful namespace evidence can be reused");
+    }
+
+    #[test]
+    fn vacant_namespace_open_and_read_errors_fail_closed_without_marking() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        let error = inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Err::<std::io::Cursor<&[u8]>, _>(std::io::ErrorKind::PermissionDenied.into()),
+        )
+        .expect_err("permission failure cannot attest vacancy");
+        assert!(
+            error
+                .to_string()
+                .contains("inspect vacant target process namespace")
+        );
+        assert!(seen.is_empty());
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+        assert!(
+            inspect_process_namespace_evidence(
+                &roots,
+                Some(PathBuf::from("mnt:[42]")),
+                &mut seen,
+                || Ok(FailedRead),
+            )
+            .is_err()
+        );
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn vacant_namespace_evidence_keeps_utf8_and_exact_size_bounds() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        for bytes in [vec![0xff], vec![b' '; 4 * 1024 * 1024 + 1]] {
+            assert!(
+                inspect_process_namespace_evidence(
+                    &roots,
+                    Some(PathBuf::from("mnt:[42]")),
+                    &mut seen,
+                    || Ok(std::io::Cursor::new(bytes)),
+                )
+                .is_err()
+            );
+            assert!(seen.is_empty());
+        }
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Ok(std::io::Cursor::new(vec![b' '; 4 * 1024 * 1024])),
+        )
+        .expect("exactly four MiB remains admissible");
+        assert!(seen.contains(Path::new("mnt:[42]")));
+    }
+
+    #[test]
+    fn vacant_namespace_evidence_still_decodes_escaped_path_tokens() {
+        for (root, evidence) in [
+            ("/state/with space", r"/state/with\040space/data"),
+            ("/state/with\ttab", r"/state/with\011tab/data"),
+            ("/state/with\nnewline", r"/state/with\012newline/data"),
+            (r"/state/with\slash", r"/state/with\134slash/data"),
+        ] {
+            let mut seen = BTreeSet::new();
+            assert!(
+                inspect_process_namespace_evidence(
+                    &[Path::new(root)],
+                    Some(PathBuf::from("mnt:[42]")),
+                    &mut seen,
+                    || Ok(std::io::Cursor::new(evidence.as_bytes())),
+                )
+                .is_err()
+            );
+            assert!(seen.is_empty());
+        }
+    }
+
+    #[test]
+    fn vacant_namespace_maps_evidence_is_always_scanned() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::from([PathBuf::from("mnt:[42]")]);
+        let mut opened = 0;
+        inspect_process_namespace_evidence(&roots, None, &mut seen, || {
+            opened += 1;
+            Ok(std::io::Cursor::new(
+                &b"0000-1000 r-xp 0 00:01 1 /usr/bin/sleep\n"[..],
+            ))
+        })
+        .expect("first process has no occupied mapping");
+        assert!(
+            inspect_process_namespace_evidence(&roots, None, &mut seen, || {
+                opened += 1;
+                Ok(std::io::Cursor::new(
+                    &b"0000-1000 r-xp 0 00:01 1 /var/lib/taira/validator-1/state\n"[..],
+                ))
+            })
+            .is_err()
+        );
+        assert_eq!(opened, 2);
+        assert_eq!(seen, BTreeSet::from([PathBuf::from("mnt:[42]")]));
     }
 
     #[test]
