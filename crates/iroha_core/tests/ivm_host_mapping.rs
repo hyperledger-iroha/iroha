@@ -16,7 +16,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prelude::*};
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
-use norito::{NoritoSerialize, SerializePayload};
+use norito::NoritoSerialize;
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)

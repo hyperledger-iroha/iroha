@@ -91,7 +91,7 @@ fn pending_current_canonical_anchor_preserves_exact_in_memory_decision_owner() {
         qcs_before
     );
     assert_eq!(adapter.locally_bound_lane_proposals, bindings_before);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("complete the actual finality publication cut");

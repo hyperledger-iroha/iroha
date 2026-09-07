@@ -388,6 +388,22 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
         }
     }
 
+    fn assign_advice_discarding_value(
+        &mut self,
+        column: Column<Advice>,
+        offset: usize,
+        to: Value<Assigned<F>>,
+    ) -> Cell {
+        let row_offset = *self.region_start + offset;
+        self.plan
+            .cs
+            .assign_advice_discarding_value(column, row_offset, to);
+        Cell {
+            row_offset,
+            column: column.into(),
+        }
+    }
+
     fn assign_advice_from_constant<'v>(
         &'v mut self,
         _annotation: &'v (dyn Fn() -> String + 'v),

@@ -2219,6 +2219,11 @@ pub(super) fn run_non_pending_lifecycle_loop(
                     pending => pending,
                 };
                 match planning {
+                    LaneReservationReconciliationPlanning::AlreadyCompleted(observation) => {
+                        break observe_completed_lane_reservation_reconciliation(
+                            queue.as_ref(), kura.as_ref(), observation,
+                        )?;
+                    }
                     LaneReservationReconciliationPlanning::Ready(plan) => {
                         let reservation_recovery = output_guard
                             .begin_fail_stop_operation()

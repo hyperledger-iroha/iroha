@@ -26,6 +26,7 @@ or ping.
 The generated network lives in one marked directory and is replaced on the
 next ``up``.  There is no release authority, promotion state, evidence bundle,
 soak, or rollback workflow.
+Storage policy is read from the repository's native Taira configuration profile.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unicodedata
 import urllib.error
 import urllib.request
@@ -135,15 +137,20 @@ BUILD_ENV_REMOVALS = (
 TAIRA_BUILD_PROFILE = "local-release"
 RUNTIME_SIGNER_DIRECTORY = Path("runtime") / "taira-runtime-signers"
 RUNTIME_SIGNER_FILE_BYTES = 71
-TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 1024 * 1024 * 1024
-TAIRA_NEXUS_MAX_WSV_MEMORY_BYTES = 256 * 1024 * 1024
-TAIRA_NEXUS_STORAGE_WEIGHTS = (
-    ("kura_blocks_bps", 6_000),
-    ("wsv_snapshots_bps", 2_000),
-    ("sorafs_bps", 2_000),
+_TAIRA_STORAGE_PROFILE = tomllib.loads(
+    (REPO_ROOT / "configs/soranexus/taira/config.toml").read_text(encoding="utf-8")
+)["nexus"]["storage"]
+TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = _TAIRA_STORAGE_PROFILE["local_budget_bytes"]
+TAIRA_NEXUS_MAX_WSV_MEMORY_BYTES = _TAIRA_STORAGE_PROFILE["max_wsv_memory_bytes"]
+TAIRA_NEXUS_STORAGE_WEIGHTS = tuple(
+    _TAIRA_STORAGE_PROFILE["disk_budget_weights"].items()
 )
 STORAGE_WEIGHT_BASIS_POINTS = 10_000
-TAIRA_SORAFS_MAX_CAPACITY_BYTES = TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES // 5
+TAIRA_SORAFS_MAX_CAPACITY_BYTES = (
+    TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES
+    * _TAIRA_STORAGE_PROFILE["disk_budget_weights"]["sorafs_bps"]
+    // STORAGE_WEIGHT_BASIS_POINTS
+)
 TAIRA_SORACLOUD_HYDRATION_CONCURRENCY = 1
 TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY = 1
 TAIRA_INROU_IDENTITY_BASE = 70_000

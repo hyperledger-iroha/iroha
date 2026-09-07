@@ -1553,10 +1553,35 @@ v2_apply_test!(
         );
         assert_eq!(
             fixture.kura.merge_query_indexed_hashes_for_test(),
-            BTreeSet::from([HashOf::new(&entry)]),
+            BTreeSet::from([entry.canonical_hash()]),
             "repeated Pending/Queue/Complete checks may revisit only the exact carrier identity"
         );
         assert!(replayed_queue.live_lane_reservations().is_empty());
+        let completed_queue_snapshot = replayed_queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture completed owner state before read-only retry");
+        let completed_reservation_bytes =
+            std::fs::read(&journal_path).expect("read completed reservation journal before retry");
+        let completed_plan_bytes = std::fs::read(journal_dir.path().join("queue-plans.norito"))
+            .expect("read completed QueuePlan journal before retry");
+        assert!(
+            fixture
+                .kura
+                .pending_autonomous_lifecycle_terminal_outcome_inventory()
+                .expect("verify no Pending outcome before read-only retry")
+                .is_empty()
+        );
+        assert!(matches!(
+            plan_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                &replayed_queue,
+                fixture.kura.as_ref(),
+                &verified_active_context,
+                None,
+            )
+            .expect("observe completed startup without minting a mutation plan"),
+            LaneReservationReconciliationPlanning::AlreadyCompleted(_)
+        ));
         assert_eq!(
             reconcile_lane_reservation_ownership(
                 fixture.state.as_ref(),
@@ -1566,6 +1591,24 @@ v2_apply_test!(
             )
             .expect("repeat startup reconciliation"),
             LaneReservationReconciliationSummary::default()
+        );
+        assert_eq!(
+            std::fs::read(&journal_path).expect("reread reservation journal after observation"),
+            completed_reservation_bytes,
+            "completed observation must not append, compact or rewrite reservation authority"
+        );
+        assert_eq!(
+            std::fs::read(journal_dir.path().join("queue-plans.norito"))
+                .expect("reread QueuePlan journal after observation"),
+            completed_plan_bytes,
+            "completed observation must not append, compact or rewrite QueuePlan authority"
+        );
+        assert_eq!(
+            replayed_queue
+                .lane_reservation_reconciliation_snapshot()
+                .unwrap(),
+            completed_queue_snapshot,
+            "completed observation preserves the exact empty Queue snapshot"
         );
         let stages = fixture
             .kura
@@ -1666,9 +1709,20 @@ v2_apply_test!(
         stale_replayed_queue
             .install_lane_reservation_journal(&stale_reservation_path, 1024 * 1024)
             .expect("replay uncommitted stale owner");
-        let stale_snapshot = stale_replayed_queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("capture stale owner before QueuePlan replay");
+        // A reservation-only replay has no authenticated QueuePlan claim yet.
+        // Observe exact quarantined keys and durable bytes without minting the
+        // full reconciliation snapshot that requires successful payload replay.
+        let stale_owners = stale_replayed_queue.live_lane_reservations();
+        assert_eq!(stale_owners, vec![stale_reservation]);
+        let stale_reservation_bytes = std::fs::read(&stale_reservation_path)
+            .expect("retain the exact stale reservation journal");
+        let stale_plan_bytes =
+            std::fs::read(&stale_plan_path).expect("retain the exact stale QueuePlan journal");
+        assert!(matches!(
+            stale_replayed_queue.lane_reservation_reconciliation_snapshot(),
+            Err(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })
+                if hash == stale_reservation.entrypoint_hash
+        ));
         stale_replayed_queue
             .install_plan_journal(&stale_plan_path, 1024 * 1024, true)
             .expect("install replayed stale-owner QueuePlan journal");
@@ -1681,10 +1735,8 @@ v2_apply_test!(
             "uncommitted stale QueuePlan replay must fail closed as invalid durable data: {plan_error}"
         );
         assert_eq!(
-            stale_replayed_queue
-                .lane_reservation_reconciliation_snapshot()
-                .expect("capture stale owner after failed QueuePlan replay"),
-            stale_snapshot,
+            stale_replayed_queue.live_lane_reservations(),
+            stale_owners,
             "failed stale QueuePlan replay must not mutate reservation ownership"
         );
         let error = reconcile_lane_reservation_ownership(
@@ -1696,17 +1748,25 @@ v2_apply_test!(
         .expect_err("uncommitted stale-incarnation owner must remain fail-closed");
         assert!(matches!(
             error,
-            V2ReservationLifecycleError::StaleReservationContext {
-                lane_id,
-                proposal_height: 1,
-            } if lane_id == reservation_lane.id
+            V2ReservationLifecycleError::Queue(
+                LaneQueueReservationError::ReconciliationMissingDurableClaim { hash }
+            ) if hash == stale_reservation.entrypoint_hash
         ));
         assert_eq!(
-            stale_replayed_queue
-                .lane_reservation_reconciliation_snapshot()
-                .expect("capture stale owner after failed reconciliation"),
-            stale_snapshot,
+            stale_replayed_queue.live_lane_reservations(),
+            stale_owners,
             "stale-owner failure must not mutate Queue ownership"
+        );
+        assert_eq!(
+            std::fs::read(&stale_reservation_path)
+                .expect("reread rejected stale reservation journal"),
+            stale_reservation_bytes,
+            "rejected stale ownership must preserve its complete durable reservation evidence"
+        );
+        assert_eq!(
+            std::fs::read(&stale_plan_path).expect("reread rejected stale QueuePlan journal"),
+            stale_plan_bytes,
+            "failed startup admission must not rewrite the retained QueuePlan evidence"
         );
         assert!(
             stale_replayed_queue.lane_reservation_startup_reconciliation_pending(),
@@ -2859,6 +2919,39 @@ v2_apply_test!(
             LaneReservationReconciliationSummary::default(),
         );
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
+        let completed_reservations =
+            std::fs::read(journal_dir.path().join("lane-reservations.norito"))
+                .expect("retain completed empty reservation journal");
+        let completed_plans = std::fs::read(journal_dir.path().join("queue-plans.norito"))
+            .expect("retain completed empty QueuePlan journal");
+        let planning = plan_lane_reservation_ownership(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            &verified_context_for_fixture(&fixture, &fixture.context),
+            None,
+        )
+        .expect("observe the genuinely completed empty startup");
+        let LaneReservationReconciliationPlanning::AlreadyCompleted(observation) = planning else {
+            panic!("a completed empty startup must return read-only evidence");
+        };
+        assert_eq!(
+            observe_completed_lane_reservation_reconciliation(
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                observation,
+            )
+            .expect("validate the empty Kura/Queue completion observation"),
+            LaneReservationReconciliationSummary::default()
+        );
+        assert_eq!(
+            std::fs::read(journal_dir.path().join("lane-reservations.norito")).unwrap(),
+            completed_reservations
+        );
+        assert_eq!(
+            std::fs::read(journal_dir.path().join("queue-plans.norito")).unwrap(),
+            completed_plans
+        );
     }
 );
 v2_apply_test!(

@@ -39,7 +39,7 @@ const PROOF_ROOT_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:history-store:pr
 /// Independent authenticated sparse-tree namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
-pub(crate) enum KagemushaHistoryTreeV1 {
+pub enum KagemushaHistoryTreeV1 {
     /// Consumed-credit replay nonmembership tree.
     Replay,
     /// Durable transition-outcome decision tree used for exact crash recovery.
@@ -94,7 +94,7 @@ pub(crate) enum KagemushaHistoryNodeBodyV1 {
 
 /// Domain-separated immutable sparse-tree node record.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub(crate) struct KagemushaHistoryNodeRecordV1 {
+pub struct KagemushaHistoryNodeRecordV1 {
     version: u16,
     tree: KagemushaHistoryTreeV1,
     body: KagemushaHistoryNodeBodyV1,
@@ -190,7 +190,7 @@ impl KagemushaHistoryNodeRecordV1 {
 
 /// The two independently selected committed content-address roots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-pub(crate) struct KagemushaHistoryRootsV1 {
+pub struct KagemushaHistoryRootsV1 {
     replay: DigestV1,
     terminal_decision: DigestV1,
 }
@@ -362,7 +362,7 @@ struct KagemushaHistoryNodeWriteV1 {
 
 /// Immutable prepared CAS material stored in the live WAL overlay.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub(crate) struct KagemushaPreparedHistoryCasV1 {
+pub struct KagemushaPreparedHistoryCasV1 {
     transaction_id: DigestV1,
     attempt_binding_digest: DigestV1,
     root_selection: KagemushaHistoryRootSelectionV1,
@@ -569,7 +569,7 @@ impl KagemushaHistoryRootSelectionCertificateV1 {
 
 /// Typestate proving that a release-approved device authenticated one exact root selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct VerifiedKagemushaHistoryRootSelectionV1 {
+pub struct VerifiedKagemushaHistoryRootSelectionV1 {
     // Keep signed evidence for durable replay, but never serialize the verified typestate.
     certificate: KagemushaHistoryRootSelectionCertificateV1,
 }
@@ -604,7 +604,7 @@ impl VerifiedKagemushaHistoryRootSelectionV1 {
 /// Exact byte accounting for the live, uncommitted prepare/WAL overlay.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct KagemushaHistoryOverlayUsageV1 {
+pub struct KagemushaHistoryOverlayUsageV1 {
     live_bytes: u64,
     capacity_bytes: u64,
 }
@@ -625,7 +625,7 @@ impl KagemushaHistoryOverlayUsageV1 {
 /// Availability of the exact node selected by a committed tree root.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum KagemushaCommittedRootReadV1 {
+pub enum KagemushaCommittedRootReadV1 {
     /// The backing store answered for the exact root.
     Available {
         /// Exact committed root that was requested.
@@ -642,7 +642,7 @@ pub(crate) enum KagemushaCommittedRootReadV1 {
 
 /// Result of durably preparing one root CAS in the live overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KagemushaHistoryPrepareOutcomeV1 {
+pub enum KagemushaHistoryPrepareOutcomeV1 {
     /// The transaction was added to the uncommitted overlay.
     Prepared,
     /// The exact transaction was already prepared.
@@ -658,7 +658,7 @@ pub(crate) enum KagemushaHistoryPrepareOutcomeV1 {
 
 /// Result of committing one hardware-authenticated prepared root CAS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KagemushaHistoryCommitOutcomeV1 {
+pub enum KagemushaHistoryCommitOutcomeV1 {
     /// The authenticated root selection committed atomically.
     Committed {
         /// Roots selected immediately after this commit.
@@ -675,7 +675,7 @@ pub(crate) enum KagemushaHistoryCommitOutcomeV1 {
 
 /// Result of aborting one prepared root CAS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KagemushaHistoryAbortOutcomeV1 {
+pub enum KagemushaHistoryAbortOutcomeV1 {
     /// The uncommitted transaction was removed and recorded as aborted.
     Aborted,
     /// The same transaction had already been aborted.
@@ -689,7 +689,7 @@ pub(crate) enum KagemushaHistoryAbortOutcomeV1 {
 
 /// Result of recovering one hardware-authenticated prepared root CAS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KagemushaHistoryRecoveryOutcomeV1 {
+pub enum KagemushaHistoryRecoveryOutcomeV1 {
     /// Recovery completed the pending atomic commit.
     Committed {
         /// Roots selected immediately after the recovered commit.
@@ -706,7 +706,7 @@ pub(crate) enum KagemushaHistoryRecoveryOutcomeV1 {
 
 /// Deterministic failures exposed by authenticated-history storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum KagemushaHistoryStoreErrorV1 {
+pub enum KagemushaHistoryStoreErrorV1 {
     /// Canonical Norito encoding failed.
     #[error("canonical KAGEMUSHA history encoding failed")]
     CanonicalEncoding,
@@ -826,13 +826,24 @@ pub(crate) enum KagemushaHistoryStoreErrorV1 {
     DurabilityUncertain,
 }
 
+mod sealed {
+    pub trait Sealed {}
+
+    impl Sealed for super::KagemushaMemoryAuthenticatedHistoryStoreV1 {}
+    #[cfg(unix)]
+    impl Sealed for super::disk_history_store::KagemushaDiskAuthenticatedHistoryStoreV1 {}
+}
+
 /// External persistence boundary for KAGEMUSHA's two authenticated history trees.
 ///
 /// Implementations must make a commit's nodes, selected roots, and terminal transaction result
 /// atomic and durable. Repeating prepare, commit, abort, or recovery must return the corresponding
 /// `Already*`/terminal outcome. Capacity applies only to the live prepare/WAL overlay; committed
 /// nodes and terminal records are not evicted or rejected through that capacity.
-pub(crate) trait KagemushaAuthenticatedHistoryStoreV1 {
+///
+/// This public state-machine bound is sealed to Core-owned implementations. Store construction
+/// and authenticated root-selection capabilities remain restricted to their verifying owners.
+pub trait KagemushaAuthenticatedHistoryStoreV1: sealed::Sealed {
     /// Return both authoritative committed roots without consulting object availability.
     fn committed_roots(&self) -> KagemushaHistoryRootsV1;
 
@@ -1763,8 +1774,9 @@ enum KagemushaTerminalHistoryCasV1 {
 /// This implementation models the required atomic boundaries and failure semantics. Production
 /// integrations can place the same immutable records, prepared entries, terminal records, and root
 /// heads in an external transactional store without changing the protocol-facing interface.
+/// The type is public as the state machine's default store; only Core can construct it.
 #[derive(Clone)]
-pub(crate) struct KagemushaMemoryAuthenticatedHistoryStoreV1 {
+pub struct KagemushaMemoryAuthenticatedHistoryStoreV1 {
     roots: KagemushaHistoryRootsV1,
     durable_nodes: ImmutableHistoryNodeIndex,
     prepared: BTreeMap<DigestV1, KagemushaLiveHistoryWalEntryV1>,

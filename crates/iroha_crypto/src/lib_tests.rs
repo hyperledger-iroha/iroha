@@ -130,6 +130,93 @@ mod tests {
             );
         }
     }
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn mldsa_shared_verifier_preserves_signature_and_batch_admission() {
+        use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
+        let keypair = checked_seed_keypair(&[0x53; 32], Algorithm::MlDsa);
+        let message = b"ML-DSA shared verifier admission";
+        let signature = checked_signature(keypair.private_key(), message);
+        let (_, public_key) = keypair.public_key().try_to_bytes().unwrap();
+        let typed_key = pqcrypto_mldsa::mldsa65::PublicKey::from_bytes(public_key).unwrap();
+        let typed_signature =
+            pqcrypto_mldsa::mldsa65::DetachedSignature::from_bytes(signature.payload()).unwrap();
+        verify_mldsa65_detached(&typed_signature, message, &typed_key)
+            .expect("shared typed verifier");
+        signature
+            .verify(keypair.public_key(), message)
+            .expect("single verification");
+        verify_signature_for_admission(&signature, keypair.public_key(), message)
+            .expect("admission verification");
+        assert!(matches!(
+            verify_signature_for_admission(&signature, keypair.public_key(), b"changed"),
+            Err(Error::BadSignature),
+        ));
+        let different_keypair = checked_seed_keypair(&[0x56; 32], Algorithm::MlDsa);
+        assert!(matches!(
+            verify_signature_for_admission(&signature, different_keypair.public_key(), message),
+            Err(Error::BadSignature),
+        ));
+        pqc_verify_batch_deterministic(&[message], &[signature.payload()], &[public_key], [0; 32])
+            .expect("batch verification");
+        assert!(matches!(
+            signature.verify(keypair.public_key(), b"changed"),
+            Err(Error::BadSignature),
+        ));
+        assert!(matches!(
+            pqc_verify_batch_deterministic(
+                &[b"changed"],
+                &[signature.payload()],
+                &[public_key],
+                [0; 32],
+            ),
+            Err(Error::BadSignature),
+        ));
+        let mut corrupt = signature.payload().to_vec();
+        corrupt[0] ^= 1;
+        let mut overlong = signature.payload().to_vec();
+        overlong.push(1);
+        for invalid in [
+            corrupt,
+            signature.payload()[1..].to_vec(),
+            overlong,
+            vec![0; signature.payload().len()],
+        ] {
+            assert!(matches!(
+                verify_signature_for_admission(
+                    &Signature::from_bytes(&invalid),
+                    keypair.public_key(),
+                    message,
+                ),
+                Err(Error::BadSignature),
+            ));
+            assert!(matches!(
+                Signature::from_bytes(&invalid).verify(keypair.public_key(), message),
+                Err(Error::BadSignature),
+            ));
+            assert!(matches!(
+                pqc_verify_batch_deterministic(&[message], &[&invalid], &[public_key], [0; 32]),
+                Err(Error::BadSignature),
+            ));
+        }
+        for invalid_key in [public_key[1..].to_vec(), vec![0; public_key.len()]] {
+            assert!(matches!(
+                pqc_verify_batch_deterministic(
+                    &[message],
+                    &[signature.payload()],
+                    &[&invalid_key],
+                    [0; 32],
+                ),
+                Err(Error::BadSignature),
+            ));
+        }
+        let wrong_algorithm = checked_seed_keypair(&[0x54; 32], Algorithm::Ed25519);
+        assert!(
+            signature
+                .verify(wrong_algorithm.public_key(), message)
+                .is_err()
+        );
+    }
     #[test]
     fn mldsa65_parse_signature_rejects_inert_or_malformed_lengths() {
         let key_pair = checked_seed_keypair(&[0x32; 32], Algorithm::MlDsa);

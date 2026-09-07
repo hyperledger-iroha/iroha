@@ -21,8 +21,6 @@ use super::{
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
-#[cfg(test)]
-use iroha_data_model::privacy::{PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1};
 
 use rand::TryRngCore;
 use rayon::prelude::*;
@@ -495,8 +493,16 @@ pub(crate) enum NoteCopyCellPolicyV1 {
     /// The cell is fixed to zero and does not join a variable cycle.
     Inactive,
     /// The cell is fixed to this exact byte.
+    #[expect(
+        dead_code,
+        reason = "execution profiles currently use inactive cells; retain the constant-copy constraint policy"
+    )]
     Constant(u8),
     /// The cell belongs to a verifier-fixed variable cycle.
+    #[expect(
+        dead_code,
+        reason = "execution profiles currently use inactive cells; retain the variable-copy constraint policy"
+    )]
     Variable,
 }
 /// Verifier-fixed copy policy and permutation for a complete note trace.

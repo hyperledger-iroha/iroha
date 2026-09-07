@@ -1781,6 +1781,7 @@ impl ParliamentAttemptStateV1 {
 
     /// Return whether this attempt references `member` through a currently
     /// live draw or an immutable sealed Parliament seat.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn references_parliament_member(&self, member: &AccountId) -> bool {
         self.parliament_member_reference_sets_v1()
@@ -1789,6 +1790,7 @@ impl ParliamentAttemptStateV1 {
     }
 
     /// Return whether an active attempt still retains `member`'s citizenship bond.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn retains_citizenship_bond(&self, member: &AccountId) -> bool {
         self.parliament_member_reference_sets_v1()
@@ -2134,6 +2136,7 @@ impl ParliamentAttemptStateV1 {
     /// Timed ballots request their frozen release slot from registration until
     /// they either consume the pulse or become terminal, so an otherwise valid
     /// arbitrary release height is visible to consensus before it arrives.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn requires_beacon_pulse_at(
         &self,
@@ -2163,7 +2166,7 @@ impl ParliamentAttemptStateV1 {
     /// Return every live beacon slot currently required by this attempt.
     ///
     /// The deduplicated set is used to maintain the world-level consensus
-    /// index; point queries should use [`Self::requires_beacon_pulse_at`].
+    /// index used by point queries.
     #[must_use]
     pub(crate) fn required_beacon_pulse_slots_v1(&self) -> BTreeSet<(BeaconSessionId, u64)> {
         if self.attempt.status != GovernanceAttemptStatusV1::Active {
@@ -2225,6 +2228,7 @@ impl ParliamentAttemptStateV1 {
     /// This hot-path lookup short-circuits over the authoritative records rather
     /// than allocating the deduplicated set used for index construction.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn classifies_beacon_pulse_unavailable_at(
         &self,
         beacon_session_id: BeaconSessionId,

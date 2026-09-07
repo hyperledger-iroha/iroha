@@ -91,11 +91,8 @@ mod proof_bytes;
 pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
 pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
+pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::verify_ordinary_proof_with_canonical_bytes_v1;
 pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
-pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::{
-    verify_ordinary_proof_with_canonical_bytes_v1,
-    verify_ordinary_proof_with_transcript_binding_at_k_v1,
-};
 
 #[cfg(test)]
 #[path = "deferred_parent_proof_bytes_tests.rs"]
@@ -103,6 +100,20 @@ mod proof_bytes_tests;
 #[cfg(test)]
 #[path = "deferred_parent_protocol_identity_tests.rs"]
 mod protocol_identity_tests;
+
+#[path = "deferred_claim_fold_transcript.rs"]
+mod claim_fold_transcript;
+pub(super) use claim_fold_transcript::{
+    ClaimFoldTranscriptPlanV1, verify_claim_fold_with_transcript_binding_v1,
+};
+
+#[path = "ordinary_poseidon_schedule.rs"]
+mod ordinary_poseidon_schedule;
+pub(super) use ordinary_poseidon_schedule::ClaimProofTranscriptPlanV1;
+pub(super) use proof_bytes::{
+    verify_ordinary_proof_with_native_binding_at_k_v1,
+    verify_two_carrier_hybrid_ordinary_proof_with_native_v1,
+};
 
 const KAGEMUSHA_PROTOCOL_STRUCTURE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:compiled-protocol-structure";
@@ -174,23 +185,15 @@ where
         .ok_or_else(|| "Kagemusha witness-commitment count overflowed".to_owned())?;
     let quotient_commitments = protocol.quotient.num_chunk();
     let evaluations = protocol.evaluations.len();
-    // The BGH19 parser groups queries by their evaluation-point shifts, not
-    // by the source `Rotation` integers.  Rotations that differ by the domain
-    // order therefore share one transcript evaluation (for example `-1` and
-    // `2^k - 1`).  Normalize modulo the authenticated domain order so this
-    // inventory exactly matches `query_sets` in snark-verifier.
-    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i64>>::new();
-    for query in &protocol.queries {
-        rotations_by_polynomial
-            .entry(query.poly)
-            .or_default()
-            .insert(canonical_rotation_v1(protocol.domain.k, query.rotation.0));
-    }
-    let bgh19_rotation_sets = rotations_by_polynomial
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<BTreeSet<_>>()
-        .len();
+    // The pinned BGH19 reader receives `Query<Rotation>` from `empty_queries`.
+    // Its grouping compares the signed rotation integers, before evaluating
+    // domain shifts. Preserve that exact inventory even for domain aliases.
+    let bgh19_rotation_sets = ordinary_ipa_rotation_set_count_v1(
+        protocol
+            .queries
+            .iter()
+            .map(|query| (query.poly, query.rotation.0)),
+    );
     ordinary_ipa_proof_profile_from_counts_v1(
         expected_k,
         witness_commitments,
@@ -200,8 +203,18 @@ where
     )
 }
 
-fn canonical_rotation_v1(domain_k: usize, rotation: i32) -> i64 {
-    i64::from(rotation).rem_euclid(1_i64 << domain_k)
+fn ordinary_ipa_rotation_set_count_v1(queries: impl IntoIterator<Item = (usize, i32)>) -> usize {
+    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
+    for (polynomial, rotation) in queries {
+        rotations_by_polynomial
+            .entry(polynomial)
+            .or_default()
+            .insert(rotation);
+    }
+    rotations_by_polynomial
+        .into_values()
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn validate_ordinary_ipa_protocol_shape_v1(
@@ -838,6 +851,10 @@ where
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
     pub(super) batch: DeferredBatchedEquationWitnessV1<C>,
+    #[expect(
+        dead_code,
+        reason = "Constrained challenge is retained with the batch for transcript qualification"
+    )]
     pub(super) challenge: AssignedValue<C::ScalarExt>,
     pub(super) challenge_limbs: [AssignedValue<C::ScalarExt>; 2],
     pub(super) source_commitments: Vec<[AssignedValue<C::ScalarExt>; 2]>,
@@ -894,6 +911,10 @@ where
 /// The fixed 544-byte successor history is appended to the parity proof's public instance column
 /// as 34 injective `u128` limbs. The compiled-protocol identity and deferred-equation audit are
 /// equality-bound to the common positions already assigned by the state relation.
+#[expect(
+    dead_code,
+    reason = "Retained authenticated scalar-pass composition entry point; shipping composites bind each phase separately"
+)]
 pub(super) fn constrain_authenticated_scalar_parent_pass_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -1298,6 +1319,10 @@ where
 ///
 /// The assigned selectors are constrained circuit values. The parallel booleans are their exact
 /// witnesses and are replayed by the reciprocal parity when it enforces the curve equations.
+#[expect(
+    dead_code,
+    reason = "Retained unbound audit adapter for reciprocal relation qualification"
+)]
 pub(super) fn finalize_deferred_audit_plan_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     loader: DeferredLoader<'_, C>,
@@ -1397,6 +1422,10 @@ where
 /// intentionally stops before cross-parity authentication; callers must bind
 /// every returned field before using the compact host witness in a reciprocal
 /// circuit.
+#[expect(
+    dead_code,
+    reason = "Retained standalone tagged-batch adapter for reciprocal relation qualification"
+)]
 pub(super) fn finalize_tagged_native_deferred_batch_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     loader: DeferredLoader<'_, C>,
@@ -1686,6 +1715,10 @@ const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_EQUATIONS_TAG_V1: u64 = u64::from_le_bytes
 /// emitted source and coefficient, recomputes the identical field-native Poseidon audit, binds its
 /// canonical two-`u128` limbs to the shared public instance, and evaluates the complete batched
 /// curve equation through the dedicated dense MSM machine.
+#[expect(
+    dead_code,
+    reason = "Retained complete parent-audit composition entry point alongside bound production audits"
+)]
 pub(super) fn constrain_reciprocal_parent_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,
     witness: &DeferredEquationWitness<C>,
@@ -1709,6 +1742,10 @@ where
 }
 
 /// Constrain one tagged scalar-verifier audit in the reciprocal Pasta parity.
+#[expect(
+    dead_code,
+    reason = "Retained tagged-audit adapter alongside bound production audits"
+)]
 pub(super) fn constrain_reciprocal_tagged_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,
     witness: &DeferredEquationWitness<C>,
@@ -2164,6 +2201,10 @@ where
 ///
 /// Every proof contributes equations to the same loader. The caller must subsequently invoke
 /// [`finalize_deferred_audit_v1`] exactly once so the reciprocal parity constrains the union.
+#[expect(
+    dead_code,
+    reason = "Retained batch ordinary-proof adapter for private recursive circuit composition"
+)]
 pub(super) fn verify_ordinary_proofs_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -2376,6 +2417,10 @@ const _: () = {
 };
 
 #[cfg(test)]
+#[path = "deferred_parent_rotation_inventory_tests.rs"]
+mod rotation_inventory_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2389,13 +2434,17 @@ mod tests {
     }
 
     #[test]
-    fn bgh19_rotation_inventory_uses_domain_shifts() {
-        let k = KAGEMUSHA_RECURSION_IPA_K_V1 as usize;
+    fn bgh19_rotation_inventory_preserves_reader_rotation_integers() {
         assert_eq!(
-            canonical_rotation_v1(k, -1),
-            canonical_rotation_v1(k, 65_535)
+            ordinary_ipa_rotation_set_count_v1([(0, -1), (1, 65_535)]),
+            2
         );
-        assert_ne!(canonical_rotation_v1(k, -1), canonical_rotation_v1(k, 0));
+        assert_eq!(ordinary_ipa_rotation_set_count_v1([(0, -1), (1, -1)]), 1);
+        assert_eq!(ordinary_ipa_rotation_set_count_v1([(0, -1), (0, -1)]), 1);
+        assert_eq!(
+            ordinary_ipa_rotation_set_count_v1([(0, -1), (0, 1), (1, 1), (1, -1)]),
+            1,
+        );
     }
 
     #[test]

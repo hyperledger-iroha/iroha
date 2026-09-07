@@ -406,6 +406,7 @@ impl CanonicalExecutedBlockRecovery {
         self.effects.drain(..count).collect()
     }
     /// Restore one source-owned effect after downstream backpressure.
+    #[cfg(test)]
     pub(crate) fn requeue_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
         if self.effects.len() >= self.limits.effect_capacity.get() {
             return false;

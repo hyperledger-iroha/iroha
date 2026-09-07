@@ -197,7 +197,7 @@ mod tests {
         state::{State, World},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{IntoKeyValue, Registrable, prelude::*};
+    use iroha_data_model::{Registrable, prelude::*};
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
 

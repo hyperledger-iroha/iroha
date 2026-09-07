@@ -121,7 +121,7 @@
     "crates/sorafs_node/src/lib.rs": 16393,
     "crates/sorafs_node/src/lib_tests.rs": 9531,
     "crates/sorafs_node/src/moderation_orchestrator.rs": 11154,
-    "crates/sorafs_node/src/provider_ingest_outbox.rs": 10366,
+    "crates/sorafs_node/src/provider_ingest_outbox.rs": 10268,
     "crates/sorafs_node/src/reputation.rs": 5371,
     "crates/sorafs_node/src/reputation/runtime.rs": 12825,
     "crates/sorafs_node/src/store.rs": 8672,

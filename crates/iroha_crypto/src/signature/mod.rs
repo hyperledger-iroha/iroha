@@ -420,7 +420,7 @@ impl Signature {
                 }
                 let pk =
                     dilithium::PublicKey::from_bytes(pk_bytes).map_err(|_| Error::BadSignature)?;
-                if dilithium::verify_detached_signature(&sig, payload, &pk).is_err() {
+                if crate::verify_mldsa65_detached(&sig, payload, &pk).is_err() {
                     return Err(Error::BadSignature);
                 }
                 Ok(())

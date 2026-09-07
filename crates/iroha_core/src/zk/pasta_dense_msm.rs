@@ -1158,9 +1158,11 @@ where
                             } else {
                                 Value::known(row.values[column])
                             };
-                            let cell = region
-                                .assign_advice(lane_config.columns[column], row_index, value)
-                                .cell();
+                            let cell = region.assign_advice_discarding_value(
+                                lane_config.columns[column],
+                                row_index,
+                                value,
+                            );
                             if column == BUS {
                                 buses[lane].push(cell);
                             }

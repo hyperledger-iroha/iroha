@@ -42,6 +42,7 @@ const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
 const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
 const ZK_CLI_MAX_NESTING_DEPTH_V1: usize = 64;
+const ZK_CLI_JSON_MAX_NESTING_DEPTH_V1: usize = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
 // Binary `Vec<u8>` fields account their byte length as sequence elements, so
 // the binary limit must admit one complete proof-sized byte field. JSON arrays
 // use the much smaller graph limit below.
@@ -57,7 +58,7 @@ const ZK_CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits:
     ZK_CLI_INPUT_MAX_BYTES_V1,
     ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1,
     ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
-    ZK_CLI_MAX_NESTING_DEPTH_V1,
+    ZK_CLI_JSON_MAX_NESTING_DEPTH_V1,
 );
 fn read_zk_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let mut file =
@@ -1301,8 +1302,8 @@ mod tests {
         let exact = directory.path().join("exact.json");
         let exact_body = format!(
             "{}0{}",
-            "[".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1 - 1),
-            "]".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1 - 1)
+            "[".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1 - 1),
+            "]".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1 - 1)
         );
         std::fs::write(&exact, exact_body).expect("write exact-depth JSON");
         let _: norito::json::Value =
@@ -1310,8 +1311,8 @@ mod tests {
         let over = directory.path().join("over.json");
         let over_body = format!(
             "{}0{}",
-            "[".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1),
-            "]".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1)
+            "[".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1),
+            "]".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1)
         );
         std::fs::write(&over, over_body).expect("write over-depth JSON");
         let error = decode_zk_json_file::<norito::json::Value>(&over, "fixture")

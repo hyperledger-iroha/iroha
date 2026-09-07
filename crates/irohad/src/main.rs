@@ -13463,6 +13463,12 @@ pub fn run_with_runtime_provider_registry(
 }
 /// Deployment-launcher guard evaluated over the parsed daemon configuration.
 type IrohaLauncherConfigGuardV1 = fn(&Config) -> Result<(), String>;
+/// Private deployment callback bound to the exact authenticated local genesis.
+type IrohaLauncherRuntimeFactoryV1 = fn(
+    &Config,
+    &iroha_core::sumeragi::GenesisV2Bootstrap,
+    IrohaRuntimeDeps,
+) -> Result<IrohaRuntimeDeps, String>;
 /// Run the standard CLI launcher with a deployment-owned configuration guard.
 ///
 /// The guard runs after the complete configuration is parsed and before
@@ -13473,7 +13479,7 @@ type IrohaLauncherConfigGuardV1 = fn(&Config) -> Result<(), String>;
 pub(crate) fn run_with_config_guard(
     guard: IrohaLauncherConfigGuardV1,
 ) -> ReportResult<(), MainError> {
-    run_main_with_config_guard(None, None, Some(guard))
+    run_main_with_config_guard(None, None, Some(guard), None)
 }
 /// Run the standard CLI launcher with a deployment-owned provider registry and
 /// configuration guard.
@@ -13483,8 +13489,9 @@ pub(crate) fn run_with_config_guard(
 pub(crate) fn run_with_runtime_provider_registry_and_config_guard(
     registry: &dyn IrohaRuntimeProviderRegistryV1,
     guard: IrohaLauncherConfigGuardV1,
+    runtime_factory: IrohaLauncherRuntimeFactoryV1,
 ) -> ReportResult<(), MainError> {
-    run_main_with_config_guard(Some(registry), None, Some(guard))
+    run_main_with_config_guard(Some(registry), None, Some(guard), Some(runtime_factory))
 }
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
@@ -13757,7 +13764,12 @@ fn run_main(
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
 ) -> ReportResult<(), MainError> {
-    run_main_with_config_guard(runtime_provider_registry, musubi_publication_factory, None)
+    run_main_with_config_guard(
+        runtime_provider_registry,
+        musubi_publication_factory,
+        None,
+        None,
+    )
 }
 #[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
 fn run_main_with_config_guard(
@@ -13766,6 +13778,7 @@ fn run_main_with_config_guard(
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
     launcher_config_guard: Option<IrohaLauncherConfigGuardV1>,
+    launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
     let lang = i18n::detect_language(args.language.as_deref());
@@ -13838,6 +13851,22 @@ fn run_main_with_config_guard(
             .map_err(Report::new)
             .change_context(MainError::Config)
             .attach("failed to resolve deployment runtime-provider bindings")?
+    };
+    let runtime_deps = if let Some(factory) = launcher_runtime_factory {
+        if emergency_fast {
+            return Err(Report::new(MainError::Config)
+                .attach("deployment runtime authority requires authenticated full startup"));
+        }
+        let local_genesis = genesis.as_ref().ok_or_else(|| {
+            Report::new(MainError::Config)
+                .attach("deployment runtime authority requires the exact local signed genesis")
+        })?;
+        let (authenticated_genesis, _) =
+            validate_available_genesis_for_check(&config, local_genesis)?;
+        factory(&config, &authenticated_genesis, runtime_deps)
+            .map_err(|error| Report::new(MainError::Config).attach(error))?
+    } else {
+        runtime_deps
     };
     #[cfg(feature = "test-network-parliament-signers")]
     let runtime_deps = {

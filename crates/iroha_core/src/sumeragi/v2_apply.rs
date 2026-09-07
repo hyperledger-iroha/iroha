@@ -65,11 +65,12 @@ use crate::{
     },
     lane_consensus::{LaneExecutablePayloadV1, deterministic_lane_author},
     queue::{
-        LaneQueueReservationError, LaneQueueReservationGroupBindingV1,
-        LaneQueueReservationGroupIdentityV1, LaneQueueReservationReconciliationGroupV1,
-        LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationReleaseBarrierV1,
-        LaneReservationStartupReconciliationReceipt, Queue, QueueLaneRetirementObserver,
-        RoutingDecision, canonical_lane_queue_reservation_group_identity_projection,
+        CompletedLaneReservationStartupReconciliation, LaneQueueReservationError,
+        LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
+        LaneQueueReservationReconciliationGroupV1, LaneQueueReservationReconciliationSnapshotV1,
+        LaneQueueReservationReleaseBarrierV1, LaneReservationStartupReconciliationReceipt, Queue,
+        QueueLaneRetirementObserver, RoutingDecision,
+        canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
         strictly_absent_lane_reservation_snapshot_recovery_state,
     },
@@ -1136,6 +1137,14 @@ pub(crate) fn plan_lane_reservation_ownership(
 ) -> Result<LaneReservationReconciliationPlanning, V2ReservationLifecycleError> {
     let active_context = verified_active_context.context();
     let current_snapshot = queue.lane_reservation_reconciliation_snapshot()?;
+    if lifecycle_handoff.is_none()
+        && let Some(completed) =
+            queue.observe_completed_lane_reservation_startup_reconciliation(&current_snapshot)?
+    {
+        return Ok(LaneReservationReconciliationPlanning::AlreadyCompleted(
+            completed,
+        ));
+    }
     let (snapshot, recovered_receipt, deferred_terminal_recovery) = match lifecycle_handoff {
         Some(handoff) => {
             let (snapshot, receipt, deferred_terminal_recovery) = handoff.into_queue_handoff();
@@ -2067,6 +2076,38 @@ pub(crate) fn plan_lane_reservation_ownership(
             recovered: unique_recovered.len(),
         },
     ))
+}
+/// Confirm a completed startup cut without replaying any Queue or Kura mutation.
+///
+/// Queue completion alone does not prove Kura terminality. Pending terminal
+/// outcomes must still take their ordinary recovery path before this observation
+/// can be consumed. Callers retain the same serialized startup ownership as for
+/// planning and application.
+pub(crate) fn observe_completed_lane_reservation_reconciliation(
+    queue: &Queue,
+    kura: &Kura,
+    observation: CompletedLaneReservationStartupReconciliation,
+) -> Result<LaneReservationReconciliationSummary, V2ReservationLifecycleError> {
+    if !kura
+        .pending_autonomous_lifecycle_terminal_outcome_inventory()
+        .map_err(
+            |error| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                detail: format!("completed startup terminal readback failed: {error}"),
+            },
+        )?
+        .is_empty()
+    {
+        return Err(
+            V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                detail: "completed startup reconciliation cannot bypass a Pending terminal outcome"
+                    .to_owned(),
+            },
+        );
+    }
+    if !queue.revalidate_completed_lane_reservation_startup_reconciliation(&observation)? {
+        return Err(V2ReservationLifecycleError::QueueSnapshotChanged);
+    }
+    Ok(LaneReservationReconciliationSummary::default())
 }
 /// Apply one previously completed immutable reconciliation plan.
 ///
@@ -4456,7 +4497,10 @@ impl V2ApplyService {
             // durable execution bytes, including signatures and results.
             // Complete that publication before recovery consults canonical
             // lane ownership; ordinary planning sees the post-append frontier.
-            self.kura
+            // The final publication below returns the receipt used for apply
+            // completion after WSV and metadata repair.
+            let _ = self
+                .kura
                 .store_v2_finality_artifact(artifact)
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(

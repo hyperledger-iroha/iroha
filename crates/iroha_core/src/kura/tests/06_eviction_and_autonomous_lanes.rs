@@ -3193,7 +3193,7 @@ fn consensus_body_read_with_verified_finality_authenticates_pending_and_publishe
         kura.read_block_body_with_verified_finality(height, &other)
             .is_err()
     );
-    kura.store_v2_finality_artifact(&artifact)
+    let _ = kura.store_v2_finality_artifact(&artifact)
         .expect("publish exact finality");
     assert_eq!(
         kura.read_block_body_with_verified_finality(height, &authority)

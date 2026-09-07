@@ -1,6 +1,20 @@
+fn guard_directory_snapshot_file() -> (TempDir, NamedTempFile) {
+    // The snapshot reader requires an owner-held directory below a shared
+    // sticky temporary root, even when the snapshot file itself is private.
+    let directory = TempDir::new().expect("snapshot directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private snapshot directory permissions");
+    }
+    let file = NamedTempFile::new_in(directory.path()).expect("snapshot file");
+    (directory, file)
+}
+
 #[test]
 fn load_guard_directory_rejects_oversized_file_before_decode() {
-    let file = NamedTempFile::new().expect("temp file");
+    let (_directory, file) = guard_directory_snapshot_file();
     file.as_file()
         .set_len(
             u64::try_from(iroha_crypto::soranet::directory::GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1)

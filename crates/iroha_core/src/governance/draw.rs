@@ -5,6 +5,7 @@ use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{NetworkId, account::AccountId, governance::types::ParliamentBody};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
+#[cfg(test)]
 const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,

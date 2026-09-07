@@ -30,9 +30,11 @@ path = "src/lib.rs"
 
 [dependencies.concread]
 version = "0.5.7"
+default-features = false
 features = [
     "ebr",
     "maps",
+    "foldhash",
 ]
 
 [dependencies.norito]

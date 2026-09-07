@@ -28,6 +28,9 @@ pub mod kex;
 mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
+/// ML-DSA-65 typed-key operations with the shared portable AArch64 fallback.
+#[cfg(feature = "pqc")]
+pub use soranet_pq::{sign_mldsa65_detached, verify_mldsa65_detached};
 mod multihash;
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
@@ -1282,7 +1285,7 @@ pub fn pqc_verify_batch_deterministic(
                 Ok(v) => v,
                 Err(_) => return Err(Error::BadSignature),
             };
-            if mldsa65::verify_detached_signature(&sig, m, &vk).is_err() {
+            if verify_mldsa65_detached(&sig, m, &vk).is_err() {
                 return Err(Error::BadSignature);
             }
         }

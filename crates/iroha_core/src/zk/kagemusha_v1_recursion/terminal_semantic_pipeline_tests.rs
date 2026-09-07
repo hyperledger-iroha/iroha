@@ -935,7 +935,6 @@ fn terminal_semantic_projection_rejects_detached_candidate_guard_role_and_digest
 
 #[test]
 fn terminal_semantic_shape_requires_exact_candidate_and_guard_columns_in_both_fields() {
-    use halo2_proofs::poly::commitment::Params as _;
     use snark_verifier::system::halo2::{Config, compile};
     fn protocol<C>(width: usize) -> PlonkProtocol<C>
     where

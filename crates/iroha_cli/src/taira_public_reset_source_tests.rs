@@ -1,14 +1,14 @@
 //! Regressions for exact source types, substitutions, and typed manifest export.
 
 use super::*;
-use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::os::unix::fs::symlink;
 
 fn indexed(mode: &str, object: &str, stage: &str, path: &str) -> Vec<u8> {
     format!("{mode} {object} {stage}\t{path}\0").into_bytes()
 }
 
 fn source_fixture() -> (tempfile::TempDir, PathBuf) {
-    let directory = tempfile::tempdir().expect("private source fixture");
+    let directory = private_custody_test_dir("taira-reset-source-");
     let root = directory.path().canonicalize().expect("direct source path");
     git_output(&root, &["init", "--quiet"]).expect("initialize disposable test index");
     fs::write(root.join("Cargo.lock"), b"test lock\n").expect("write fixture lock");

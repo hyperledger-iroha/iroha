@@ -834,14 +834,162 @@ fn checkpoint_writer_roundtrips_private_receipt_and_rejects_byte_budget() {
         Err(MusubiProviderAttestationJournalErrorV1::CapacityExceeded)
     );
 }
+/// Byte-level journal fixtures preserve every owning field while exposing only raw network bytes.
+mod network_wire_fixture {
+    use super::*;
+
+    struct RawNetwork([u8; Hash::LENGTH]);
+    impl norito::SerializePayload for RawNetwork {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+            std::io::Write::write_all(writer, &self.0)?;
+            Ok(())
+        }
+    }
+    #[derive(norito::SerializePayload)]
+    struct Binding {
+        network_id: RawNetwork,
+        provider_id: ProviderId,
+        completed_by: AccountId,
+        completion_authority: ProviderIngestCompletionAuthorityV1,
+        replication_order: ReplicationOrderId,
+        assignment_revision: u64,
+        completion_epoch: u64,
+        finalized_anchor: ProviderIngestFinalizedAnchorV1,
+        archive_id: ArchiveId,
+        bundle_digest: MusubiContentDigestV1,
+        descriptor_digest: MusubiContentDigestV1,
+        semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
+        verification_lock_digest: MusubiVerificationLockDigestV1,
+        source_tree_digest: MusubiContentDigestV1,
+    }
+    #[derive(norito::SerializePayload)]
+    struct Payload {
+        version: u8,
+        binding: Binding,
+    }
+    #[derive(norito::SerializePayload)]
+    struct Intent {
+        approval_id: MusubiProviderAttestationApprovalIdV1,
+        payload: Payload,
+        completion_claim_digest: [u8; 32],
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        attestation_key: MusubiProviderBundleAttestationKeyV1,
+        sequence: u64,
+    }
+    #[derive(norito::SerializePayload)]
+    struct Entry {
+        intent: Intent,
+        generation: u64,
+        state: StoredJournalStateV1,
+    }
+    #[derive(norito::SerializePayload)]
+    struct Checkpoint {
+        version: u8,
+        checkpoint_sequence: u64,
+        next_intent_sequence: u64,
+        last_observed_unix_ms: u64,
+        entries: Vec<Entry>,
+    }
+
+    pub(super) fn frame(
+        checkpoint: &StoredJournalCheckpointV1,
+        network: [u8; Hash::LENGTH],
+        flags: u8,
+    ) -> Vec<u8> {
+        assert_eq!(
+            checkpoint.entries.len(),
+            1,
+            "fixture changes exactly one network"
+        );
+        let entry = &checkpoint.entries[0];
+        let intent = &entry.intent;
+        let binding = &intent.payload.binding;
+        let raw = Checkpoint {
+            version: checkpoint.version,
+            checkpoint_sequence: checkpoint.checkpoint_sequence,
+            next_intent_sequence: checkpoint.next_intent_sequence,
+            last_observed_unix_ms: checkpoint.last_observed_unix_ms,
+            entries: vec![Entry {
+                intent: Intent {
+                    approval_id: intent.approval_id,
+                    payload: Payload {
+                        version: intent.payload.version,
+                        binding: Binding {
+                            network_id: RawNetwork(network),
+                            provider_id: binding.provider_id,
+                            completed_by: binding.completed_by.clone(),
+                            completion_authority: binding.completion_authority.clone(),
+                            replication_order: binding.replication_order,
+                            assignment_revision: binding.assignment_revision,
+                            completion_epoch: binding.completion_epoch,
+                            finalized_anchor: binding.finalized_anchor,
+                            archive_id: binding.archive_id,
+                            bundle_digest: binding.bundle_digest,
+                            descriptor_digest: binding.descriptor_digest,
+                            semantic_release_manifest_digest: binding
+                                .semantic_release_manifest_digest,
+                            verification_lock_digest: binding.verification_lock_digest,
+                            source_tree_digest: binding.source_tree_digest,
+                        },
+                    },
+                    completion_claim_digest: intent.completion_claim_digest,
+                    observed_finalized_cursor: intent.observed_finalized_cursor,
+                    signer_policy: intent.signer_policy,
+                    attestation_key: intent.attestation_key,
+                    sequence: intent.sequence,
+                },
+                generation: entry.generation,
+                state: entry.state.clone(),
+            }],
+        };
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let mut payload = Vec::new();
+        norito::SerializePayload::serialize(
+            &raw,
+            &mut norito::core::Encoder::for_buffer(&mut payload),
+        )
+        .expect("serialize raw journal fixture");
+        norito::core::frame_bare_with_header_flags::<StoredJournalCheckpointV1>(&payload, flags)
+            .expect("frame payload with the owning checkpoint identity")
+    }
+}
 #[test]
 fn corrupt_checkpoint_rejects_unmarked_network_identity() {
     let corrupt_identity_fixture = fixture(0x13, 0x14);
-    let mut checkpoint = awaiting_checkpoint(&corrupt_identity_fixture);
-    checkpoint.entries[0].intent.payload.binding.network_id = NetworkId::from_genesis_hash(
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
+    let checkpoint = awaiting_checkpoint(&corrupt_identity_fixture);
+    let valid = encode_checkpoint(&checkpoint, test_policy()).expect("valid checkpoint baseline");
+    let valid_snapshot =
+        MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(valid.clone())
+            .expect("content-address valid checkpoint");
+    assert_eq!(
+        decode_checkpoint(&valid_snapshot, test_policy())
+            .expect("decode valid checkpoint baseline"),
+        checkpoint
     );
-    let bytes = norito::to_bytes(&checkpoint).expect("encode deliberately corrupt checkpoint");
+    let flags = norito::core::Header::read(std::io::Cursor::new(&valid))
+        .expect("read baseline layout")
+        .flags;
+    let mut network = *checkpoint.entries[0]
+        .intent
+        .payload
+        .binding
+        .network_id
+        .as_bytes();
+    assert_eq!(
+        network_wire_fixture::frame(&checkpoint, network, flags),
+        valid,
+        "raw fixture must preserve the entire canonical valid checkpoint frame"
+    );
+    network[Hash::LENGTH - 1] &= !1;
+    let bytes = network_wire_fixture::frame(&checkpoint, network, flags);
+    assert!(matches!(
+        norito::decode_canonical_with_limits::<StoredJournalCheckpointV1>(
+            &bytes,
+            JOURNAL_CHECKPOINT_DECODE_LIMITS_V1,
+        ),
+        Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+    ));
     let snapshot = MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(bytes)
         .expect("content-address corrupt bytes");
     assert_eq!(

@@ -2261,6 +2261,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         norito::decode_canonical(bytes)
     }
     /// Decode and validate the canonical basis-bearing V1 frame.
+    #[cfg(test)]
     pub(crate) fn decode_framed(bytes: &[u8]) -> Result<Self, norito::Error> {
         let outcome = Self::decode_framed_unvalidated(bytes)?;
         outcome

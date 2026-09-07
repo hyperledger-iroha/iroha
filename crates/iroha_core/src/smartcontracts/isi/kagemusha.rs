@@ -109,8 +109,11 @@ struct KagemushaRecursiveVerifierProfileFileV1 {
 
 /// Non-serializable authority proving that one exact top-up request selected an enabled profile
 /// from its authenticated release.
+///
+/// Returned by [`KagemushaV1RuntimeVerifier`]; its private fields prevent callers from
+/// constructing an authorization without authenticated release verification.
 #[derive(Clone, Debug)]
-pub(in crate::smartcontracts::isi) struct VerifiedKagemushaTopUpAuthorizationV1 {
+pub struct VerifiedKagemushaTopUpAuthorizationV1 {
     request_digest: [u8; 32],
     mint_authorization_digest: [u8; 32],
     profile: KagemushaHardwareProfileV1,

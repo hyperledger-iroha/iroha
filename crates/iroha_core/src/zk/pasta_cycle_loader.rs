@@ -1102,6 +1102,7 @@ where
         [low, high]
     }
     /// Return the stable deferred-source index carried by one assigned point.
+    #[cfg(test)]
     pub(super) fn assigned_point_source_index(
         &self,
         point: &DeferredScalarPoint<C>,
@@ -2382,6 +2383,7 @@ where
             },
         ))
     }
+    #[cfg(test)]
     /// Constrain the canonical bytes of a reciprocal non-native scalar.
     pub(super) fn assigned_scalar_bytes(
         &self,

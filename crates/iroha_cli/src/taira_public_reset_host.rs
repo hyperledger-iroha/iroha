@@ -6,8 +6,9 @@ use super::{
     PinnedArtifact, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome,
     TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
     ensure_authorization_current, ensure_pinned_unchanged, now_unix_ms, open_pinned_regular,
-    pin_owner_private_file, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
-    validate_owner_private_dir, verify_execution_authorization,
+    pin_owner_private_file, read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex,
+    validate_inventory, validate_owner_private_dir, validate_validator_genesis_config,
+    verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
@@ -19,7 +20,7 @@ use iroha::{
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
-    config::{Config as ClientConfig, LoadPath},
+    config::Config as ClientConfig,
     data_model::{
         NetworkId,
         account::{AccountId, address::ChainDiscriminantGuard},
@@ -3110,13 +3111,12 @@ fn admit_host_request(
             "host request embedded closure exceeded a bound or hash drifted"
         ));
     }
-    let inventory: InventoryV1 =
-        json::from_slice(&inventory_bytes).wrap_err("host request inventory is invalid")?;
+    let (inventory, chain_guard) =
+        super::decode_inventory(&inventory_bytes, "host request inventory")?;
     let authorization: AuthorizationEnvelopeV1 =
         json::from_slice(&authorization_bytes).wrap_err("host request authorization is invalid")?;
     let trusted_key: TrustedKeyV1 =
         json::from_slice(&trusted_key_bytes).wrap_err("host request trusted key is invalid")?;
-    let chain_guard = super::enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
     let inventory_sha256 = sha256_hex(&inventory_bytes);
     let authorization_sha256 = authorization_semantic_sha256(&authorization, &trusted_key)?;
@@ -3561,6 +3561,51 @@ fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
     roots.iter().any(|root| path.starts_with(root))
 }
 
+// Mark a mount namespace examined only after its evidence was read and checked.
+// An exiting representative must not suppress another live process in that namespace.
+#[cfg(any(target_os = "linux", test))]
+fn inspect_process_namespace_evidence<R: Read>(
+    roots: &[&Path],
+    namespace: Option<PathBuf>,
+    seen: &mut BTreeSet<PathBuf>,
+    open: impl FnOnce() -> std::io::Result<R>,
+) -> Result<()> {
+    if namespace
+        .as_ref()
+        .is_some_and(|namespace| seen.contains(namespace))
+    {
+        return Ok(());
+    }
+    let file = match open() {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).wrap_err("inspect vacant target process namespace");
+        }
+    };
+    let mut bytes = Vec::new();
+    file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(eyre!("vacant target namespace evidence exceeds its bound"));
+    }
+    for token in std::str::from_utf8(&bytes)?.split_ascii_whitespace() {
+        let decoded = token
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+            .replace("\\134", "\\");
+        if decoded.starts_with('/') && target_path_is_occupied(Path::new(&decoded), roots) {
+            return Err(eyre!(
+                "vacant target retains a mapped file or namespace mount"
+            ));
+        }
+    }
+    if let Some(namespace) = namespace {
+        seen.insert(namespace);
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
     // Look outside MainPID/cgroup as well: a surviving guest or escaped child
@@ -3618,41 +3663,20 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
             }
         }
         for name in ["maps", "mountinfo"] {
-            if name == "mountinfo" {
+            let namespace = if name == "mountinfo" {
                 match fs::read_link(proc_root.join("ns/mnt")) {
-                    Ok(namespace) if !mount_namespaces.insert(namespace) => continue,
-                    Ok(_) => {}
+                    Ok(namespace) => Some(namespace),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => {
                         return Err(error).wrap_err("inspect vacant target mount namespace");
                     }
                 }
-            }
-            let file = match File::open(proc_root.join(name)) {
-                Ok(file) => file,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return Err(error).wrap_err("inspect vacant target process namespace");
-                }
+            } else {
+                None
             };
-            let mut bytes = Vec::new();
-            file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-            if bytes.len() > 4 * 1024 * 1024 {
-                return Err(eyre!("vacant target namespace evidence exceeds its bound"));
-            }
-            for token in std::str::from_utf8(&bytes)?.split_ascii_whitespace() {
-                let decoded = token
-                    .replace("\\040", " ")
-                    .replace("\\011", "\t")
-                    .replace("\\012", "\n")
-                    .replace("\\134", "\\");
-                if decoded.starts_with('/') && target_path_is_occupied(Path::new(&decoded), &roots)
-                {
-                    return Err(eyre!(
-                        "vacant target retains a mapped file or namespace mount"
-                    ));
-                }
-            }
+            inspect_process_namespace_evidence(&roots, namespace, &mut mount_namespaces, || {
+                File::open(proc_root.join(name))
+            })?;
         }
     }
     Ok(())
@@ -3719,7 +3743,7 @@ fn require_vacant_host_precondition(admitted: &HostAdmission) -> Result<()> {
     require_vacant_unit(admitted, false)
 }
 
-fn require_absent_or_exact_edge_candidate(admitted: &HostAdmission, edge: &EdgeV1) -> Result<()> {
+fn require_absent_or_exact_edge_candidate(edge: &EdgeV1) -> Result<()> {
     let path = Path::new(&edge.nginx_config);
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -3819,7 +3843,7 @@ fn publish_first_edge_config(
 ) -> Result<()> {
     let config = artifact(&edge.artifacts, "edge_config")?;
     let route = Path::new(&edge.nginx_config);
-    require_absent_or_exact_edge_candidate(admitted, edge)?;
+    require_absent_or_exact_edge_candidate(edge)?;
     if fs::symlink_metadata(route).is_ok() {
         return sync_existing_file_publication(route, &config.sha256, rollback, sync_directory);
     }
@@ -3940,7 +3964,7 @@ fn rollback_vacant_edge(admitted: &HostAdmission, edge: &EdgeV1, rollback: &Path
     let route = Path::new(&edge.nginx_config);
     let quarantine = rollback.join("first-edge-config.after");
     if fs::symlink_metadata(route).is_ok() {
-        require_absent_or_exact_edge_candidate(admitted, edge)?;
+        require_absent_or_exact_edge_candidate(edge)?;
         require_path_absent(&quarantine, "first edge route quarantine")?;
         rename_noreplace(route, &quarantine)?;
         sync_directory(route.parent().expect("edge route has parent"))?;
@@ -5567,7 +5591,7 @@ fn execute_host_action(
             if edge.is_vacant() && !first_edge_start_was_prepared(admitted, edge)? {
                 require_empty_root_directory(Path::new(&edge.state_root), "vacant edge state")?;
                 require_vacant_unit(admitted, false)?;
-                require_absent_or_exact_edge_candidate(admitted, edge)?;
+                require_absent_or_exact_edge_candidate(edge)?;
             }
             install_release(admitted)?;
             cutover_edge(admitted)?;
@@ -7013,7 +7037,12 @@ fn validator_preseed_store(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
 ) -> Result<ValidatorPreseedStore> {
-    let bytes = installed_validator_config_bytes(admitted, validator)?;
+    let bytes = zeroize::Zeroizing::new(installed_validator_config_bytes(admitted, validator)?);
+    validate_validator_genesis_config(
+        &bytes,
+        Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
+        &admitted.inventory.next_genesis_hash,
+    )?;
     let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
     let config: toml::Value =
         toml::from_str(text).wrap_err("installed validator config is not valid TOML")?;
@@ -8220,15 +8249,9 @@ fn attest_validator_process(
     let stable_current = Path::new(&validator.service_root).join("current");
     let stable_executable = stable_current.join("bin/iroha3d_taira");
     let stable_config = stable_current.join("config/config.toml");
-    let stable_genesis = stable_current.join("genesis/genesis.json");
     let expected_config = release_root.join("config/config.toml");
     let expected_genesis = release_root.join("genesis/genesis.json");
-    validate_validator_argv(
-        &arguments,
-        &stable_executable,
-        &stable_config,
-        &stable_genesis,
-    )?;
+    validate_validator_argv(&arguments, &stable_executable, &stable_config)?;
     let config_hash = if fresh_state {
         &artifact(&validator.artifacts, "config")?.sha256
     } else {
@@ -8240,6 +8263,28 @@ fn attest_validator_process(
         &validator.admitted_release()?.genesis_sha256
     };
     verify_regular_hash(&expected_config, config_hash)?;
+    let (file, snapshot) = open_pinned_regular(&expected_config, "attested validator config")?;
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &expected_config,
+        "attested validator config",
+        file,
+        &snapshot,
+        1024 * 1024,
+    )?);
+    if sha256_hex(&bytes) != *config_hash {
+        return Err(eyre!(
+            "attested validator config changed after hash verification"
+        ));
+    }
+    validate_validator_genesis_config(
+        &bytes,
+        &expected_genesis,
+        if fresh_state {
+            &admitted.inventory.next_genesis_hash
+        } else {
+            &admitted.inventory.previous_genesis_hash
+        },
+    )?;
     verify_regular_hash(&expected_genesis, genesis_hash)?;
     require_root_directory(
         Path::new(&validator.state_root),
@@ -8267,18 +8312,11 @@ fn attest_validator_process(
     Ok(())
 }
 
-fn validate_validator_argv(
-    arguments: &[PathBuf],
-    executable: &Path,
-    config: &Path,
-    genesis: &Path,
-) -> Result<()> {
+fn validate_validator_argv(arguments: &[PathBuf], executable: &Path, config: &Path) -> Result<()> {
     let expected = [
         executable.to_path_buf(),
         PathBuf::from("--config"),
         config.to_path_buf(),
-        PathBuf::from("--genesis-manifest-json"),
-        genesis.to_path_buf(),
         PathBuf::from("--sora"),
     ];
     if arguments != expected {
@@ -11577,10 +11615,17 @@ fn validate_validator_client_semantics(
     inputs: &[super::PinnedInput],
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    if inputs.len() != admitted.inventory.validator_clients.len() {
+    validate_validator_client_inputs(inputs, &admitted.inventory)
+}
+
+pub(super) fn validate_validator_client_inputs(
+    inputs: &[super::PinnedInput],
+    inventory: &super::InventoryV1,
+) -> Result<()> {
+    if inputs.len() != inventory.validator_clients.len() {
         return Err(eyre!("validator client semantic closure length drifted"));
     }
-    for (input, expected) in inputs.iter().zip(&admitted.inventory.validator_clients) {
+    for (input, expected) in inputs.iter().zip(&inventory.validator_clients) {
         revalidate_pinned(input, "validator client config")?;
         let config = load_client_config_from_pinned(input, "validator client config")?;
         let expected_account =
@@ -11597,27 +11642,38 @@ fn validate_validator_client_semantics(
     Ok(())
 }
 
-fn load_client_config_from_pinned(input: &super::PinnedInput, label: &str) -> Result<ClientConfig> {
+pub(super) fn load_client_config_from_pinned(
+    input: &super::PinnedInput,
+    label: &str,
+) -> Result<ClientConfig> {
     revalidate_pinned(input, label)?;
-    let retained = input
+    let mut retained = input
         .file
         .try_clone()
         .wrap_err_with(|| format!("failed to duplicate {label} descriptor"))?;
-    #[cfg(target_os = "linux")]
-    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
-    #[cfg(all(unix, not(target_os = "linux")))]
-    let descriptor_path = PathBuf::from(format!("/dev/fd/{}", retained.as_raw_fd()));
-    #[cfg(not(unix))]
-    return Err(eyre!(
-        "client config semantic admission requires Unix descriptors"
-    ));
-    let config = ClientConfig::load(LoadPath::Explicit(descriptor_path))
+    retained
+        .rewind()
+        .map_err(|_| eyre!("cannot rewind {label}"))?;
+    let maximum = iroha_config_base::toml::MAX_TOML_SOURCE_BYTES;
+    if input.snapshot.len == 0 || input.snapshot.len > maximum {
+        return Err(eyre!(
+            "{label} exceeds the bounded client configuration size"
+        ));
+    }
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &input.path,
+        label,
+        retained,
+        &input.snapshot,
+        maximum,
+    )?);
+    let (config, _) = ClientConfig::load_bytes_with_musubi_publication(&input.path, &bytes)
         .map_err(|_| eyre!("{label} failed strict semantic loading"))?;
     revalidate_pinned(input, label)?;
     Ok(config)
 }
 
-fn hash_pinned_input(
+pub(super) fn hash_pinned_input(
     input: &super::PinnedInput,
     label: &str,
     deadline: Option<Instant>,
@@ -11655,6 +11711,26 @@ fn ensure_local_deadline(deadline: Option<Instant>) -> Result<()> {
     Ok(())
 }
 
+fn inherited_client_config_args(
+    input: &super::PinnedInput,
+    label: &str,
+) -> Result<(Vec<OsString>, File)> {
+    revalidate_pinned(input, label)?;
+    let file = input
+        .file
+        .try_clone()
+        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
+    Ok((
+        vec![
+            "--config-fd".into(),
+            file.as_raw_fd().to_string().into(),
+            "--config-source-path".into(),
+            input.path.as_os_str().to_owned(),
+        ],
+        file,
+    ))
+}
+
 fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
     revalidate_pinned(input, label)?;
     let file = input
@@ -11676,7 +11752,7 @@ fn inherited_file_path(_file: &File) -> Result<PathBuf> {
     ))
 }
 
-fn validator_config_closure_sha256(
+pub(super) fn validator_config_closure_sha256(
     inputs: &[super::PinnedInput],
     deadline: Option<Instant>,
 ) -> Result<String> {
@@ -11692,7 +11768,7 @@ fn validator_config_closure_sha256(
     Ok(hex::encode(digest.finalize()))
 }
 
-fn pin_stage_tree(
+pub(super) fn pin_stage_tree(
     root: &Path,
     deadline: Option<Instant>,
 ) -> Result<(
@@ -11762,7 +11838,7 @@ fn pin_stage_tree(
     Ok((hash, bytes, files, fixed))
 }
 
-fn revalidate_stage_files(
+pub(super) fn revalidate_stage_files(
     root: &Path,
     files: &[(String, super::PinnedInput)],
     deadline: Option<Instant>,
@@ -13193,9 +13269,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         _timeout_secs: u64,
         include_submission_secret: bool,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
-        let mut args = vec!["-c".into(), config_path.into_os_string()];
+        let (mut args, config_file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
         let mut inherited_files = vec![config_file];
         args.extend(self.runtime.fee_args.iter().cloned());
         args.extend([
@@ -13238,15 +13315,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             ]);
         }
         if kind == "onboarding" && include_submission_secret {
-            let (token_path, token_file) = inherited_input_path(
+            let (_token_path, token_file) = inherited_input_path(
                 self.runtime
                     .onboarding_token
                     .as_ref()
                     .ok_or_else(|| eyre!("write-canary submission lacks onboarding custody"))?,
                 "Taira onboarding token",
             )?;
-            args.push(OsString::from("--onboarding-token-file"));
-            args.push(token_path.into_os_string());
+            args.push(OsString::from("--onboarding-token-fd"));
+            args.push(token_file.as_raw_fd().to_string().into());
             inherited_files.push(token_file);
         }
         args.push(OsString::from("--json"));
@@ -13626,8 +13703,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         idempotency_key: &str,
         timeout_secs: u64,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
+        let (mut args, config_file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
         let operation = match kind {
             "inrou_bundle_pin" => "bundle-pin",
             "inrou_guest_pin" => "guest-pin",
@@ -13635,7 +13714,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "inrou_canary" => "service-mutation",
             _ => return Err(eyre!("unsupported prepared Inrou child kind")),
         };
-        let mut args = vec!["-c".into(), config_path.into_os_string()];
         args.extend(self.runtime.fee_args.iter().cloned());
         args.extend([
             OsString::from("taira"),
@@ -13992,10 +14070,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "Taira runtime client config".to_owned(),
             )
         };
-        let (config_path, config_file) = inherited_input_path(config, &label)?;
-        let args = vec![
-            "-c".into(),
-            config_path.into_os_string(),
+        let (mut args, config_file) = inherited_client_config_args(config, &label)?;
+        args.extend([
             "taira".into(),
             "inrou-check".into(),
             "--public-root".into(),
@@ -14012,7 +14088,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "--timeout-secs".into(),
             timeout_secs.to_string().into(),
             "--json".into(),
-        ];
+        ]);
         let authorization_deadline_unix_ms = (!recovery_only).then_some(
             self.admitted
                 .authorization
@@ -14120,7 +14196,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "four-validator convergence did not reach one atomic checkpoint"
                     ));
                 }
-                let (config_path, config_file) = inherited_input_path(
+                let (mut config_args, config_file) = inherited_client_config_args(
                     &self.runtime.validator_client_configs[index],
                     "validator client config",
                 )?;
@@ -14128,16 +14204,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     .checked_add(Duration::from_secs(10))
                     .ok_or_else(|| eyre!("convergence poll deadline overflow"))?
                     .min(deadline);
+                config_args.extend([
+                    "--output-format".into(),
+                    "json".into(),
+                    "ops".into(),
+                    "sumeragi".into(),
+                    "status".into(),
+                ]);
                 let output = self.run_local_cli_until(
-                    vec![
-                        "-c".into(),
-                        config_path.into_os_string(),
-                        "--output-format".into(),
-                        "json".into(),
-                        "ops".into(),
-                        "sumeragi".into(),
-                        "status".into(),
-                    ],
+                    config_args,
                     vec![config_file],
                     timeout_secs,
                     poll_deadline,
@@ -16806,8 +16881,8 @@ fn verify_remote_receipt(request: &HostRequestV1, receipt: &HostReceiptV1) -> Re
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -16833,8 +16908,8 @@ fn verify_remote_recovery_receipt(request: &HostRequestV1, receipt: &HostReceipt
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -16870,8 +16945,8 @@ fn verify_remote_reservation_receipt(
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -18051,9 +18126,8 @@ mod tests {
             validator.endpoint.host_identity_sha256 = shared_identity.clone();
         }
         inventory.edge.endpoint.host_identity_sha256 = shared_identity;
-        let inventory_bytes = json::to_json(&inventory)
-            .expect("inventory JSON")
-            .into_bytes();
+        let inventory_bytes =
+            super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON");
         let inventory_sha256 = sha256_hex(&inventory_bytes);
         let claims = super::super::AuthorizationClaimsV1 {
             action: "reset_and_deploy".to_owned(),
@@ -18618,23 +18692,28 @@ mod tests {
     fn validator_argv_rejects_duplicate_last_wins_flags() {
         let executable = PathBuf::from("/srv/taira/taira-validator-1/current/bin/iroha3d_taira");
         let config = PathBuf::from("/srv/taira/taira-validator-1/current/config/config.toml");
-        let genesis = PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json");
         let exact = vec![
             executable.clone(),
             PathBuf::from("--config"),
             config.clone(),
-            PathBuf::from("--genesis-manifest-json"),
-            genesis.clone(),
             PathBuf::from("--sora"),
         ];
-        validate_validator_argv(&exact, &executable, &config, &genesis)
-            .expect("exact validator argv");
+        validate_validator_argv(&exact, &executable, &config).expect("exact validator argv");
+        let mut old_manifest = exact.clone();
+        old_manifest.splice(
+            3..3,
+            [
+                PathBuf::from("--genesis-manifest-json"),
+                PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json"),
+            ],
+        );
+        assert!(validate_validator_argv(&old_manifest, &executable, &config).is_err());
         let mut duplicate = exact;
         duplicate.extend([
             PathBuf::from("--config"),
             PathBuf::from("/tmp/attacker.toml"),
         ]);
-        let _ = validate_validator_argv(&duplicate, &executable, &config, &genesis)
+        let _ = validate_validator_argv(&duplicate, &executable, &config)
             .expect_err("duplicate last-wins config flag must fail");
     }
 
@@ -18692,7 +18771,8 @@ mod tests {
 
     fn admitted_reset_fixture() -> AdmittedReset {
         let remote = progress_admission();
-        let inventory_bytes = json::to_vec(&remote.inventory).expect("fixture inventory JSON");
+        let inventory_bytes = super::super::canonical_inventory_bytes(&remote.inventory)
+            .expect("fixture inventory JSON");
         let authorization_bytes =
             json::to_vec(&remote.authorization).expect("fixture authorization JSON");
         let ssh = File::open("/dev/null").expect("open fixture SSH input");
@@ -18727,6 +18807,56 @@ mod tests {
                 snapshot: known_hosts_snapshot,
             },
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_client_config_semantics_and_child_fd_share_exact_source() {
+        let directory = tempfile::Builder::new()
+            .prefix(".taira-client-fd-test-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("private fixture directory");
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private fixture directory");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("canonical directory")
+            .join("client.toml");
+        fs::write(&path, include_bytes!("../../../defaults/client.toml"))
+            .expect("write public fixture config");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private config fixture");
+        let input = pin_owner_private_file(&path, "test client config").expect("pin config");
+        hash_pinned_input(&input, "test client config", None)
+            .expect("consume retained input offset");
+        let config = load_client_config_from_pinned(&input, "test client config")
+            .expect("semantic loading reads exact retained bytes");
+        assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+        let (args, retained) = inherited_client_config_args(&input, "test client config")
+            .expect("child descriptor arguments");
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("--config-fd"),
+                OsString::from(retained.as_raw_fd().to_string()),
+                OsString::from("--config-source-path"),
+                path.as_os_str().to_owned()
+            ]
+        );
+        let (child_config, _) = crate::client_config::load_inherited(
+            u32::try_from(retained.as_raw_fd()).expect("descriptor"),
+            &path,
+        )
+        .expect("actual inherited FD semantic load");
+        assert_eq!(child_config.account, config.account);
+        assert_eq!(child_config.torii_api_url, config.torii_api_url);
+        let changed = format!(
+            "{}\nunknown_runtime_key = \"private diagnostic fixture\"\n",
+            include_str!("../../../defaults/client.toml")
+        );
+        fs::write(&path, changed).expect("change fixture source");
+        assert!(load_client_config_from_pinned(&input, "test client config").is_err());
     }
 
     fn prepared_write_report_fixture(
@@ -19599,7 +19729,12 @@ mod tests {
         admitted.request.mutation_phase = typed_result.binding.phase.clone();
         admitted.request.mutation_idempotency_key = typed_result.binding.idempotency_key.clone();
         admitted.action_deadline = Instant::now() + Duration::from_secs(10);
-        let inventory_bytes = json::to_vec(&admitted.inventory).expect("fixture inventory");
+        // This captured signed proof fixture deliberately uses a foreign chain_id. Its
+        // inventory is only hashed here, never passed to the Taira admission decoder.
+        let inventory_bytes = {
+            let _guard = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+            json::to_vec(&admitted.inventory).expect("foreign-chain proof fixture inventory")
+        };
         admitted.inventory_sha256 = sha256_hex(&inventory_bytes);
 
         let envelope = norito::json!({
@@ -20297,8 +20432,9 @@ mod tests {
             {
                 let mut request = admitted.request.clone();
                 request.host_slug = slug.to_owned();
-                request.inventory_base64 =
-                    BASE64.encode(json::to_json(&inventory).expect("inventory JSON"));
+                request.inventory_base64 = BASE64.encode(
+                    super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON"),
+                );
                 request.authorization_base64 = BASE64
                     .encode(json::to_json(&admitted.authorization).expect("authorization JSON"));
                 request.trusted_key_base64 = BASE64.encode(trusted_bytes.as_bytes());
@@ -20403,6 +20539,173 @@ mod tests {
             .rposition(|key| key.action == HostAction::Restart.label())
             .expect("last local validator restart");
         assert!(last_restart < first(HostAction::EdgeVerify));
+    }
+
+    #[test]
+    fn vacant_namespace_missing_representative_does_not_hide_live_mount() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Err::<std::io::Cursor<&[u8]>, _>(std::io::ErrorKind::NotFound.into()),
+        )
+        .expect("exited representative is skipped");
+        assert!(
+            seen.is_empty(),
+            "missing evidence must not mark the namespace"
+        );
+        let mut opened_live_representative = false;
+        let result = inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || {
+                opened_live_representative = true;
+                Ok(std::io::Cursor::new(
+                    &b"36 22 0:1 /var/lib/taira/validator-1 /mnt/held rw - ext4 /dev/sda rw\n"[..],
+                ))
+            },
+        );
+        assert!(opened_live_representative);
+        assert!(result.unwrap_err().to_string().contains("namespace mount"));
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn vacant_namespace_successful_scan_deduplicates_without_opening_again() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || {
+                Ok(std::io::Cursor::new(
+                    &b"36 22 0:1 / / rw - ext4 /dev/sda rw\n"[..],
+                ))
+            },
+        )
+        .expect("unoccupied namespace checked");
+        assert!(seen.contains(Path::new("mnt:[42]")));
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || -> std::io::Result<std::io::Cursor<&[u8]>> {
+                panic!("already checked namespace must not be reopened")
+            },
+        )
+        .expect("successful namespace evidence can be reused");
+    }
+
+    #[test]
+    fn vacant_namespace_open_and_read_errors_fail_closed_without_marking() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        let error = inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Err::<std::io::Cursor<&[u8]>, _>(std::io::ErrorKind::PermissionDenied.into()),
+        )
+        .expect_err("permission failure cannot attest vacancy");
+        assert!(
+            error
+                .to_string()
+                .contains("inspect vacant target process namespace")
+        );
+        assert!(seen.is_empty());
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+        assert!(
+            inspect_process_namespace_evidence(
+                &roots,
+                Some(PathBuf::from("mnt:[42]")),
+                &mut seen,
+                || Ok(FailedRead),
+            )
+            .is_err()
+        );
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn vacant_namespace_evidence_keeps_utf8_and_exact_size_bounds() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        for bytes in [vec![0xff], vec![b' '; 4 * 1024 * 1024 + 1]] {
+            assert!(
+                inspect_process_namespace_evidence(
+                    &roots,
+                    Some(PathBuf::from("mnt:[42]")),
+                    &mut seen,
+                    || Ok(std::io::Cursor::new(bytes)),
+                )
+                .is_err()
+            );
+            assert!(seen.is_empty());
+        }
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Ok(std::io::Cursor::new(vec![b' '; 4 * 1024 * 1024])),
+        )
+        .expect("exactly four MiB remains admissible");
+        assert!(seen.contains(Path::new("mnt:[42]")));
+    }
+
+    #[test]
+    fn vacant_namespace_evidence_still_decodes_escaped_path_tokens() {
+        for (root, evidence) in [
+            ("/state/with space", r"/state/with\040space/data"),
+            ("/state/with\ttab", r"/state/with\011tab/data"),
+            ("/state/with\nnewline", r"/state/with\012newline/data"),
+            (r"/state/with\slash", r"/state/with\134slash/data"),
+        ] {
+            let mut seen = BTreeSet::new();
+            assert!(
+                inspect_process_namespace_evidence(
+                    &[Path::new(root)],
+                    Some(PathBuf::from("mnt:[42]")),
+                    &mut seen,
+                    || Ok(std::io::Cursor::new(evidence.as_bytes())),
+                )
+                .is_err()
+            );
+            assert!(seen.is_empty());
+        }
+    }
+
+    #[test]
+    fn vacant_namespace_maps_evidence_is_always_scanned() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::from([PathBuf::from("mnt:[42]")]);
+        let mut opened = 0;
+        inspect_process_namespace_evidence(&roots, None, &mut seen, || {
+            opened += 1;
+            Ok(std::io::Cursor::new(
+                &b"0000-1000 r-xp 0 00:01 1 /usr/bin/sleep\n"[..],
+            ))
+        })
+        .expect("first process has no occupied mapping");
+        assert!(
+            inspect_process_namespace_evidence(&roots, None, &mut seen, || {
+                opened += 1;
+                Ok(std::io::Cursor::new(
+                    &b"0000-1000 r-xp 0 00:01 1 /var/lib/taira/validator-1/state\n"[..],
+                ))
+            })
+            .is_err()
+        );
+        assert_eq!(opened, 2);
+        assert_eq!(seen, BTreeSet::from([PathBuf::from("mnt:[42]")]));
     }
 
     #[test]
@@ -20562,7 +20865,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn retained_edge_route_retry_requires_both_rename_parents_durable() {
-        let directory = tempfile::tempdir().expect("edge route retry fixture");
+        let directory = super::super::private_custody_test_dir("taira-edge-route-retry-");
         let root = directory
             .path()
             .canonicalize()
@@ -20851,7 +21154,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn admitted_edge_rollback_matching_prior_retry_requires_route_namespace_durable() {
-        let directory = tempfile::tempdir().expect("admitted edge rollback fixture");
+        let directory = super::super::private_custody_test_dir("taira-edge-rollback-");
         let root = directory
             .path()
             .canonicalize()

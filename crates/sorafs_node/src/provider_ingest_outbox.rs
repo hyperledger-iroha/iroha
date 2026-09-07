@@ -6281,22 +6281,22 @@ impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
+    mod authorization_fixtures;
+
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use authorization_fixtures::{
+        assert_musubi_context_rejects_unmarked_network, authorization,
+        authorization_with_musubi_context, musubi_authorization_and_receipt, musubi_commitment,
+        network_id, test_network_id,
+    };
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::AccountId,
-        block::BlockHeader,
         isi::InstructionBox,
-        musubi::{
-            MusubiArchiveCommitmentV1, MusubiContentDigestV1, MusubiSemanticReleaseDigestV1,
-            MusubiVerificationLockDigestV1,
-        },
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         sorafs::{
             capacity::ProviderId,
-            pin_registry::{
-                ChunkerProfileHandle, ManifestDigest, ManifestRootCid, ReplicationOrderId,
-            },
+            pin_registry::{ManifestDigest, ReplicationOrderId},
         },
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
@@ -6309,18 +6309,6 @@ mod tests {
         time::{Duration, Instant},
     };
     use tempfile::{TempDir, tempdir};
-    fn test_network_id() -> iroha_data_model::NetworkId {
-        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(
-            iroha_crypto::Hash::new(b"provider-ingest-outbox-test"),
-        ))
-    }
-    fn network_id(seed: u8) -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-            [seed; 32],
-        )))
-    }
     fn policy() -> ProviderIngestOutboxPolicyV1 {
         ProviderIngestOutboxPolicyV1 {
             max_active_entries: 16,
@@ -6788,98 +6776,6 @@ mod tests {
             predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
             policy_digest: [digest_byte; 32],
         }
-    }
-    fn authorization(order: u8, height: u64) -> FinalizedProviderIngestAuthorizationV1 {
-        FinalizedProviderIngestAuthorizationV1::from_finalized_state(
-            height,
-            cursor(height).block_hash,
-            [0x11; 32],
-            [order; 32],
-            [order.wrapping_add(0x20); 32],
-            vec![1, 0x71, 0x1f, 32, order.wrapping_add(0x20)],
-            "sorafs.sf1@1.0.0".to_owned(),
-            [order.wrapping_add(0x30); 32],
-            [order.wrapping_add(0x40); 32],
-            4_096,
-        )
-        .expect("authorization")
-    }
-    fn authorization_with_musubi_context(
-        generic: &FinalizedProviderIngestAuthorizationV1,
-        context: FinalizedProviderIngestMusubiContextV1,
-    ) -> FinalizedProviderIngestAuthorizationV1 {
-        FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
-            generic.finalized_height(),
-            generic.finalized_block_hash(),
-            generic.provider_id(),
-            generic.order_id(),
-            generic.manifest_digest(),
-            generic.manifest_cid().to_vec(),
-            generic.chunker_handle().to_owned(),
-            generic.chunk_digest_sha3_256(),
-            generic.por_root(),
-            generic.content_length(),
-            context,
-        )
-        .expect("Musubi authorization")
-    }
-    fn musubi_commitment(
-        authorization: &FinalizedProviderIngestAuthorizationV1,
-        seed: u8,
-    ) -> MusubiArchiveCommitmentV1 {
-        let commitment = MusubiArchiveCommitmentV1 {
-            root_cid: ManifestRootCid::try_from_slice(authorization.manifest_cid())
-                .expect("canonical manifest root CID"),
-            chunker: ChunkerProfileHandle {
-                profile_id: 1,
-                namespace: "sorafs".to_owned(),
-                name: "sf1".to_owned(),
-                semver: "1.0.0".to_owned(),
-                multihash_code: 0x1f,
-            },
-            chunk_plan_digest: MusubiContentDigestV1::new(authorization.chunk_digest_sha3_256()),
-            por_root: MusubiContentDigestV1::new(authorization.por_root()),
-            content_length: authorization.content_length(),
-            car_digest: MusubiContentDigestV1::new([seed; 32]),
-            car_size: authorization.content_length().saturating_add(1_024),
-            bundle_digest: MusubiContentDigestV1::new([seed.wrapping_add(1); 32]),
-            source_tree_digest: MusubiContentDigestV1::new([seed.wrapping_add(2); 32]),
-            descriptor_digest: MusubiContentDigestV1::new([seed.wrapping_add(3); 32]),
-            file_count: 1,
-            chunk_count: 1,
-        };
-        commitment.validate().expect("valid Musubi commitment");
-        commitment
-    }
-    fn verified_musubi_receipt(
-        authorization: &FinalizedProviderIngestAuthorizationV1,
-        commitment: MusubiArchiveCommitmentV1,
-    ) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
-        ProviderIngestVerifiedMusubiBundleReceiptV1::new_for_test(
-            authorization,
-            commitment,
-            MusubiSemanticReleaseDigestV1::new([0xC1; 32]),
-            MusubiVerificationLockDigestV1::new([0xC2; 32]),
-        )
-    }
-    fn musubi_authorization_and_receipt(
-        order: u8,
-        height: u64,
-        context_seed: u8,
-    ) -> (
-        FinalizedProviderIngestAuthorizationV1,
-        ProviderIngestVerifiedMusubiBundleReceiptV1,
-    ) {
-        let generic = authorization(order, height);
-        let commitment = musubi_commitment(&generic, context_seed);
-        let context = FinalizedProviderIngestMusubiContextV1::new(
-            network_id(context_seed.wrapping_add(0x40)),
-            commitment.archive_id(),
-        )
-        .expect("Musubi context");
-        let authorization = authorization_with_musubi_context(&generic, context);
-        let receipt = verified_musubi_receipt(&authorization, commitment);
-        (authorization, receipt)
     }
     fn owner(seed: u8) -> ProviderIngestClaimOwnerV1 {
         ProviderIngestClaimOwnerV1::new([seed; 32]).expect("owner")
@@ -8533,14 +8429,7 @@ mod tests {
         assert_ne!(first.job_id(), second.job_id());
         assert!(!generic.same_binding(&first));
         assert!(!first.same_binding(&second));
-        let mut unmarked_network = first_context.clone();
-        unmarked_network.network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
-        );
-        assert_eq!(
-            unmarked_network.validate(),
-            Err(ProviderIngestOutboxError::InvalidAuthorization)
-        );
+        assert_musubi_context_rejects_unmarked_network(&first_context);
         let mut zero_archive = first_context;
         zero_archive.archive_id = ArchiveId::new([0; 32]);
         assert_eq!(

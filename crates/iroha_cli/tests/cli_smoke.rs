@@ -53,6 +53,8 @@ const ALICE_PRIVATE_KEY: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
 const BOB_PUBLIC_KEY: &str =
     "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
+const MOCK_NETWORK_ID: &str =
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 static ALICE_ACCOUNT_LITERAL: LazyLock<String> =
     LazyLock::new(|| account_literal_from_public_key(ALICE_PUBLIC_KEY));
 static BOB_ACCOUNT_LITERAL: LazyLock<String> =
@@ -283,23 +285,20 @@ fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &st
     path
 }
 fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
-    use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
-    let contract_address_len =
-        u32::try_from(contract_address.len()).expect("contract address length fits into u32");
-    let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + std::mem::size_of::<u32>()
-            + contract_address.len()
-            + code.len()
-            + abi.len(),
-    );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&contract_address_len.to_le_bytes());
-    input.extend_from_slice(contract_address.as_bytes());
-    input.extend_from_slice(code);
-    input.extend_from_slice(abi);
-    let digest = Blake2b512::digest(&input);
-    hex::encode(&digest[..32])
+    use iroha_data_model::governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+    };
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: parse_account_literal(alice_account_literal()),
+        contract_address: contract_address
+            .parse()
+            .expect("canonical contract address"),
+        code_hash: ContractCodeHash::new(*code),
+        abi_hash: ContractAbiHash::new(*abi),
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    hex::encode(proposal.fingerprint())
 }
 fn write_daemon_config(
     dir: &torii_mock_support::TempDir,
@@ -502,6 +501,8 @@ fn taira_mutation_commands_remain_config_required() {
         vec![
             "taira",
             "write-canary",
+            "--operation",
+            "onboarding",
             "--onboarding-token-file",
             "missing.token",
             "--json",
@@ -513,6 +514,8 @@ fn taira_mutation_commands_remain_config_required() {
             "missing-stage",
             "--mode",
             "deploy",
+            "--operation",
+            "bundle-pin",
             "--json",
         ],
     ] {
@@ -520,6 +523,21 @@ fn taira_mutation_commands_remain_config_required() {
             .current_dir(temp_dir.path())
             .arg("--machine")
             .args(command_args)
+            .args([
+                "--authorization-sha256",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "--authorization-nonce",
+                "cccccccccccccccccccccccccccccccc",
+                "--mutation-phase",
+                "pre_edge",
+                "--idempotency-key",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--execution-expires-at-unix-ms",
+                "2000000000000",
+                "--prepare-envelope",
+                "--prepared-output-fd",
+                "3",
+            ])
             .output()
             .expect("run config-required Taira mutation command");
         assert_eq!(output.status.code(), Some(3));
@@ -1527,6 +1545,15 @@ fn gov_vote_plain_against_mock() {
                 "mode": "Plain",
                 "status": "Open"
             },
+            "ballot_plain_request": {
+                "authority": owner_str,
+                "network_id": MOCK_NETWORK_ID,
+                "referendum_id": "ref-plain",
+                "owner": owner_str,
+                "amount": "500",
+                "duration_blocks": 128,
+                "direction": "Aye"
+            },
             "ballot_plain_response": {
                 "ok": true,
                 "accepted": true,
@@ -1635,6 +1662,15 @@ fn gov_vote_plain_emits_summary_and_json() {
                 "id": "ref-plain",
                 "mode": "Plain",
                 "status": "Open"
+            },
+            "ballot_plain_request": {
+                "authority": owner_str,
+                "network_id": MOCK_NETWORK_ID,
+                "referendum_id": "ref-plain",
+                "owner": owner_str,
+                "amount": "500",
+                "duration_blocks": 128,
+                "direction": "Aye"
             },
             "ballot_plain_response": {
                 "ok": true,
@@ -2137,6 +2173,18 @@ fn gov_vote_zk_against_mock() {
                 "mode": "Zk",
                 "status": "Open"
             },
+            "ballot_zk_request": {
+                "authority": owner_str,
+                "network_id": MOCK_NETWORK_ID,
+                "election_id": "ref-zk",
+                "backend": "halo2/ipa",
+                "envelope_b64": "AAA=",
+                "owner": owner_str,
+                "amount": "700",
+                "duration_blocks": 256,
+                "direction": "Nay",
+                "nullifier": nullifier
+            },
             "ballot_zk_response": {
                 "ok": true,
                 "accepted": false,
@@ -2257,7 +2305,7 @@ fn gov_vote_zk_emits_summary_and_json() {
             .expect("hints JSON is utf8");
     let instruction = InstructionBox::from(CastZkBallot {
         election_id: "ref-zk".to_owned(),
-        proof_b64: "BBB=".to_owned(),
+        proof_b64: "BBA=".to_owned(),
         public_inputs_json,
     });
     let payload_bytes = norito::to_bytes(&instruction).expect("encode zk ballot");
@@ -2270,6 +2318,18 @@ fn gov_vote_zk_emits_summary_and_json() {
                 "id": "ref-zk",
                 "mode": "Zk",
                 "status": "Open"
+            },
+            "ballot_zk_request": {
+                "authority": owner_str,
+                "network_id": MOCK_NETWORK_ID,
+                "election_id": "ref-zk",
+                "backend": "halo2/ipa",
+                "envelope_b64": "BBA=",
+                "owner": owner_str,
+                "amount": amount,
+                "duration_blocks": duration_blocks,
+                "direction": direction,
+                "nullifier": nullifier
             },
             "ballot_zk_response": {
                 "ok": true,
@@ -2303,7 +2363,7 @@ fn gov_vote_zk_emits_summary_and_json() {
             "--backend",
             "halo2/ipa",
             "--envelope-b64",
-            "BBB=",
+            "BBA=",
             "--owner",
             &owner_str,
             "--amount",
@@ -2341,7 +2401,7 @@ fn gov_vote_zk_emits_summary_and_json() {
             "--backend",
             "halo2/ipa",
             "--envelope-b64",
-            "BBB=",
+            "BBA=",
             "--owner",
             &owner_str,
             "--amount",
@@ -2459,10 +2519,20 @@ fn gov_audit_deploy_reports_results_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
     let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-    let code_bytes = b"mock-contract-code";
-    let abi_bytes = b"mock-contract-abi";
-    let code_hash = CryptoHash::new(code_bytes);
-    let abi_hash = CryptoHash::new(abi_bytes);
+    let (code_bytes, manifest) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(include_str!("../src/contracts/fixtures/minimal_view.ko"))
+        .expect("compile the audited public contract and its matching manifest");
+    let code_hash = manifest.code_hash.expect("compiled artifact hash");
+    let abi_hash = manifest.abi_hash.expect("compiled ABI hash");
+    assert_ne!(code_hash, CryptoHash::new(&code_bytes));
+    let public_entrypoints = manifest
+        .entrypoints
+        .as_ref()
+        .expect("compiled entrypoint interface")
+        .iter()
+        .map(|entrypoint| entrypoint.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(public_entrypoints, ["inspect"]);
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let mut code_arr = [0u8; 32];
@@ -2470,25 +2540,12 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let mut abi_arr = [0u8; 32];
     abi_arr.copy_from_slice(abi_hash.as_ref());
     let proposal_hex = proposal_id_hex(contract_address, &code_arr, &abi_arr);
-    let manifest_body = {
-        let mut manifest = json::Map::new();
-        manifest.insert(
-            "code_hash".to_string(),
-            json::Value::String(format!("0x{code_hash_hex}")),
-        );
-        manifest.insert(
-            "abi_hash".to_string(),
-            json::Value::String(format!("0x{abi_hash_hex}")),
-        );
-        let mut root = json::Map::new();
-        root.insert("manifest".to_string(), json::Value::Object(manifest));
-        json::Value::Object(root)
-    };
+    let manifest_body = norito::json!({"manifest": manifest});
     let code_bytes_body = {
         let mut root = json::Map::new();
         root.insert(
             "code_b64".to_string(),
-            json::Value::String(BASE64.encode(code_bytes)),
+            json::Value::String(BASE64.encode(&code_bytes)),
         );
         json::Value::Object(root)
     };
@@ -2522,8 +2579,26 @@ fn gov_audit_deploy_reports_results_against_mock() {
         norito::json!({
             "found": true,
             "contract_address": contract_address,
+            "contract_subject_account": (bob_account_literal()),
             "dataspace": "universal",
-            "code_hash_hex": code_hash_hex
+            "active": true,
+            "lifecycle": {
+                "version": 1,
+                "origin": "parliament",
+                "origin_account": (alice_account_literal()),
+                "origin_proposal_content_id_hex": proposal_hex,
+                "origin_governance_attempt_id_hex": ("33".repeat(32)),
+                "owner": "parliament",
+                "pending_owner": null,
+                "parliament_delegated": false,
+                "active_code_hash_hex": code_hash_hex,
+                "revision": 1,
+                "emergency_hold": null
+            },
+            "emergency_hold_active": false,
+            "code_hash_hex": code_hash_hex,
+            "abi_hash_hex": abi_hash_hex,
+            "public_entrypoints": public_entrypoints
         }),
     );
     let mut manifests = json::Map::new();
@@ -2626,6 +2701,57 @@ fn gov_audit_deploy_reports_results_against_mock() {
             .get("code_hash_matches")
             .and_then(norito::json::Value::as_bool),
         Some(true)
+    );
+    let mut tampered_code = code_bytes;
+    tampered_code[0] ^= 1;
+    let mut tampered_config = config_payload;
+    tampered_config
+        .get_mut("code_bytes")
+        .and_then(Value::as_object_mut)
+        .and_then(|entries| entries.get_mut(&code_hash_hex))
+        .and_then(Value::as_object_mut)
+        .expect("configured artifact response")
+        .insert(
+            "code_b64".to_owned(),
+            Value::String(BASE64.encode(tampered_code)),
+        );
+    configure_governance(mock.base_url(), &tampered_config).expect("configure altered artifact");
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args([
+            "app",
+            "gov",
+            "deploy",
+            "audit",
+            "--contract-address",
+            contract_address,
+        ])
+        .output()
+        .expect("audit altered artifact bytes");
+    assert!(
+        output.status.success(),
+        "audit must produce an issue report"
+    );
+    let value: Value = json::from_slice(&output.stdout).expect("altered artifact audit JSON");
+    assert_eq!(value.get("has_issues").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        value
+            .get("code")
+            .and_then(|code| code.get("present"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        value
+            .get("issues")
+            .and_then(Value::as_array)
+            .expect("audit issues")
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|issue| issue.starts_with("code_bytes_error:")
+                && issue.contains("artifact digest does not match the requested hash")),
+        "an altered execution header must invalidate the artifact hash"
     );
 }
 #[test]
@@ -3781,6 +3907,7 @@ fn incentives_daemon_processes_metrics_spool() {
             .is_empty()
     );
 }
+#[cfg(unix)]
 #[test]
 fn sumeragi_summary_commands_against_torii_mock() {
     use torii_mock_support::{
@@ -3799,6 +3926,25 @@ fn sumeragi_summary_commands_against_torii_mock() {
     let temp_dir = TempDir::new("sumeragi_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
+    let operator_key_file = tempfile::NamedTempFile::new().expect("private operator key file");
+    let operator_key = fixture_key_pair(0xA7);
+    fs::write(
+        operator_key_file.path(),
+        iroha_crypto::ExposedPrivateKey(operator_key.private_key().clone()).to_string(),
+    )
+    .expect("write canonical runtime operator key");
+    let unsigned = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["ops", "sumeragi", "status"])
+        .output()
+        .expect("run operator read without its dedicated signer");
+    assert!(!unsigned.status.success());
+    assert!(unsigned.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&unsigned.stderr)
+            .contains("operator signing key is required before request dispatch")
+    );
     // The shared mock's default also covers the wider Python SDK fixture shape.
     // This command consumes Torii's exact, fail-closed authoritative V2 schema.
     configure_sumeragi(
@@ -3861,6 +4007,8 @@ fn sumeragi_summary_commands_against_torii_mock() {
         let output = command()
             .arg("--config")
             .arg(&config_path)
+            .arg("--operator-private-key-file")
+            .arg(operator_key_file.path())
             .arg("--output-format")
             .arg("text")
             .args(args)
@@ -3880,7 +4028,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
     };
     assert_summary(
         &["ops", "sumeragi", "status"],
-        "protocol=3 height=10 view=2 phase=prepare leader=1 body=validated pending_persistence=- last_committed=9 restart_required=false",
+        "protocol=4 height=10 view=2 phase=prepare leader=1 body=validated pending_persistence=- last_committed=9 restart_required=false",
     );
     assert_summary(
         &["ops", "sumeragi", "leader"],
@@ -4365,14 +4513,14 @@ fn address_convert_json_summary_is_domainless() {
 #[test]
 fn address_audit_reports_parsed_and_errors() {
     use torii_mock_support::TempDir;
-    let local_account = account_id_for_domain("sora", 0xC3);
-    let default_account = account_id_for_domain("default", 0x44);
-    let local_i105 = encode_account_id_to_i105_for_discriminant(&local_account, 753).expect("i105");
-    let default_i105 =
-        encode_account_id_to_i105_for_discriminant(&default_account, 753).expect("i105");
+    let first_account = AccountId::new(fixture_key_pair(0xC3).public_key().clone());
+    let second_account = AccountId::new(fixture_key_pair(0x44).public_key().clone());
+    let first_i105 = encode_account_id_to_i105_for_discriminant(&first_account, 753).expect("i105");
+    let second_i105 =
+        encode_account_id_to_i105_for_discriminant(&second_account, 753).expect("i105");
     let temp_dir = TempDir::new("address_audit_report").expect("temp dir");
     let input_path = temp_dir.path().join("addresses.txt");
-    let contents = format!("# sample addresses\n{local_i105}\n{default_i105}\ninvalid-address\n");
+    let contents = format!("# sample addresses\n{first_i105}\n{second_i105}\ninvalid-address\n");
     fs::write(&input_path, contents).expect("write addresses");
     let output = command()
         .current_dir(workspace_root())
@@ -4406,8 +4554,8 @@ fn address_audit_reports_parsed_and_errors() {
         .and_then(Value::as_array)
         .expect("entries");
     assert_eq!(entries.len(), 3);
-    assert_parsed_entry_kind(entries, &local_i105, "default");
-    assert_parsed_entry_kind(entries, &default_i105, "default");
+    assert_parsed_address_entry(entries, &first_i105, &first_account);
+    assert_parsed_address_entry(entries, &second_i105, &second_account);
     assert_error_entry(entries);
 }
 #[test]
@@ -4474,7 +4622,7 @@ fn assert_address_audit_stats(stats_value: &Value) {
         1
     );
 }
-fn assert_parsed_entry_kind(entries: &[Value], expected_input: &str, expected_kind: &str) {
+fn assert_parsed_address_entry(entries: &[Value], expected_input: &str, account: &AccountId) {
     let parsed_entry = entry_by_input(entries, expected_input);
     assert_eq!(
         parsed_entry
@@ -4483,14 +4631,29 @@ fn assert_parsed_entry_kind(entries: &[Value], expected_input: &str, expected_ki
             .expect("status"),
         "parsed"
     );
+    let summary = parsed_entry.get("summary").expect("parsed address summary");
+    assert_eq!(summary.as_object().expect("summary object").len(), 3);
+    assert_eq!(summary.get("domain"), None);
     assert_eq!(
-        parsed_entry
-            .get("summary")
-            .and_then(|summary| summary.get("domain"))
-            .and_then(|domain| domain.get("kind"))
-            .and_then(Value::as_str)
-            .expect("domain kind"),
-        expected_kind
+        summary
+            .pointer("/detected_format/kind")
+            .and_then(Value::as_str),
+        Some("i105")
+    );
+    assert_eq!(
+        summary.pointer("/i105/value").and_then(Value::as_str),
+        Some(expected_input)
+    );
+    assert_eq!(
+        summary
+            .pointer("/i105/network_prefix")
+            .and_then(Value::as_u64),
+        Some(753)
+    );
+    let canonical = encode_account_id_to_canonical_hex(account).expect("canonical account bytes");
+    assert_eq!(
+        summary.get("canonical_hex").and_then(Value::as_str),
+        Some(canonical.as_str())
     );
 }
 fn assert_error_entry(entries: &[Value]) {
@@ -4807,7 +4970,7 @@ mod torii_mock_support {
         let torii_url = format!("{}/", base_url.trim_end_matches('/'));
         let contents = format!(
             "chain = \"00000000-0000-0000-0000-000000000000\"\n\
-network_id = \"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0\"\n\
+network_id = \"{network_id}\"\n\
 torii_url = \"{torii_url}\"\n\
 \n\
 [basic_auth]\n\
@@ -4819,6 +4982,7 @@ domain = \"wonderland.universal\"\n\
 public_key = \"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03\"\n\
 private_key = \"{private_key}\"\n",
             private_key = super::ALICE_PRIVATE_KEY,
+            network_id = super::MOCK_NETWORK_ID,
         );
         fs::write(path, contents)
     }

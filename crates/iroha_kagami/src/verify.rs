@@ -431,7 +431,7 @@ mod tests {
         builder: GenesisBuilder,
         peers: &[(PublicKey, Vec<u8>)],
     ) -> GenesisBuilder {
-        super::super::complete_test_genesis_builder_for_peers(
+        crate::genesis::complete_test_genesis_builder_for_peers(
             builder,
             peers
                 .iter()

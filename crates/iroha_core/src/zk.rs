@@ -89,6 +89,8 @@ use halo2_proofs::poly::commitment::Params as _;
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
+#[cfg(all(test, feature = "zk-halo2"))]
+use kaigi_zk::usage_v1::KAIGI_USAGE_CIRCUIT_ID_V1;
 #[cfg(feature = "zk-halo2")]
 use kaigi_zk::{
     authorization_v1::{
@@ -97,8 +99,8 @@ use kaigi_zk::{
         KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1, KaigiAuthorizationCircuitV1,
     },
     usage_v1::{
-        KAIGI_USAGE_BACKEND_V1, KAIGI_USAGE_CIRCUIT_ID_V1, KAIGI_USAGE_CIRCUIT_K_V1,
-        KAIGI_USAGE_INSTANCE_ROWS_V1, KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1, KaigiUsageCircuitV1,
+        KAIGI_USAGE_BACKEND_V1, KAIGI_USAGE_CIRCUIT_K_V1, KAIGI_USAGE_INSTANCE_ROWS_V1,
+        KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1, KaigiUsageCircuitV1,
     },
 };
 #[cfg(feature = "zk-halo2-ipa")]
@@ -819,6 +821,7 @@ pub(crate) fn halo2_open_verify_circuit_id_matches_backend(
     }
     backend == ZK_BACKEND_HALO2_IPA || normalize_halo2_ipa_circuit_id(backend) == Some(canonical)
 }
+#[cfg(test)]
 fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
     normalize_halo2_ipa_circuit_id(circuit_id).is_some_and(|normalized| {
         HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&normalized.as_str())

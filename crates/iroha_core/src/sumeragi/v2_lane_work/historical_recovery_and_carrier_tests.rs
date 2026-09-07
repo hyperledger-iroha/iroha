@@ -78,7 +78,7 @@ fn historical_certificate_payload_corruption_is_fail_stop_and_retains_owner() {
         .as_ref()
         .clone();
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish exact finality before testing historical payload corruption");
@@ -4107,7 +4107,7 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         .store_block(first_block.clone())
         .expect("persist first raw lane artifact");
     let first_finality = verified_finality_artifact_for_block(&first, &keys, &first_block);
-    first
+    let _ = first
         .kura
         .store_v2_finality_artifact(&first_finality)
         .expect("publish full-wire finality for the first raw predecessor");
@@ -4239,7 +4239,7 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         .store_block(second_block.clone())
         .expect("persist second raw lane artifact");
     let second_finality = verified_finality_artifact_for_block(&second, &keys, &second_block);
-    second
+    let _ = second
         .kura
         .store_v2_finality_artifact(&second_finality)
         .expect("publish full-wire finality for the second raw predecessor");

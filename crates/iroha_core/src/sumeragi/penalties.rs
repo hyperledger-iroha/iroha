@@ -1,4 +1,6 @@
 //! Deterministic `NPoS` consensus-evidence slashing.
+#[cfg(test)]
+use crate::state::StateBlock;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -8,8 +10,7 @@ use crate::{
         indexed_slashable_validator_exposure, max_slash_amount, validator_tenure_contains_height,
     },
     state::{
-        State, StateBlock, StateTransaction, StateView, WorldReadOnly,
-        public_lane_validator_record_matches_key,
+        State, StateTransaction, StateView, WorldReadOnly, public_lane_validator_record_matches_key,
     },
 };
 use eyre::{Result, WrapErr, eyre};
@@ -38,6 +39,7 @@ pub struct PenaltyOutcome {
 #[derive(Clone, Copy)]
 enum EffectsApplicationMode {
     Commit,
+    #[cfg(test)]
     ValidateOnly,
 }
 #[derive(Clone)]
@@ -399,6 +401,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
 /// state. Operational slash counters and telemetry are suppressed because the
 /// transaction is deliberately discarded. Consensus effects never contribute
 /// to the transaction execution witness in either application mode.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_npos_consensus_effects_after_execution(
     state_block: &mut StateBlock<'_>,
@@ -634,6 +637,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                         offence_height,
                         share_keys,
                     )?,
+                    #[cfg(test)]
                     EffectsApplicationMode::ValidateOnly => {
                         apply_indexed_slash_to_validator_without_observability(
                             tx,

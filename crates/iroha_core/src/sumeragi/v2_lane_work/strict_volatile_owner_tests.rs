@@ -16,7 +16,7 @@ fn strict_current_lane_owner_fixture() -> (
         .store_block(block.clone())
         .expect("persist the protected carrier");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish complete-wire carrier authority");
@@ -195,7 +195,7 @@ fn corrupted_decided_carrier_retains_autonomous_new_view_clock() {
         .store_block(carrier.clone())
         .expect("persist autonomous carrier");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish autonomous complete-wire authority");
@@ -559,7 +559,7 @@ fn corrupt_predecessor_receipt_preserves_autonomous_new_view_clock_and_payload_o
         .store_block(parent_block.clone())
         .expect("persist the executed predecessor");
     let finality = verified_finality_artifact_for_block(&parent, &keys, &parent_block);
-    parent
+    let _ = parent
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish exact predecessor wire authority");
@@ -717,7 +717,7 @@ fn corrupt_historical_application_anchor_preserves_pending_committed_cache_owner
         .store_block(block.clone())
         .expect("store the exact historical carrier");
     let finality = verified_finality_artifact_for_block(&parent, &keys, &block);
-    parent
+    let _ = parent
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish full-wire historical finality");
@@ -882,7 +882,7 @@ fn corrupt_planner_frontier_retains_exact_pending_producer_reservations() {
         .store_block(block.clone())
         .expect("publish actual current-height lane ownership");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("authenticate the entire stored carrier");
@@ -946,7 +946,7 @@ fn corrupt_native_application_receipt_retains_exact_pending_producer_reservation
         .kura
         .store_block(carrier.clone())
         .expect("store actual Native carrier");
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish actual Native manifest and complete wire authority");

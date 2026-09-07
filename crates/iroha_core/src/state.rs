@@ -9490,8 +9490,16 @@ pub struct WorldView<'world> {
         ParliamentAttemptStateV1,
     >,
     /// Exact derived Parliament attempt counts by lifecycle status and stage.
+    #[expect(
+        dead_code,
+        reason = "retains read guards for the complete World snapshot"
+    )]
     pub(crate) parliament_attempt_counts: CellView<'world, ParliamentAttemptCountsV1>,
     /// Derived distinct-attempt reference counts for each Parliament member account.
+    #[expect(
+        dead_code,
+        reason = "retains read guards for the complete World snapshot"
+    )]
     pub(crate) parliament_member_reference_counts:
         StorageView<'world, AccountId, ParliamentMemberReferenceCountsV1>,
     /// Active hidden-ballot phase windows eligible for compact casting snapshots.
@@ -9501,6 +9509,10 @@ pub struct WorldView<'world> {
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Certified governance attempts keyed by their exact enactment height.
+    #[expect(
+        dead_code,
+        reason = "retains read guards for the complete World snapshot"
+    )]
     pub(crate) parliament_certified_enactments:
         StorageView<'world, u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
@@ -14805,13 +14817,6 @@ pub(crate) enum ConsensusKeyGate {
     Expired,
     Disabled,
 }
-pub(crate) fn peer_consensus_key_gate(
-    snapshot: &impl WorldReadOnly,
-    peer_id: &PeerId,
-    block_height: u64,
-) -> ConsensusKeyGate {
-    peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, None)
-}
 /// Resolve the lifecycle gate for one peer and one exact consensus-key role.
 pub(crate) fn peer_consensus_key_gate_for_role(
     snapshot: &impl WorldReadOnly,
@@ -14913,17 +14918,6 @@ fn peer_consensus_key_gate_matching_role(
     }
     gate
 }
-/// Check whether a peer has a live consensus key at the provided block height.
-pub(crate) fn peer_has_live_consensus_key(
-    snapshot: &impl WorldReadOnly,
-    peer_id: &PeerId,
-    block_height: u64,
-) -> bool {
-    matches!(
-        peer_consensus_key_gate(snapshot, peer_id, block_height),
-        ConsensusKeyGate::Live
-    )
-}
 /// Check whether a peer has a live key for one exact consensus role.
 pub(crate) fn peer_has_live_consensus_key_for_role(
     snapshot: &impl WorldReadOnly,
@@ -14947,6 +14941,7 @@ pub(crate) fn peer_has_live_consensus_key_for_lane(
         == ConsensusKeyGate::Live
 }
 /// Fetch the stored BLS proof-of-possession for a peer's live consensus key.
+#[cfg(test)]
 pub(crate) fn live_consensus_key_pop_for_peer(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
@@ -32419,6 +32414,7 @@ impl State {
         consensus_lane_dataspace_at_height(lane_id, &nexus, self.lane_authority_height()).is_some()
     }
     /// Resolve the only lane allowed to own staking storage at the committed authority height.
+    #[cfg(test)]
     pub(crate) fn staking_authority_lane(&self, lane_id: LaneId) -> Option<LaneId> {
         let nexus = self.nexus_snapshot();
         nexus_staking_authority_lane_at_height(lane_id, &nexus, self.lane_authority_height())
@@ -34856,6 +34852,7 @@ impl State {
             })
             .collect()
     }
+    #[cfg(test)]
     fn validate_queue_plan_admissions_for_carrier(
         &self,
         admissions: &[Vec<u8>],
@@ -35026,6 +35023,7 @@ impl State {
         }
         Ok((admission, lookup))
     }
+    #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
         &self,
         bytes: &[u8],
@@ -40645,6 +40643,7 @@ impl State {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn resolve_queue_plan_pending_obligation_in_storage(
         storage: &mut impl QueuePlanMarkerStorage,
         network_id_digest: Hash,
@@ -43186,6 +43185,7 @@ impl State {
     }
     /// Resolve and stage a compact certified merge reference before running
     /// deterministic start-of-block effects.
+    #[cfg(test)]
     pub(crate) fn block_with_certified_merge_reference(
         &self,
         carrier_header: BlockHeader,
@@ -43208,6 +43208,7 @@ impl State {
     /// Stage proposal-native QueuePlan certificates on the pristine carrier
     /// overlay before running deterministic start-of-block effects.
     #[inline(never)]
+    #[cfg(test)]
     pub(crate) fn block_with_queue_plan_admissions(
         &self,
         carrier_header: BlockHeader,

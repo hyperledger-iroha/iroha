@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tomllib
 import types
 import unittest
 from pathlib import Path
@@ -1732,6 +1733,63 @@ class TairaDevnetTests(unittest.TestCase):
             helper.NORMALIZED_ROOTFS_BYTES + (16 + 64) * 1024 * 1024,
         )
         self.assertLessEqual(helper.NORMALIZED_ROOTFS_BYTES + 27_236_288 + 13_923_072, expected)
+
+    def test_storage_policy_matches_native_profile_and_complete_preseed(self) -> None:
+        profile = tomllib.loads(
+            (REPO_ROOT / "configs/soranexus/taira/config.toml").read_text(encoding="utf-8")
+        )
+        mib = 1024 * 1024
+        self.assertEqual(module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES, 4096 * mib)
+        self.assertEqual(
+            dict(module.TAIRA_NEXUS_STORAGE_WEIGHTS),
+            {"kura_blocks_bps": 2500, "wsv_snapshots_bps": 1250, "sorafs_bps": 6250},
+        )
+        self.assertEqual(sum(dict(module.TAIRA_NEXUS_STORAGE_WEIGHTS).values()), 10_000)
+        self.assertEqual(module.TAIRA_SORAFS_MAX_CAPACITY_BYTES, 2560 * mib)
+        self.assertEqual(
+            module.TAIRA_SORAFS_MAX_CAPACITY_BYTES,
+            profile["sorafs"]["storage"]["max_capacity_bytes"],
+        )
+        self.assertEqual(
+            module.TAIRA_SORAFS_MAX_CAPACITY_BYTES
+            - module.MAX_INROU_CANARY_GUEST_BYTES
+            - module.MAX_INROU_CANARY_BUNDLE_BYTES,
+            448 * mib,
+        )
+
+    def test_up_rejects_retired_storage_budget_before_inrou_staging(self) -> None:
+        runtime = FakeRuntime()
+
+        def old_storage_profile(command, **kwargs):
+            result = runtime.run(command, **kwargs)
+            values = [str(value) for value in command]
+            if "localnet" in values and "--out-dir" in values:
+                target = Path(values[values.index("--out-dir") + 1])
+                config = target / "peer0.toml"
+                text = config.read_text(encoding="utf-8")
+                for old, new in (
+                    (
+                        f"local_budget_bytes = {4096 * 1024 * 1024}",
+                        f"local_budget_bytes = {1024 * 1024 * 1024}",
+                    ),
+                    ("kura_blocks_bps = 2500", "kura_blocks_bps = 6000"),
+                    ("wsv_snapshots_bps = 1250", "wsv_snapshots_bps = 2000"),
+                    ("sorafs_bps = 6250", "sorafs_bps = 2000"),
+                    (
+                        f"max_capacity_bytes = {2560 * 1024 * 1024}",
+                        f"max_capacity_bytes = {1024 * 1024 * 1024 // 5}",
+                    ),
+                ):
+                    self.assertIn(old, text)
+                    text = text.replace(old, new, 1)
+                config.write_text(text, encoding="utf-8")
+            return result
+
+        with self.assertRaisesRegex(module.DevnetError, "wrong Taira storage aggregate"):
+            module.up(self.up_args(), run=old_storage_profile, request=runtime.request)
+        self.assertFalse(
+            any("inrou-stage" in command and "--help" not in command for command in runtime.commands)
+        )
 
     def test_up_requires_an_explicit_inrou_canary_workspace(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):

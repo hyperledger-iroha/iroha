@@ -45,13 +45,13 @@ fn billing_statements_cli_rejects_missing_response_anchor_without_output() {
 }
 #[test]
 fn hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_output() {
-    let checkpoint = "33".repeat(32);
+    let checkpoint = "ab".repeat(32);
     let args = HedgingProjectionArgs {
         expected_checkpoint_fingerprint: checkpoint.clone(),
         after: None,
         limit: 1,
     };
-    for returned in ["44".repeat(32).to_ascii_uppercase(), checkpoint.clone()] {
+    for returned in ["cd".repeat(32).to_ascii_uppercase(), checkpoint.clone()] {
         let mut context = TestContext::new();
         let error = args
             .run_with(&mut context, |_client, _filter| {
@@ -67,6 +67,15 @@ fn hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_outp
         );
         assert!(context.printed.is_empty());
     }
+    let mut context = TestContext::new();
+    args.run_with(&mut context, |_client, _filter| {
+        Ok(exact_checkpoint_page_response(
+            Some(&checkpoint.to_ascii_uppercase()),
+            "application/json",
+        ))
+    })
+    .expect("matching canonical uppercase anchor must succeed");
+    assert_eq!(context.printed.len(), 1);
 }
 #[test]
 fn exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output() {

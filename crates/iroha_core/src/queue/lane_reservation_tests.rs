@@ -2631,7 +2631,9 @@ fn reservation_group_forget_prefix_replays_and_resumes_exactly_once() {
             .as_mut()
             .expect("installed reservation journal")
             .inject_append_fault_after(
-                4,
+                // Every Commit and PlanTombstoned marker precedes the first
+                // ForgetCommit; fail after syncing the second ForgetCommit.
+                keys.len() * 2 + 1,
                 ReservationJournalAppendFault::AfterSyncBeforeReplayPublication,
             );
         let error = queue
@@ -3184,7 +3186,21 @@ fn empty_startup_reconciliation_receipt_publishes_with_gate_already_open() {
     let queue = Queue::test(config_factory(), &time_source);
     let dir = tempdir().expect("empty startup-reconciliation journal directory");
     install_globally_certified_test_reservation_journals(&queue, &dir);
+    let state = lane_reservation_test_state();
+    queue
+        .replay_plan_journal(&state)
+        .expect("publish the actual empty QueuePlan startup replay");
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture the empty installed replay");
+    assert!(
+        queue
+            .observe_completed_lane_reservation_startup_reconciliation(&snapshot)
+            .expect("observe an installed but unpublished empty startup")
+            .is_none()
+    );
     let receipt = checked_startup_reconciliation_receipt(&queue);
+    let stale_receipt = checked_startup_reconciliation_receipt(&queue);
     assert!(receipt.initial_snapshot.is_empty());
     assert!(
         !queue.lane_reservation_startup_reconciliation_pending(),
@@ -3192,9 +3208,229 @@ fn empty_startup_reconciliation_receipt_publishes_with_gate_already_open() {
     );
     queue
         .complete_lane_reservation_startup_reconciliation(receipt)
-        .expect("an exact empty replay receipt may idempotently publish an open gate");
+        .expect("an exact empty replay receipt publishes the initial open gate once");
     assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    let observation = queue
+        .observe_completed_lane_reservation_startup_reconciliation(&snapshot)
+        .expect("observe the exact completed startup")
+        .expect("actual publication retained completion evidence");
+    assert!(
+        queue
+            .revalidate_completed_lane_reservation_startup_reconciliation(&observation)
+            .expect("revalidate completion without acquiring mutation authority")
+    );
+    assert!(matches!(
+        queue.complete_lane_reservation_startup_reconciliation(stale_receipt),
+        Err(LaneQueueReservationError::InvalidIdentity(ref reason))
+            if reason.contains("stale at the final publication gate")
+    ));
+    assert!(
+        queue
+            .revalidate_completed_lane_reservation_startup_reconciliation(&observation)
+            .expect("rejecting the old mutation receipt preserves completion evidence")
+    );
 }
+
+fn completed_empty_startup_observation_fixture() -> (
+    Queue,
+    tempfile::TempDir,
+    CompletedLaneReservationStartupReconciliation,
+) {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("completed startup observation directory");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    queue
+        .replay_plan_journal(&state)
+        .expect("authenticate the empty QueuePlan replay");
+    let receipt = checked_startup_reconciliation_receipt(&queue);
+    queue
+        .complete_lane_reservation_startup_reconciliation(receipt)
+        .expect("publish actual completed startup");
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture completed empty Queue");
+    let observation = queue
+        .observe_completed_lane_reservation_startup_reconciliation(&snapshot)
+        .expect("observe actual publication")
+        .expect("publication supplies completion evidence");
+    (queue, dir, observation)
+}
+
+#[test]
+fn startup_completion_observation_requires_actual_publication() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time_source);
+    let snapshot = LaneQueueReservationReconciliationSnapshotV1::default();
+    assert!(matches!(
+        queue.lane_reservation_reconciliation_snapshot(),
+        Err(LaneQueueReservationError::JournalNotInstalled)
+    ));
+    assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    assert!(
+        queue
+            .observe_completed_lane_reservation_startup_reconciliation(&snapshot)
+            .expect("a new Queue has no completed publication")
+            .is_none()
+    );
+    assert!(matches!(
+        queue.bind_lane_reservation_startup_reconciliation_receipt(&snapshot),
+        Err(LaneQueueReservationError::JournalNotInstalled)
+    ));
+    let dir = tempdir().expect("installed but unpublished startup directory");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    queue
+        .replay_plan_journal(&lane_reservation_test_state())
+        .expect("publish the actual empty QueuePlan replay");
+    assert!(
+        queue
+            .observe_completed_lane_reservation_startup_reconciliation(&snapshot)
+            .expect("journal replay is not startup completion")
+            .is_none()
+    );
+}
+
+#[test]
+fn startup_completion_observation_rejects_new_owner_and_commit_barrier() {
+    let (queue, dir, observation) = completed_empty_startup_observation_fixture();
+    let empty = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("retain the completed empty snapshot");
+    let state = lane_reservation_test_state();
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        accepted_queue_plan_tx_by_someone(&time_source),
+    );
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(&state, b"after-startup-owner", b"after-startup-proposal"),
+            nonzero!(1_usize),
+        )
+        .expect("acquire a genuine new reservation after publication")[0]
+        .key();
+    let owned = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture the exact new live owner");
+    assert!(!owned.is_empty());
+    assert!(
+        queue
+            .observe_completed_lane_reservation_startup_reconciliation(&empty)
+            .is_err()
+    );
+    assert!(
+        queue
+            .observe_completed_lane_reservation_startup_reconciliation(&owned)
+            .is_err()
+    );
+    assert!(!matches!(
+        queue.revalidate_completed_lane_reservation_startup_reconciliation(&observation),
+        Ok(true)
+    ));
+    assert_eq!(
+        queue.lane_reservation_reconciliation_snapshot().unwrap(),
+        owned
+    );
+    // Exercise a real durable Commit boundary, as the existing pending-work
+    // fixture does, without pretending it is authorized startup completion.
+    queue
+        .lane_reservation_journal
+        .lock()
+        .as_mut()
+        .expect("actual reservation journal")
+        .commit(key)
+        .expect("persist the commit crash barrier");
+    {
+        let mut store = queue.lane_reservations.lock();
+        store.live_by_entrypoint.remove(&key.entrypoint_hash);
+        store.commit_barriers.push(key);
+    }
+    let barrier = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture the exact committed barrier");
+    assert_eq!(barrier.commit_barriers, vec![key]);
+    assert!(
+        queue
+            .observe_completed_lane_reservation_startup_reconciliation(&barrier)
+            .is_err()
+    );
+    assert!(!matches!(
+        queue.revalidate_completed_lane_reservation_startup_reconciliation(&observation),
+        Ok(true)
+    ));
+    assert_eq!(
+        queue.lane_reservation_reconciliation_snapshot().unwrap(),
+        barrier
+    );
+}
+
+#[test]
+fn startup_completion_observation_rejects_fault_emergency_and_pending_state() {
+    for state in ["plan-fault", "reservation-fault", "emergency", "pending"] {
+        let (queue, _dir, observation) = completed_empty_startup_observation_fixture();
+        let snapshot = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("retain completed snapshot before adverse state");
+        match state {
+            "plan-fault" => queue
+                .plan_journal_durability_fault
+                .store(true, Ordering::Release),
+            "reservation-fault" => queue
+                .lane_reservation_durability_fault
+                .store(true, Ordering::Release),
+            "emergency" => queue.emergency_fast_startup.store(true, Ordering::Release),
+            "pending" => queue
+                .lane_reservation_reconciliation_pending
+                .store(true, Ordering::Release),
+            _ => unreachable!("closed test state set"),
+        }
+        let result = queue.observe_completed_lane_reservation_startup_reconciliation(&snapshot);
+        if state.ends_with("fault") {
+            assert!(matches!(
+                result,
+                Err(LaneQueueReservationError::DurabilityFault)
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(LaneQueueReservationError::InvalidIdentity(_))
+            ));
+        }
+        assert!(!matches!(
+            queue.revalidate_completed_lane_reservation_startup_reconciliation(&observation),
+            Ok(true)
+        ));
+    }
+}
+
+#[test]
+fn startup_completion_observation_cannot_survive_installed_replay_identity_loss() {
+    for lose_plan_receipt in [false, true] {
+        let (queue, _dir, observation) = completed_empty_startup_observation_fixture();
+        let snapshot = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("retain exact completed ownership");
+        if lose_plan_receipt {
+            queue.plan_journal_startup_replay_receipt.lock().take();
+        } else {
+            queue.lane_reservation_snapshot_replay_receipt.lock().take();
+        }
+        assert!(
+            queue
+                .observe_completed_lane_reservation_startup_reconciliation(&snapshot)
+                .is_err()
+        );
+        assert!(!matches!(
+            queue.revalidate_completed_lane_reservation_startup_reconciliation(&observation),
+            Ok(true)
+        ));
+    }
+}
+
 #[test]
 fn reservation_restart_release_restores_exact_global_fifo() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());

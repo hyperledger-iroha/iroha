@@ -12425,7 +12425,6 @@ pub mod isi {
     #[derive(Debug)]
     struct ValidatedSccpNativeBridgeMessageV1 {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
-        route_configuration_hash: [u8; 32],
         settlement: SccpInboundSettlementV1,
         replay_accumulator_id: iroha_data_model::bridge::SccpReplayAccumulatorIdV1,
         replay_domain: iroha_data_model::bridge::SccpReplayDomainV1,
@@ -12689,7 +12688,6 @@ pub mod isi {
         };
         Ok(ValidatedSccpNativeBridgeMessageV1 {
             admission: validated,
-            route_configuration_hash: route.route_configuration_hash,
             settlement,
             replay_accumulator_id,
             replay_domain,

@@ -3,6 +3,7 @@ use base64::Engine as _;
 
 #[test]
 fn post_torii_mutation_rejects_invalid_url() {
+    install_mock_protected_read_signer();
     let payload = norito::json!({ "noop": true });
     let err = post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
         .expect_err("invalid URL must fail");

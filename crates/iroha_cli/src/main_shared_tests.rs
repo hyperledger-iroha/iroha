@@ -515,6 +515,10 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     .expect("parse local contract manifest build");
     assert!(args.command.allows_fallback_config());
     assert!(args.command.allows_fallback_config_in_machine_mode());
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"local-contract-test")),
+    )
+    .to_string();
     for command in [
         vec!["iroha", "--machine", "contract", "app", "build"],
         vec!["iroha", "--machine", "contract", "dev", "check"],
@@ -530,8 +534,10 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
             "fixture-authority",
             "--deploy-nonce",
             "1",
-            "--chain-id",
-            "local-contract-test",
+            "--network-id",
+            &network_id,
+            "--chain-discriminant",
+            "753",
         ],
         vec![
             "iroha",
@@ -1114,7 +1120,7 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
 }
 #[test]
 fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
-    let args = Args::try_parse_from([
+    let command = [
         "iroha",
         "taira",
         "inrou-canary",
@@ -1122,12 +1128,27 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/taira-inrou-stage",
         "--mode",
         "upgrade",
+        "--operation",
+        "bundle-pin",
+        "--authorization-sha256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--authorization-nonce",
+        "cccccccccccccccccccccccccccccccc",
+        "--mutation-phase",
+        "pre_edge",
+        "--execution-expires-at-unix-ms",
+        "2000000000000",
         "--idempotency-key",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--timeout-secs",
         "90",
         "--json",
-    ])
+    ];
+    let args = Args::try_parse_from(command.into_iter().chain([
+        "--prepare-envelope",
+        "--prepared-output-fd",
+        "3",
+    ]))
     .expect("parse Taira Inrou canary args");
     let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
         panic!("expected taira inrou-canary command");
@@ -1137,6 +1158,9 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         std::path::PathBuf::from("/tmp/taira-inrou-stage")
     );
     assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+    assert_eq!(cmd.operation, crate::taira::InrouCanaryOperation::BundlePin);
+    assert!(cmd.prepare_envelope);
+    assert_eq!(cmd.prepared_output_fd, Some(3));
     assert_eq!(
         cmd.idempotency_key,
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1144,13 +1168,45 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
     assert_eq!(cmd.timeout_secs, 90);
     assert!(cmd.json);
 
-    let error = Args::try_parse_from([
-        "iroha",
-        "taira",
-        "inrou-canary",
-        "--stage-dir",
-        "/tmp/taira-inrou-stage",
-    ])
+    let error = Args::try_parse_from(command)
+        .expect_err("Inrou canary must require an exact prepared action");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    let error = Args::try_parse_from(command.into_iter().chain(["--prepare-envelope"]))
+        .expect_err("preparation must require its output descriptor");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    for action in [
+        "--submit-prepared-envelope-fd",
+        "--recover-prepared-envelope-fd",
+    ] {
+        let args = Args::try_parse_from(command.into_iter().chain([action, "3"]))
+            .expect("exact submission or recovery descriptor must parse");
+        let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
+            panic!("expected taira inrou-canary command");
+        };
+        assert!(!cmd.prepare_envelope);
+        assert_eq!(
+            cmd.submit_prepared_envelope_fd,
+            (action == "--submit-prepared-envelope-fd").then_some(3)
+        );
+        assert_eq!(
+            cmd.recover_prepared_envelope_fd,
+            (action == "--recover-prepared-envelope-fd").then_some(3)
+        );
+    }
+    let error = Args::try_parse_from(command.into_iter().chain([
+        "--submit-prepared-envelope-fd",
+        "3",
+        "--recover-prepared-envelope-fd",
+        "4",
+    ]))
+    .expect_err("prepared actions must be mutually exclusive");
+    assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    let error = Args::try_parse_from(
+        command
+            .into_iter()
+            .filter(|argument| !matches!(*argument, "--mode" | "upgrade"))
+            .chain(["--submit-prepared-envelope-fd", "3"]),
+    )
     .expect_err("Inrou canary must require an explicit mutation mode");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
@@ -1274,6 +1330,8 @@ fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
         "openai/gpt-oss",
         "--revision",
         "0123456789abcdef0123456789abcdef01234567",
+        "--storage-class",
+        "warm",
         "--lease-term-ms",
         "60000",
     ])
@@ -1810,6 +1868,61 @@ status_timeout_ms = 3400
         config.transaction_status_timeout,
         Duration::from_millis(3400)
     );
+}
+
+#[test]
+fn inherited_config_cli_requires_explicit_provenance_and_rejects_mixed_sources() {
+    let valid = [
+        "iroha",
+        "--config-fd",
+        "19",
+        "--config-source-path",
+        "/private/runtime/client.toml",
+        "ops",
+        "sumeragi",
+        "status",
+    ];
+    let args = Args::try_parse_from(valid).expect("explicit descriptor CLI");
+    assert_eq!(args.config_fd, Some(19));
+    assert_eq!(
+        args.config_source_path,
+        Some(PathBuf::from("/private/runtime/client.toml"))
+    );
+    for invalid in [
+        vec!["iroha", "--config-fd", "19", "ops", "sumeragi", "status"],
+        vec![
+            "iroha",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+        vec![
+            "iroha",
+            "--config-fd",
+            "2",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+        vec![
+            "iroha",
+            "--config-fd",
+            "19",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "--config",
+            "/private/runtime/other.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+    ] {
+        assert!(Args::try_parse_from(invalid).is_err());
+    }
 }
 
 #[test]

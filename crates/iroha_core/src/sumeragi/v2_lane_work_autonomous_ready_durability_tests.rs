@@ -1892,7 +1892,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         .store_block(predecessor_block.clone())
         .expect("persist the raw canonical predecessor");
     let finality = verified_finality_artifact_for_block(&parent, &keys, &predecessor_block);
-    parent
+    let _ = parent
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish the finalized predecessor's complete-wire authority");
@@ -5468,7 +5468,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         .store_block(block.clone())
         .expect("persist autonomous recovery carrier");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish complete-wire authority for historical READY recovery");

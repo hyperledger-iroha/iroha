@@ -46,7 +46,7 @@ fn balance_key_is_independent_of_chain_display_and_ambient_layout() {
             norito::core::validate_header_flags(flags).expect("supported V1 layout");
             let _layout = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(transfer_balance_key(&asset, &account).unwrap(), expected);
-            assert_eq!(norito::core::get_decode_flags(), flags);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
         }
     }
     assert_eq!(

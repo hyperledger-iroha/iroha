@@ -451,13 +451,13 @@ and [device bridge contract](kagemusha_device_bridge_v1.md).
   comparison preserves the original complete ordinary/hybrid verifier bodies;
   compilation, challenge/stream/equation equivalence, constraint mutation tests,
   genuine proof verification and key convergence remain outstanding. The
-  nonzero-view restart fixture correction restores real WAL registry and body
-  custody and compiles in Core51. Its default-stack execution aborts in production
-  registry insertion after successful signing. A private correction moves the
-  two largest retained carrier variants to the heap, reserving live Broadcast
-  storage before publication. The new size regression and genuine restart test
-  must pass; signed Proposal/chunk/Prepare checks remain required. No restart
-  or production release credit is claimed for the failed run.
+  nonzero-view restart fixture now restores real WAL registry and body custody.
+  The retained Broadcast and recovered-Apply carriers use heap storage, with live
+  Broadcast allocation reserved before publication. Core56 passes the genuine
+  nonzero-view production-services restart and inline-carrier size regressions on
+  the default stack. This closes the observed registry-insertion stack failure.
+  Broader startup/recovery and four-validator settlement qualification remain
+  open; these focused passes do not establish a monetary or production release.
   All 19 current cases
   mapped from the original 18 failures pass on the preceding executable; 17 are
   additional unique tests, bringing its focused Core total to 81. The full proof

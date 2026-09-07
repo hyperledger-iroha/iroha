@@ -643,6 +643,7 @@ pub(crate) fn validate_v2_admission_penalty_separation(
 /// Select a canonical, bounded batch of locally pending exact v2 proofs for a
 /// proposer to attach to its next candidate.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn pending_v2_evidence_admissions(
     state: &State,
     proposal_height: u64,

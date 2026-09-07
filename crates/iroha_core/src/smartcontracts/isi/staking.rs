@@ -1987,17 +1987,6 @@ fn quantity_sub(lhs: Quantity, rhs: Quantity) -> Result<Quantity, Error> {
     lhs.checked_sub(&rhs)
         .map_err(|_| Error::Math(MathError::Overflow))
 }
-/// Return every slashable unit still held by staking custody for one validator.
-pub(crate) fn slashable_validator_exposure(
-    world: &impl WorldReadOnly,
-    lane_id: LaneId,
-    validator: &AccountId,
-    record: &PublicLaneValidatorRecord,
-) -> Result<Quantity, Error> {
-    let shares = validator_share_updates(world, lane_id, validator, None)?;
-    slashable_exposure_from_shares(record, &shares, None)
-}
-
 /// Return offence-height-eligible custody using a complete indexed key slice.
 pub(crate) fn indexed_slashable_validator_exposure(
     world: &impl WorldReadOnly,
@@ -2461,29 +2450,8 @@ pub(crate) fn apply_slash_to_validator(
         true,
     )
 }
-/// Apply a finality-owned slash with commit-boundary metrics but no transaction evidence.
-pub(crate) fn apply_consensus_slash_to_validator(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    lane_id: LaneId,
-    validator: &AccountId,
-    slash_id: Hash,
-    amount: &Quantity,
-    now_ms: u64,
-) -> Result<(), Error> {
-    apply_slash_to_validator_inner(
-        state_transaction,
-        lane_id,
-        validator,
-        slash_id,
-        amount,
-        now_ms,
-        None,
-        None,
-        false,
-        true,
-    )
-}
 /// Apply a slash in a disposable validation transaction without external observability effects.
+#[cfg(test)]
 pub(crate) fn apply_slash_to_validator_without_observability(
     state_transaction: &mut StateTransaction<'_, '_>,
     lane_id: LaneId,

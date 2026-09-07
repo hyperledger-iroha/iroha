@@ -605,6 +605,7 @@ impl Kura {
     }
     /// Read one exact durability-attested receipt while the caller holds
     /// `prune_lock`. This path never repairs progress-sidecar artifacts.
+    #[cfg(test)]
     fn read_exact_lane_block_application_receipt_under_prune_guard(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -615,6 +616,7 @@ impl Kura {
     /// Read one exact durability-attested receipt while the caller holds
     /// `prune_lock` and `canonical_chain_lock`, in that order. This path never
     /// repairs progress-sidecar artifacts or reacquires either outer lock.
+    #[cfg(test)]
     fn read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -682,30 +684,6 @@ impl Kura {
                     self.lane_block_application_receipt_matches_merge_log(artifact)
                 } else {
                     self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
-                        artifact,
-                    )
-                }
-            }
-        }
-    }
-    fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => self
-                .lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                if repair_missing_sidecars {
-                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
-                        artifact,
-                    )
-                } else {
-                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
                         artifact,
                     )
                 }

@@ -88,20 +88,32 @@ plus normalized rootfs total 1,651,772,096 bytes, within the 1600 MiB immutable 
 ceiling; staging still checks the actual prepared bytes. Official HTTPS checksum consistency and the
 independently reviewed repository archive digest remain mandatory. A failed preparation removes the stale
 `env.sh` success entry point and does not publish the failed normalized copy.
-Each validator has a 1 GiB Nexus disk budget and an explicit 256 MiB encoded WSV
-budget. The startup probe derives matching QEMU and cgroup geometry from the
-selected host CPU/RAM ceiling, including VMM overhead.
+Each validator has a 4 GiB Nexus disk budget: 1 GiB for Kura, 512 MiB for
+snapshots and 2.5 GiB for SoraFS, plus an explicit 256 MiB encoded WSV memory
+budget. SoraFS retains both the 1600 MiB guest ceiling and the 512 MiB compressed
+bundle ceiling, leaving 448 MiB for discovery, manifests and storage metadata.
+The shared policy requires at least 64 MiB of that headroom. The startup probe
+derives matching QEMU and cgroup geometry from the selected host CPU/RAM ceiling,
+including VMM overhead.
 
 The signed validator units must bound each validator process to 1000 millicores
 and 2 GiB RAM separately from its Inrou worker. Four validators and workers plus
 1000 millicores/2 GiB for the guest OS require 9 CPUs and 13 GiB RAM; a 16 GiB
 Linux guest leaves 3 GiB additional guest headroom. These are allocation bounds,
 not performance qualification or a physical RAM reservation. Full disk budgeting
-must include all four root volumes, all four immutable image copies, all writable
-and Nexus caps (16.25 GiB plus 320 MiB combined), guest OS, signed release/upload
-artifacts, preparation copies, staging and filesystem overhead. The 12 GB packaging VM cannot contain that full allocation. Expand and
-qualify the actual guest only through the reviewed deployment procedure; never
-use compressed size or sparse current usage as the permitted full growth budget.
+must include all four root volumes, all four immutable image copies, app-data
+and Nexus caps (28.5 GiB combined at the admitted guest-image ceiling), guest OS,
+signed release/upload artifacts, preparation copies, staging and filesystem
+overhead. The 16 MiB temporary filesystem per replica is RAM-backed. Size the
+physically backed guest disk from the exact admitted canary, all retained copies
+and full runtime/Nexus growth allowances. A 64 GiB disk provides headroom; a
+smaller disk requires measured free bytes and artifact sizes demonstrating that
+all owners fit with an explicit operating reserve before native preparation.
+The retained original assets plus workspace, local-stage and host-stage guest
+copies are additional to the 28.5 GiB runtime allowance.
+Expand and qualify the actual guest only through the reviewed deployment
+procedure; never use compressed size or sparse current usage as the permitted
+full growth budget.
 
 Public-reset V1 supports exactly one Linux/AArch64 host running all four
 validators and the edge. Inventory admission rejects a dedicated edge or any
@@ -362,6 +374,63 @@ target/release/iroha taira public-reset preflight \
   --ssh-identity /private/runtime/taira-public-reset/id_ed25519 \
   --known-hosts /private/runtime/taira-public-reset/known_hosts
 ```
+
+Before preflight, use the same compiled CLI to create the inventory and owner
+signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
+approved endpoints and host pins, target occupancy, previous/next genesis anchors,
+source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+It fills derived hashes, sizes, modes, source/stage identities and validator
+fingerprints from the actual files, then runs the existing admission checks.
+Generate its source manifest with `iroha taira public-reset source-manifest
+--source-root DIR` from the exact clean `optimizations` checkout. Taira's signed
+genesis must use NPoS; each supplied validator config must bind that actual genesis
+and its declared peer. Prepare the deploy-mode Inrou stage before assembly, since
+staging binds the final validator config bytes.
+
+Both commands below require the same local file arguments. Paths are illustrative;
+use the approved release's actual inputs and an existing mode-0700 output directory.
+The four client configs and four systemd units must be in validator order.
+
+```bash
+reset_local_inputs=(
+  --runtime-client-config /private/runtime/taira-public-reset/client.toml
+  --validator-client-config /private/runtime/taira-public-reset/client1.toml
+    /private/runtime/taira-public-reset/client2.toml
+    /private/runtime/taira-public-reset/client3.toml
+    /private/runtime/taira-public-reset/client4.toml
+  --onboarding-token /private/runtime/taira-public-reset/onboarding-token
+  --inrou-stage-dir /private/runtime/taira-public-reset/inrou-stage
+  --validator-unit /private/runtime/taira-public-reset/validator1.service
+    /private/runtime/taira-public-reset/validator2.service
+    /private/runtime/taira-public-reset/validator3.service
+    /private/runtime/taira-public-reset/validator4.service
+  --edge-unit /private/runtime/taira-public-reset/edge.service
+  --known-hosts /private/runtime/taira-public-reset/known_hosts
+)
+target/release/iroha taira public-reset assemble \
+  --inventory-draft /private/runtime/taira-public-reset/inventory-draft.json \
+  "${reset_local_inputs[@]}" \
+  --output /private/runtime/taira-public-reset/inventory.json
+target/release/iroha taira public-reset authorize \
+  --inventory /private/runtime/taira-public-reset/inventory.json \
+  "${reset_local_inputs[@]}" \
+  --trusted-public-key /private/runtime/taira-public-reset/trusted-public-key.json \
+  --signing-key-fd 3 \
+  --output /private/runtime/taira-public-reset/authorization.json \
+  3< /private/runtime/taira-public-reset/owner-signing-key
+```
+
+Review the assembled inventory before authorizing it. `authorize` revalidates the
+complete local inputs and signs the retained inventory file bytes; editing or
+reformatting that file invalidates the signature. The independently trusted
+`TrustedKeyV1` must match the inherited Ed25519 key. The key file must be a direct
+owner-private single-link regular file (0400 or 0600), at most 512 bytes, containing
+its Iroha private-key string with at most one trailing newline. No authority key is
+generated or returned. Outputs are created as private files without replacement;
+use fresh paths instead of overwriting prior inputs. Authorization lasts at most
+15 minutes for admission, with the separate bounded execution lease computed by
+the existing coordinator. Run preflight promptly after signing; only `apply`
+contacts hosts or mutates the public deployment.
 
 `InventoryV1` must contain `canary_onboarding_request`; it is not optional and
 has no derived-at-runtime fallback. The value must be the exact canonical

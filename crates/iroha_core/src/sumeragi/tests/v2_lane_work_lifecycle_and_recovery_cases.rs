@@ -268,7 +268,7 @@ fn enabled_nexus_binds_independent_lane_author_distinct_from_global_leader() {
         .store_block(block.clone())
         .expect("persist exact enabled-Nexus recovery body");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish exact fixture finality before canonical recovery");
@@ -294,7 +294,7 @@ fn canonical_kura_recovery_accepts_global_view_one_with_fresh_lane_view() {
         .store_block(block.clone())
         .expect("persist planner-produced canonical recovery body");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish exact fixture finality before canonical recovery");
@@ -342,7 +342,7 @@ fn canonical_kura_recovery_rejects_nonzero_planner_origin_lane_view() {
         .store_block(block.clone())
         .expect("persist adversarial nonzero lane-view body");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish exact fixture finality before canonical recovery");

@@ -29,7 +29,7 @@ fn install_native_amx_startup_carrier_without_participant_evidence(kura: &Kura) 
     let block = Arc::new(block);
     kura.store_block(Arc::clone(&block))
         .expect("store exact non-Native startup carrier");
-    kura.store_v2_finality_artifact(&finality)
+    let _ = kura.store_v2_finality_artifact(&finality)
         .expect("publish authenticated non-Native startup carrier finality");
     assert!(
         kura.read_native_amx_participant_application_history(LaneId::SINGLE)
@@ -200,11 +200,10 @@ fn install_native_amx_evidence_fixture_at_block(
     >,
 ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
     let application_block_height = block.header().height().get();
-    let lane_incarnation = {
+    let (lane_incarnation, _) = {
         let _geometry_guard = kura.lane_geometry_lock.lock();
         kura.active_lane_incarnation_marker(entry)
             .expect("Native AMX fixture requires its durably bound lane geometry")
-            .0
     };
     let executed_block_wire = block
         .encode_wire()

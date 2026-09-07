@@ -49,7 +49,7 @@ use iroha_data_model::{
         ExternalExecutionContext,
         consensus::{
             CertPhase, ExecKv, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
-            LaneBlockQcV1, SumeragiLanePayloadOwnership,
+            SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,

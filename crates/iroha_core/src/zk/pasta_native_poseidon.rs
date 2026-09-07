@@ -237,6 +237,116 @@ pub(super) struct PastaNativePoseidonJobsV1<F: KagemushaPoseidonFieldV1> {
     usable_rows: usize,
     spec: RawSpec<F>,
     use_unknown: bool,
+    unfinished_transcript: bool,
+}
+
+/// One fully reserved stateful transcript. Dropping it without `finish` poisons its queue.
+///
+/// Challenge generation is infallible in the verifier trait. Each squeeze therefore retains
+/// genuine permutation witnesses locally, including on an invalid call schedule; it never
+/// returns a placeholder. Only exact completion commits the jobs and permits synthesis.
+pub(super) struct PastaNativePoseidonTranscriptV1<'jobs, F: KagemushaPoseidonFieldV1> {
+    queue: &'jobs mut PastaNativePoseidonJobsV1<F>,
+    expected_inputs: Vec<usize>,
+    expected_permutations: usize,
+    observed_inputs: Vec<usize>,
+    pending: Vec<AssignedValue<F>>,
+    state: [AssignedValue<F>; WIDTH],
+    jobs: Vec<PermutationJob<F>>,
+    hashes: Vec<HashInventory>,
+    witness_gen_only: bool,
+    failed: bool,
+}
+
+impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonTranscriptV1<'_, F> {
+    /// Absorb original assigned cells into the next fixed squeeze segment.
+    pub(super) fn absorb(&mut self, inputs: &[AssignedValue<F>]) -> Result<(), String> {
+        let expected = self
+            .expected_inputs
+            .get(self.observed_inputs.len())
+            .copied();
+        let count = self.pending.len().checked_add(inputs.len());
+        if self.failed
+            || expected.is_none()
+            || count
+                .zip(expected)
+                .is_none_or(|(count, expected)| count > expected)
+            || (!self.witness_gen_only && inputs.iter().any(|cell| cell.cell.is_none()))
+        {
+            self.failed = true;
+            return Err("native Poseidon transcript absorption schedule is invalid".to_owned());
+        }
+        self.pending.extend_from_slice(inputs);
+        Ok(())
+    }
+
+    /// Squeeze the genuine persistent state and retain every permutation it computes.
+    ///
+    /// A short or extra squeeze makes `finish` fail and leaves the containing queue invalid.
+    /// It does not cause a panic, skip a permutation, or fall back to a different circuit.
+    pub(super) fn squeeze(&mut self, ctx: &mut Context<F>, gate: &GateChip<F>) -> AssignedValue<F> {
+        let mut padded = std::mem::take(&mut self.pending);
+        let input_count = padded.len();
+        if self.expected_inputs.get(self.observed_inputs.len()) != Some(&input_count) {
+            self.failed = true;
+        }
+        self.observed_inputs.push(input_count);
+        let first_permutation = self.jobs.len();
+        padded.push(ctx.load_constant(F::ONE));
+        if padded.len() % 2 != 0 {
+            padded.push(ctx.load_constant(F::ZERO));
+        }
+        for chunk in padded.chunks_exact(2) {
+            self.state[1] = gate.add(ctx, self.state[1], chunk[0]);
+            self.state[2] = gate.add(ctx, self.state[2], chunk[1]);
+            let value = self
+                .queue
+                .spec
+                .permutation(self.state.map(|cell| *cell.value()));
+            let output = value.map(|value| ctx.load_witness(value));
+            self.jobs.push(PermutationJob {
+                input: self.state,
+                output,
+            });
+            self.state = output;
+        }
+        self.hashes.push(HashInventory {
+            input_count,
+            first_permutation,
+            permutations: self.jobs.len() - first_permutation,
+        });
+        self.state[1]
+    }
+
+    /// Commit only the complete reserved transcript; return its final constrained state cell.
+    pub(super) fn finish(mut self) -> Result<AssignedValue<F>, String> {
+        if self.failed
+            || !self.pending.is_empty()
+            || self.observed_inputs != self.expected_inputs
+            || self.jobs.len() != self.expected_permutations
+            || !self.queue.unfinished_transcript
+        {
+            return Err("native Poseidon transcript reservation is incomplete".to_owned());
+        }
+        let offset = self.queue.jobs.len();
+        let complete = offset.checked_add(self.jobs.len()).ok_or_else(|| {
+            "native Poseidon transcript permutation inventory overflow".to_owned()
+        })?;
+        if required_rows(complete, self.queue.lane_count)? > self.queue.usable_rows {
+            return Err("native Poseidon transcript reservation exceeds lane capacity".to_owned());
+        }
+        for hash in &mut self.hashes {
+            hash.first_permutation = hash
+                .first_permutation
+                .checked_add(offset)
+                .ok_or_else(|| "native Poseidon transcript hash inventory overflow".to_owned())?;
+        }
+        self.queue.jobs.extend(self.jobs);
+        self.queue.hashes.extend(self.hashes);
+        self.queue.unfinished_transcript = false;
+        self.queue.validate_inventory()?;
+        Ok(self.state[1])
+    }
 }
 
 impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
@@ -254,6 +364,57 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
             usable_rows,
             spec: RawSpec::new(),
             use_unknown: false,
+            unfinished_transcript: false,
+        })
+    }
+
+    /// Reserve a complete stateful squeeze schedule before allocating any transcript advice.
+    ///
+    /// The schedule contains the exact number of absorbed native fields at every squeeze.
+    /// Holding the returned reservation exclusively borrows this queue. A failed or abandoned
+    /// transcript keeps the queue invalid, so no assigned challenge can lose its native gates.
+    pub(super) fn begin_transcript<'jobs>(
+        &'jobs mut self,
+        ctx: &mut Context<F>,
+        expected_inputs: &[usize],
+    ) -> Result<PastaNativePoseidonTranscriptV1<'jobs, F>, String> {
+        self.validate_inventory()?;
+        if expected_inputs.is_empty() {
+            return Err("native Poseidon transcript has no squeeze schedule".to_owned());
+        }
+        let expected_permutations = expected_inputs.iter().try_fold(0_usize, |total, &count| {
+            count
+                .checked_div(2)
+                .and_then(|count| count.checked_add(1))
+                .and_then(|count| total.checked_add(count))
+                .ok_or_else(|| "native Poseidon transcript schedule overflow".to_owned())
+        })?;
+        let complete = self
+            .jobs
+            .len()
+            .checked_add(expected_permutations)
+            .ok_or_else(|| {
+                "native Poseidon transcript permutation inventory overflow".to_owned()
+            })?;
+        if required_rows(complete, self.lane_count)? > self.usable_rows {
+            return Err("native Poseidon transcript reservation exceeds lane capacity".to_owned());
+        }
+        self.unfinished_transcript = true;
+        Ok(PastaNativePoseidonTranscriptV1 {
+            queue: self,
+            expected_inputs: expected_inputs.to_vec(),
+            expected_permutations,
+            observed_inputs: Vec::with_capacity(expected_inputs.len()),
+            pending: Vec::new(),
+            state: [
+                ctx.load_constant(F::from_u128(1_u128 << 64)),
+                ctx.load_constant(F::ZERO),
+                ctx.load_constant(F::ZERO),
+            ],
+            jobs: Vec::with_capacity(expected_permutations),
+            hashes: Vec::with_capacity(expected_inputs.len()),
+            witness_gen_only: ctx.witness_gen_only(),
+            failed: false,
         })
     }
 
@@ -329,6 +490,9 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
     }
 
     fn validate_inventory(&self) -> Result<(), String> {
+        if self.unfinished_transcript {
+            return Err("native Poseidon transcript reservation is unfinished".to_owned());
+        }
         let mut next = 0_usize;
         for hash in &self.hashes {
             if hash.first_permutation != next || hash.permutations != hash.input_count / 2 + 1 {
@@ -441,7 +605,7 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                     }
                     region.assign_fixed(config.bridge_mode, row, F::from(code));
                     if !bus_slot {
-                        region.assign_advice(
+                        region.assign_advice_discarding_value(
                             config.bus,
                             row,
                             if self.use_unknown {
@@ -473,7 +637,7 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                                 {
                                     value += F::ONE;
                                 }
-                                region.assign_advice(
+                                region.assign_advice_discarding_value(
                                     columns[i],
                                     row,
                                     if self.use_unknown {
@@ -496,17 +660,15 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                                     }
                                     let bus_row =
                                         block * PERMUTATION_ROWS + bridge_start(lane, output) + i;
-                                    let assigned = region
-                                        .assign_advice(
-                                            config.bus,
-                                            bus_row,
-                                            if self.use_unknown {
-                                                Value::unknown()
-                                            } else {
-                                                Value::known(value)
-                                            },
-                                        )
-                                        .cell();
+                                    let assigned = region.assign_advice_discarding_value(
+                                        config.bus,
+                                        bus_row,
+                                        if self.use_unknown {
+                                            Value::unknown()
+                                        } else {
+                                            Value::known(value)
+                                        },
+                                    );
                                     if let (Some(job), Some(physical)) = (job, &physical) {
                                         let bridge =
                                             if output { job.output[i] } else { job.input[i] };
@@ -542,6 +704,10 @@ fn required_rows(permutations: usize, lanes: usize) -> Result<usize, String> {
         .checked_mul(PERMUTATION_ROWS)
         .ok_or_else(|| "native Poseidon row count overflow".to_owned())
 }
+
+#[cfg(test)]
+#[path = "pasta_native_poseidon_transcript_tests.rs"]
+mod transcript_tests;
 
 #[cfg(test)]
 mod tests {
