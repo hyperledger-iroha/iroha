@@ -863,7 +863,7 @@ fn assert_geometry_io_error(error: &Error, expected_kind: ErrorKind, expected_me
     let Error::IO(source, _) = error else {
         panic!("unexpected lane geometry error: {error:?}");
     };
-    assert_eq!(source.kind(), expected_kind);
+    assert_eq!(source.kind(), expected_kind, "lane geometry error: {error}");
     assert_eq!(source.to_string(), expected_message);
 }
 struct RetiredGeometryFixture {
@@ -1625,11 +1625,14 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
     proposal.proposal_hash = proposal.computed_proposal_hash();
     crate::lane_consensus::validate_lane_block_proposal(&proposal)
         .expect("valid Native archive participant proposal");
-    let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+    let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, None)
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
         .unpack(|_| {})
         .into();
+    block
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach canonical empty results to the Native archive carrier");
     let block = Arc::new(block);
     kura.store_block(Arc::clone(&block))
         .expect("persist Native archive application block");
@@ -1638,29 +1641,18 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
     let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
         proposal.descriptor.accepted_transaction_hashes[0],
     );
-    let settlement = LaneBlockCommitment {
-        block_height: proposal.descriptor.lane_block_height,
-        lane_id: proposal.descriptor.lane_id,
-        lane_incarnation: proposal.descriptor.lane_incarnation,
-        dataspace_id: proposal.descriptor.dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0".parse().expect("zero quantity"),
-        total_xor_due: "0".parse().expect("zero quantity"),
-        total_xor_after_haircut: "0".parse().expect("zero quantity"),
-        total_xor_variance: "0".parse().expect("zero quantity"),
-        swap_metadata: None,
-        receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
-            source_id,
-            local_amount: "0".parse().expect("zero quantity"),
-            xor_due: "0".parse().expect("zero quantity"),
-            xor_after_haircut: "0".parse().expect("zero quantity"),
-            xor_variance: "0".parse().expect("zero quantity"),
-            timestamp_ms: 1,
-        }],
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+    let settlement = iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+        proposal.descriptor.lane_id,
+        proposal.descriptor.dataspace_id,
+        proposal.descriptor.lane_incarnation,
+        proposal.descriptor.lane_block_height,
+        1,
+        None,
+        vec![source_id],
+    )
+    .expect("valid Native participant control");
+    let settlement_hash = settlement
+        .computed_hash()
         .expect("hash Native archive settlement");
     let executed_block_wire = block
         .encode_wire()
@@ -1680,6 +1672,7 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
         descriptor_hash: proposal.descriptor.descriptor_hash,
         proposal_hash: proposal.proposal_hash,
         settlement_hash,
+        previous_native_settlement_hash: None,
         members: vec![NativeAmxApplicationManifestMemberV1 {
             entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
             source_id,
@@ -1787,8 +1780,12 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
         1
     );
     assert!(
-        kura.native_amx_participant_application_drain_evidence(&receipt)
-            .is_some(),
+        kura.read_native_amx_participant_application_history(
+            receipt.participant_proposal.descriptor.lane_id
+        )
+        .expect("authenticate Native archive history")
+        .drain_evidence(receipt.participant_proposal.descriptor.lane_block_height)
+        .is_some(),
         "complete Native archive fixture must revalidate as drain evidence"
     );
     kura.apply_lane_geometry_transition(
@@ -2317,6 +2314,11 @@ fn install_merge_applied_retirement_work(
         epoch_id: 1,
         lane_catalog_hash: Hash::new(b"geometry-durability-merge-catalog"),
         active_lanes,
+        lane_authority_catalog:
+            iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(
+                std::slice::from_ref(&certified.proposal.descriptor.validator_set),
+            )
+            .expect("catalog matches the certified retirement fixture lane authority"),
         incarnation_root: Hash::new(b"geometry-durability-merge-incarnations"),
         activation_root: Hash::new(b"geometry-durability-merge-activations"),
         lane_snapshots: Vec::new(),
@@ -2626,14 +2628,14 @@ fn geometry_native_amx_receipt(
         coordinator_proposal_hash: coordinator_proposal.proposal_hash,
     };
     prepare_body.participant_settlement_commitment = prepare_body
-        .computed_grouped_participant_settlement_commitment(&[prepare_body.source_id])
+        .computed_grouped_participant_settlement_commitment(None, &[prepare_body.source_id])
         .expect("single-source test fixture settlement is valid");
     let participant_settlement = prepare_body
-        .computed_grouped_participant_settlement(&[prepare_body.source_id])
+        .computed_grouped_participant_settlement(None, &[prepare_body.source_id])
         .expect("single-source test fixture settlement is valid");
-    let participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-            .expect("geometry participant settlement hashes");
+    let participant_settlement_hash = participant_settlement
+        .computed_hash()
+        .expect("geometry participant settlement hashes");
     let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
         .expect("geometry retirement participant PoP");
     let qc = |body| {

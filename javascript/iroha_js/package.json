@@ -10,6 +10,11 @@
       "import": "./dist/index.js",
       "types": "./index.d.ts"
     },
+    "./nft": {
+      "types": "./nft.d.ts",
+      "browser": "./dist/nft.js",
+      "import": "./dist/nft.js"
+    },
     "./address": {
       "browser": "./dist/public/address.js",
       "import": "./dist/public/address.js",
@@ -128,6 +133,16 @@
       "browser": "./dist/race.js",
       "import": "./dist/race.js",
       "types": "./race.d.ts"
+    },
+    "./classed-race": {
+      "types": "./classed-race.d.ts",
+      "browser": "./dist/classedRace.js",
+      "import": "./dist/classedRace.js"
+    },
+    "./game": {
+      "types": "./game.d.ts",
+      "browser": "./dist/game.js",
+      "import": "./dist/game.js"
     }
   },
   "typesVersions": {
@@ -206,6 +221,12 @@
       ],
       "race": [
         "./race.d.ts"
+      ],
+      "classed-race": [
+        "./classed-race.d.ts"
+      ],
+      "game": [
+        "game.d.ts"
       ]
     }
   },
@@ -286,7 +307,11 @@
     "dist",
     "recipes/iso_bridge_builder.mjs",
     "recipes/nexus_app_transfer.mjs",
-    "race.d.ts"
+    "race.d.ts",
+    "classed-race.d.ts",
+    "game.d.ts",
+    "game-resources.d.ts",
+    "nft.d.ts"
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",

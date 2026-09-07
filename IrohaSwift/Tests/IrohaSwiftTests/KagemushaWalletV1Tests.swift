@@ -24,4 +24,15 @@ final class KagemushaWalletV1Tests: XCTestCase {
     XCTAssertEqual(KagemushaOperationKindV1.receiveFold.rawValue, 3)
     XCTAssertEqual(KagemushaOperationKindV1.rotate.rawValue, 5)
   }
+  func testStagingDispositionHasOnlyDurableOutcomes() {
+    XCTAssertEqual(KagemushaHardwareStageDispositionV1.staged, .staged)
+    XCTAssertEqual(KagemushaHardwareStageDispositionV1.exactDuplicate, .exactDuplicate)
+  }
+
+  func testThreeMessageProviderSurfaceCompiles() {
+    func requireProvider(_ provider: any KagemushaHardwareProviderV1) {
+      _ = provider
+    }
+    _ = requireProvider
+  }
 }

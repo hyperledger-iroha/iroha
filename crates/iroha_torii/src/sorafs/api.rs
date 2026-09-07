@@ -32095,7 +32095,8 @@ mod advert_tests {
             app.sorafs_admission.clone(),
             None,
             None,
-        );
+        )
+        .expect("valid test gateway security configuration");
         app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
     }
@@ -41216,7 +41217,11 @@ mod advert_tests {
     async fn storage_restart_recovers_manifest_metadata() {
         use sorafs_node::config::StorageConfig;
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let storage_root = temp_dir.path().join("storage");
+        let storage_root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical restart fixture directory")
+            .join("storage");
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(storage_root.clone())
@@ -41249,7 +41254,8 @@ mod advert_tests {
             inner_after.sorafs_admission.clone(),
             None,
             None,
-        );
+        )
+        .expect("valid test gateway security configuration");
         inner_after.sorafs_gateway_policy = Some(Arc::clone(&components_after.policy));
         inner_after.sorafs_gateway_tls_state = Some(Arc::clone(&components_after.tls_state));
         let state_after = Arc::new(inner_after);

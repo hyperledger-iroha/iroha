@@ -4478,162 +4478,15 @@ pub mod json {
                 }
             }
         }
-        /// Read a JSON object key and return its FNV-1a 64-bit hash.
+        /// Read a JSON object key using the same hash as compile-time and tape dispatch.
+        /// The existing string parser borrows unescaped keys and validates/unescapes
+        /// escaped keys. The colon remains unconsumed, as with the tape reader.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
-            self.skip_ws();
-            self.expect(b'"')?;
-            let mut h: u64 = 0xcbf29ce484222325;
-            loop {
-                let b = self.bump().ok_or_else(|| {
-                    let (byte, line, col) = self.pos_meta(self.i);
-                    Error::UnterminatedString { byte, line, col }
-                })?;
-                match b {
-                    b'"' => break,
-                    b'\\' => {
-                        // Hash the escaped char logically (treat escape as the resulting byte where trivial)
-                        let esc = self.bump().ok_or_else(|| {
-                            let (byte, line, col) = self.pos_meta(self.i);
-                            Error::EofEscape { byte, line, col }
-                        })?;
-                        match esc {
-                            b'"' => {
-                                h ^= b'"' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'\\' => {
-                                h ^= b'\\' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'/' => {
-                                h ^= b'/' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'b' => {
-                                h ^= 0x08u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'f' => {
-                                h ^= 0x0Cu64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'n' => {
-                                h ^= b'\n' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'r' => {
-                                h ^= b'\r' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b't' => {
-                                h ^= b'\t' as u64;
-                                h = h.wrapping_mul(0x100000001b3);
-                            }
-                            b'u' => {
-                                // Consume 4 hex digits; combine surrogate pairs when present and hash UTF‑8 bytes
-                                let hex_to_u32 = |p: &mut Self| -> Result<u32, Error> {
-                                    let mut v: u32 = 0;
-                                    for _ in 0..4 {
-                                        let c = p.bump().ok_or_else(|| {
-                                            let (byte, line, col) = p.pos_meta(p.i);
-                                            Error::EofHex { byte, line, col }
-                                        })?;
-                                        v = (v << 4)
-                                            | match c {
-                                                b'0'..=b'9' => (c - b'0') as u32,
-                                                b'a'..=b'f' => (c - b'a' + 10) as u32,
-                                                b'A'..=b'F' => (c - b'A' + 10) as u32,
-                                                _ => {
-                                                    let (byte, line, col) =
-                                                        p.pos_meta(p.i.saturating_sub(1));
-                                                    return Err(Error::InvalidHex {
-                                                        byte,
-                                                        line,
-                                                        col,
-                                                    });
-                                                }
-                                            };
-                                    }
-                                    Ok(v)
-                                };
-                                let hi = hex_to_u32(self)?;
-                                let cp = if (0xD800..=0xDBFF).contains(&hi) {
-                                    if self.peek() != Some(b'\\') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    self.bump();
-                                    if self.bump() != Some(b'u') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected \\u for low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    let lo = hex_to_u32(self)?;
-                                    if !(0xDC00..=0xDFFF).contains(&lo) {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "invalid low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    0x10000 + (((hi - 0xD800) << 10) | (lo - 0xDC00))
-                                } else if (0xDC00..=0xDFFF).contains(&hi) {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "unexpected low surrogate",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                } else {
-                                    hi
-                                };
-                                if let Some(ch) = char::from_u32(cp) {
-                                    let mut buf = [0u8; 4];
-                                    let s = ch.encode_utf8(&mut buf);
-                                    for &bb in s.as_bytes() {
-                                        h ^= bb as u64;
-                                        h = h.wrapping_mul(0x100000001b3);
-                                    }
-                                } else {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "invalid codepoint",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                }
-                            }
-                            _ => {
-                                let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
-                                return Err(Error::WithPos {
-                                    msg: "bad escape",
-                                    byte,
-                                    line,
-                                    col,
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        h ^= b as u64;
-                        h = h.wrapping_mul(0x100000001b3);
-                    }
-                }
-            }
-            Ok(h)
+            let mut arena = Arena::new();
+            let key = self.parse_string_ref(&mut arena)?;
+            Ok(key_hash_const(match key {
+                StrRef::Borrowed(value) | StrRef::Owned(value) => value,
+            }))
         }
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.
@@ -7026,23 +6879,21 @@ pub mod json {
             }
             #[cfg(all(feature = "crc-key-hash", target_arch = "x86_64"))]
             #[inline]
+            #[target_feature(enable = "sse4.2")]
             unsafe fn crc32c_u8_sse(crc: u32, b: u8) -> u32 {
                 use core::arch::x86_64::_mm_crc32_u8;
-                unsafe { _mm_crc32_u8(crc, b) }
+                // The intrinsic updates an uncomplemented register; mirror the
+                // software/const helper's complemented input and output exactly.
+                !_mm_crc32_u8(!crc, b)
             }
             #[cfg(all(feature = "crc-key-hash", target_arch = "aarch64"))]
             #[inline]
+            #[target_feature(enable = "crc")]
             unsafe fn crc32c_u8_arm(crc: u32, b: u8) -> u32 {
-                // Uses aarch64 CRC32C byte update when available
-                #[cfg(target_feature = "crc")]
-                {
-                    use core::arch::aarch64::__crc32cb;
-                    return unsafe { __crc32cb(crc, b) };
-                }
-                #[allow(unreachable_code)]
-                {
-                    crc
-                }
+                use core::arch::aarch64::__crc32cb;
+                // Callers test runtime support before entering this function,
+                // including baseline builds without a global CRC target feature.
+                !__crc32cb(!crc, b)
             }
             let mut i = open_off + 1;
             while i < close_off {

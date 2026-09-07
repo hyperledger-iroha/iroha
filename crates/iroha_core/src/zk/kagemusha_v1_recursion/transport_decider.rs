@@ -172,11 +172,9 @@ where
     let stats = builder.statistics();
     let gate_advice_cells = stats.gate.total_advice_per_phase.iter().sum();
     let gate_advice_columns = builder.config_params.num_advice_per_phase.iter().sum();
-    let gate_packed_rows = packed_rows_v1(
-        &stats.gate.total_advice_per_phase,
-        &builder.config_params.num_advice_per_phase,
-        "gate",
-    )?;
+    let packing =
+        super::base_packing::validate_base_gate_capacity_v1(builder, MINIMUM_UNUSABLE_ROWS)?;
+    let gate_packed_rows = packing.maximum_advice_rows;
     let lookup_advice_cells = stats.total_lookup_advice_per_phase.iter().sum();
     let lookup_advice_columns = builder
         .config_params
@@ -190,12 +188,8 @@ where
     )?;
     let (dense_jobs, dense_sources, dense_rows) = (0, 0, 0);
     let k = builder.config_params.k;
-    let domain_rows = 1_usize
-        .checked_shl(u32::try_from(k).map_err(|_| "transport k exceeds u32".to_owned())?)
-        .ok_or_else(|| "transport domain row count overflow".to_owned())?;
-    let usable_rows = domain_rows
-        .checked_sub(MINIMUM_UNUSABLE_ROWS)
-        .ok_or_else(|| "transport unusable-row reserve exceeds domain".to_owned())?;
+    let domain_rows = packing.domain_rows;
+    let usable_rows = packing.usable_rows;
     let max_component_rows = gate_packed_rows.max(lookup_packed_rows).max(dense_rows);
     if max_component_rows > usable_rows {
         return Err(format!(
@@ -382,8 +376,8 @@ pub(super) fn build_kagemusha_transport_decider_pair_v1(
         &ep_inner_binding_cells,
     )?;
 
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
+    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     let eq_audit = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
     let ep_audit = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
     Ok((
@@ -574,6 +568,22 @@ const _: () = {
 mod tests {
     use super::*;
     use ff::Field as _;
+
+    #[test]
+    fn transport_capacity_rejects_average_rows_that_hide_a_boundary_copy() {
+        let mut builder = BaseCircuitBuilder::<Fp>::new(false).use_k(6);
+        for _ in 0..55 {
+            builder.main(0).load_witness(Fp::ONE);
+        }
+        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        assert_eq!(builder.config_params.num_advice_per_phase, [1]);
+        assert!(transport_capacity_profile_v1(&builder).is_err());
+        super::super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)
+            .expect("exact gate packing");
+        let profile = transport_capacity_profile_v1(&builder).expect("complete capacity");
+        assert_eq!(profile.gate_advice_columns, 2);
+        assert_eq!(profile.gate_packed_rows, 55);
+    }
 
     #[test]
     fn private_inner_binding_indices_are_unique_and_nonsemantic() {

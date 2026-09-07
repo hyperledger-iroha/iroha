@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "native_origin": true,
+  "source_artifact": "/Users/takemiyamakoto/dev/sora-cars/output/qualification/native-proof/stock-v3/native-outcome-vectors.json",
+  "sha256": "c452358899ed35521f69638f076145ec4afa90d9e8159e851351efc92fd8ea71",
+  "native_execution": "unmodified production reference/outcome modules linked against actual Cargo-built model and dependency closure",
+  "profile_id_confirmed": false,
+  "full_stark_qualification": false,
+  "artifacts": {
+    "/Users/takemiyamakoto/dev/sora-cars/output/qualification/native-proof/stock-v3/native-outcome-vectors.json": "c452358899ed35521f69638f076145ec4afa90d9e8159e851351efc92fd8ea71",
+    "/Users/takemiyamakoto/dev/sora-cars/output/qualification/native-proof/stock-v3/outcome-harness.rs": "6ce8b4cbf5574cf6af007f921be5984e47694ff325132c8d5db1dfb9fb42a725",
+    "/Users/takemiyamakoto/dev/sora-cars/output/qualification/native-proof/stock-v3/outcome-command.json": "082f8bfd69cc186bd7a10a00e73f2c60ac0af8959942067c38ef2b0486c04fb5",
+    "/Users/takemiyamakoto/dev/sora-cars/output/qualification/native-proof/stock-v3/outcome-tests": "18c2d05f030080309bccb2b0fae0ddc593fc0e60f6784d0396b678de1e189437",
+    "/Users/takemiyamakoto/dev/sora-cars/output/qualification/native-proof/stock-v3/outcome-test.log": "f6378f8d7aba2b63c57b8c8052fbb64408bcd5e7f24b91a81ac91dda47f8bf7d",
+    "/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/execution_proofs/race.rs": "1afc65441897bf832f5f6c26c079adc1fc746f9173749737622b48d087df9108",
+    "/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/execution_proofs/v3/outcome.rs": "7a4060b5661075c0aa644b034ac35fabe71a1b6e5bdd6fbec783665a5fcd2e42"
+  }
+}

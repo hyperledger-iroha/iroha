@@ -8,6 +8,97 @@ fn corrupt_durable_file_for_test(path: &std::path::Path) {
     file.sync_all().expect("make injected corruption durable");
 }
 #[test]
+fn remote_only_carrier_validates_retained_network_and_state_before_waiting() {
+    for foreign_network in [true, false] {
+        let (mut adapter, keys, block, finality) = canonical_executed_block_recovery_fixture();
+        let ownership = &block
+            .execution_context()
+            .expect("canonical carrier has an ordinary lane ownership")
+            .lane_payload_ownerships[0];
+        let proposal = proposal_from_ownership(ownership, block.hash())
+            .expect("reconstruct exact canonical lane proposal");
+        let vote_body = proposal.vote_body(CertPhase::Prepare);
+        let height =
+            NonZeroUsize::new(usize::try_from(finality.height).expect("fixture height fits usize"))
+                .expect("canonical carrier height is non-zero");
+        evict_canonical_executed_block_fixture(&adapter, &keys, &block);
+        assert!(
+            adapter
+                .kura
+                .read_block_body(height)
+                .expect("authenticated eviction leaves a genuine body dependency")
+                .is_none()
+        );
+        assert!(
+            adapter
+                .canonical_finalized_autonomous_payload_for_vote_body(&vote_body)
+                .expect("consistent remote-only authority remains recoverable")
+                .is_none()
+        );
+        if foreign_network {
+            let mut context = finality.height_context.clone();
+            context.network_id =
+                crate::sumeragi::synthetic_network_id("foreign-remote-only-carrier");
+            (
+                context.kagemusha_mint_finality_epoch_id,
+                context.kagemusha_mint_finality_epoch_roster,
+            ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                context.network_id,
+                context.epoch,
+                &context.roster,
+            );
+            let foreign = verified_finality_for_context(&context, &keys, &block);
+            adapter
+                .kura
+                .overwrite_v2_finality_without_validation_for_tests(finality.height, foreign)
+                .expect("install a correctly signed foreign-network retained artifact");
+        } else {
+            let (other_adapter, other_keys) =
+                fixture_at_height_inner(wire::ConsensusMode::Permissioned, finality.height, true);
+            let leader = usize::try_from(other_adapter.context.leader(0))
+                .expect("alternative State leader index");
+            let other_block = test_block(
+                finality.height,
+                block.header().prev_block_hash(),
+                None,
+                &other_keys[leader],
+            );
+            assert_ne!(other_block.hash(), block.hash());
+            let committed = ValidBlock::committed_from_replay_signed_block(other_block);
+            commit_test_block_to_state(
+                other_adapter.state.as_ref(),
+                &committed,
+                &other_adapter.context,
+            );
+            adapter.state = Arc::clone(&other_adapter.state);
+        }
+        assert!(
+            adapter
+                .kura
+                .v2_finality_artifact_with_header(finality.height)
+                .expect(
+                    "retained authority remains internally canonical and cryptographically valid"
+                )
+                .is_some()
+        );
+        let error = adapter
+            .canonical_finalized_autonomous_payload_for_vote_body(&vote_body)
+            .expect_err("body absence must not hide inconsistent retained authority");
+        assert!(error.contains(if foreign_network {
+            "network or canonical identity"
+        } else {
+            "committed State"
+        }));
+        assert!(
+            adapter
+                .finalized_autonomous_ingress_payload_or_fail_stop(&vote_body)
+                .is_err()
+        );
+        assert!(adapter.output_guard.restart_required());
+        assert!(adapter.effects.is_empty());
+    }
+}
+#[test]
 fn owned_lane_ingress_without_opaque_ownership_requires_restart() {
     let (mut adapter, _, request) = self_contained_historical_recovery_request_fixture();
     let sender = request.requester.clone();
@@ -288,4 +379,52 @@ fn historical_anchor_storage_errors_retain_recovery_instead_of_superseding() {
             .is_empty()
     );
     assert!(adapter.output_guard.restart_required());
+}
+
+#[test]
+fn historical_carrier_rejects_malformed_and_duplicate_siblings_before_absence() {
+    let (adapter, _, request) = self_contained_historical_recovery_request_fixture();
+    let proposal = &request.certificate.as_ref().expect("certificate").proposal;
+    let block = adapter
+        .kura
+        .read_block_body(NonZeroUsize::new(1).expect("height"))
+        .expect("authenticate original carrier")
+        .expect("original carrier");
+    assert!(
+        adapter
+            .historical_block_anchors_proposal(&block, proposal)
+            .expect("original carrier is exact")
+    );
+    for duplicate in [false, true] {
+        let mut altered = block.as_ref().clone();
+        let mut bundle = altered
+            .execution_context()
+            .cloned()
+            .expect("lane ownership");
+        if duplicate {
+            bundle
+                .lane_payload_ownerships
+                .push(bundle.lane_payload_ownerships[0].clone());
+        } else {
+            bundle.lane_payload_ownerships[0].rbc_instance_hash =
+                Hash::new(b"malformed historical sibling replay material");
+        }
+        altered.set_execution_context(Some(bundle));
+        let mut target = proposal.clone();
+        target
+            .payload_block_hint
+            .as_mut()
+            .expect("carrier hint")
+            .proposal_block_hash = altered.hash();
+        assert!(
+            adapter
+                .historical_block_anchors_proposal(&altered, &target)
+                .is_err(),
+            "invalid present ownership cannot mean an absent or superseded proposal"
+        );
+        assert!(
+            !adapter.output_guard.restart_required(),
+            "malformed remote contents alone cannot poison local storage authority"
+        );
+    }
 }

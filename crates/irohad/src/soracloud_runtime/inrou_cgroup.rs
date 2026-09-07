@@ -52,8 +52,25 @@ const INROU_INTERNAL_LAUNCHER_MAX_ARGUMENT_BYTES: usize = 16 * 1024;
 const INROU_INTERNAL_LAUNCHER_MAX_BINDINGS: usize = 64;
 const INROU_INTERNAL_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
+/// One canonical locked UID/GID pair that owns a validator's Inrou workers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct InrouCgroupOwnerSlot(u32);
+
+impl InrouCgroupOwnerSlot {
+    pub(super) fn from_identity(uid: u32, gid: u32) -> eyre::Result<Self> {
+        iroha_config::parameters::defaults::soracloud_runtime::inrou_portable_vm_identity_slot(
+            uid, gid,
+        )
+        .map(Self)
+        .ok_or_else(|| {
+            eyre::eyre!("Inrou cgroup owner requires one equal canonical UID/GID slot pair")
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct InrouCgroupWorkerKey<'a> {
+    pub owner_slot: InrouCgroupOwnerSlot,
     pub service_name: &'a str,
     pub service_version: &'a str,
     pub replica_slot: u16,
@@ -296,6 +313,7 @@ fn parse_inrou_internal_launcher_v1(
         eyre::bail!("Inrou internal launcher binding destinations are not unique");
     }
     validate_bubblewrap_binding_map(&bubblewrap_arguments, &bindings)?;
+    validate_inrou_launcher_owner_identity(&bubblewrap_arguments, &expected_cgroup_path)?;
     Ok(InrouInternalLauncherV1 {
         gate_fd,
         acknowledgement_fd,
@@ -333,8 +351,8 @@ fn parse_inrou_launcher_count(value: OsString, label: &str) -> eyre::Result<usiz
 
 fn validate_inrou_expected_cgroup_path(value: &str) -> eyre::Result<()> {
     let path = Path::new(value);
-    let worker_prefix = format!("/{INROU_CGROUP_SUBTREE_NAME}/{INROU_CGROUP_WORKER_PREFIX}");
-    let worker_digest = value.strip_prefix(&worker_prefix);
+    let worker_prefix = format!("/{INROU_CGROUP_SUBTREE_NAME}/");
+    let worker_name = value.strip_prefix(&worker_prefix);
     if value.len() > 4_096
         || !value.starts_with('/')
         || value.ends_with('/')
@@ -348,14 +366,90 @@ fn validate_inrou_expected_cgroup_path(value: &str) -> eyre::Result<()> {
                     | std::path::Component::ParentDir
             )
         })
-        || !worker_digest.is_some_and(|digest| {
-            digest.len() == Hash::LENGTH * 2
-                && digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+        || !worker_name.is_some_and(|name| validate_inrou_cgroup_worker_name(name).is_ok())
     {
         eyre::bail!("Inrou expected cgroup path is not canonical absolute V1 syntax");
+    }
+    Ok(())
+}
+
+pub(super) fn validate_inrou_cgroup_owner_identity(
+    path: &str,
+    uid: u32,
+    gid: u32,
+) -> eyre::Result<()> {
+    validate_inrou_expected_cgroup_path(path)?;
+    let name = path.rsplit_once('/').expect("canonical worker path").1;
+    if validate_inrou_cgroup_worker_name(name)? != InrouCgroupOwnerSlot::from_identity(uid, gid)? {
+        eyre::bail!("Inrou cgroup worker owner does not bind the exact child UID/GID");
+    }
+    Ok(())
+}
+
+fn validate_inrou_launcher_owner_identity(
+    arguments: &[OsString],
+    expected_path: &str,
+) -> eyre::Result<()> {
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .ok_or_else(|| eyre::eyre!("Inrou bubblewrap arguments omit the command separator"))?;
+    let command = &arguments[separator + 1..];
+    if command.first().map(OsString::as_os_str)
+        != Some(OsStr::new(
+            super::inrou_namespace::INROU_NAMESPACE_SETPRIV_PATH,
+        ))
+        || command.get(1).map(OsString::as_os_str) != Some(OsStr::new("--reuid"))
+        || command.get(3).map(OsString::as_os_str) != Some(OsStr::new("--regid"))
+    {
+        eyre::bail!("Inrou launcher requires the exact namespaced setpriv identity prefix");
+    }
+    let parse_id = |argument: Option<&OsString>| -> eyre::Result<u32> {
+        let value = argument
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| eyre::eyre!("Inrou setpriv identity is missing or not UTF-8"))?;
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|id| id.to_string() == value)
+            .ok_or_else(|| eyre::eyre!("Inrou setpriv identity is not canonical decimal"))
+    };
+    let uid = parse_id(command.get(2))?;
+    let gid = parse_id(command.get(4))?;
+    let supplementary_gids = match command.get(5).map(OsString::as_os_str) {
+        Some(value) if value == OsStr::new("--clear-groups") => Vec::new(),
+        Some(value) if value == OsStr::new("--groups") => {
+            let value = command
+                .get(6)
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| eyre::eyre!("Inrou setpriv groups are missing or not UTF-8"))?;
+            value
+                .split(',')
+                .map(|value| parse_id(Some(&OsString::from(value))))
+                .collect::<eyre::Result<Vec<_>>>()?
+        }
+        _ => eyre::bail!("Inrou setpriv must declare its exact supplementary groups"),
+    };
+    let identity = super::PortableVmChildIdentity {
+        uid,
+        gid,
+        supplementary_gids,
+    };
+    super::validate_portable_vm_child_identity_values(&identity)?;
+    validate_inrou_cgroup_owner_identity(expected_path, uid, gid)?;
+    let mut expected = vec![OsString::from(
+        super::inrou_namespace::INROU_NAMESPACE_SETPRIV_PATH,
+    )];
+    expected.extend(super::inrou_namespace::inrou_namespaced_setpriv_arguments(
+        &identity,
+    ));
+    expected.push(OsString::from(
+        super::inrou_namespace::INROU_NAMESPACE_QEMU_PATH,
+    ));
+    if !command.starts_with(&expected) {
+        eyre::bail!(
+            "Inrou launcher identity or privilege-drop arguments differ from the exact contract"
+        );
     }
     Ok(())
 }
@@ -963,23 +1057,33 @@ pub(super) fn ensure_inrou_cgroup_v2_available() -> eyre::Result<()> {
     prepare_inrou_cgroup_root().map(|_| ())
 }
 
-/// Prove that startup inherited no worker cgroup from an earlier supervisor.
+/// Prove that this owner inherited no worker cgroup from an earlier supervisor.
 ///
-/// This must run immediately before the real startup probe. An empty worker
-/// subtree is the only durable evidence that no orphaned worker can continue
-/// charging a reporter counter after process restart.
-pub(super) fn attest_inrou_worker_absence() -> eyre::Result<()> {
+/// Other canonical owners may retain live workers during a rolling restart.
+/// Their names and custody are checked, but they are never altered by this scan.
+/// An own-slot directory remains an orphan even when it is currently empty.
+pub(super) fn attest_inrou_worker_absence(owner: InrouCgroupOwnerSlot) -> eyre::Result<()> {
     let subtree = prepare_inrou_cgroup_root()?;
-    validate_root_custodied_directory(&subtree, "Inrou cgroup root")?;
-    let directory = fs::File::open(&subtree)
+    attest_inrou_worker_absence_in(&subtree, owner, &|path| {
+        validate_root_custodied_directory(path, "Inrou owner-scoped cgroup")
+    })
+}
+
+fn attest_inrou_worker_absence_in(
+    subtree: &Path,
+    owner: InrouCgroupOwnerSlot,
+    validate_directory_custody: &impl Fn(&Path) -> eyre::Result<()>,
+) -> eyre::Result<()> {
+    validate_directory_custody(subtree)?;
+    let directory = fs::File::open(subtree)
         .wrap_err_with(|| format!("open Inrou cgroup root {}", subtree.display()))?;
     let opened = directory.metadata()?;
-    let named_before = fs::symlink_metadata(&subtree)?;
+    let named_before = fs::symlink_metadata(subtree)?;
     if opened.dev() != named_before.dev() || opened.ino() != named_before.ino() {
         eyre::bail!("Inrou cgroup root changed while it was opened");
     }
     let mut entry_count = 0_usize;
-    for entry in fs::read_dir(&subtree)? {
+    for entry in fs::read_dir(subtree)? {
         if entry_count == INROU_CGROUP_ROOT_MAX_ENTRIES {
             eyre::bail!(
                 "Inrou cgroup root exceeds its {INROU_CGROUP_ROOT_MAX_ENTRIES}-entry startup scan bound"
@@ -995,14 +1099,23 @@ pub(super) fn attest_inrou_worker_absence() -> eyre::Result<()> {
             );
         }
         if file_type.is_dir() {
-            eyre::bail!(
-                "Inrou startup found a pre-existing child cgroup {}; worker absence is not attested",
-                entry.path().display()
-            );
+            validate_directory_custody(&entry.path())?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .ok_or_else(|| eyre::eyre!("Inrou worker cgroup name must be canonical UTF-8"))?;
+            let worker_owner = validate_inrou_cgroup_worker_name(name)?;
+            if worker_owner == owner {
+                eyre::bail!(
+                    "Inrou startup found a pre-existing child cgroup {} for owner slot {}; worker absence is not attested",
+                    entry.path().display(),
+                    owner.0
+                );
+            }
         }
     }
-    let named_after = fs::symlink_metadata(&subtree)?;
-    validate_root_custodied_directory(&subtree, "Inrou cgroup root")?;
+    let named_after = fs::symlink_metadata(subtree)?;
+    validate_directory_custody(subtree)?;
     if opened.dev() != named_after.dev() || opened.ino() != named_after.ino() {
         eyre::bail!("Inrou cgroup root changed during the bounded startup scan");
     }
@@ -1142,6 +1255,7 @@ fn resolve_inrou_cgroup_io_devices(
 
 fn inrou_cgroup_worker_name(key: InrouCgroupWorkerKey<'_>) -> String {
     let mut preimage = b"iroha.inrou.cgroup.worker.v1".to_vec();
+    preimage.extend_from_slice(&key.owner_slot.0.to_be_bytes());
     for value in [
         key.service_name.as_bytes(),
         key.service_version.as_bytes(),
@@ -1153,15 +1267,25 @@ fn inrou_cgroup_worker_name(key: InrouCgroupWorkerKey<'_>) -> String {
     preimage.extend_from_slice(&key.replica_slot.to_be_bytes());
     preimage.extend_from_slice(&key.process_generation.to_be_bytes());
     format!(
-        "{INROU_CGROUP_WORKER_PREFIX}{}",
+        "{INROU_CGROUP_WORKER_PREFIX}{}-{}",
+        key.owner_slot.0,
         hex::encode(Hash::new(&preimage).as_ref())
     )
 }
 
-fn validate_inrou_cgroup_worker_name(name: &str) -> eyre::Result<()> {
-    let Some(digest) = name.strip_prefix(INROU_CGROUP_WORKER_PREFIX) else {
+fn validate_inrou_cgroup_worker_name(name: &str) -> eyre::Result<InrouCgroupOwnerSlot> {
+    let Some(owner_and_digest) = name.strip_prefix(INROU_CGROUP_WORKER_PREFIX) else {
         eyre::bail!("Inrou cgroup worker name lacks the fixed worker prefix");
     };
+    let (owner, digest) = owner_and_digest.split_once('-').ok_or_else(|| {
+        eyre::eyre!(
+            "Inrou cgroup worker name must contain one canonical owner slot and lowercase hash"
+        )
+    })?;
+    let owner = owner.parse::<u32>().ok().filter(|slot| {
+        *slot < iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_SLOT_COUNT
+            && slot.to_string() == owner
+    }).ok_or_else(|| eyre::eyre!("Inrou cgroup worker owner slot is not canonical"))?;
     if digest.len() != Hash::LENGTH * 2
         || !digest
             .bytes()
@@ -1169,17 +1293,12 @@ fn validate_inrou_cgroup_worker_name(name: &str) -> eyre::Result<()> {
     {
         eyre::bail!("Inrou cgroup worker name must contain one lowercase hash");
     }
-    Ok(())
+    Ok(InrouCgroupOwnerSlot(owner))
 }
 
 fn validate_inrou_proc_cgroup(contents: &str, expected_path: &str) -> eyre::Result<()> {
-    if !expected_path.starts_with(&format!("/{INROU_CGROUP_SUBTREE_NAME}/"))
-        || expected_path
-            .rsplit_once('/')
-            .is_none_or(|(_, name)| validate_inrou_cgroup_worker_name(name).is_err())
-    {
-        eyre::bail!("expected Inrou procfs cgroup path is not canonical");
-    }
+    validate_inrou_expected_cgroup_path(expected_path)
+        .wrap_err("expected Inrou procfs cgroup path is not canonical")?;
     let mut lines = contents.lines();
     let Some(line) = lines.next() else {
         eyre::bail!("Inrou process must expose exactly one unified cgroup-v2 membership record");
@@ -1458,6 +1577,263 @@ mod tests {
 
     use super::*;
 
+    fn owner_slot(slot: u32) -> InrouCgroupOwnerSlot {
+        let uid =
+            iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE + slot;
+        InrouCgroupOwnerSlot::from_identity(uid, uid).expect("canonical owner slot")
+    }
+
+    fn fixture_directory_custody(path: &Path) -> eyre::Result<()> {
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.gid() != rustix::process::getegid().as_raw()
+            || metadata.mode() & 0o7777 != 0o700
+        {
+            eyre::bail!("private test directory has unsafe custody");
+        }
+        Ok(())
+    }
+
+    fn create_worker_fixture(root: &Path, slot: u32) -> eyre::Result<PathBuf> {
+        let name = inrou_cgroup_worker_name(InrouCgroupWorkerKey {
+            owner_slot: owner_slot(slot),
+            ..worker_key()
+        });
+        let path = root.join(name);
+        fs::create_dir(&path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        fs::write(path.join("cgroup.procs"), "123\n")?;
+        Ok(path)
+    }
+
+    #[test]
+    fn canonical_cgroup_owner_slots_reject_overlapping_or_unknown_identities() {
+        let base = iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE;
+        for slot in 0..4 {
+            assert_eq!(
+                InrouCgroupOwnerSlot::from_identity(base + slot, base + slot)
+                    .expect("canonical owner")
+                    .0,
+                slot
+            );
+        }
+        for (uid, gid) in [
+            (0, 0),
+            (base - 1, base - 1),
+            (base + 4, base + 4),
+            (base, base + 1),
+            (base + 1, base),
+            (u32::MAX, u32::MAX),
+        ] {
+            assert!(
+                InrouCgroupOwnerSlot::from_identity(uid, gid).is_err(),
+                "uid={uid} gid={gid}"
+            );
+        }
+    }
+
+    #[test]
+    fn cgroup_owner_is_bound_independently_of_workload_replica_slot() -> eyre::Result<()> {
+        let original = worker_key();
+        let mut names = BTreeSet::new();
+        let mut digests = BTreeSet::new();
+        for slot in 0..4 {
+            let name = inrou_cgroup_worker_name(InrouCgroupWorkerKey {
+                owner_slot: owner_slot(slot),
+                ..original
+            });
+            assert_eq!(validate_inrou_cgroup_worker_name(&name)?, owner_slot(slot));
+            validate_inrou_expected_cgroup_path(&format!("/{INROU_CGROUP_SUBTREE_NAME}/{name}"))?;
+            digests.insert(name.rsplit_once('-').expect("worker digest").1.to_owned());
+            assert!(names.insert(name));
+        }
+        assert_eq!(
+            digests.len(),
+            4,
+            "the owner must also bind the worker digest"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cohost_restart_waves_preserve_sibling_workers_and_reject_own_orphans() -> eyre::Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let workers = (0..4)
+            .map(|slot| create_worker_fixture(directory.path(), slot))
+            .collect::<eyre::Result<Vec<_>>>()?;
+        for slot in 0..4 {
+            let owner = owner_slot(slot);
+            assert!(
+                attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)
+                    .is_err(),
+                "a live own worker must block restart wave {slot}"
+            );
+            let own = &workers[slot as usize];
+            fs::write(own.join("cgroup.procs"), "")?;
+            assert!(
+                attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)
+                    .is_err(),
+                "an empty retained own cgroup is still an unclosed orphan in wave {slot}"
+            );
+            fs::remove_file(own.join("cgroup.procs"))?;
+            fs::remove_dir(own)?;
+            attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)?;
+            for (sibling, path) in workers.iter().enumerate() {
+                if sibling != slot as usize {
+                    assert_eq!(
+                        fs::read_to_string(path.join("cgroup.procs"))?,
+                        "123\n",
+                        "restart wave {slot} must not touch sibling {sibling}"
+                    );
+                }
+            }
+            assert_eq!(create_worker_fixture(directory.path(), slot)?, *own);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_owner_scan_rejects_ambiguous_siblings_and_unsafe_custody() -> eyre::Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let owner = owner_slot(0);
+        for name in [
+            format!("worker-{}", "01".repeat(Hash::LENGTH)),
+            format!("worker-4-{}", "01".repeat(Hash::LENGTH)),
+            format!("worker-01-{}", "01".repeat(Hash::LENGTH)),
+            format!("worker--1-{}", "01".repeat(Hash::LENGTH)),
+            "worker-1-short".to_owned(),
+            "foreign-child".to_owned(),
+        ] {
+            let path = directory.path().join(&name);
+            fs::create_dir(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+            assert!(
+                attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)
+                    .is_err(),
+                "{name}"
+            );
+            fs::remove_dir(path)?;
+        }
+        let sibling = create_worker_fixture(directory.path(), 1)?;
+        fs::set_permissions(&sibling, fs::Permissions::from_mode(0o777))?;
+        assert!(
+            attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)
+                .is_err()
+        );
+        fs::set_permissions(&sibling, fs::Permissions::from_mode(0o700))?;
+        let link = directory.path().join("unexpected-link");
+        std::os::unix::fs::symlink(&sibling, &link)?;
+        assert!(
+            attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)
+                .is_err()
+        );
+        fs::remove_file(link)?;
+        attest_inrou_worker_absence_in(directory.path(), owner, &fixture_directory_custody)?;
+        Ok(())
+    }
+
+    #[test]
+    fn parent_cgroup_path_requires_the_exact_canonical_child_identity() -> eyre::Result<()> {
+        for slot in 0..4 {
+            let name = inrou_cgroup_worker_name(InrouCgroupWorkerKey {
+                owner_slot: owner_slot(slot),
+                ..worker_key()
+            });
+            let path = format!("/{INROU_CGROUP_SUBTREE_NAME}/{name}");
+            let uid = 70_000 + slot;
+            validate_inrou_cgroup_owner_identity(&path, uid, uid)?;
+            for other in 0..4 {
+                if other != slot {
+                    assert!(
+                        validate_inrou_cgroup_owner_identity(&path, 70_000 + other, 70_000 + other)
+                            .is_err()
+                    );
+                }
+            }
+            assert!(
+                validate_inrou_cgroup_owner_identity(&path, uid, 70_000 + (slot + 1) % 4).is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn internal_launcher_rejects_sibling_owner_and_identity_override_arguments() -> eyre::Result<()>
+    {
+        for slot in 0..4 {
+            let mut exact = internal_launcher_arguments(&[]);
+            let name = inrou_cgroup_worker_name(InrouCgroupWorkerKey {
+                owner_slot: owner_slot(slot),
+                ..worker_key()
+            });
+            exact[2] = format!("/{INROU_CGROUP_SUBTREE_NAME}/{name}").into();
+            let uid_index = exact
+                .iter()
+                .position(|value| value == "--reuid")
+                .expect("real setpriv uid")
+                + 1;
+            let gid_index = exact
+                .iter()
+                .position(|value| value == "--regid")
+                .expect("real setpriv gid")
+                + 1;
+            exact[uid_index] = (70_000 + slot).to_string().into();
+            exact[gid_index] = (70_000 + slot).to_string().into();
+            parse_inrou_internal_launcher_v1(exact.clone())?;
+            let other = (slot + 1) % 4;
+
+            let mut sibling_path = exact.clone();
+            let name = inrou_cgroup_worker_name(InrouCgroupWorkerKey {
+                owner_slot: owner_slot(other),
+                ..worker_key()
+            });
+            sibling_path[2] = format!("/{INROU_CGROUP_SUBTREE_NAME}/{name}").into();
+            assert!(parse_inrou_internal_launcher_v1(sibling_path).is_err());
+
+            let mut sibling_identity = exact.clone();
+            sibling_identity[uid_index] = (70_000 + other).to_string().into();
+            sibling_identity[gid_index] = (70_000 + other).to_string().into();
+            assert!(parse_inrou_internal_launcher_v1(sibling_identity).is_err());
+
+            let mut overlap = exact.clone();
+            overlap[gid_index] = (70_000 + other).to_string().into();
+            assert!(parse_inrou_internal_launcher_v1(overlap).is_err());
+
+            let mut override_uid = exact.clone();
+            override_uid.splice(
+                gid_index + 1..gid_index + 1,
+                [
+                    OsString::from("--reuid"),
+                    OsString::from((70_000 + other).to_string()),
+                ],
+            );
+            assert!(parse_inrou_internal_launcher_v1(override_uid).is_err());
+
+            let mut bypass = exact.clone();
+            let program = bypass
+                .iter()
+                .position(|value| {
+                    value == super::super::inrou_namespace::INROU_NAMESPACE_SETPRIV_PATH
+                })
+                .expect("fixed setpriv program");
+            bypass[program] = "/inrou/bin/qemu".into();
+            assert!(parse_inrou_internal_launcher_v1(bypass).is_err());
+
+            let mut weaker_drop = exact;
+            let capability = weaker_drop
+                .iter()
+                .position(|value| value == "--bounding-set=-all")
+                .expect("capability drop");
+            weaker_drop[capability] = "--bounding-set=+all".into();
+            assert!(parse_inrou_internal_launcher_v1(weaker_drop).is_err());
+        }
+        Ok(())
+    }
+
     fn resources() -> SoraResourceLimitsV1 {
         SoraResourceLimitsV1 {
             cpu_millis: NonZeroU32::new(1_500).expect("nonzero"),
@@ -1470,6 +1846,7 @@ mod tests {
 
     fn worker_key<'a>() -> InrouCgroupWorkerKey<'a> {
         InrouCgroupWorkerKey {
+            owner_slot: owner_slot(0),
             service_name: "http-canary",
             service_version: "1.0.0",
             replica_slot: 2,
@@ -1543,7 +1920,7 @@ mod tests {
         validate_inrou_cgroup_worker_name(&name)?;
         assert_eq!(
             name.len(),
-            INROU_CGROUP_WORKER_PREFIX.len() + Hash::LENGTH * 2
+            INROU_CGROUP_WORKER_PREFIX.len() + 2 + Hash::LENGTH * 2
         );
         let variants = [
             InrouCgroupWorkerKey {
@@ -1571,9 +1948,9 @@ mod tests {
             assert_ne!(inrou_cgroup_worker_name(variant), name);
         }
         for (rejected, expected_error) in [
-            ("worker-../escape", "must contain one lowercase hash"),
-            ("worker-ABCDEF", "must contain one lowercase hash"),
-            ("worker-00", "must contain one lowercase hash"),
+            ("worker-0-../escape", "must contain one lowercase hash"),
+            ("worker-0-ABCDEF", "must contain one lowercase hash"),
+            ("worker-0-00", "must contain one lowercase hash"),
             (
                 "other-0000000000000000000000000000000000000000000000000000000000000000",
                 "lacks the fixed worker prefix",
@@ -1713,7 +2090,7 @@ mod tests {
         let mut arguments = vec![
             "17".into(),
             "29".into(),
-            format!("/iroha-inrou-v1/worker-{}", "01".repeat(Hash::LENGTH)).into(),
+            format!("/iroha-inrou-v1/worker-0-{}", "01".repeat(Hash::LENGTH)).into(),
             binding_fds.len().to_string().into(),
         ];
         for (index, descriptor) in binding_fds.iter().enumerate() {
@@ -1746,7 +2123,22 @@ mod tests {
                 format!("/inrou/input/binding-{index}").into(),
             ]);
         }
-        arguments.extend([OsString::from("--"), OsString::from("/inrou/bin/qemu")]);
+        arguments.extend([
+            OsString::from("--"),
+            OsString::from(super::super::inrou_namespace::INROU_NAMESPACE_SETPRIV_PATH),
+        ]);
+        arguments.extend(
+            super::super::inrou_namespace::inrou_namespaced_setpriv_arguments(
+                &super::super::PortableVmChildIdentity {
+                    uid: 70_000,
+                    gid: 70_000,
+                    supplementary_gids: vec![108],
+                },
+            ),
+        );
+        arguments.push(OsString::from(
+            super::super::inrou_namespace::INROU_NAMESPACE_QEMU_PATH,
+        ));
         arguments
     }
 
@@ -1766,7 +2158,7 @@ mod tests {
         );
         assert_eq!(
             parsed.expected_cgroup_path,
-            format!("/iroha-inrou-v1/worker-{}", "01".repeat(Hash::LENGTH))
+            format!("/iroha-inrou-v1/worker-0-{}", "01".repeat(Hash::LENGTH))
         );
 
         let parsed = parse_inrou_internal_launcher_v1(internal_launcher_arguments(&[]))?;

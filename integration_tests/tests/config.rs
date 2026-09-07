@@ -1,45 +1,54 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Configuration retrieval and mutation integration tests.
+//! Four-validator retrieval of startup configuration and rejection of HTTP mutation.
+
+use std::{io::Read as _, time::Duration};
+
+use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
-use iroha_config::client_api::{
-    ConfigUpdateDTO, Logger, SoranetHandshakePowSummary, SoranetHandshakePowUpdate,
-    SoranetHandshakePuzzleUpdate, SoranetHandshakeUpdate,
-};
+use iroha_config::client_api::ConfigGetDTO;
 use iroha_data_model::Level;
 use iroha_test_network::NetworkBuilder;
 use nonzero_ext::nonzero;
-use std::{thread, time::Duration};
-const TEST_POW_DIFFICULTY: u8 = 7;
-const TEST_POW_MAX_FUTURE_SKEW: u64 = 720;
-const TEST_POW_MIN_TTL: u64 = 180;
-const TEST_POW_TARGET_TTL: u64 = 360;
-const INITIAL_POW_MEMORY_KIB: u32 = 8 * 1024;
-const INITIAL_POW_TIME_COST: u32 = 1;
-const INITIAL_POW_LANES: u32 = 1;
-const UPDATED_POW_MEMORY_KIB: u32 = 10 * 1024;
-const UPDATED_POW_TIME_COST: u32 = 2;
-const UPDATED_POW_LANES: u32 = 2;
-const TEST_POW_MEMORY_KIB: u32 = 12 * 1024;
-const TEST_POW_TIME_COST: u32 = 3;
-const TEST_POW_LANES: u32 = 3;
-const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
-const CONFIG_APPLY_RETRY_ATTEMPTS: usize = 180;
-const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
-const CONFIG_PROPAGATION_RETRY_ATTEMPTS: usize = 600;
-const CONFIG_PROPAGATION_RETRY_DELAY: Duration = Duration::from_millis(200);
-const CONFIG_RECONCILIATION_RETRY_ATTEMPTS: usize = 300;
+
+fn assert_startup_configuration(config: &ConfigGetDTO) {
+    assert_eq!(config.network.block_gossip_size, nonzero!(100_u32));
+    assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
+    assert_eq!(config.logger.level, Level::INFO);
+    assert_eq!(
+        config
+            .logger
+            .filter
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("iroha_p2p=warn")
+    );
+    let pow = &config.network.soranet_handshake.pow;
+    assert_eq!(pow.difficulty, 6);
+    assert_eq!(pow.max_future_skew_secs, 900);
+    assert_eq!(pow.min_ticket_ttl_secs, 120);
+    assert_eq!(pow.ticket_ttl_secs, 240);
+    assert_eq!(pow.puzzle.memory_kib, 8 * 1024);
+    assert_eq!(pow.puzzle.time_cost, 1);
+    assert_eq!(pow.puzzle.lanes, 1);
+    assert!(config.network.require_sm_handshake_match);
+    assert!(config.network.require_sm_openssl_preview_match);
+}
+
 #[test]
-fn config_scenarios() -> eyre::Result<()> {
+fn startup_configuration_is_read_only_on_four_validators() -> Result<()> {
     let builder = NetworkBuilder::new()
-        .with_min_peers(4)
-        .with_config_layer(|c| {
-            let c = c.write(
-                ["nexus", "storage", "local_budget_bytes"],
-                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
-            );
-            c.write(["network", "block_gossip_size"], 100)
+        .with_peers(4)
+        .with_config_layer(|config| {
+            config
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    1_073_741_824_i64,
+                )
+                .write(["network", "block_gossip_size"], 100)
                 .write(["queue", "capacity"], 100_000)
-                .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
+                .write(["logger", "level"], "INFO")
+                .write(["logger", "filter"], "iroha_p2p=warn")
+                .write(["network", "soranet_handshake", "pow", "difficulty"], 6)
                 .write(
                     [
                         "network",
@@ -47,15 +56,15 @@ fn config_scenarios() -> eyre::Result<()> {
                         "pow",
                         "max_future_skew_secs",
                     ],
-                    900_i64,
+                    900,
                 )
                 .write(
                     ["network", "soranet_handshake", "pow", "min_ticket_ttl_secs"],
-                    120_i64,
+                    120,
                 )
                 .write(
                     ["network", "soranet_handshake", "pow", "ticket_ttl_secs"],
-                    240_i64,
+                    240,
                 )
                 .write(
                     [
@@ -65,370 +74,118 @@ fn config_scenarios() -> eyre::Result<()> {
                         "puzzle",
                         "memory_kib",
                     ],
-                    i64::from(INITIAL_POW_MEMORY_KIB),
+                    8 * 1024,
                 )
                 .write(
                     ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
-                    i64::from(INITIAL_POW_TIME_COST),
+                    1,
                 )
                 .write(
                     ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
-                    i64::from(INITIAL_POW_LANES),
+                    1,
                 );
         });
-    let Some((network, rt)) =
-        sandbox::start_network_blocking_or_skip(builder, stringify!(config_scenarios))?
+    let Some((network, runtime)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(startup_configuration_is_read_only_on_four_validators),
+    )?
     else {
         return Ok(());
     };
-    let client = network.client();
-    soranet_pow_puzzle_config_roundtrips_scenario(&client)?;
-    retrieve_update_config_scenario(&client)?;
-    soranet_pow_puzzle_update_propagates_across_peers_scenario(&network, &rt)?;
-    Ok(())
-}
-fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Result<()> {
-    let config = client.get_config()?;
-    assert_eq!(config.network.block_gossip_size, nonzero!(100u32));
-    assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
-    let initial_level = config.logger.level;
-    let initial_filter = config.logger.filter.clone();
-    let new_level = if initial_level == Level::ERROR {
-        Level::INFO
-    } else {
-        Level::ERROR
-    };
-    let new_filter = if initial_filter.is_some() {
-        None
-    } else {
-        Some("iroha_p2p=trace".parse()?)
-    };
-    client.set_config(&ConfigUpdateDTO {
-        logger: Logger {
-            level: new_level,
-            filter: new_filter.clone(),
-        },
-        network_acl: None,
-        network: None,
-        soranet_handshake: None,
-        transport: None,
-        compute_pricing: None,
-    })?;
-    let config = client.get_config()?;
-    assert_eq!(config.network.block_gossip_size, nonzero!(100u32));
-    assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
-    assert_eq!(config.logger.level, new_level);
-    assert_eq!(config.logger.filter, new_filter);
-    let baseline_handshake_identity = (
-        config
-            .network
-            .soranet_handshake
-            .descriptor_commit_hex
-            .clone(),
-        config
-            .network
-            .soranet_handshake
-            .client_capabilities_hex
-            .clone(),
-        config
-            .network
-            .soranet_handshake
-            .relay_capabilities_hex
-            .clone(),
-        config.network.soranet_handshake.kem_id,
-        config.network.soranet_handshake.sig_id,
-        config.network.soranet_handshake.resume_hash_hex.clone(),
-    );
-    // Now override SoraNet proof-of-work settings without changing the live
-    // peer handshake identity or negotiated suite.
-    let handshake_update = ConfigUpdateDTO {
-        logger: Logger {
-            level: new_level,
-            filter: new_filter.clone(),
-        },
-        network_acl: None,
-        network: None,
-        soranet_handshake: Some(SoranetHandshakeUpdate {
-            descriptor_commit_hex: None,
-            client_capabilities_hex: None,
-            relay_capabilities_hex: None,
-            kem_id: None,
-            sig_id: None,
-            resume_hash_hex: None,
-            pow: Some(SoranetHandshakePowUpdate {
-                difficulty: Some(5),
-                max_future_skew_secs: Some(900),
-                min_ticket_ttl_secs: Some(120),
-                ticket_ttl_secs: Some(300),
-                outbound_mint_capacity: None,
-                inbound_verify_capacity: None,
-                puzzle: Some(SoranetHandshakePuzzleUpdate {
-                    memory_kib: Some(UPDATED_POW_MEMORY_KIB),
-                    time_cost: Some(UPDATED_POW_TIME_COST),
-                    lanes: Some(UPDATED_POW_LANES),
-                }),
-            }),
-        }),
-        transport: None,
-        compute_pricing: None,
-    };
-    client.set_config(&handshake_update)?;
-    let mut config = client.get_config()?;
-    for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
-        let handshake = &config.network.soranet_handshake;
-        if handshake.pow.difficulty == 5 {
-            break;
-        }
-        client.set_config(&handshake_update)?;
-        thread::sleep(CONFIG_APPLY_RETRY_DELAY);
-        config = client.get_config()?;
-    }
-    let handshake = &config.network.soranet_handshake;
-    assert_eq!(
-        (
-            handshake.descriptor_commit_hex.clone(),
-            handshake.client_capabilities_hex.clone(),
-            handshake.relay_capabilities_hex.clone(),
-            handshake.kem_id,
-            handshake.sig_id,
-            handshake.resume_hash_hex.clone(),
-        ),
-        baseline_handshake_identity
-    );
-    assert_eq!(handshake.pow.difficulty, 5);
-    let puzzle = handshake.pow.puzzle;
-    assert_eq!(puzzle.memory_kib, UPDATED_POW_MEMORY_KIB);
-    assert_eq!(puzzle.time_cost, UPDATED_POW_TIME_COST);
-    assert_eq!(puzzle.lanes, UPDATED_POW_LANES);
-    assert!(config.network.require_sm_handshake_match);
-    assert!(config.network.require_sm_openssl_preview_match);
-    Ok(())
-}
-fn soranet_pow_puzzle_config_roundtrips_scenario(
-    client: &iroha::client::Client,
-) -> eyre::Result<()> {
-    let config = client.get_config()?;
-    let handshake = &config.network.soranet_handshake;
-    assert_eq!(handshake.pow.difficulty, 6);
-    assert_eq!(handshake.pow.max_future_skew_secs, 900);
-    assert_eq!(handshake.pow.min_ticket_ttl_secs, 120);
-    assert_eq!(handshake.pow.ticket_ttl_secs, 240);
-    let puzzle = handshake.pow.puzzle;
-    assert_eq!(puzzle.memory_kib, INITIAL_POW_MEMORY_KIB);
-    assert_eq!(puzzle.time_cost, INITIAL_POW_TIME_COST);
-    assert_eq!(puzzle.lanes, INITIAL_POW_LANES);
-    Ok(())
-}
-#[allow(clippy::too_many_lines)]
-fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
-    network: &sandbox::SerializedNetwork,
-    rt: &tokio::runtime::Runtime,
-) -> eyre::Result<()> {
-    // Wait for genesis to be committed.
-    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 1).await })?;
-    let peers: Vec<_> = network.peers().iter().collect();
-    let (peer_to_update, other_peers) = peers
-        .split_first()
-        .expect("network with peers should include at least one entry");
-    assert!(
-        !other_peers.is_empty(),
-        "at least one additional peer is required to observe propagation"
-    );
-    let client = peer_to_update.client();
-    let baseline = client.get_config()?;
-    let baseline_pow = baseline.network.soranet_handshake.pow;
-    let baseline_puzzle = baseline_pow.puzzle;
-    let bump_u8 = |current: u8, desired: u8| {
-        if current == desired {
-            desired.saturating_add(1)
-        } else {
-            desired
-        }
-    };
-    let bump_u32 = |current: u32, desired: u32| {
-        if current == desired {
-            desired.saturating_add(1)
-        } else {
-            desired
-        }
-    };
-    let bump_u64 = |current: u64, desired: u64| {
-        if current == desired {
-            desired.saturating_add(1)
-        } else {
-            desired
-        }
-    };
-    let target_difficulty = bump_u8(baseline_pow.difficulty, TEST_POW_DIFFICULTY);
-    let target_max_future_skew =
-        bump_u64(baseline_pow.max_future_skew_secs, TEST_POW_MAX_FUTURE_SKEW);
-    let target_min_ttl = bump_u64(baseline_pow.min_ticket_ttl_secs, TEST_POW_MIN_TTL);
-    let target_ticket_ttl = bump_u64(baseline_pow.ticket_ttl_secs, TEST_POW_TARGET_TTL);
-    let target_puzzle_memory = bump_u32(baseline_puzzle.memory_kib, TEST_POW_MEMORY_KIB);
-    let target_puzzle_time = bump_u32(baseline_puzzle.time_cost, TEST_POW_TIME_COST);
-    let target_puzzle_lanes = bump_u32(baseline_puzzle.lanes, TEST_POW_LANES).min(16);
-    let pow_matches_target = |pow: &SoranetHandshakePowSummary| {
-        pow.difficulty == target_difficulty
-            && pow.max_future_skew_secs == target_max_future_skew
-            && pow.min_ticket_ttl_secs == target_min_ttl
-            && pow.ticket_ttl_secs == target_ticket_ttl
-            && pow.puzzle.memory_kib == target_puzzle_memory
-            && pow.puzzle.time_cost == target_puzzle_time
-            && pow.puzzle.lanes == target_puzzle_lanes
-    };
-    for peer in other_peers {
-        let remote_pow = peer.client().get_config()?.network.soranet_handshake.pow;
-        assert!(
-            !pow_matches_target(&remote_pow),
-            "peer {} already reports the target PoW settings before broadcast",
-            peer.id()
-        );
-    }
-    let pow_update = ConfigUpdateDTO {
-        logger: Logger {
-            level: baseline.logger.level,
-            filter: baseline.logger.filter.clone(),
-        },
-        network_acl: None,
-        network: None,
-        soranet_handshake: Some(SoranetHandshakeUpdate {
-            descriptor_commit_hex: None,
-            client_capabilities_hex: None,
-            relay_capabilities_hex: None,
-            kem_id: None,
-            sig_id: None,
-            resume_hash_hex: None,
-            pow: Some(SoranetHandshakePowUpdate {
-                difficulty: Some(target_difficulty),
-                max_future_skew_secs: Some(target_max_future_skew),
-                min_ticket_ttl_secs: Some(target_min_ttl),
-                ticket_ttl_secs: Some(target_ticket_ttl),
-                outbound_mint_capacity: None,
-                inbound_verify_capacity: None,
-                puzzle: Some(SoranetHandshakePuzzleUpdate {
-                    memory_kib: Some(target_puzzle_memory),
-                    time_cost: Some(target_puzzle_time),
-                    lanes: Some(target_puzzle_lanes),
-                }),
-            }),
-        }),
-        transport: None,
-        compute_pricing: None,
-    };
-    client.set_config(&pow_update)?;
-    let mut initiator_pow = client.get_config()?.network.soranet_handshake.pow;
-    let mut initiator_applied = pow_matches_target(&initiator_pow);
-    for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
-        if initiator_applied {
-            break;
-        }
-        let _ = client.set_config(&pow_update);
-        thread::sleep(CONFIG_APPLY_RETRY_DELAY);
-        initiator_pow = client.get_config()?.network.soranet_handshake.pow;
-        initiator_applied = pow_matches_target(&initiator_pow);
-    }
-    assert!(
-        initiator_applied,
-        "failed to apply updated puzzle settings on the initiating peer"
-    );
-    let mut propagated = false;
-    for _ in 0..CONFIG_PROPAGATION_RETRY_ATTEMPTS {
-        propagated = other_peers
-            .iter()
-            .all(|peer| match peer.client().get_config() {
-                Ok(config) => pow_matches_target(&config.network.soranet_handshake.pow),
-                Err(_) => false,
-            });
-        if propagated {
-            break;
-        }
-        thread::sleep(CONFIG_PROPAGATION_RETRY_DELAY);
-    }
-    if !propagated {
-        println!(
-            "Target PoW: diff={target_difficulty}, max_skew={target_max_future_skew}, min_ttl={target_min_ttl}, ticket_ttl={target_ticket_ttl}, puzzle={{memory_kib={target_puzzle_memory}, time_cost={target_puzzle_time}, lanes={target_puzzle_lanes}}}"
-        );
-        for (i, peer) in other_peers.iter().enumerate() {
-            match peer.client().get_config() {
-                Ok(config) => {
-                    let pow = &config.network.soranet_handshake.pow;
-                    println!(
-                        "Peer {i} ({}) pow: diff={}, max_skew={}, min_ttl={}, ticket_ttl={}, puzzle={{memory_kib={}, time_cost={}, lanes={}}}",
-                        peer.id(),
-                        pow.difficulty,
-                        pow.max_future_skew_secs,
-                        pow.min_ticket_ttl_secs,
-                        pow.ticket_ttl_secs,
-                        pow.puzzle.memory_kib,
-                        pow.puzzle.time_cost,
-                        pow.puzzle.lanes,
-                    );
-                }
-                Err(err) => {
-                    println!("Peer {i} ({}) config fetch failed: {err:?}", peer.id());
-                }
-            }
-        }
-        for (i, peer) in network.peers().iter().enumerate() {
-            println!("Dumping logs for Peer {i} ({})", peer.id());
-            if let Some(path) = peer.latest_stderr_log_path() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    println!("--- stderr start ---\n{content}\n--- stderr end ---");
-                } else {
-                    println!("Failed to read stderr log at {path:?}");
-                }
-            } else {
-                println!("No stderr log found");
-            }
-            if let Some(path) = peer.latest_stdout_log_path() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    println!("--- stdout start ---\n{content}\n--- stdout end ---");
-                } else {
-                    println!("Failed to read stdout log at {path:?}");
-                }
-            } else {
-                println!("No stdout log found");
-            }
-        }
-        let mut laggards = Vec::new();
-        for peer in other_peers {
+    let result = (|| {
+        let http = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        for peer in network.peers() {
             let client = peer.client();
-            match client.get_config() {
-                Ok(config) if pow_matches_target(&config.network.soranet_handshake.pow) => {}
-                Ok(_) | Err(_) => {
-                    laggards.push(peer.id().to_string());
-                    let _ = client.set_config(&pow_update);
-                }
-            }
-        }
-        if !laggards.is_empty() {
-            println!(
-                "Manually reconciled PoW settings on lagging peers: {}",
-                laggards.join(", ")
+            let url = client.torii_url.join("/v1/configuration")?;
+            let uri: iroha_torii::Uri = url.path().parse()?;
+            let operator = client
+                .operator_key_pair
+                .as_ref()
+                .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
+            // Retain the exact signed GET carrier before exercising the native client's
+            // decoder. A malformed server response must remain inspectable even when
+            // Client::get_config correctly fails; this is never a fallback decoder.
+            let read_headers = iroha_torii::operator_signed_request_headers(
+                operator,
+                &client.network_id,
+                &iroha_torii::Method::GET,
+                &uri,
+                &[],
+            )?;
+            let read_response = http
+                .get(url.clone())
+                .headers(read_headers)
+                .header("Accept", "application/json")
+                .send()?;
+            ensure!(
+                read_response.status() == reqwest::StatusCode::OK,
+                "signed configuration GET returned {}",
+                read_response.status()
+            );
+            let mut carrier = Vec::new();
+            read_response
+                .take(512 * 1024 + 1)
+                .read_to_end(&mut carrier)?;
+            ensure!(
+                carrier.len() <= 512 * 1024,
+                "configuration carrier exceeds test bound"
+            );
+            let storage = peer.kura_store_dir();
+            let evidence = storage
+                .parent()
+                .ok_or_else(|| eyre!("peer storage has no evidence parent"))?
+                .join("configuration-response.json");
+            std::fs::write(evidence, &carrier)?;
+            // Native clients sign GET with the explicitly configured peer operator key.
+            let before = client.get_config()?;
+            assert_startup_configuration(&before);
+            let body = norito::json::to_vec(&norito::json!({
+                "logger": {"level": "ERROR"},
+                "queue": {"capacity": 1}
+            }))?;
+            let headers = iroha_torii::operator_signed_request_headers(
+                operator,
+                &client.network_id,
+                &iroha_torii::Method::POST,
+                &uri,
+                &body,
+            )?;
+            let response = http
+                .post(url)
+                .headers(headers)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .body(body)
+                .send()?;
+            ensure!(
+                response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED,
+                "configuration mutation must be rejected by method admission, got {}",
+                response.status()
+            );
+            let mut bytes = Vec::new();
+            response.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() <= 16 * 1024,
+                "method rejection exceeds its test carrier bound"
+            );
+            let error: norito::json::Value = norito::json::from_slice(&bytes)?;
+            ensure!(
+                error["code"].as_str() == Some("method_not_allowed"),
+                "configuration POST returned the wrong rejection"
+            );
+            let after = client.get_config()?;
+            assert_startup_configuration(&after);
+            assert_eq!(
+                norito::json::to_vec(&before)?,
+                norito::json::to_vec(&after)?,
+                "unsupported POST changed effective configuration"
             );
         }
-        for _ in 0..CONFIG_RECONCILIATION_RETRY_ATTEMPTS {
-            propagated = true;
-            for peer in other_peers {
-                let client = peer.client();
-                match client.get_config() {
-                    Ok(config) if pow_matches_target(&config.network.soranet_handshake.pow) => {}
-                    Ok(_) | Err(_) => {
-                        propagated = false;
-                        let _ = client.set_config(&pow_update);
-                    }
-                }
-            }
-            if propagated {
-                break;
-            }
-            thread::sleep(CONFIG_PROPAGATION_RETRY_DELAY);
-        }
-    }
-    assert!(
-        propagated,
-        "puzzle configuration did not propagate to all peers"
-    );
-    rt.block_on(network.shutdown());
-    Ok(())
+        Ok::<(), eyre::Report>(())
+    })();
+    runtime.block_on(network.shutdown());
+    result
 }

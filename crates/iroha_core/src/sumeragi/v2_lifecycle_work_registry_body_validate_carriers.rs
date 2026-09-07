@@ -128,6 +128,31 @@ impl DurableStoreBody {
                 &self.pending,
             )
     }
+    /// Match the complete Store row shape after the scheduler authenticated its state.
+    ///
+    /// Unlike [`Self::matches_recovered_record`], this deliberately does not
+    /// require `Ready`: an exact reducer-fence-woken Store is still represented
+    /// as `Waiting` until the scheduler publishes the generation advance.
+    fn matches_schedulable_record_shape(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        self.validates(installed_digest)
+            && self
+                .replay_evidence
+                .exactly_matches_schedulable_record_shape(
+                    active_context,
+                    record,
+                    metadata,
+                    installed_digest,
+                    &self.effect,
+                    &self.durable_receipt,
+                    &self.pending,
+                )
+    }
     fn project_candidate(
         &self,
         verified: &VerifiedHeightContext,

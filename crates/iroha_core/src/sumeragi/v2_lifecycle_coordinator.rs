@@ -335,9 +335,10 @@ pub(in crate::sumeragi) use work_registry::{
 };
 pub(in crate::sumeragi) use work_registry::{
     AttestedLifecycleDecisionApplySuccessorOutputsV1, DurableStoreTerminalRetrySealV1,
-    LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
-    PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-    PreparedApplyTerminalDirectBroadcastV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    LifecycleDecisionApplySuccessorOutputModeV1, LifecycleOutputAdmissionKeyV1,
+    PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
+    PendingLiveWalSignAdmissionV1, PreparedApplyTerminalDirectBroadcastV1,
+    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
     PreparedAuthenticatedGenesisStoreReplayPreAdmission,
     PreparedAuthenticatedGenesisStoredReplayPreAdmission,
     PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,

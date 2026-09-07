@@ -41,7 +41,7 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+    "connect_norito_kagemusha_device_command_response_v1_verify",
 }
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
@@ -82,6 +82,7 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_contract_v1",
             "connect_norito_kagemusha_core_coordinator_open_v1",
             "connect_norito_kagemusha_core_coordinator_invoke_v1",
+            "connect_norito_kagemusha_device_command_response_v1_verify",
         ):
             library = types.SimpleNamespace(**{
                 symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -115,11 +116,14 @@ def test_current_kagemusha_symbols_are_not_blanket_retired() -> None:
 def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
     retired = {
         "c-jni": {
+            "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1",
             "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
             "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
             "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
         },
         "csharp": {
+            "connect_norito_kagemusha_device_response_authenticator_v1_verify",
             "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
         },
         "node": {"privateSettlementVerifyAuditorCapsuleResponseV1"},
@@ -142,3 +146,21 @@ def test_retired_protocol_symbol_inventory_is_rejected() -> None:
             assert "retired protocol symbols" in str(error)
         else:
             raise AssertionError(f"retired symbols were accepted: {symbols}")
+
+
+def test_command_verifier_never_accepts_previous_c_or_jni_alias() -> None:
+    old_c = "connect_norito_kagemusha_device_response_authenticator_v1_verify"
+    old_jni = (
+        "Java_org_hyperledger_iroha_sdk_offline_"
+        "KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_"
+        "nativeVerifyResponseAuthenticatorV1"
+    )
+    for sdk, aliases in (("c-jni", (old_c, old_jni)), ("csharp", (old_c,))):
+        for alias in aliases:
+            symbols = [*MODULE.REQUIRED_SYMBOLS[sdk], alias]
+            try:
+                MODULE.validate_retired_protocol_symbols(symbols, sdk=sdk)
+            except MODULE.ArtifactContractError as error:
+                assert alias in str(error)
+            else:
+                raise AssertionError(f"retired verifier alias was accepted: {sdk}: {alias}")

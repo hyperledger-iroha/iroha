@@ -10,6 +10,19 @@ import { NetworkId, networkIdBytes } from "./networkId.js";
 
 export { NetworkId };
 
+/** Exact current binary FrameV1 + EnvelopeV1 + AEAD overhead for SignRequestTx. */
+export const CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1 = 216;
+
+/** Validate endpoint-reported WebSocket/buffer capacity; this is not wallet or finality authentication. */
+export function validateConnectTransactionTransportStatus(status, payloadLength) {
+  if (!Number.isSafeInteger(payloadLength) || payloadLength <= 0 || payloadLength > Number.MAX_SAFE_INTEGER - CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1) throw new RangeError("invalid Connect transaction payload length");
+  const frameBytes = payloadLength + CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1;
+  const frameMaxBytes = status?.policy?.frame_max_bytes;
+  const sessionBufferMaxBytes = status?.policy?.session_buffer_max_bytes;
+  if (status?.enabled !== true || !Number.isSafeInteger(frameMaxBytes) || !Number.isSafeInteger(sessionBufferMaxBytes) || frameMaxBytes < frameBytes || sessionBufferMaxBytes < frameBytes) throw new Error("Connect endpoint cannot carry this complete transaction; use an execution-qualified transport configuration.");
+  return Object.freeze({ frameBytes, frameMaxBytes, sessionBufferMaxBytes });
+}
+
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
 const CONNECT_SALT_PREFIX = encoder.encode("iroha-connect|salt|");

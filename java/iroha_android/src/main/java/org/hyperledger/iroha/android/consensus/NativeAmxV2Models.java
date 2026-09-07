@@ -382,51 +382,7 @@ public final class NativeAmxV2Models {
     }
   }
 
-  /** One zero-effect grouped settlement row. */
-  public static final class SettlementReceipt {
-    private final NativeAmxV2.SettlementReceipt delegate;
-
-    private SettlementReceipt(final NativeAmxV2.SettlementReceipt delegate) {
-      this.delegate = delegate;
-    }
-
-    public SourceId sourceId() {
-      return new SourceId(delegate.getSourceId());
-    }
-
-    public String localAmount() {
-      return delegate.getLocalAmount();
-    }
-
-    public String xorDue() {
-      return delegate.getXorDue();
-    }
-
-    public String xorAfterHaircut() {
-      return delegate.getXorAfterHaircut();
-    }
-
-    public String xorVariance() {
-      return delegate.getXorVariance();
-    }
-
-    public BigInteger timestampMs() {
-      return unsigned64(delegate.getTimestampMs(), "participant_settlement.timestamp_ms");
-    }
-
-    @Override
-    public boolean equals(final Object other) {
-      return other instanceof SettlementReceipt
-          && delegate.equals(((SettlementReceipt) other).delegate);
-    }
-
-    @Override
-    public int hashCode() {
-      return delegate.hashCode();
-    }
-  }
-
-  /** Terminal zero-effect participant settlement. */
+  /** Exact seven-field participant control with FIFO source membership. */
   public static final class ParticipantSettlement {
     private final NativeAmxV2.ParticipantSettlement delegate;
 
@@ -434,49 +390,27 @@ public final class NativeAmxV2Models {
       this.delegate = delegate;
     }
 
-    public BigInteger blockHeight() {
-      return unsigned64(delegate.getBlockHeight(), "participant_settlement.block_height");
+    public long laneId() { return delegate.getLaneId(); }
+    public BigInteger dataspaceId() { return delegate.getDataspaceId(); }
+    public ConsensusHash laneIncarnation() { return new ConsensusHash(delegate.getLaneIncarnation()); }
+    public BigInteger participantLaneBlockHeight() { return delegate.getParticipantLaneBlockHeight(); }
+    public BigInteger authorityContextHeight() { return delegate.getAuthorityContextHeight(); }
+
+    /** Previous Native control hash, or null before the first Native control. */
+    public ConsensusHash previousNativeSettlementHash() {
+      final NativeAmxV2.ConsensusHash value = delegate.getPreviousNativeSettlementHash();
+      return value == null ? null : new ConsensusHash(value);
     }
 
-    public long laneId() {
-      return delegate.getLaneId();
-    }
-
-    public ConsensusHash laneIncarnation() {
-      return new ConsensusHash(delegate.getLaneIncarnation());
-    }
-
-    public BigInteger dataspaceId() {
-      return unsigned64(delegate.getDataspaceId(), "participant_settlement.dataspace_id");
-    }
-
-    public long transactionCount() {
-      return delegate.getTransactionCount();
-    }
-
-    public String totalLocalAmount() {
-      return delegate.getTotalLocalAmount();
-    }
-
-    public String totalXorDue() {
-      return delegate.getTotalXorDue();
-    }
-
-    public String totalXorAfterHaircut() {
-      return delegate.getTotalXorAfterHaircut();
-    }
-
-    public String totalXorVariance() {
-      return delegate.getTotalXorVariance();
-    }
-
-    public List<SettlementReceipt> receipts() {
-      final ArrayList<SettlementReceipt> values = new ArrayList<>();
-      for (final NativeAmxV2.SettlementReceipt value : delegate.getReceipts()) {
-        values.add(new SettlementReceipt(value));
+    public List<SourceId> sourceIds() {
+      final ArrayList<SourceId> values = new ArrayList<>();
+      for (final NativeAmxV2.SourceId value : delegate.getSourceIds()) {
+        values.add(new SourceId(value));
       }
       return Collections.unmodifiableList(values);
     }
+
+    public ConsensusHash computedHash() { return new ConsensusHash(delegate.computedHash()); }
 
     @Override
     public boolean equals(final Object other) {
@@ -485,9 +419,7 @@ public final class NativeAmxV2Models {
     }
 
     @Override
-    public int hashCode() {
-      return delegate.hashCode();
-    }
+    public int hashCode() { return delegate.hashCode(); }
   }
 
   /** Exact control-only participant lane-block descriptor. */
@@ -826,6 +758,16 @@ public final class NativeAmxV2Models {
     return NativeAmxV2.requiresMixedRoleAnchorValidation(
         descriptor.delegate,
         new NativeAmxV2.TransactionEntrypointHash(transactionEntrypointHash));
+  }
+
+  /** Decode only the current seven-field participant control. */
+  public static ParticipantSettlement parseParticipantSettlement(final String json) {
+    return new ParticipantSettlement(NativeAmxV2.parseParticipantSettlement(json));
+  }
+
+  /** Decode an exact participant-control map. */
+  public static ParticipantSettlement parseParticipantSettlement(final Map<String, Object> value) {
+    return new ParticipantSettlement(NativeAmxV2.parseParticipantSettlement(value));
   }
 
   /** Parse and strictly validate a Native AMX receipt-group JSON string. */

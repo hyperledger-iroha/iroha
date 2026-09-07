@@ -1286,6 +1286,7 @@ pub(super) fn prepare_genesis_for_signing(
         .map(<[PeerId]>::to_vec)
         .unwrap_or_else(|| collect_topology_peers(&genesis));
     ensure_valid_genesis_committee(&final_topology)?;
+    final_topology.sort();
     if topology_override.is_none() && !peer_pops.is_empty() {
         return Err(eyre!(
             "--peer-pop requires --topology to align PoPs with peers"
@@ -1359,7 +1360,11 @@ pub(super) fn prepare_genesis_for_signing(
             .with_consensus_mode(consensus_mode)
             .with_consensus_meta()
     };
-    ensure_valid_genesis_committee(&collect_topology_peers(&prepared))?;
+    prepared
+        .validate_kagemusha_mint_finality_topology()
+        .wrap_err(
+            "refusing to sign a genesis whose final topology lacks its exact provisioned KAGEMUSHA authority; Kagami never derives or rewrites production Pasta keys",
+        )?;
     Ok(prepared)
 }
 
@@ -2013,26 +2018,39 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         CryptoKeyPair::try_random_with_algorithm(algorithm)
             .expect("genesis sign fixture key generation should succeed")
     }
-    fn valid_test_topology(count: usize) -> (Vec<PeerId>, Vec<String>) {
-        (0..count)
-            .map(|_| {
-                let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
+    fn valid_test_topology_material(count: usize) -> Vec<(PeerId, Vec<u8>)> {
+        let mut topology = (0..count)
+            .map(|index| {
+                let seed_byte = 0x40_u8
+                    .checked_add(
+                        u8::try_from(index)
+                            .expect("genesis-sign fixture validator index fits in u8"),
+                    )
+                    .expect("genesis-sign fixture validator seed domain is not exhausted");
+                let key_pair =
+                    CryptoKeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic genesis-sign fixture validator");
                 let pop = bls_normal_pop_prove(key_pair.private_key())
                     .expect("generate checked topology proof of possession");
-                let peer = PeerId::new(key_pair.public_key().clone());
+                (PeerId::new(key_pair.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        topology.sort_by(|(left, _), (right, _)| left.cmp(right));
+        topology
+    }
+    fn valid_test_topology(count: usize) -> (Vec<PeerId>, Vec<String>) {
+        valid_test_topology_material(count)
+            .into_iter()
+            .map(|(peer, pop)| {
                 let encoded_pop = format!("{}={}", peer.public_key(), hex::encode(pop));
                 (peer, encoded_pop)
             })
             .unzip()
     }
     fn valid_test_topology_entries(count: usize) -> Vec<GenesisTopologyEntry> {
-        (0..count)
-            .map(|_| {
-                let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
-                let pop = bls_normal_pop_prove(key_pair.private_key())
-                    .expect("generate checked topology proof of possession");
-                GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
-            })
+        valid_test_topology_material(count)
+            .into_iter()
+            .map(|(peer, pop)| GenesisTopologyEntry::new(peer, pop))
             .collect()
     }
     fn with_test_authority_for_topology(path: PathBuf, topology: &[PeerId]) -> PathBuf {

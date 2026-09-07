@@ -149,6 +149,27 @@ pub(crate) fn validate_request(
     kagemusha_core_coordinator_validate_method_request_v1(method, frame)?;
     let fields = kagemusha_core_coordinator_decode_request_v1(frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::BeginObservation => {
+            let operation =
+                u8::try_from(require_u32_field(fields.first())?).map_err(field_error)?;
+            require_binding(
+                crate::kagemusha_device_bridge_v1::validate_coordinator_observation_binding_v1(
+                    operation, &fields[1],
+                ),
+            )?;
+        }
+        KagemushaCoreCoordinatorMethodV1::ReserveOperationId => {
+            let operation =
+                u8::try_from(require_u32_field(fields.first())?).map_err(field_error)?;
+            let operation_id = fields[1].as_slice().try_into().map_err(field_error)?;
+            require_binding(
+                crate::kagemusha_device_bridge_v1::validate_coordinator_reservation_binding_v1(
+                    operation,
+                    operation_id,
+                    &fields[2],
+                ),
+            )?;
+        }
         KagemushaCoreCoordinatorMethodV1::BeginSenderTransition => {
             sender_inputs(&fields)?;
         }

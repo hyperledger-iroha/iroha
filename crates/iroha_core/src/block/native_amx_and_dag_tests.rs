@@ -96,6 +96,18 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     );
     let context = crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
         .with_native_amx_receipt(receipt.clone());
+    let coordinator_manifest_root: [u8; Hash::LENGTH] =
+        Hash::new(b"native AMX coordinator finality manifest").into();
+    state.set_axt_policy(
+        context.dataspace_id,
+        iroha_data_model::nexus::AxtPolicyEntry {
+            manifest_root: coordinator_manifest_root,
+            target_lane: context.lane_id,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
     let mut validator_set = keypairs
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -170,6 +182,7 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     assert_eq!(statements.len(), 1);
     let statement = &statements[0];
     assert_eq!(statement.block_header_hash, valid_block.as_ref().hash());
+    assert_eq!(statement.manifest_root, coordinator_manifest_root);
     let commitment = &statement.settlement_commitment;
     assert_eq!(commitment.tx_count, 1);
     assert_eq!(commitment.native_amx_receipts, vec![receipt]);

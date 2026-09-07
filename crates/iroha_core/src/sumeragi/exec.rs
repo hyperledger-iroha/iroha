@@ -6,7 +6,7 @@ use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
         SignedBlock,
-        consensus::{ExecWitness, LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
+        consensus::{ExecWitness, LaneBlockProposalV1, NativeAmxReceipt},
         consensus_v2 as wire,
     },
     merge::MergeLedgerEntry,
@@ -30,8 +30,9 @@ fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
 #[derive(Debug)]
 struct NativeAmxApplicationGroup {
     participant_proposal: LaneBlockProposalV1,
-    participant_settlement: LaneBlockCommitment,
-    participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    participant_settlement: iroha_data_model::block::consensus::NativeAmxParticipantSettlement,
+    participant_settlement_hash:
+        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     settlement_source_ids: Vec<[u8; Hash::LENGTH]>,
     members: Vec<wire::NativeAmxApplicationManifestMemberV1>,
     results: Vec<TransactionResult>,
@@ -212,7 +213,8 @@ pub(crate) struct NativeAmxApplicationManifestEntryV1 {
     /// Exact participant proposal retained in the durable receipt.
     pub(crate) participant_proposal: LaneBlockProposalV1,
     /// Exact zero-effect settlement retained in the durable receipt.
-    pub(crate) participant_settlement: LaneBlockCommitment,
+    pub(crate) participant_settlement:
+        iroha_data_model::block::consensus::NativeAmxParticipantSettlement,
     /// Exact canonical transaction results aligned with `leaf.members`.
     pub(crate) results: Vec<TransactionResult>,
 }
@@ -251,6 +253,11 @@ impl NativeAmxApplicationManifestV1 {
         block: &SignedBlock,
         merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<Self, String> {
+        if !block.has_results() {
+            return Err(
+                "Native AMX application manifest requires a result-bearing block".to_owned(),
+            );
+        }
         let executed_block_wire = block
             .encode_wire()
             .map_err(|error| format!("canonical executed block cannot be encoded: {error}"))?;
@@ -317,8 +324,7 @@ impl NativeAmxApplicationManifestV1 {
                     );
                 }
                 let computed_settlement_hash =
-                    iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-                        .map_err(|_| {
+                    leg.participant_settlement.computed_hash().map_err(|_| {
                         "Native AMX participant control settlement cannot be hashed".to_owned()
                     })?;
                 if computed_settlement_hash != leg.participant_settlement_hash {
@@ -327,27 +333,14 @@ impl NativeAmxApplicationManifestV1 {
                     );
                 }
                 let settlement = &leg.participant_settlement;
-                if settlement.tx_count
-                    != u64::try_from(settlement.receipts.len()).unwrap_or(u64::MAX)
-                    || !settlement.total_local_amount.is_zero()
-                    || !settlement.total_xor_due.is_zero()
-                    || !settlement.total_xor_after_haircut.is_zero()
-                    || !settlement.total_xor_variance.is_zero()
-                    || settlement.swap_metadata.is_some()
-                    || !settlement.nexus_fee_receipts.is_empty()
-                    || !settlement.native_amx_receipts.is_empty()
-                    || settlement.receipts.is_empty()
-                    || settlement.receipts.len() > wire::MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS
-                    || settlement.receipts.iter().any(|receipt| {
-                        !receipt.local_amount.is_zero()
-                            || !receipt.xor_due.is_zero()
-                            || !receipt.xor_after_haircut.is_zero()
-                            || !receipt.xor_variance.is_zero()
-                            || receipt.timestamp_ms != authority_context_height
-                    })
+                if settlement.lane_id() != descriptor.lane_id
+                    || settlement.dataspace_id() != descriptor.dataspace_id
+                    || settlement.lane_incarnation() != descriptor.lane_incarnation
+                    || settlement.participant_lane_block_height() != descriptor.lane_block_height
+                    || settlement.authority_context_height() != authority_context_height
                 {
                     return Err(
-                        "Native AMX participant settlement is not exact zero-effect control evidence"
+                        "Native AMX participant settlement differs from its application context"
                             .to_owned(),
                     );
                 }
@@ -367,11 +360,7 @@ impl NativeAmxApplicationManifestV1 {
                             .to_owned(),
                     );
                 }
-                let settlement_source_ids = settlement
-                    .receipts
-                    .iter()
-                    .map(|receipt| receipt.source_id)
-                    .collect::<Vec<_>>();
+                let settlement_source_ids = settlement.source_ids().to_vec();
                 let group = groups
                     .entry(key)
                     .or_insert_with(|| NativeAmxApplicationGroup {
@@ -445,6 +434,9 @@ impl NativeAmxApplicationManifestV1 {
                 descriptor_hash: descriptor.descriptor_hash,
                 proposal_hash: group.participant_proposal.proposal_hash,
                 settlement_hash: group.participant_settlement_hash,
+                previous_native_settlement_hash: group
+                    .participant_settlement
+                    .previous_native_settlement_hash(),
                 members: group.members,
                 application_block_height,
                 application_block_hash,
@@ -763,9 +755,8 @@ mod tests {
         block::{
             BlockHeader, BlockSignature,
             consensus::{
-                ExecKv, ExecWitness, LaneBlockDescriptorV1, LaneSettlementReceipt,
-                NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2, NativeAmxLegRecordV2,
-                NativeAmxPhase, NativeAmxReceipt,
+                ExecKv, ExecWitness, LaneBlockDescriptorV1, NativeAmxAttestationBodyV2,
+                NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
             },
             execution_context::{
                 BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteRole,
@@ -783,7 +774,7 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use iroha_primitives::{numeric::Quantity, time::TimeSource};
+    use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroU64, time::Duration};
     const MANIFEST_APPLICATION_HEIGHT: u64 = 40;
     const MANIFEST_LANE_BLOCK_HEIGHT: u64 = 5;
@@ -791,8 +782,8 @@ mod tests {
     #[derive(Clone)]
     struct ManifestParticipantFixture {
         proposal: LaneBlockProposalV1,
-        settlement: LaneBlockCommitment,
-        settlement_hash: HashOf<LaneBlockCommitment>,
+        settlement: iroha_data_model::block::consensus::NativeAmxParticipantSettlement,
+        settlement_hash: HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     }
     pub(super) struct ManifestBlockFixture {
         pub(super) block: SignedBlock,
@@ -864,34 +855,19 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         crate::lane_consensus::validate_lane_block_proposal(&proposal)
             .expect("canonical manifest participant proposal");
-        let receipts = source_ids
-            .iter()
-            .copied()
-            .map(|source_id| LaneSettlementReceipt {
-                source_id,
-                local_amount: Quantity::zero(),
-                xor_due: Quantity::zero(),
-                xor_after_haircut: Quantity::zero(),
-                xor_variance: Quantity::zero(),
-                timestamp_ms: MANIFEST_APPLICATION_HEIGHT,
-            })
-            .collect::<Vec<_>>();
-        let settlement = LaneBlockCommitment {
-            block_height: MANIFEST_LANE_BLOCK_HEIGHT,
-            lane_id,
-            lane_incarnation,
-            dataspace_id,
-            tx_count: u64::try_from(receipts.len()).expect("fixture receipt count fits u64"),
-            total_local_amount: Quantity::zero(),
-            total_xor_due: Quantity::zero(),
-            total_xor_after_haircut: Quantity::zero(),
-            total_xor_variance: Quantity::zero(),
-            swap_metadata: None,
-            receipts,
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+        let settlement =
+            iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                MANIFEST_LANE_BLOCK_HEIGHT,
+                MANIFEST_APPLICATION_HEIGHT,
+                None,
+                source_ids.to_vec(),
+            )
+            .expect("valid Native manifest participant control");
+        let settlement_hash = settlement
+            .computed_hash()
             .expect("hash manifest participant settlement");
         ManifestParticipantFixture {
             proposal,
@@ -1426,6 +1402,61 @@ mod tests {
         assert_eq!(
             post_state_from_witness(&duplicated_writes),
             post_state_from_witness(&single_write)
+        );
+    }
+    #[test]
+    fn native_amx_manifest_rejects_resultless_blocks_with_and_without_receipts() {
+        let fixture = result_bearing_native_manifest_block();
+        for retain_receipts in [false, true] {
+            let mut proposal = fixture.block.canonical_resultless_proposal();
+            if !retain_receipts {
+                proposal.set_execution_context(None);
+            }
+            assert!(!proposal.has_results());
+            let error = NativeAmxApplicationManifestV1::from_result_bearing_block(&proposal)
+                .expect_err(
+                    "a proposal cannot establish authenticated Native AMX application state",
+                );
+            assert_eq!(
+                error,
+                "Native AMX application manifest requires a result-bearing block"
+            );
+        }
+    }
+    #[test]
+    fn native_amx_manifest_requires_attached_results_for_an_empty_block() {
+        let key = fixture_key(0x55, Algorithm::BlsNormal);
+        let header = BlockHeader::new(
+            NonZeroU64::new(MANIFEST_APPLICATION_HEIGHT).expect("non-zero height"),
+            None,
+            None,
+            None,
+            MANIFEST_APPLICATION_HEIGHT,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(key.private_key(), header.hash()).expect("sign empty body"),
+        );
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+        assert!(!block.has_results());
+        NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
+            .expect_err("an empty proposal still has no authenticated execution result");
+        block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach the empty execution result");
+        let manifest = NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
+            .expect("an executed empty block has an authenticated empty manifest");
+        assert_eq!(manifest.count(), 0);
+        assert_eq!(
+            manifest.root(),
+            wire::native_amx_application_manifest_empty_root()
+        );
+        assert_eq!(
+            manifest.executed_block_wire_hash(),
+            block
+                .executed_block_wire_hash()
+                .expect("hash executed empty wire")
         );
     }
     #[test]

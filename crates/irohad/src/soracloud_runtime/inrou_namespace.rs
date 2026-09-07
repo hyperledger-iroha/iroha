@@ -63,7 +63,7 @@ const INROU_NAMESPACE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const INROU_NAMESPACE_CONNECT_THREAD_STACK_BYTES: usize = 256 * 1024;
 
 pub(super) const INROU_NAMESPACE_QEMU_PATH: &str = "/inrou/bin/qemu";
-const INROU_NAMESPACE_SETPRIV_PATH: &str = "/inrou/bin/setpriv";
+pub(super) const INROU_NAMESPACE_SETPRIV_PATH: &str = "/inrou/bin/setpriv";
 pub(super) const INROU_NAMESPACE_KERNEL_PATH: &str = "/inrou/input/kernel";
 pub(super) const INROU_NAMESPACE_INITRD_PATH: &str = "/inrou/input/initrd";
 pub(super) const INROU_NAMESPACE_BUNDLE_PATH: &str = "/inrou/input/bundle";
@@ -764,7 +764,9 @@ fn enter_inrou_network_namespace(namespace: &fs::File) -> io::Result<()> {
     Ok(())
 }
 
-fn inrou_namespaced_setpriv_arguments(identity: &PortableVmChildIdentity) -> Vec<OsString> {
+pub(super) fn inrou_namespaced_setpriv_arguments(
+    identity: &PortableVmChildIdentity,
+) -> Vec<OsString> {
     let mut arguments = vec![
         "--reuid".into(),
         identity.uid.to_string().into(),

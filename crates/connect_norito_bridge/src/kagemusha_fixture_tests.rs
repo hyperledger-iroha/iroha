@@ -309,7 +309,7 @@ fn encoded_section(raw: Vec<u8>, text: Option<String>, kind: Option<u8>) -> Valu
 
 fn digest_section(domain: &str, digest: [u8; 32]) -> Value {
     norito::json!({
-        "domain": domain,
+        "domain": (domain),
         "hex": (hex::encode(digest)),
     })
 }
@@ -320,7 +320,8 @@ fn canonical_fixture_v1() -> Value {
     let payment_raw = norito::encode_canonical(&values.payment).expect("encode payment");
     let acknowledgement_raw =
         norito::encode_canonical(&values.acknowledgement).expect("encode acknowledgement");
-    let proof_raw = norito::encode_canonical(&values.payment.proof).expect("encode proof");
+    let payment_proof_raw =
+        norito::encode_canonical(&values.payment.proof).expect("encode payment proof");
     let commit_certificate_raw = norito::encode_canonical(&values.payment.commit_certificate)
         .expect("encode commit certificate");
     let terminal_body_raw =
@@ -344,15 +345,6 @@ fn canonical_fixture_v1() -> Value {
         .payment
         .canonical_digest_against(&values.request)
         .expect("payment digest");
-    let payment_output_digest = values
-        .payment
-        .output
-        .canonical_digest()
-        .expect("payment output digest");
-    let ciphertext_digest = kagemusha_ciphertext_digest_v1(&values.payment.encrypted_credit);
-    let payment_body_digest =
-        kagemusha_payment_body_digest_v1(&values.payment.output, &values.payment.encrypted_credit)
-            .expect("payment body digest");
     let commit_certificate_digest = values
         .payment
         .commit_certificate
@@ -366,6 +358,15 @@ fn canonical_fixture_v1() -> Value {
         values.payment.output.ciphertext_commitment,
     )
     .expect("prepared transfer digest");
+    let payment_output_digest = values
+        .payment
+        .output
+        .canonical_digest()
+        .expect("payment output digest");
+    let ciphertext_digest = kagemusha_ciphertext_digest_v1(&values.payment.encrypted_credit);
+    let payment_body_digest =
+        kagemusha_payment_body_digest_v1(&values.payment.output, &values.payment.encrypted_credit)
+            .expect("payment body digest");
     let acknowledgement_digest = sha256(&acknowledgement_raw);
     let acknowledgement_signing_bytes = values
         .acknowledgement
@@ -397,7 +398,7 @@ fn canonical_fixture_v1() -> Value {
             Some(acknowledgement_text),
             Some(3),
         )),
-        "payment_proof": (encoded_section(proof_raw, None, None)),
+        "payment_proof": (encoded_section(payment_proof_raw, None, None)),
         "commit_certificate": (encoded_section(commit_certificate_raw, None, None)),
         "request_digest": (digest_section("iroha:kagemusha:v1:payment-request", request_digest)),
         "payment_digest": (digest_section("iroha:kagemusha:v1:payment", payment_digest)),
@@ -413,6 +414,7 @@ fn canonical_fixture_v1() -> Value {
             "hex": (hex::encode(values.payment.output.credit_id)),
         },
         "identity_vectors": {
+            "acknowledgement_digest_hex": (hex::encode(acknowledgement_digest)),
             "payment_request_digest_hex": (hex::encode(request_digest)),
             "payment_digest_hex": (hex::encode(payment_digest)),
             "payment_output_digest_hex": (hex::encode(payment_output_digest)),
@@ -469,8 +471,8 @@ fn canonical_fixture_v1() -> Value {
             "terminal_body_norito_hex": (hex::encode(terminal_body_raw)),
             "hex": (hex::encode(values.payment.commit_certificate.hardware_terminal_commitment)),
         },
-        "complete_three_message": {
-            "messages": ["payment_request", "payment", "acknowledgement"],
+        "complete_exchange": {
+            "messages": ["request", "payment", "acknowledgement"],
             "raw_bytes": raw_bytes,
             "raw_target_bytes": KAGEMUSHA_COMPLETE_EXCHANGE_TARGET_BYTES_V1,
             "raw_hard_cap_bytes": KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,

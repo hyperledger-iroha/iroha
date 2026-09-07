@@ -116,7 +116,7 @@ fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()>
         // Debug tracing interferes with ConstVec decode guards; skip engineering checks in this mode.
         return Ok(());
     }
-    let genesis = load_default_genesis_source_template_for_test()?;
+    let genesis = with_test_signing_topology(load_default_genesis_source_template_for_test()?);
     let kp = checked_genesis_fixture_keypair();
     let proposal = genesis.build_and_sign(&kp)?;
     assert!(

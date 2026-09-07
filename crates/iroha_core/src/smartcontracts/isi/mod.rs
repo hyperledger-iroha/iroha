@@ -28,8 +28,12 @@ pub mod privacy;
 /// Atomic private cross-dataspace settlement carrier execution.
 pub mod private_settlement;
 pub mod query;
-/// Native race custody and proof settlement transitions.
-pub mod race;
+/// Generic game custody and proof settlement transitions.
+pub mod game;
+/// Shared protected NFT reservation and exact-price sale support.
+pub mod nft_custody;
+/// Generic native exact-price NFT marketplace.
+pub mod nft_market;
 pub mod ram_lfe;
 pub mod repo;
 pub mod rwa;
@@ -121,17 +125,25 @@ macro_rules! define_instruction_handlers {
     };
 }
 define_instruction_handlers! {
-    dispatch_instruction::<iroha_data_model::isi::race::OpenRaceV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::JoinRaceV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::StartRaceV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::CommitRaceCheckpointV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::ChallengeRaceV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::CommitRaceInputsV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::RevealRaceInputsV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::AdvanceRaceDeadlineV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::SubmitRaceProofV1>,
-    dispatch_instruction::<iroha_data_model::isi::race::ExpireRaceV1>,
+    dispatch_instruction::<iroha_data_model::isi::nft_market::OfferNftV1>,
+    dispatch_instruction::<iroha_data_model::isi::nft_market::BuyNftV1>,
+    dispatch_instruction::<iroha_data_model::isi::nft_market::CancelNftOfferV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::RegisterExecutionProofProfileV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::VerifyExecutionProofV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::SettleGameSessionV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::OpenGameSessionV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::JoinGameSessionV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::StartGameSessionV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::CommitGameCheckpointV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::ChallengeGameSessionV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::CommitGameInputsV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::RevealGameInputsV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::AdvanceGameDeadlineV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::ExpireGameSessionV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::ClaimGamePayoutV1>,
+    dispatch_instruction::<iroha_data_model::isi::game::StakeGameItemV1>,
 
+    dispatch_instruction::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>,
     dispatch_instruction::<RegisterPeerWithPop>,
     dispatch_instruction::<RegisterBox>,
     dispatch_instruction::<UnregisterBox>,
@@ -618,6 +630,26 @@ mod registry_dispatch_tests {
         registered_native_instruction_type_names().contains(&type_name)
     }
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
+    #[test]
+    fn game_and_committee_peer_instructions_have_native_handlers() {
+        use iroha_data_model::isi::{game, register::RegisterCommitteePeerWithPop};
+
+        assert_native_registration::<game::RegisterExecutionProofProfileV1>();
+        assert_native_registration::<game::VerifyExecutionProofV1>();
+        assert_native_registration::<game::SettleGameSessionV1>();
+        assert_native_registration::<game::OpenGameSessionV1>();
+        assert_native_registration::<game::JoinGameSessionV1>();
+        assert_native_registration::<game::StartGameSessionV1>();
+        assert_native_registration::<game::CommitGameCheckpointV1>();
+        assert_native_registration::<game::ChallengeGameSessionV1>();
+        assert_native_registration::<game::CommitGameInputsV1>();
+        assert_native_registration::<game::RevealGameInputsV1>();
+        assert_native_registration::<game::AdvanceGameDeadlineV1>();
+        assert_native_registration::<game::ExpireGameSessionV1>();
+        assert_native_registration::<game::ClaimGamePayoutV1>();
+        assert_native_registration::<game::StakeGameItemV1>();
+        assert_native_registration::<RegisterCommitteePeerWithPop>();
+    }
     #[test]
     fn parliament_lifecycle_and_standalone_ballots_have_native_handlers() {
         use iroha_data_model::isi::governance;

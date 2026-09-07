@@ -138,9 +138,14 @@ def test_signed_release_observations_cannot_replay_physical_candidate(tmp_path: 
     verifier = captured["verifier"]
     profile = fixture.manifest["profiles"][0]
     report = json.loads(fixture.path(profile["qualification_report"]).read_text())
+    vk_digest = VERIFIER.rust_vk_set_digest(
+        [verifier._artifact_binding(role) for role in VERIFIER.ARTIFACT_ROLES],
+        fixture.manifest["protocols"],
+    )
     with pytest.raises(VERIFIER.KagemushaEvidenceError, match="release candidate or artifact set"):
         verifier._verify_physical_evidence(profile["physical_evidence"], profile["hardware_profile"],
-                                           profile["qualification_report"], report)
+                                           profile["qualification_report"], report,
+                                           profile["suite_id"], vk_digest)
 
 
 def test_manifest_must_retain_the_physical_provenance_sidecar(tmp_path: Path) -> None:
@@ -203,9 +208,16 @@ def test_physical_source_replacement_before_final_projection_is_rejected(
 ) -> None:
     fixture = _fixture(tmp_path / "fixture")
     source = VERIFIER.PHYSICAL_VERIFIER_PATH.read_bytes()
-    trusted_path = tmp_path / "trusted-physical.py"
+    trusted_path = tmp_path / "scripts" / "trusted-physical.py"
+    trusted_path.parent.mkdir(mode=0o700)
     trusted_path.write_bytes(source)
     trusted_path.chmod(0o600)
+    # Keep the real bundled source layout: the physical verifier independently
+    # reads the pinned native parser source before final closure revalidation.
+    native_source = tmp_path / "crates/connect_norito_bridge/src/kagemusha_sender_release_evidence.rs"
+    native_source.parent.mkdir(parents=True, mode=0o700)
+    native_source.write_bytes(PHYSICAL_TEST.physical.SENDER_PARSER_SOURCE.read_bytes())
+    native_source.chmod(0o600)
     monkeypatch.setattr(VERIFIER, "PHYSICAL_VERIFIER_PATH", trusted_path)
     original = VERIFIER.EvidenceVerifier._revalidate_closure
     reached_final_boundary = []

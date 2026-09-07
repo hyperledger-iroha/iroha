@@ -42893,15 +42893,8 @@ mod explorer_lookup_tests {
             "derive explorer lookup block leader fixture key",
         );
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(txs)
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
-        let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let mut committed = valid.commit_unchecked().unpack(|_| {});
+        let mut builder = BlockBuilder::new(txs)
+            .chain(0, state.view().latest_block().as_deref());
         if let Some(route_plans) = route_plans {
             use iroha_data_model::block::{
                 BlockExecutionContextBundle, ExternalExecutionContext,
@@ -42941,8 +42934,14 @@ mod explorer_lookup_tests {
                     )
                 })
                 .collect();
-            committed.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
+            builder = builder.with_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
         }
+        let unverified = builder.sign(leader.private_key()).unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, state_block, committed);
         (state, hashes)
     }
@@ -62290,7 +62289,7 @@ mod space_directory_manifest_helper_tests {
             public_only,
         )
         .await
-        .expect_err("mixed public/restricted account summary must be hidden");
+        .err().expect("mixed public/restricted account summary must be hidden");
         assert_eq!(summary.into_response().status(), StatusCode::NOT_FOUND);
     }
     routing_test! { sync manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows

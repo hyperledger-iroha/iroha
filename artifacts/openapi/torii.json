@@ -23615,7 +23615,7 @@
             "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal"
           },
           "participant_settlement": {
-            "$ref": "#/components/schemas/NativeAmxParticipantSettlementCommitment"
+            "$ref": "#/components/schemas/NativeAmxParticipantSettlement"
           },
           "participant_settlement_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -23794,121 +23794,105 @@
         ],
         "type": "object"
       },
-      "NativeAmxParticipantSettlementCommitment": {
+      "NativeAmxParticipantSettlement": {
         "additionalProperties": false,
-        "description": "Exact bounded zero-effect participant settlement. Group ordering, timestamp equality, current-source membership, and tx_count equality require semantic validation.",
+        "description": "Nonrecursive Native AMX participant control commitment. Source IDs are unique and retain candidate order; this type has no economic or nested fields.",
         "properties": {
-          "block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "lane_id": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
+          "dataspace_id": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
           "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "not": {
+                  "pattern": "^hash:0{63}1#"
+                }
+              }
+            ]
           },
-          "native_amx_receipts": {
-            "maxItems": 0,
-            "type": "array"
+          "participant_lane_block_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
           },
-          "nexus_fee_receipts": {
-            "maxItems": 0,
-            "type": "array"
+          "authority_context_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
           },
-          "receipts": {
+          "previous_native_settlement_hash": {
+            "description": "Required Native control history link; null for the first Native control. Ordinary lane blocks may interleave.",
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Hash"
+                  },
+                  {
+                    "not": {
+                      "pattern": "^hash:0{63}1#"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "source_ids": {
             "items": {
-              "$ref": "#/components/schemas/NativeAmxParticipantSettlementReceipt"
+              "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
+              "type": "string"
             },
-            "maxItems": 4096,
             "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "swap_metadata": {
-            "type": "null"
-          },
-          "total_local_amount": {
-            "const": "0"
-          },
-          "total_xor_after_haircut": {
-            "const": "0"
-          },
-          "total_xor_due": {
-            "const": "0"
-          },
-          "total_xor_variance": {
-            "const": "0"
-          },
-          "tx_count": {
-            "format": "uint64",
-            "maximum": 4096,
-            "minimum": 1,
-            "type": "integer"
+            "maxItems": 4096,
+            "uniqueItems": true,
+            "type": "array"
           }
         },
         "required": [
-          "block_height",
           "lane_id",
-          "lane_incarnation",
           "dataspace_id",
-          "tx_count",
-          "total_local_amount",
-          "total_xor_due",
-          "total_xor_after_haircut",
-          "total_xor_variance",
-          "swap_metadata",
-          "receipts",
-          "nexus_fee_receipts",
-          "native_amx_receipts"
+          "lane_incarnation",
+          "participant_lane_block_height",
+          "authority_context_height",
+          "previous_native_settlement_hash",
+          "source_ids"
         ],
-        "type": "object"
-      },
-      "NativeAmxParticipantSettlementReceipt": {
-        "additionalProperties": false,
-        "description": "One zero-effect source member in a grouped control-only Native AMX participant settlement.",
-        "properties": {
-          "local_amount": {
-            "const": "0"
-          },
-          "source_id": {
-            "description": "Ordered Native AMX participant source id as canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "timestamp_ms": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "xor_after_haircut": {
-            "const": "0"
-          },
-          "xor_due": {
-            "const": "0"
-          },
-          "xor_variance": {
-            "const": "0"
+        "type": "object",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "participant_lane_block_height": {
+                  "const": 1
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "previous_native_settlement_hash": {
+                  "type": "null"
+                }
+              }
+            }
           }
-        },
-        "required": [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms"
-        ],
-        "type": "object"
+        ]
       },
       "NativeAmxPhase": {
         "additionalProperties": false,

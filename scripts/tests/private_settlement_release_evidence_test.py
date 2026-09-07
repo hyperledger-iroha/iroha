@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import importlib.util
 import json
+import shutil
+import stat
 import struct
 import sys
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -106,6 +110,9 @@ FIXTURE_FORMAL_EVIDENCE_CODE_SHA256 = (
         FIXTURE_FORMAL_EVIDENCE_CODE_PAYLOADS
     )
 )
+_BASE_BUNDLE_TEMPLATE: tuple[
+    tempfile.TemporaryDirectory[str], Path, tuple[Path, ...]
+] | None = None
 FIXTURE_JAVA_VERSION_OUTPUT = 'openjdk version "21.0.8" 2025-07-15 LTS\n'
 FIXTURE_JAVA_VERSION_PAYLOAD = FIXTURE_JAVA_VERSION_OUTPUT.encode("utf-8")
 FIXTURE_JAVA_RUNTIME = {
@@ -216,6 +223,67 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
     """Exercise exact qualification, audit, inventory, and digest gates."""
 
     def make_bundle(self, root: Path) -> Path:
+        """Copy complete fixture bytes into an independent mutable directory.
+
+        Only generated input files are reused. Every caller still invokes the
+        real verifier, and no validation result is cached. The template is
+        lazy so a directly instantiated helper and a single selected test work
+        without unittest class setup. TemporaryDirectory and explicit exit
+        cleanup retain the template only for the current Python process.
+        """
+
+        root.mkdir(parents=True, exist_ok=True)
+        if not stat.S_ISDIR(root.lstat().st_mode) or any(root.iterdir()):
+            raise ValueError("fixture destination must be an empty real directory")
+        # unittest discovery and the runner's direct helper import can name
+        # this module differently. Share one template across those aliases.
+        owner = sys.modules.setdefault(
+            "scripts.tests.private_settlement_release_evidence_test",
+            sys.modules[__name__],
+        )
+        template = owner._BASE_BUNDLE_TEMPLATE
+        if template is None:
+            temporary = tempfile.TemporaryDirectory(prefix="aps-release-fixture-")
+            base = Path(temporary.name)
+            try:
+                manifest = self._build_bundle(base)
+                files = []
+                directories = [base]
+                for path in sorted(base.rglob("*")):
+                    metadata = path.lstat()
+                    if stat.S_ISDIR(metadata.st_mode):
+                        directories.append(path)
+                    elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                        files.append(path.relative_to(base))
+                        path.chmod(0o400)
+                    else:
+                        raise ValueError("fixture template must contain only real files")
+                for directory in reversed(directories):
+                    directory.chmod(0o500)
+                template = (temporary, manifest.relative_to(base), tuple(files))
+            except BaseException:
+                temporary.cleanup()
+                raise
+            owner._BASE_BUNDLE_TEMPLATE = template
+            atexit.register(temporary.cleanup)
+        temporary, manifest_relative, files = template
+        base = Path(temporary.name)
+        for relative in files:
+            source = base / relative
+            metadata = source.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("fixture template file was replaced by a link")
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # copyfile copies contents into a new inode; unlike copy2 it does
+            # not inherit the template's read-only mode. Never use hardlinks.
+            shutil.copyfile(source, destination)
+            destination.chmod(0o600)
+        return root / manifest_relative
+
+    def _build_bundle(self, root: Path) -> Path:
+        """Construct every participant, seed, trial and artifact in the fixture."""
+
         release_binary_path = Path("evidence") / "bin" / "iroha3d"
         release_binary_payload = b"reproducible iroha3d candidate\n"
         release_binary_digest = hashlib.sha256(release_binary_payload).hexdigest()
@@ -1299,6 +1367,101 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             leakage_artifact,
             (json.dumps(leakage_report, sort_keys=True) + "\n").encode(),
         )
+
+    def test_fixture_copies_are_isolated_and_template_is_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first, second, third = (
+                root / name for name in ("first", "second", "third")
+            )
+            with mock.patch.object(
+                self, "_build_bundle", wraps=self._build_bundle
+            ) as build:
+                first_manifest = self.make_bundle(first)
+                self.make_bundle(second)
+                owner = sys.modules[
+                    "scripts.tests.private_settlement_release_evidence_test"
+                ]
+                template = owner._BASE_BUNDLE_TEMPLATE
+                assert template is not None
+                base = Path(template[0].name)
+                root_tokens = {
+                    encoded
+                    for path in (base, base.resolve())
+                    for raw in (str(path).encode(),)
+                    for encoded in (raw, raw.hex().encode())
+                }
+                overlap = max(map(len, root_tokens)) - 1
+                expected = {}
+                for relative in template[2]:
+                    paths = [
+                        directory / relative for directory in (base, first, second)
+                    ]
+                    metadata = [path.lstat() for path in paths]
+                    self.assertTrue(
+                        all(stat.S_ISREG(item.st_mode) for item in metadata)
+                    )
+                    self.assertTrue(all(item.st_nlink == 1 for item in metadata))
+                    self.assertEqual(
+                        len({(item.st_dev, item.st_ino) for item in metadata}), 3
+                    )
+                    self.assertEqual(metadata[0].st_mode & 0o222, 0)
+                    self.assertTrue(
+                        all(item.st_mode & 0o200 for item in metadata[1:])
+                    )
+                    # Root-dependent contents would become stale after copying,
+                    # including a root embedded inside hex-encoded raw evidence.
+                    source_hash = hashlib.sha256()
+                    tail = b""
+                    with paths[0].open("rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            source_hash.update(chunk)
+                            window = tail + chunk
+                            for token in root_tokens:
+                                self.assertFalse(
+                                    token in window,
+                                    f"temporary root embedded in {relative}",
+                                )
+                            tail = window[-overlap:]
+                    digest = source_hash.hexdigest()
+                    expected[relative] = digest
+                    self.assertEqual(MODULE._sha256(paths[1]), digest)
+                    self.assertEqual(MODULE._sha256(paths[2]), digest)
+
+                # In-place writes would poison a hardlinked template. Deletion
+                # and extra files must also remain confined to this copy.
+                (first / "evidence/audit_report.txt").write_bytes(b"mutated audit\n")
+                (first / "evidence/source.commit").unlink()
+                (first / "unlisted.txt").write_bytes(b"test-local extra file\n")
+                with self.assertRaisesRegex(MODULE.EvidenceError, "inventory mismatch"):
+                    MODULE.verify_bundle(first_manifest)
+                self.make_bundle(third)
+                self.assertLessEqual(build.call_count, 1)
+                for directory in (base, second, third):
+                    files = {
+                        path.relative_to(directory)
+                        for path in directory.rglob("*")
+                        if path.is_file()
+                    }
+                    self.assertEqual(files, set(expected))
+                    for relative, digest in expected.items():
+                        self.assertEqual(MODULE._sha256(directory / relative), digest)
+                self.assertIs(owner._BASE_BUNDLE_TEMPLATE, template)
+
+    def test_fixture_destination_rejects_links_and_existing_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            link.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "empty real directory"):
+                self.make_bundle(link)
+            sentinel = real / "sentinel.txt"
+            sentinel.write_bytes(b"existing test state\n")
+            with self.assertRaisesRegex(ValueError, "empty real directory"):
+                self.make_bundle(real)
+            self.assertEqual(sentinel.read_bytes(), b"existing test state\n")
 
     def test_complete_exact_bundle_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

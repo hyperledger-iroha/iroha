@@ -7,6 +7,14 @@ use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+/// Closed native execution catalog's maximum canonical proof-envelope size.
+///
+/// This includes public replay data and the native cryptographic proof. It is a
+/// local type/admission ceiling, not permission to exceed transaction, block,
+/// Torii, gossip or data-availability limits. A deployment must qualify those
+/// independent limits before admitting funded execution profiles.
+pub const EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1: usize = 4 * 1024 * 1024;
+
 /// Simulation ticks per second in the immutable RaceV1 rules.
 pub const RACE_TICKS_PER_SECOND_V1: u32 = 30;
 /// Maximum duration of one RaceV1 run.
@@ -110,7 +118,7 @@ pub struct RaceCarStateV1 {
     pub boost_energy: u16,
     /// First completed simulation tick at which the car crossed the finish.
     pub finish_tick: Option<u32>,
-    /// Exact pre-tick removal boundary; finished cars cannot be disqualified.
+    /// Consensus removal boundary; a previous finish remains historical after forfeiture.
     pub dnf_tick: Option<u32>,
 }
 
@@ -132,9 +140,9 @@ pub struct RaceStateV1 {
 pub struct RaceStandingV1 {
     /// Original participant slot.
     pub slot: u8,
-    /// Finish tick, or None for a DNF.
+    /// Historical finish tick, if reached; forfeiture may subsequently remove eligibility.
     pub finish_tick: Option<u32>,
-    /// Exact pre-tick removal boundary; finished cars cannot be disqualified.
+    /// Consensus removal boundary; a previous finish remains historical after forfeiture.
     pub dnf_tick: Option<u32>,
     /// Final unwrapped progress.
     pub progress_mm: i64,
@@ -146,9 +154,10 @@ pub struct RaceStandingV1 {
 pub struct RaceResultV1 {
     /// Exact number of simulated ticks.
     pub ticks: u32,
-    /// Finishers by ascending finish tick, then DNFs by descending progress; slot breaks display ties.
+    /// Eligible racers before forfeits, then finish time and progress; slot breaks display ties.
     pub standings: Vec<RaceStandingV1>,
-    /// Every slot tied for the earliest finish; empty when nobody finished.
+    /// Earliest finishers, a sole eligible survivor, or eligible distance leaders at timeout.
+    /// Empty for an unfinished prefix or a terminal all-forfeit refund.
     pub winners: Vec<u8>,
 }
 
@@ -160,7 +169,7 @@ pub struct RacePublicInputsV1 {
     pub network_id: NetworkId,
     /// One immutable race identifier.
     pub race_id: Hash,
-    /// Commitment to the canonical participant and session-key roster.
+    /// Commitment to the immutable participant, session-key, wager and equipment admission body.
     pub roster_hash: Hash,
     /// Commitment to the complete immutable physics and race rules.
     pub rules_hash: Hash,
@@ -174,7 +183,27 @@ pub struct RacePublicInputsV1 {
     pub result: RaceResultV1,
 }
 
-/// Exact first-release native execution proof envelope.
+/// Application-neutral statement for a compiled native execution relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+pub struct ExecutionPublicInputsV1 {
+    /// Exact runtime network.
+    pub network_id: NetworkId,
+    /// One immutable game session.
+    pub session_id: Hash,
+    /// Exact canonical application manifest commitment.
+    pub manifest_hash: Hash,
+    /// Exact immutable wallet, gameplay-key, wager and equipment admission commitment.
+    pub roster_hash: Hash,
+    /// Authenticated cumulative application input transcript commitment.
+    pub transcript_root: Hash,
+    /// Commitment to all consensus-resolved input and removal events.
+    pub dispute_root: Hash,
+    /// Exact typed generic outcome commitment, interpreted only after adapter verification.
+    pub outcome_hash: Hash,
+}
+
+/// Exact first-release application-neutral native execution proof envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
 pub struct ExecutionProofEnvelopeV1 {
@@ -183,7 +212,7 @@ pub struct ExecutionProofEnvelopeV1 {
     /// Immutable compiled verifier/profile digest.
     pub profile_id: Hash,
     /// Exact typed public statement.
-    pub statement: RacePublicInputsV1,
+    pub statement: ExecutionPublicInputsV1,
     /// Canonical bounded native STARK proof payload.
     pub proof_bytes: Vec<u8>,
 }
@@ -193,6 +222,14 @@ pub struct ExecutionProofEnvelopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
 pub struct RaceProofPayloadV1 {
+    /// Exact generic session manifest; this adapter decodes only its compiled parameters.
+    pub manifest: crate::game::GameManifestV1,
+    /// Public immutable admission body whose canonical commitment must match the statement.
+    pub admission: crate::game::GameAdmissionBodyV1,
+    /// Typed generic payout outcome, derived from the proof-bound RaceV1 final state.
+    pub outcome: crate::game::GameOutcomeV1,
+    /// Race-specific relation statement; it is not part of any generic native instruction.
+    pub relation_inputs: RacePublicInputsV1,
     /// Complete input and consensus DNF transcript.
     pub replay: RaceReplayV1,
     /// Claimed terminal state, constrained by the final AIR boundary.
@@ -208,7 +245,11 @@ pub struct RaceProofPayloadV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
 pub struct RaceProverRequestV1 {
     /// Complete network and ledger-bound claim.
-    pub statement: RacePublicInputsV1,
+    pub statement: ExecutionPublicInputsV1,
+    /// Exact generic session manifest containing the compiled race parameters.
+    pub manifest: crate::game::GameManifestV1,
+    /// Public immutable participants and NFT authorizations; contains no custody signing keys.
+    pub admission: crate::game::GameAdmissionBodyV1,
     /// Available canonical input transcript.
     pub replay: RaceReplayV1,
     /// Claimed state at the retained signed checkpoint, when present.
@@ -228,7 +269,7 @@ pub enum ExecutionProofRelationV1 {
 }
 
 /// Exact native descriptor retained by the compiled execution-profile registry.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
 pub struct ExecutionProofProfileV1 {
     /// Descriptor schema version, exactly one.
@@ -241,10 +282,25 @@ pub struct ExecutionProofProfileV1 {
     pub relation: ExecutionProofRelationV1,
     /// Release target, not a claim that qualification has already passed.
     pub target_soundness_bits: u16,
-    /// Absolute cryptographic wire bound; transport bounds are separate admission conditions.
+    /// Maximum canonical execution envelope, including public replay and proof bytes.
+    /// Transport and transaction bounds are separate admission conditions.
     pub maximum_proof_bytes: u32,
     /// True only after native correctness, cryptographic, and resource release gates pass.
     pub qualified: bool,
+}
+
+/// Compact receipt for mathematical execution validity; it does not authorize a race payout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+pub struct ExecutionProofVerificationV1 {
+    /// Exact compiled native verifier profile.
+    pub profile_id: Hash,
+    /// Domain-separated commitment to the verified public statement and profile.
+    pub statement_hash: Hash,
+    /// Exact canonical envelope retained in the finalized transaction body.
+    pub proof_hash: Hash,
+    /// Consensus block height at which native verification succeeded.
+    pub verified_at_height: u64,
 }
 
 #[cfg(test)]
@@ -282,6 +338,56 @@ mod tests {
                     .curvature()
                     .into_iter()
                     .all(|value| (-3..=3).contains(&value))
+            );
+        }
+    }
+
+    #[test]
+    fn state_and_result_preserve_exact_tick_zero_removal() {
+        let state = RaceStateV1 {
+            tick: 6,
+            track: RaceTrackV1::Harbor,
+            cars: vec![RaceCarStateV1 {
+                progress_mm: -4000,
+                lateral_mm: -1800,
+                speed_mm_per_tick: 0,
+                lateral_velocity_mm_per_tick: -3,
+                boost_energy: 975,
+                finish_tick: None,
+                dnf_tick: Some(0),
+            }],
+        };
+        let result = RaceResultV1 {
+            ticks: 6,
+            standings: vec![RaceStandingV1 {
+                slot: 0,
+                finish_tick: None,
+                dnf_tick: Some(0),
+                progress_mm: -4000,
+            }],
+            winners: vec![],
+        };
+        let state_bytes = norito::encode_canonical(&state).expect("canonical state");
+        let result_bytes = norito::encode_canonical(&result).expect("canonical result");
+        assert_eq!(
+            norito::decode_canonical::<RaceStateV1>(&state_bytes).expect("decode state"),
+            state
+        );
+        assert_eq!(
+            norito::decode_canonical::<RaceResultV1>(&result_bytes).expect("decode result"),
+            result
+        );
+        #[cfg(feature = "json")]
+        {
+            let state_json = norito::json::to_json(&state).expect("state JSON");
+            let result_json = norito::json::to_json(&result).expect("result JSON");
+            assert_eq!(
+                norito::json::from_json::<RaceStateV1>(&state_json).expect("read state JSON"),
+                state
+            );
+            assert_eq!(
+                norito::json::from_json::<RaceResultV1>(&result_json).expect("read result JSON"),
+                result
             );
         }
     }

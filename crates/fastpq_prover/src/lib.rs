@@ -1,10 +1,11 @@
 //! FASTPQ lane prover.
 //!
-//! This crate provides the production FASTPQ-ISI prover and verifier
-//! implementation.  It exposes deterministic commitments, wiring to the
-//! sole V1 parameter set, and the backend that drives the
-//! end-to-end STARK pipeline.  Downstream callers interact with the canonical
-//! constructor which initialises the production backend.
+//! This crate implements the FASTPQ-ISI prover and verifier under development.
+//! It exposes deterministic commitments, the sole first-release V1 parameter
+//! set, and the backend that drives the STARK pipeline. Production qualification
+//! is unavailable: verification still replays the complete statement because
+//! the transfer AIR and cryptographic qualification are incomplete. See the
+//! repository's `specs/fastpq_production_readiness.md` for the completion gates.
 //!
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
@@ -12,6 +13,7 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
+mod artifact_dispatch;
 mod axt_binding;
 mod backend;
 mod batch;
@@ -22,6 +24,7 @@ mod bn254_poseidon;
 mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
+mod digest384_batch;
 mod error;
 #[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod fastpq_cuda;

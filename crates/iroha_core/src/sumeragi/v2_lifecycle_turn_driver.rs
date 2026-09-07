@@ -1124,6 +1124,7 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionLifecycleCompletionSelectionV1::RestartRequired;
         };
         let (dispatch, ack) = completion.into_publication_parts();
+        let physical_completion = ack.physical_completion();
         match owner.coordinator.complete_durable_validate_dispatch(
             &mut owner.registry,
             dispatch,
@@ -1135,7 +1136,10 @@ impl LaunchedProductionLifecycleV1 {
                 assert!(pending_lifecycle_completion.is_none());
                 *pending_lifecycle_completion = Some(
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(
-                        ReadyValidateSuccessorV1::from_validated(published),
+                        ReadyValidateSuccessorV1::from_validated(
+                            published,
+                            physical_completion,
+                        ),
                     ),
                 );
                 ack.acknowledge_after_publication();
@@ -1148,7 +1152,10 @@ impl LaunchedProductionLifecycleV1 {
                 assert!(pending_lifecycle_completion.is_none());
                 *pending_lifecycle_completion = Some(
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(
-                        ReadyValidateSuccessorV1::from_rejected(published),
+                        ReadyValidateSuccessorV1::from_rejected(
+                            published,
+                            physical_completion,
+                        ),
                     ),
                 );
                 ack.acknowledge_after_publication();
@@ -1718,6 +1725,7 @@ impl LaunchedProductionLifecycleV1 {
                             executor,
                             runner.debt(),
                             ordinal,
+                            None,
                         ),
                         None => owner.dispatch_completion_with_runner_debt(
                             services,

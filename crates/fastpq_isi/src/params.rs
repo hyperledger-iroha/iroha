@@ -7,10 +7,10 @@ pub const FASTPQ_FINAL_V1_ID: &str = "fastpq-state-transition-stark-v1";
 pub const FASTPQ_CATALOG_V1: &str = "iroha-privacy-exact12-v1";
 /// Required aggregate qROM security for the first release.
 pub const FASTPQ_REQUIRED_SECURITY_BITS_V1: u32 = 128;
-/// Maximum V1 unquotiented composition degree relative to the trace length.
+/// Conservative exclusive V1 quotient degree bound relative to the trace length.
 pub const FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1: u32 = 2;
 /// Evaluation count retained by the current V1 complete terminal FRI opening.
-pub const FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1: u32 = 2;
+pub const FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1: u32 = 4;
 /// Number of independently generated Goldilocks digest lanes.
 pub const FASTPQ_DIGEST_LANES_V1: u32 = 6;
 /// Bits in each canonical Goldilocks digest lane.
@@ -201,7 +201,10 @@ impl WideUint512V1 {
         let mut output = Self::default();
         let word_shift = usize::try_from(shift / 64).ok()?;
         let bit_shift = shift % 64;
-        let limbs = [value as u64, (value >> 64) as u64];
+        let limbs = [
+            u64::try_from(value & u128::from(u64::MAX)).ok()?,
+            u64::try_from(value >> 64).ok()?,
+        ];
         for (source_index, limb) in limbs.into_iter().enumerate() {
             if limb == 0 {
                 continue;
@@ -245,10 +248,10 @@ impl WideUint512V1 {
 }
 
 fn checked_shift(value: u128, shift: u32) -> Option<u128> {
-    // `checked_shl` checks only the shift count; it still discards significant
-    // high bits. A truncated security-bound numerator would understate the
-    // adversary's success probability, so require an exact multiplication.
-    value.checked_mul(1_u128.checked_shl(shift)?)
+    let shifted = value.checked_shl(shift)?;
+    // checked_shl checks the shift count, but can still discard high bits.
+    // Exact security accounting must reject every unrepresentable numerator.
+    (shifted >> shift == value).then_some(shifted)
 }
 
 fn qrom_bound_terms(
@@ -261,7 +264,7 @@ fn qrom_bound_terms(
         || inputs.composition_degree_expansion >= inputs.blowup_factor
         || !inputs.terminal_domain_size.is_power_of_two()
         || inputs.terminal_domain_size < 2
-        || queries % 2 != 0
+        || !queries.is_multiple_of(2)
     {
         return None;
     }
@@ -269,11 +272,10 @@ fn qrom_bound_terms(
         - inputs.composition_degree_expansion.ilog2())
     .min(inputs.terminal_domain_size.ilog2());
     // The square-root loss is represented exactly by halving the classical proximity exponent.
-    // The unquotiented quadratic composition has degree < 2 * N_trace, so the
-    // physical LDE blowup alone would overstate this model's sampling exponent.
-    // The current schedule reduces even further to two terminal evaluations;
-    // checking a constant there admits starting degree < N_eval / 2. Preserve
-    // that rounding loss instead of claiming the intended N_eval / 4 bound.
+    // The quotient composition has degree < 2 * N_trace, so the physical
+    // LDE blowup alone would overstate this model's sampling exponent. The
+    // four-point terminal preserves that bound; smaller terminal domains would
+    // round the degree bound upward and must retain that loss in the model.
     let sampling_denominator_log2 = queries.checked_mul(inverse_rate_log2)?.checked_div(2)?;
     let oracle_square_shift = inputs.quantum_oracle_query_log2_bound.checked_mul(2)?;
     let sampling_numerator =
@@ -329,14 +331,16 @@ fn exact_sum_below_target(
 
 /// Evaluate the exact dyadic aggregate bound for one candidate query count.
 ///
-/// Returns `None` for inadmissible inputs or any numerator that cannot be
-/// represented exactly; overflow must never weaken the reported bound.
+/// Returns `None` for invalid inputs or numerators that cannot be represented
+/// exactly; overflowing terms are never truncated into smaller bounds.
 #[must_use]
 pub fn calculate_fastpq_qrom_bound_v1(
     inputs: FastpqQromBoundInputsV1,
     queries: u32,
 ) -> Option<FastpqQromBoundReportV1> {
-    if queries < FASTPQ_MIN_QUERY_COUNT_V1 || queries % FASTPQ_QUERY_COUNT_GRANULARITY_V1 != 0 {
+    if queries < FASTPQ_MIN_QUERY_COUNT_V1
+        || !queries.is_multiple_of(FASTPQ_QUERY_COUNT_GRANULARITY_V1)
+    {
         return None;
     }
     let (sampling_term, collision_term) = qrom_bound_terms(inputs, queries)?;
@@ -374,10 +378,9 @@ pub fn select_fastpq_query_count_v1(inputs: FastpqQromBoundInputsV1) -> Option<u
 /// Query count currently frozen in V1 wires and fixtures.
 ///
 /// TODO: migrate parameters and release artifacts together after protocol review.
-/// Accounting for the unquotiented quadratic composition makes the current
-/// count fail the arithmetic target. Accounting also for the two-point FRI
-/// terminal schedule makes [`select_fastpq_query_count_v1`] select 400, which
-/// still does not establish qualification.
+/// Accounting for the quotient degree bound and four-point FRI terminal makes
+/// the current count fail the arithmetic target. [`select_fastpq_query_count_v1`]
+/// selects 200; that arithmetic result still does not establish qualification.
 pub const FASTPQ_QUERY_COUNT_V1: u32 = 136;
 
 /// Sole canonical FASTPQ first-release parameter set.
@@ -395,7 +398,7 @@ pub const FASTPQ_FINAL_V1: StarkParameterSet = StarkParameterSet {
     fri: FriParameters {
         arity: 2,
         blowup_factor: 8,
-        max_reductions: 18,
+        max_reductions: 17,
         queries: FASTPQ_QUERY_COUNT_V1,
     },
 };
@@ -411,6 +414,85 @@ pub fn find_by_name(name: &str) -> Option<&'static StarkParameterSet> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_shift_matches_checked_multiplication() {
+        for value in [
+            0,
+            1,
+            2,
+            u128::from(u64::MAX),
+            1_u128 << 64,
+            1_u128 << 127,
+            u128::MAX,
+        ] {
+            for shift in 0..=128 {
+                let expected = 1_u128
+                    .checked_shl(shift)
+                    .and_then(|factor| value.checked_mul(factor));
+                assert_eq!(
+                    checked_shift(value, shift),
+                    expected,
+                    "value {value}, shift {shift}"
+                );
+            }
+        }
+        assert_eq!(checked_shift(1, u32::MAX), None);
+    }
+
+    #[test]
+    fn wide_uint_shift_matches_individual_bits_at_every_boundary() {
+        for value in [
+            0,
+            1,
+            u128::from(u64::MAX),
+            1_u128 << 64,
+            1_u128 << 127,
+            u128::MAX,
+        ] {
+            for shift in 0..=513 {
+                let mut expected = [0_u64; 8];
+                let mut overflowed = false;
+                for bit in 0..128 {
+                    if value & (1_u128 << bit) != 0 {
+                        let target = bit + shift;
+                        if target >= 512 {
+                            overflowed = true;
+                        } else {
+                            expected[usize::try_from(target / 64).unwrap()] |=
+                                1_u64 << (target % 64);
+                        }
+                    }
+                }
+                assert_eq!(
+                    WideUint512V1::from_u128_shifted(value, shift),
+                    (!overflowed).then_some(WideUint512V1(expected)),
+                    "value {value}, shift {shift}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exact_calculator_rejects_numerator_overflow() {
+        for (aggregate_targets, quantum_oracle_query_log2_bound) in [
+            // Both numerators overflow: sampling = 2^147, collision = 2^252.
+            (1_u64 << 63, 42),
+            // Only collision overflows: sampling = 2^76, collision = 2^130.
+            (1_u64 << 32, 22),
+        ] {
+            let inputs = FastpqQromBoundInputsV1 {
+                aggregate_targets,
+                quantum_oracle_query_log2_bound,
+                required_security_bits: 256,
+                ..FASTPQ_QROM_BOUND_INPUTS_V1
+            };
+            // Truncating either overflowing term to zero would incorrectly
+            // report the requested security target as met at this query count.
+            assert!(calculate_fastpq_qrom_bound_v1(inputs, 256).is_none());
+            assert!(select_fastpq_query_count_v1(inputs).is_none());
+        }
+    }
 
     fn mul_mod(left: u64, right: u64) -> u64 {
         let modulus = u128::from(crate::poseidon::FIELD_MODULUS);
@@ -458,14 +540,14 @@ mod tests {
     fn exact_calculator_accounts_for_composition_and_terminal_rounding() {
         assert_eq!(
             select_fastpq_query_count_v1(FASTPQ_QROM_BOUND_INPUTS_V1),
-            Some(400)
+            Some(200)
         );
         let previous = calculate_fastpq_qrom_bound_v1(
             FASTPQ_QROM_BOUND_INPUTS_V1,
-            400 - FASTPQ_QUERY_COUNT_GRANULARITY_V1,
+            200 - FASTPQ_QUERY_COUNT_GRANULARITY_V1,
         )
         .expect("previous multiple of eight is admissible input");
-        let selected = calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 400)
+        let selected = calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 200)
             .expect("selected count is admissible input");
         assert!(!previous.arithmetic_target_met);
         assert!(selected.arithmetic_target_met);
@@ -484,7 +566,7 @@ mod tests {
         let frozen =
             calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, FASTPQ_QUERY_COUNT_V1)
                 .expect("frozen query count is admissible input");
-        assert_eq!(frozen.sampling_term.denominator_log2, 68);
+        assert_eq!(frozen.sampling_term.denominator_log2, 136);
         assert!(!frozen.arithmetic_target_met);
         assert_eq!(
             frozen.production_qualification,
@@ -507,10 +589,13 @@ mod tests {
 
     #[test]
     fn four_point_terminal_preserves_the_intended_quadratic_degree_bound() {
-        let four_point = FastpqQromBoundInputsV1 {
-            terminal_domain_size: 4,
-            ..FASTPQ_QROM_BOUND_INPUTS_V1
+        let four_point = FASTPQ_QROM_BOUND_INPUTS_V1;
+        assert_eq!(four_point.terminal_domain_size, 4);
+        let overfolded = FastpqQromBoundInputsV1 {
+            terminal_domain_size: 2,
+            ..four_point
         };
+        assert_eq!(select_fastpq_query_count_v1(overfolded), Some(400));
         assert_eq!(select_fastpq_query_count_v1(four_point), Some(200));
         let report = calculate_fastpq_qrom_bound_v1(four_point, 200).unwrap();
         assert_eq!(report.sampling_term.denominator_log2, 200);
@@ -535,6 +620,7 @@ mod tests {
 
     #[test]
     fn malformed_query_counts_and_non_dyadic_blowups_are_rejected() {
+        assert!(qrom_bound_terms(FASTPQ_QROM_BOUND_INPUTS_V1, 65).is_none());
         assert!(calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 63).is_none());
         assert!(calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 65).is_none());
         let mut invalid = FASTPQ_QROM_BOUND_INPUTS_V1;

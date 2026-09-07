@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    prelude::{AcceptedTransaction, StateReadOnly},
-    smartcontracts::Execute,
-};
+use crate::{prelude::StateReadOnly, smartcontracts::Execute};
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
@@ -26,9 +23,6 @@ fn wonderland_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("domain id")
 }
 fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-    Account::new(account_id.clone())
-}
-fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
     Account::new(account_id.clone())
 }
 #[test]
@@ -171,714 +165,227 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
         "revoking role should invalidate cache and revoke execution permission"
     );
 }
-fn build_test_block(
-    accepted: AcceptedTransaction<'static>,
-    parent: Option<&SignedBlock>,
-    signer: &iroha_crypto::PrivateKey,
-) -> crate::block::NewBlock {
-    crate::block::BlockBuilder::new(vec![accepted])
-        .chain(0, parent)
-        .sign(signer)
-        .unpack(|_| {})
-}
-fn install_permission_cache_replay_parameters(state: &State) {
-    let mut parameters = state.world.parameters.block();
-    parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
-        iroha_data_model::parameter::system::SumeragiNposParameters::default()
-            .into_custom_parameter(),
-    ));
-    parameters.commit();
-}
-fn replay_permission_cache_blocks(
-    kura: &Arc<Kura>,
-    state: &mut State,
-    topology: &crate::sumeragi::network_topology::Topology,
-    block_count: usize,
-) -> Result<()> {
-    super::replay_validation_tests::replay_blocks_from_kura_range(
-        kura,
-        state,
-        topology,
-        1,
-        1,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-    )?;
-    install_permission_cache_replay_parameters(state);
-    if block_count > 1 {
-        super::replay_validation_tests::replay_blocks_from_kura_range(
-            kura,
-            state,
-            topology,
-            2,
-            block_count,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-        )?;
-    }
-    Ok(())
+fn assert_replayed_permission_cache(
+    state: &State,
+    registrar: &AccountId,
+    owner: &AccountId,
+    trigger_id: &TriggerId,
+    expected: bool,
+) {
+    let parent = state
+        .view()
+        .latest_block()
+        .expect("committed permission-cache parent");
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(parent.header().height().get() + 1).expect("next height"),
+        Some(parent.hash()),
+        None,
+        None,
+        u64::try_from(
+            (parent.header().creation_time() + std::time::Duration::from_secs(1)).as_millis(),
+        )
+        .expect("logical time fits u64"),
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    assert!(
+        stx.perm_cache.needs_hydration(registrar),
+        "a fresh execution/restart must hydrate permissions from committed state"
+    );
+    assert_eq!(
+        stx.can_register_trigger_for(registrar, owner),
+        expected,
+        "registration permission must reflect the authenticated block prefix"
+    );
+    assert_eq!(
+        stx.can_execute_trigger_for(registrar, trigger_id),
+        expected,
+        "execution permission must reflect the authenticated block prefix"
+    );
+    let expected_count = usize::from(expected);
+    let summary = stx.ensure_permission_summary(registrar);
+    assert_eq!(summary.reg_trigger_authorities.len(), expected_count);
+    assert_eq!(summary.exec_trigger_ids.len(), expected_count);
+    assert!(
+        !stx.perm_cache.needs_hydration(registrar),
+        "the actual WSV summary must be cached"
+    );
+    assert_eq!(
+        stx.can_register_trigger_for(registrar, owner),
+        expected,
+        "repeat registration cache hit"
+    );
+    assert_eq!(
+        stx.can_execute_trigger_for(registrar, trigger_id),
+        expected,
+        "repeat execution cache hit"
+    );
+    assert_eq!(
+        stx.ensure_permission_summary(registrar)
+            .reg_trigger_authorities
+            .len(),
+        expected_count
+    );
 }
 #[test]
 fn permission_cache_rebuilds_after_restart() {
     // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
     // platform-default worker stack for this integration-heavy scenario.
-    let handle = std::thread::Builder::new()
-        .name("permission_cache_rebuilds_after_restart".to_owned())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(permission_cache_rebuilds_after_restart_impl)
-        .expect("spawn permission cache replay test");
+    let handle =
+        crate::sumeragi::sumeragi_thread_builder("permission_cache_rebuilds_after_restart")
+            .spawn(permission_cache_rebuilds_after_restart_impl)
+            .expect("spawn permission cache replay test");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
 }
 #[allow(clippy::too_many_lines)]
 fn permission_cache_rebuilds_after_restart_impl() {
-    use iroha_config::{
-        base::WithOrigin,
-        parameters::{
-            actual::{Kura as Config, LaneConfig},
-            defaults::kura::BLOCKS_IN_MEMORY,
+    use iroha_data_model::isi::{InstructionBox, Log, Register};
+    use iroha_data_model::{
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
         },
     };
-    use iroha_data_model::{
-        ChainId,
-        block::{BlockHeader, SignedBlock},
-        domain::Domain,
-        isi::{Grant, InstructionBox},
-        prelude::PeerId,
-        transaction::TransactionBuilder,
-        trigger::TriggerId,
-    };
-    use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
-    use iroha_primitives::time::TimeSource;
-    use iroha_test_samples::{
-        SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-    };
-    use std::{
-        borrow::Cow,
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-    };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    #[cfg(debug_assertions)]
-    {
-        println!(
-            "permission_cache_rebuilds_after_restart temp dir: {}",
-            temp_dir.path().display()
-        );
-    }
-    let make_config = |dir: &tempfile::TempDir| Config {
-        init_mode: iroha_config::kura::InitMode::Strict,
-        store_dir: WithOrigin::inline(dir.path().to_path_buf()),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: BLOCKS_IN_MEMORY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::kura::FsyncMode::Batched,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-    };
-    let lane_config = LaneConfig::default();
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&make_config(&temp_dir), &lane_config)
-            .expect("init kura");
-    let live_query = {
-        let _guard = runtime.enter();
-        crate::query::store::LiveQueryStore::start_test()
-    };
-    let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-    let make_world = || {
-        World::with(
-            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        )
-    };
-    let state = State::new(make_world(), Arc::clone(&kura), live_query);
-    {
-        let params_block = state.world.parameters.block();
-        params_block.commit();
-    }
-    let mut recorded_blocks: Vec<Arc<SignedBlock>> = Vec::new();
-    let leader_keypair =
-        crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-    let (leader_public_key, leader_private_key) = leader_keypair.into_parts();
-    let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-        leader_public_key.clone(),
-    )]);
-    let leader_pop =
-        iroha_crypto::bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP");
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (registrar, registrar_keypair) = gen_account_in("wonderland");
     let (owner, owner_keypair) = gen_account_in("wonderland");
-    let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-    let mut genesis_builder =
-        GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-            .set_topology(vec![GenesisTopologyEntry::new(
-                PeerId::new(leader_public_key.clone()),
-                leader_pop,
-            )]);
-    genesis_builder = genesis_builder
-        .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
-        .account(registrar_keypair.public_key().clone())
-        .account(owner_keypair.public_key().clone())
-        .finish_domain()
-        .append_instruction(Register::trigger(iroha_data_model::trigger::Trigger::new(
+    let trigger_id: TriggerId = "trigger_alpha".parse().expect("trigger id");
+    let genesis_instructions = vec![
+        InstructionBox::from(Register::domain(Domain::new(wonderland_domain_id()))),
+        InstructionBox::from(Register::account(Account::new(AccountId::new(
+            registrar_keypair.public_key().clone(),
+        )))),
+        InstructionBox::from(Register::account(Account::new(AccountId::new(
+            owner_keypair.public_key().clone(),
+        )))),
+        InstructionBox::from(Register::trigger(Trigger::new(
             trigger_id.clone(),
-            iroha_data_model::trigger::action::Action::new(
+            Action::new(
                 vec![InstructionBox::from(Log::new(
                     iroha_logger::Level::INFO,
                     "permission cache trigger".to_owned(),
                 ))],
-                iroha_data_model::trigger::action::Repeats::Indefinitely,
+                Repeats::Indefinitely,
                 owner.clone(),
-                iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(owner.clone()),
             )
-            .expect("trigger action fixture satisfies validation invariants"),
-        )))
-        .append_instruction(Grant::account_permission(CanManageRoles, owner.clone()));
-    let genesis_block = genesis_builder
-        .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("genesis");
-    {
-        let time_source = TimeSource::new_system();
-        let mut voting_block = None;
-        let (valid_genesis, mut state_block) =
-            crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
-                genesis_block.0.clone(),
-                &topology,
-                &genesis_id,
-                &time_source,
-                &state,
-                &mut voting_block,
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            )
-            .unpack(|_| {})
-            .expect("valid genesis");
-        let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
-        let _ =
-            state_block.apply_without_execution(&committed_genesis, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let block_arc = Arc::new(committed_genesis.into());
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store genesis block");
-        let height = block_arc.header().height().get();
-        kura.store_wsv_checkpoint(
-            height,
-            block_arc.hash(),
-            crate::snapshot::canonical_state_snapshot_hash(&state),
-        )
-        .expect("store genesis WSV checkpoint");
-        let height_usize =
-            usize::try_from(height).expect("block height must fit in usize for tests");
-        assert!(
-            kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                .is_some(),
-            "genesis block should persist"
+            .expect("canonical trigger action"),
+        ))),
+        InstructionBox::from(Grant::account_permission(CanManageRoles, owner.clone())),
+    ];
+    let mut fixture =
+        super::strict_replay_tests::StrictReplayFixture::new_with_genesis_instructions(
+            genesis_instructions,
         );
-        recorded_blocks.push(Arc::clone(&block_arc));
-    }
-    install_permission_cache_replay_parameters(&state);
-    {
-        let state_view = state.view();
-        let world_view = state_view.world();
-        assert!(
-            world_view.accounts().get(&registrar).is_some(),
-            "registrar account should exist after genesis"
-        );
-        assert!(
-            world_view.accounts().get(&owner).is_some(),
-            "owner account should exist after genesis"
-        );
-    }
     let permission_register = CanRegisterTrigger {
         authority: owner.clone(),
     };
     let permission_execute = CanExecuteTrigger {
         trigger: trigger_id.clone(),
     };
-    {
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height = NonZeroU64::new(2).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        Grant::account_permission(permission_register.clone(), registrar.clone())
-            .execute(&owner, &mut stx)
-            .expect("dry-run grant register");
-        Grant::account_permission(permission_execute.clone(), registrar.clone())
-            .execute(&owner, &mut stx)
-            .expect("dry-run grant execute");
-    }
-    let grant_tx = TransactionBuilder::new(
-        state.network_id,
-        owner.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Grant::account_permission(
-            permission_register.clone(),
-            registrar.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            permission_execute.clone(),
-            registrar.clone(),
-        )),
-    ])
-    .sign(owner_keypair.private_key());
-    let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
-    let latest_block = state.view().latest_block();
-    let unverified_grant =
-        build_test_block(accepted_grant, latest_block.as_deref(), &leader_private_key);
-    {
-        let mut state_block = state.block(unverified_grant.header());
-        let committed_grant = unverified_grant
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _ = state_block.apply_without_execution(&committed_grant, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let signed_block: SignedBlock = committed_grant.into();
-        assert!(
-            signed_block.error(0).is_none(),
-            "grant transaction rejected: {:?}",
-            signed_block.error(0)
-        );
-        let block_arc = Arc::new(signed_block);
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store grant block");
-        let height = block_arc.header().height().get();
-        kura.store_wsv_checkpoint(
-            height,
-            block_arc.hash(),
-            crate::snapshot::canonical_state_snapshot_hash(&state),
-        )
-        .expect("store grant WSV checkpoint");
-        let height_usize =
-            usize::try_from(height).expect("block height must fit in usize for tests");
-        assert!(
-            kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                .is_some(),
-            "grant block should persist"
-        );
-        recorded_blocks.push(Arc::clone(&block_arc));
-    }
-    {
-        let state_view = state.view();
-        let world_view = state_view.world();
-        assert!(
-            world_view.account_permissions().get(&registrar).is_some(),
-            "grant block should register permissions"
-        );
-    }
-    {
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height = NonZeroU64::new(3).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        let summary = stx.ensure_permission_summary(&registrar);
-        let reg_cached = summary.reg_trigger_authorities.len();
-        let exec_cached = summary.exec_trigger_ids.len();
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "permission should exist before restart (cached reg entries: {reg_cached})"
-        );
-        assert!(
-            stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "execute permission should exist before restart (cached exec entries: {exec_cached})"
-        );
-    }
-    drop(state);
-    let live_query = {
-        let _guard = runtime.enter();
-        crate::query::store::LiveQueryStore::start_test()
-    };
-    let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-    {
-        let params_block = state.world.parameters.block();
-        params_block.commit();
-    }
-    replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-        .expect("replay stored blocks");
-    {
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        let mut summary = AccountPermissionSummary::default();
-        summary.apply_grant(&Permission::from(permission_register.clone()));
-        summary.apply_grant(&Permission::from(permission_execute.clone()));
-        stx.perm_cache.insert_summary(registrar.clone(), summary);
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "permission should exist after replay"
-        );
-        assert!(
-            stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "execute permission should exist after replay"
-        );
-        let summary = stx.ensure_permission_summary(&registrar);
-        let reg_cached = summary.reg_trigger_authorities.len();
-        let exec_cached = summary.exec_trigger_ids.len();
-        assert_eq!(reg_cached, 1);
-        assert_eq!(exec_cached, 1);
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "repeat hit should stay cached"
-        );
-        assert_eq!(
-            stx.ensure_permission_summary(&registrar)
-                .reg_trigger_authorities
-                .len(),
-            reg_cached
-        );
-    }
-    let revoke_tx = TransactionBuilder::new(
-        state.network_id,
-        owner.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Revoke::account_permission(
-            permission_register.clone(),
-            registrar.clone(),
-        )),
-        InstructionBox::from(Revoke::account_permission(
-            permission_execute.clone(),
-            registrar.clone(),
-        )),
-    ])
-    .sign(owner_keypair.private_key());
-    let accepted_revoke = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_tx));
-    let latest_block = state.view().latest_block();
-    let unverified_revoke = build_test_block(
-        accepted_revoke,
-        latest_block.as_deref(),
-        &leader_private_key,
-    );
-    {
-        let mut state_block = state.block(unverified_revoke.header());
-        let committed_revoke = unverified_revoke
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _ =
-            state_block.apply_without_execution(&committed_revoke, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let block_arc = Arc::new(committed_revoke.into());
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store revoke block");
-        let height = block_arc.header().height().get();
-        kura.store_wsv_checkpoint(
-            height,
-            block_arc.hash(),
-            crate::snapshot::canonical_state_snapshot_hash(&state),
-        )
-        .expect("store revoke WSV checkpoint");
-        let height_usize =
-            usize::try_from(height).expect("block height must fit in usize for tests");
-        assert!(
-            kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                .is_some(),
-            "revoke block should persist"
-        );
-        recorded_blocks.push(Arc::clone(&block_arc));
-    }
-    let latest_hash = state
-        .view()
-        .latest_block()
-        .as_ref()
-        .map(|block| block.hash());
-    let next_height = NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-    let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-    {
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        assert!(
-            stx.perm_cache.needs_hydration(&registrar),
-            "cache should be invalidated after revoke"
-        );
-        assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "registration permission revoked"
-        );
-        assert!(
-            !stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "execution permission revoked"
-        );
-    }
-    drop(state);
-    let live_query = {
-        let _guard = runtime.enter();
-        crate::query::store::LiveQueryStore::start_test()
-    };
-    let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-    {
-        let params_block = state.world.parameters.block();
-        params_block.commit();
-    }
-    replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-        .expect("replay stored blocks after revoke");
-    {
-        let state_view = state.view();
-        let world_view = state_view.world();
-        assert!(
-            world_view.accounts().get(&registrar).is_some(),
-            "registrar account should exist after replay"
-        );
-        assert!(
-            world_view.accounts().get(&owner).is_some(),
-            "owner account should exist after replay"
-        );
-    }
-    let latest_hash = state
-        .view()
-        .latest_block()
-        .as_ref()
-        .map(|block| block.hash());
-    let next_height = NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-    let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-    {
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "registration should remain revoked after restart"
-        );
-        assert!(
-            !stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "execution should remain revoked after restart"
-        );
-    }
-    let role_id: RoleId = "trigger_role_restart".parse().unwrap();
+    let role_id: RoleId = "trigger_role_restart".parse().expect("role id");
     let role = Role::new(role_id.clone(), owner.clone())
         .add_permission(permission_register.clone())
         .add_permission(permission_execute.clone());
-    let register_role_tx = TransactionBuilder::new(
-        state.network_id,
-        owner.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Register::role(role)),
-        InstructionBox::from(Grant::account_role(role_id.clone(), registrar.clone())),
-    ])
-    .sign(owner_keypair.private_key());
-    let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
-    let latest_block = state.view().latest_block();
-    let unverified_role =
-        build_test_block(accepted_role, latest_block.as_deref(), &leader_private_key);
-    {
-        let mut state_block = state.block(unverified_role.header());
-        let committed_role = unverified_role
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _ = state_block.apply_without_execution(&committed_role, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let signed_block: SignedBlock = committed_role.into();
-        assert!(
-            signed_block.error(0).is_none(),
-            "role registration transaction rejected: {:?}",
-            signed_block.error(0)
-        );
-        let block_arc = Arc::new(signed_block);
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store role block");
-        let height = block_arc.header().height().get();
-        kura.store_wsv_checkpoint(
-            height,
-            block_arc.hash(),
-            crate::snapshot::canonical_state_snapshot_hash(&state),
-        )
-        .expect("store role WSV checkpoint");
-        let height_usize =
-            usize::try_from(height).expect("block height must fit in usize for tests");
-        assert!(
-            kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                .is_some(),
-            "role registration block should persist"
-        );
-        recorded_blocks.push(Arc::clone(&block_arc));
-    }
-    let latest_hash = state
-        .view()
-        .latest_block()
-        .as_ref()
-        .map(|block| block.hash());
-    let next_height = NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-    let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-    {
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "role membership should allow trigger registration"
-        );
-        assert!(
-            stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "role membership should allow trigger execution"
-        );
-    }
-    drop(state);
-    let live_query = {
-        let _guard = runtime.enter();
-        crate::query::store::LiveQueryStore::start_test()
-    };
-    let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-    {
-        let params_block = state.world.parameters.block();
-        params_block.commit();
-    }
-    replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-        .expect("replay stored blocks after role grant");
-    let latest_hash = state
-        .view()
-        .latest_block()
-        .as_ref()
-        .map(|block| block.hash());
-    let next_height = NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-    let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-    {
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "role-based registration permission should survive restart"
-        );
-        assert!(
-            stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "role-based execution permission should survive restart"
-        );
-    }
-    let revoke_role_tx = TransactionBuilder::new(
-        state.network_id,
-        owner.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([InstructionBox::from(Revoke::account_role(
-        role_id.clone(),
-        registrar.clone(),
-    ))])
-    .sign(owner_keypair.private_key());
-    let accepted_revoke_role = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_role_tx));
-    let latest_block = state.view().latest_block();
-    let unverified_revoke_role = build_test_block(
-        accepted_revoke_role,
-        latest_block.as_deref(),
-        &leader_private_key,
+    let rounds = [
+        (
+            "direct grant",
+            true,
+            vec![
+                InstructionBox::from(Grant::account_permission(
+                    permission_register.clone(),
+                    registrar.clone(),
+                )),
+                InstructionBox::from(Grant::account_permission(
+                    permission_execute.clone(),
+                    registrar.clone(),
+                )),
+            ],
+        ),
+        (
+            "direct revoke",
+            false,
+            vec![
+                InstructionBox::from(Revoke::account_permission(
+                    permission_register,
+                    registrar.clone(),
+                )),
+                InstructionBox::from(Revoke::account_permission(
+                    permission_execute,
+                    registrar.clone(),
+                )),
+            ],
+        ),
+        (
+            "role grant",
+            true,
+            vec![
+                InstructionBox::from(Register::role(role)),
+                InstructionBox::from(Grant::account_role(role_id.clone(), registrar.clone())),
+            ],
+        ),
+        (
+            "role revoke",
+            false,
+            vec![InstructionBox::from(Revoke::account_role(
+                role_id,
+                registrar.clone(),
+            ))],
+        ),
+    ];
+    assert_replayed_permission_cache(
+        fixture.materialized_state.as_ref(),
+        &registrar,
+        &owner,
+        &trigger_id,
+        false,
     );
-    {
-        let mut state_block = state.block(unverified_revoke_role.header());
-        let committed_revoke_role = unverified_revoke_role
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _ = state_block
-            .apply_without_execution(&committed_revoke_role, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let signed_block: SignedBlock = committed_revoke_role.into();
+    for (label, expected, instructions) in rounds {
+        let applied =
+            fixture.append_instructions(&owner, owner_keypair.private_key(), instructions);
+        assert_eq!(applied.block.results().len(), 1);
         assert!(
-            signed_block.error(0).is_none(),
-            "role revocation transaction rejected: {:?}",
-            signed_block.error(0)
+            applied
+                .block
+                .results()
+                .all(|result| result.as_ref().is_ok()),
+            "{label} must really execute"
         );
-        let block_arc = Arc::new(signed_block);
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store revoke role block");
-        let height = block_arc.header().height().get();
-        kura.store_wsv_checkpoint(
-            height,
-            block_arc.hash(),
-            crate::snapshot::canonical_state_snapshot_hash(&state),
-        )
-        .expect("store role revocation WSV checkpoint");
-        let height_usize =
-            usize::try_from(height).expect("block height must fit in usize for tests");
-        assert!(
-            kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                .is_some(),
-            "role revocation block should persist"
+        assert_replayed_permission_cache(
+            fixture.materialized_state.as_ref(),
+            &registrar,
+            &owner,
+            &trigger_id,
+            expected,
         );
-        recorded_blocks.push(Arc::clone(&block_arc));
-    }
-    let latest_hash = state
-        .view()
-        .latest_block()
-        .as_ref()
-        .map(|block| block.hash());
-    let next_height = NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-    let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-    {
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        assert!(
-            stx.perm_cache.needs_hydration(&registrar),
-            "revoking role should invalidate cached permissions"
+        // A new State has no warmed permission summaries. Rebuild it solely from the exact
+        // retained body, CommitQC, manifest and checkpoint for every preceding block.
+        let mut restarted = fixture.replay_state(Arc::clone(&fixture.kura));
+        let height = usize::try_from(applied.context.height).expect("replay height");
+        super::replay_blocks_from_kura(&fixture.kura, &mut restarted, height)
+            .unwrap_or_else(|error| panic!("production replay after {label}: {error:#}"));
+        assert_eq!(restarted.committed_height(), height);
+        assert_eq!(
+            restarted.latest_block_hash_fast(),
+            Some(applied.block.hash())
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&restarted),
+            applied.checkpoint_hash
         );
         assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "role revocation should remove trigger registration permission"
+            restarted.world_view().accounts().get(&registrar).is_some(),
+            "registrar survives restart"
         );
         assert!(
-            !stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "role revocation should remove trigger execution permission"
+            restarted.world_view().accounts().get(&owner).is_some(),
+            "owner survives restart"
         );
-    }
-    drop(state);
-    let live_query = {
-        let _guard = runtime.enter();
-        crate::query::store::LiveQueryStore::start_test()
-    };
-    let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-    {
-        let params_block = state.world.parameters.block();
-        params_block.commit();
-    }
-    replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-        .expect("replay stored blocks after role revoke");
-    let latest_hash = state
-        .view()
-        .latest_block()
-        .as_ref()
-        .map(|block| block.hash());
-    let next_height = NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-    let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-    {
-        let mut block = state.block(next_header);
-        let mut stx = block.transaction();
-        assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "role revocation should persist after restart"
-        );
-        assert!(
-            !stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "role revocation should persist after restart"
-        );
+        assert_replayed_permission_cache(&restarted, &registrar, &owner, &trigger_id, expected);
     }
 }

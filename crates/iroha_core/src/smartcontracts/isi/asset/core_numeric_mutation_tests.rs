@@ -1925,7 +1925,7 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
 }
 #[test]
-fn transfer_rejects_configured_kagemusha_reserve_source() {
+fn transfer_rejects_materialized_kagemusha_reserve_source() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
@@ -1945,28 +1945,39 @@ fn transfer_rejects_configured_kagemusha_reserve_source() {
         )
     }
     .build(&ALICE_ID);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
-    let world = World::with_assets(
-        [domain],
-        [alice_account, bob_account],
-        [asset_def],
-        [alice_asset],
-        [],
-    );
+    let world = World::with([domain], [alice_account, bob_account], [asset_def]);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_store);
-    state
-        .settlement
-        .kagemusha
-        .reserve_accounts
-        .insert(asset_def_id.clone(), ALICE_ID.clone());
+    let state = State::new(world, kura, query_store);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let err = Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
+    seed_test_call_hash(&mut stx, 0xD6);
+    let asset_definition = stx
+        .world
+        .asset_definition(&asset_def_id)
+        .expect("registered asset definition");
+    crate::smartcontracts::isi::domain::isi::ensure_kagemusha_reserve_account(
+        &asset_definition,
+        &ALICE_ID,
+        &mut stx,
+    )
+    .expect("materialize deterministic Kagemusha reserve account");
+    let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
+        stx.network_id(),
+        &asset_def_id,
+    );
+    assert_eq!(
+        stx.settlement.kagemusha.reserve_accounts.get(&asset_def_id),
+        Some(&reserve_account),
+        "the runtime cache must retain the exact deterministic custody account"
+    );
+    let reserve_asset_id = AssetId::new(asset_def_id.clone(), reserve_account.clone());
+    Mint::asset_quantity(10_u32, reserve_asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
+        .expect("fund the materialized reserve for the debit rejection test");
+    let err = Transfer::asset_quantity(reserve_asset_id.clone(), 1_u32, BOB_ID.clone())
+        .execute(&reserve_account, &mut stx)
         .expect_err("generic transfer from escrow source must be rejected");
     assert!(
         err.to_string().contains("Kagemusha reserve account"),
@@ -1975,7 +1986,7 @@ fn transfer_rejects_configured_kagemusha_reserve_source() {
     let source_balance = stx
         .world
         .assets
-        .get(&alice_asset_id)
+        .get(&reserve_asset_id)
         .map(|asset| asset.as_ref().clone())
         .unwrap_or_else(Quantity::zero);
     assert_eq!(source_balance, Quantity::from(10_u32));
@@ -2042,6 +2053,7 @@ fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
+    seed_test_call_hash(&mut stx, 0xD7);
     let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&escrow_account, &mut stx)
         .expect_err("deterministically derived escrow source must be rejected");

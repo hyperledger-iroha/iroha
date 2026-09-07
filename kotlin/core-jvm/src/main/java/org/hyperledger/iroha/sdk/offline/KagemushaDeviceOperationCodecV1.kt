@@ -1168,7 +1168,7 @@ object KagemushaDeviceOperationCodecV1 {
         return value
     }
 
-    private fun lane(value: KagemushaDeviceLaneIdV1): ByteArray = fields(
+    internal fun lane(value: KagemushaDeviceLaneIdV1): ByteArray = fields(
         value.networkId(),
         digestArray(value.deviceLaneId()),
         value.assetCanonicalPayload(),
@@ -1185,11 +1185,11 @@ object KagemushaDeviceOperationCodecV1 {
         u64(value.policyEpoch),
     )
 
-    private fun hardwareEpoch(value: KagemushaDeviceHardwareEpochV1): ByteArray = fields(
+    internal fun hardwareEpoch(value: KagemushaDeviceHardwareEpochV1): ByteArray = fields(
         u128(value.generation), digestArray(value.epochId()),
     )
 
-    private fun policyBinding(value: KagemushaDevicePolicyBindingV1): ByteArray = fields(
+    internal fun policyBinding(value: KagemushaDevicePolicyBindingV1): ByteArray = fields(
         digestArray(value.deviceKeyReference()), digestArray(value.hardwarePolicyId()),
     )
 
@@ -1287,7 +1287,7 @@ object KagemushaDeviceOperationCodecV1 {
         )
     }
 
-    private fun decodeLane(payload: ByteArray): KagemushaDeviceLaneIdV1 {
+    internal fun decodeLane(payload: ByteArray): KagemushaDeviceLaneIdV1 {
         val reader = DeviceReader(payload)
         val value = KagemushaDeviceLaneIdV1(
             reader.exactField(32),
@@ -1322,14 +1322,14 @@ object KagemushaDeviceOperationCodecV1 {
         )
     }
 
-    private fun decodeHardwareEpoch(payload: ByteArray): KagemushaDeviceHardwareEpochV1 {
+    internal fun decodeHardwareEpoch(payload: ByteArray): KagemushaDeviceHardwareEpochV1 {
         val reader = DeviceReader(payload)
         val value = KagemushaDeviceHardwareEpochV1(reader.u128Field(), decodeDigestArray(reader.field()))
         reader.finish()
         return value
     }
 
-    private fun decodePolicyBinding(payload: ByteArray): KagemushaDevicePolicyBindingV1 {
+    internal fun decodePolicyBinding(payload: ByteArray): KagemushaDevicePolicyBindingV1 {
         val reader = DeviceReader(payload)
         val value = KagemushaDevicePolicyBindingV1(decodeDigestArray(reader.field()), decodeDigestArray(reader.field()))
         reader.finish()

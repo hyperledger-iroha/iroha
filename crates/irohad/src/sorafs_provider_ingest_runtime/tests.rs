@@ -1862,7 +1862,9 @@ fn state_free_preflight_fixture() -> (
             max_active_entries: 32,
             max_terminal_entries: 4_096,
             max_attempts: 8,
-            checkpoint_max_bytes: Bytes(160 * 1024 * 1024),
+            // Retained completion identities and both transaction copies must fit
+            // the native worst-case checkpoint bound before adapter checks run.
+            checkpoint_max_bytes: provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES,
             checkpoint_operation_timeout_ms: 30_000,
             source_lease_ttl_ms: 30_000,
             retry_base_delay_ms: 1_000,
@@ -1873,6 +1875,7 @@ fn state_free_preflight_fixture() -> (
         },
         provider_attestation_journal: None,
     };
+    validate_config(&config).expect("valid state-free adapter preflight configuration");
     let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
         [0x22; 32], [0x33; 32],
     ]));
@@ -2298,10 +2301,12 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
 fn cancelling_store_wait_joins_late_writer() {
     let completed = Arc::new(AtomicBool::new(false));
     let late = Arc::clone(&completed);
-    let thread = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(10));
-        late.store(true, Ordering::Release);
-    });
+    let thread =
+        crate::panic_recovery::spawn_thread_recoverable(std::thread::Builder::new(), move || {
+            std::thread::sleep(Duration::from_millis(10));
+            late.store(true, Ordering::Release);
+        })
+        .expect("spawn late store writer");
     drop(BlockingStoreJoinGuardV1(Some(thread)));
     assert!(completed.load(Ordering::Acquire));
 }

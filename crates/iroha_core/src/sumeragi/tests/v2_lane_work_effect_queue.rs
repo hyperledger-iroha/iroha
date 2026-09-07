@@ -272,7 +272,7 @@ fn temporarily_unserviceable_effect_requeues_behind_later_reserved_work() {
 }
 #[test]
 fn retransmission_classes_rotate_fairly_at_capacity_one() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let (_, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
     assert_eq!(
         adapter.lane_sessions.insert_proposal(proposal.clone()),
@@ -284,7 +284,7 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
             .payload_block_hint
             .expect("planned proposal carries its global block hint"),
     );
-    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
+    let candidate = single_production_merge_candidate_for_view(&adapter, 0);
     adapter
         .retain_merge_sidecars_for_global_view(candidate.view, None, None)
         .expect("install exact unlocked reducer directive");

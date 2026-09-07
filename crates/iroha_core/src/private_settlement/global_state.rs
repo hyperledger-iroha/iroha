@@ -1885,15 +1885,7 @@ pub(crate) mod tests {
         validator_keys: &[KeyPair],
     ) -> PrivateSettlementReceiptV1 {
         let mut ordered_keys = validator_keys.to_vec();
-        ordered_keys.sort_by(|left, right| {
-            let left_peer = PeerId::from(left.public_key().clone());
-            let right_peer = PeerId::from(right.public_key().clone());
-            iroha_data_model::account::AccountId::new(left.public_key().clone())
-                .cmp(&iroha_data_model::account::AccountId::new(
-                    right.public_key().clone(),
-                ))
-                .then_with(|| left_peer.cmp(&right_peer))
-        });
+        ordered_keys.sort_by_key(|key| PeerId::from(key.public_key().clone()));
         let validators = ordered_keys
             .iter()
             .map(|key| PeerId::from(key.public_key().clone()))
@@ -2041,7 +2033,7 @@ pub(crate) mod tests {
             governance::manifest::{
                 GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
             },
-            state::derive_validator_key_id,
+            state::derive_committee_key_id,
         };
         use iroha_data_model::{
             account::AccountId,
@@ -2062,7 +2054,7 @@ pub(crate) mod tests {
             peers.apply();
         }
         for key in validator_keys {
-            let id = derive_validator_key_id(key.public_key());
+            let id = derive_committee_key_id(key.public_key());
             let record = ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: key.public_key().clone(),
@@ -3172,9 +3164,11 @@ pub(crate) mod tests {
         };
         use std::num::{NonZeroU32, NonZeroU64};
 
-        let (private_state, receipt, sidecar_fixture) = fixture();
+        let (mut private_state, receipt, sidecar_fixture) = fixture();
         let receipt =
             recertify_receipt_with_validator_keys(receipt, &sidecar_fixture.validator_keys);
+        register_receipt_prepare(&mut private_state, &receipt)
+            .expect("replicate the exact certified Prepare locks before finalization");
         let world = world_from_private_settlement_state(private_state);
         let state = State::new_with_chain_and_network_id_for_testing(
             world,
@@ -3354,6 +3348,40 @@ pub(crate) mod tests {
             .minimum_activation_notice_blocks =
             NonZeroU64::new(1).expect("non-zero settlement activation notice");
 
+        {
+            let mut transaction = block.transaction();
+            for key in &sidecar_fixture.validator_keys {
+                let committee_id = crate::state::derive_committee_key_id(key.public_key());
+                let mut record = transaction
+                    .world
+                    .consensus_keys
+                    .get(&committee_id)
+                    .cloned()
+                    .expect("fixture has a purpose-specific committee key");
+                let _ = transaction.world.consensus_keys.remove(committee_id);
+                record.id = crate::state::derive_validator_key_id(key.public_key());
+                transaction
+                    .world
+                    .consensus_keys_by_pk
+                    .insert(record.public_key.to_string(), vec![record.id.clone()]);
+                transaction
+                    .world
+                    .consensus_keys
+                    .insert(record.id.clone(), record);
+            }
+            let before = private_settlement_transaction_bytes(&transaction);
+            assert_eq!(
+                transaction.apply_private_settlement_receipt_v1(receipt.clone()),
+                Err(PrivateSettlementGlobalStateErrorV1::Receipt),
+                "global-validator keys alone must not authorize private settlement"
+            );
+            assert_eq!(
+                private_settlement_transaction_bytes(&transaction),
+                before,
+                "wrong-purpose authority must not mutate any private-state map"
+            );
+        }
+
         let forged_validator_keys = (0xB1_u8..=0xB4)
             .map(|seed| KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal))
             .collect::<Vec<_>>();
@@ -3406,6 +3434,15 @@ pub(crate) mod tests {
 
         {
             let mut transaction = block.transaction();
+            for index in 0..receipt.manifest.legs.len() {
+                let authority = receipt
+                    .authority_catalog
+                    .authority_for_leg(&receipt.manifest, index)
+                    .expect("exact fixture authority");
+                crate::private_settlement::protocol::validate_private_settlement_committee_authority_v1(
+                    &transaction, receipt.manifest.authority_context_height, &authority,
+                ).expect("the positive fixture uses the resolved ordered committee and live Committee keys");
+            }
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(receipt.clone()),
                 Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)

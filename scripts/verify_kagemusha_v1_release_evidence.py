@@ -323,6 +323,31 @@ HARDWARE_POLICY_SCHEMA = "iroha.kagemusha.v1.release-hardware-policy-digest-subj
 HARDWARE_PROFILE_SCHEMA = "iroha.kagemusha.v1.hardware-profile-id-preimage"
 RELEASE_PROFILE_SCHEMA = "iroha.kagemusha.v1.release-profile-digest-subject"
 
+# Exact tags of KagemushaRecursiveVerifierProfileV1::canonical_digest. The evidence
+# profile above identifies reviewed reports; this independent role identifies the
+# native layout before any processed key may configure or allocate circuit columns.
+NATIVE_PROFILE_LAYOUT_TAGS = {
+    "inner_state_eq": 1, "inner_state_ep": 2, "state_eq": 3, "state_ep": 4,
+    "guard_eq": 5, "guard_ep": 6,
+    "terminal_authorization_eq": 7, "terminal_authorization_ep": 8,
+    "commit_wrapper_eq": 9, "commit_wrapper_ep": 10,
+    "mint_authorization_eq": 11, "mint_authorization_ep": 12,
+    "mint_eq": 13, "mint_ep": 14,
+    "inner_mint_authorization_eq": 18, "inner_mint_authorization_ep": 19,
+    "inner_mint_eq": 20, "inner_mint_ep": 21,
+    "mint_hash_shard_eq": 22, "mint_hash_shard_ep": 23,
+    "mint_hash_claim_eq": 24, "mint_hash_claim_ep": 25,
+}
+NATIVE_PROFILE_DIGEST_TAGS = {
+    "mint_eq_protocol_digest": 15, "mint_ep_protocol_digest": 16,
+    "mint_genesis_roster_id": 17,
+    "mint_hash_shard_eq_protocol_digest": 26,
+    "mint_hash_shard_ep_protocol_digest": 27,
+    "mint_hash_claim_eq_protocol_digest": 28,
+    "mint_hash_claim_ep_protocol_digest": 29,
+}
+NATIVE_PROFILE_MAX_BYTES = 64 * 1024
+
 REPORT_SCHEMAS = frozenset(
     {
         "iroha.kagemusha_v1.circuit_shape_report",
@@ -332,9 +357,9 @@ REPORT_SCHEMAS = frozenset(
         "iroha.kagemusha_v1.resource_report",
         "iroha.kagemusha_v1.hardware_profile_qualification_report",
         "iroha.kagemusha_v1.oem_attestation_verification_report",
+        "iroha.kagemusha_v1.sender_release_command_projection",
         "iroha.kagemusha_v1.relation_qualification_report",
         "iroha.kagemusha_v1.helper_qualification_report",
-        "iroha.kagemusha_v1.receive_fold_occupancy_report",
         "iroha.kagemusha_v1.recursive_depth_report",
         "iroha.kagemusha_v1.aggregate_balance_report",
         "iroha.kagemusha_v1.thermal_report",
@@ -566,6 +591,65 @@ _PLATFORM_CLASSES = (
 )
 _P256_PRIME = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
 _P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+_P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_P256_GENERATOR = (
+    0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296,
+    0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5,
+)
+
+
+def _p256_add(left: tuple[int, int] | None, right: tuple[int, int] | None) -> tuple[int, int] | None:
+    """Add already validated public curve points; None is the point at infinity."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    x, y = left
+    other_x, other_y = right
+    if x == other_x:
+        if (y + other_y) % _P256_PRIME == 0:
+            return None
+        slope = (3 * x * x - 3) * pow(2 * y, -1, _P256_PRIME) % _P256_PRIME
+    else:
+        slope = (other_y - y) * pow(other_x - x, -1, _P256_PRIME) % _P256_PRIME
+    result_x = (slope * slope - x - other_x) % _P256_PRIME
+    return result_x, (slope * (x - result_x) - y) % _P256_PRIME
+
+
+def _p256_multiply(scalar: int, point: tuple[int, int]) -> tuple[int, int] | None:
+    """Multiply public verification inputs only; this is not a signing primitive."""
+    result = None
+    while scalar:
+        if scalar & 1:
+            result = _p256_add(result, point)
+        point = _p256_add(point, point)
+        scalar >>= 1
+    return result
+
+
+def _p256_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Verify fixed-width low-S ECDSA-P256-SHA256 without nonstandard imports.
+
+    Only public release-authority inputs enter this variable-time verifier. P-256
+    has cofactor one; finite on-curve points therefore have the required order.
+    """
+    if len(public_key) != 65 or public_key[0] != 4 or len(signature) != 64:
+        return False
+    x, y = int.from_bytes(public_key[1:33], "big"), int.from_bytes(public_key[33:], "big")
+    if x >= _P256_PRIME or y >= _P256_PRIME:
+        return False
+    if (y * y - (x * x * x - 3 * x + _P256_B)) % _P256_PRIME != 0:
+        return False
+    r, s = int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
+    if not 1 <= r < _P256_ORDER or not 1 <= s <= _P256_ORDER // 2:
+        return False
+    inverse = pow(s, -1, _P256_ORDER)
+    digest = int.from_bytes(hashlib.sha256(message).digest(), "big")
+    point = _p256_add(
+        _p256_multiply(digest * inverse % _P256_ORDER, _P256_GENERATOR),
+        _p256_multiply(r * inverse % _P256_ORDER, (x, y)),
+    )
+    return point is not None and point[0] % _P256_ORDER == r
 
 
 def _device_public_key(value: object, label: str) -> bytes:
@@ -875,6 +959,167 @@ def rust_hardware_policy_digest(profiles: Sequence[Mapping[str, object]]) -> str
 
     payload = _norito_struct(_norito_vec([_enabled_profile_payload(row) for row in profiles]))
     return _rust_digest(HARDWARE_POLICY_DIGEST_DOMAIN, HARDWARE_POLICY_SCHEMA, payload)
+
+
+PROVIDER_POLICY_FIELDS = frozenset({
+    "hardware_profile_id", "provider_authority_commitment", "provider_profile_index",
+    "issuer_signature",
+})
+
+
+def rust_provider_policy_signing_bytes(profile_id: str, position: int, authority: str) -> bytes:
+    """Build the exact explicit-schema Norito issuer-authorization preimage."""
+    profile_id = _digest(profile_id, "provider authorization hardware profile id")
+    authority = _digest(authority, "provider proof authority")
+    position = _integer(position, "provider profile index", maximum=65535)
+    domain = b"iroha:kagemusha:v1:provider-policy-authorization"
+    return _norito_frame(
+        "iroha.kagemusha.v1.provider-policy-authorization",
+        _norito_struct(_u64(len(domain)) + domain, _u16(WIRE_VERSION),
+                       bytes.fromhex(profile_id), _u16(position), bytes.fromhex(authority)),
+    )
+
+
+def rust_provider_policy_root(
+    hardware_profiles: Sequence[Mapping[str, object]], entries: Sequence[Mapping[str, object]]
+) -> str:
+    """Independently derive the exact depth-16 provider registry, never supplied siblings.
+
+    Leaves contain only governed profile data and public proof-authority commitments.
+    They exclude the final release ID and its empty-effect digest to avoid cycles.
+    """
+    if not 1 <= len(hardware_profiles) <= 64 or len(entries) != len(hardware_profiles):
+        _fail("provider policy must contain exactly one row per enabled profile, at most 64")
+    nodes: dict[int, bytes] = {}
+    previous_id = ""
+    for index, (hardware, raw) in enumerate(zip(hardware_profiles, entries)):
+        hardware = _object(hardware, "provider policy hardware profile", _HARDWARE_PROFILE_FIELDS)
+        row = _object(raw, f"provider policy row {index}", PROVIDER_POLICY_FIELDS)
+        profile_id = _digest(row["hardware_profile_id"], "provider policy hardware profile id")
+        if profile_id != hardware["hardware_profile_id"] or profile_id <= previous_id:
+            _fail("provider policy rows must match the exact sorted enabled profiles")
+        if profile_id != rust_hardware_profile_id(hardware):
+            _fail("provider policy substitutes the Rust-derived qualified hardware profile body")
+        previous_id = profile_id
+        authority = _digest(row["provider_authority_commitment"], "provider proof authority")
+        position = _integer(row["provider_profile_index"], "provider profile index", maximum=65535)
+        signature = _hex_bytes(row["issuer_signature"], "provider issuer signature", size=64)
+        issuer = _device_public_key(hardware["governance_credential_public_key"], "provider issuer key")
+        if not _p256_verify(issuer, rust_provider_policy_signing_bytes(profile_id, position, authority), signature):
+            _fail("provider policy lacks valid governed issuer authorization")
+        if position in nodes:
+            _fail("provider policy leaf indices must be unique")
+        capabilities = _integer(hardware["capability_mask"], "provider capabilities", minimum=65535, maximum=65535)
+        platform = _PLATFORM_CLASSES.index(str(hardware["platform_class"]))
+        nodes[position] = hashlib.sha256(
+            b"iroha:kagemusha:v1:hardware-policy-leaf\0"
+            + bytes.fromhex(profile_id) + bytes([platform])
+            + capabilities.to_bytes(2, "little") + bytes.fromhex(authority)
+        ).digest()
+
+    def node(left: bytes, right: bytes) -> bytes:
+        return hashlib.sha256(b"iroha:kagemusha:v1:hardware-policy-node\0" + left + right).digest()
+
+    empty = hashlib.sha256(b"iroha:kagemusha:v1:hardware-policy-empty\0").digest()
+    for _ in range(16):
+        nodes = {
+            parent: node(nodes.get(parent * 2, empty), nodes.get(parent * 2 + 1, empty))
+            for parent in {index // 2 for index in nodes}
+        }
+        empty = node(empty, empty)
+    return nodes[0].hex()
+
+
+def rust_native_profile_digest(raw: object, protocols: Mapping[str, object]) -> str:
+    """Derive the native layout identity from exact observed runtime-profile JSON.
+
+    No payload-supplied digest is trusted. Bounds and allocation order mirror the
+    native preflight; protocol identities must match the separately selected role
+    inventory. The nonzero genesis roster is pinned by this signed profile identity.
+    """
+    profile = _object(
+        raw, "native profile", set(NATIVE_PROFILE_LAYOUT_TAGS) | set(NATIVE_PROFILE_DIGEST_TAGS)
+    )
+    if len(canonical_json_bytes(profile)) > NATIVE_PROFILE_MAX_BYTES:
+        _fail("native profile exceeds the runtime 64-KiB limit")
+    maximum = (1 << 64) - 1
+    parts: dict[int, bytes] = {}
+    for name, tag in NATIVE_PROFILE_LAYOUT_TAGS.items():
+        label = f"native profile {name}"
+        layout = _object(profile[name], label, {
+            "k", "num_advice_per_phase", "num_fixed", "num_lookup_advice_per_phase",
+            "lookup_bits", "num_instance_columns",
+        })
+        expected_k = 12 if name.startswith("mint_hash_shard_") else HALO2_K
+        expected_columns = (2 if name.startswith("inner_mint_authorization_") else
+                            3 if name.startswith("mint_hash_claim_") else 1)
+        k = _integer(layout["k"], f"{label} k", minimum=expected_k, maximum=expected_k)
+        columns = _integer(layout["num_instance_columns"], f"{label} instance columns",
+                           minimum=expected_columns, maximum=expected_columns)
+        lookup_bits = _integer(layout["lookup_bits"], f"{label} lookup bits",
+                               minimum=k - 1, maximum=k - 1)
+        fixed = _integer(layout["num_fixed"], f"{label} fixed columns", maximum=maximum)
+        vectors = []
+        for key in ("num_advice_per_phase", "num_lookup_advice_per_phase"):
+            values = _array(layout[key], f"{label} {key}")
+            if not values or len(values) > NATIVE_PROFILE_MAX_BYTES:
+                _fail(f"{label} has an invalid phase vector")
+            counts = [_integer(value, f"{label} {key} count", maximum=maximum) for value in values]
+            if any(counts[3:]) or sum(counts) > maximum:
+                _fail(f"{label} has unsupported phases or overflowing column counts")
+            vectors.append(counts)
+        advice, lookup = vectors
+        if not any(advice):
+            _fail(f"{label} must allocate gate advice")
+        phases = [False] * 3
+        for counts in (advice, lookup):
+            for phase, count in enumerate(counts[:3]):
+                if count:
+                    if phase and not phases[phase - 1]:
+                        _fail(f"{label} skips a required earlier allocation phase")
+                    phases[phase] = True
+        gate_count, lookup_count = sum(advice), sum(lookup)
+        optimized = lookup_count != 0 and advice[0] == 1 and lookup[0] != 0
+        allocated_lookup = lookup_count - lookup[0] if optimized else lookup_count
+        allocated = fixed + int(lookup_count != 0) + gate_count + int(optimized)
+        if allocated + gate_count + allocated_lookup + columns > maximum:
+            _fail(f"{label} circuit column count overflows u64")
+        packed = bytearray(k.to_bytes(8, "little"))
+        for count in (len(advice), *advice, fixed, len(lookup), *lookup):
+            packed.extend(count.to_bytes(8, "little"))
+        packed.extend(b"\x01")
+        packed.extend(lookup_bits.to_bytes(8, "little"))
+        packed.extend(columns.to_bytes(8, "little"))
+        parts[tag] = bytes(packed)
+    helpers = {row["helper"]: row for row in protocols["helper_protocols"]}
+    digests = []
+    for name, tag in NATIVE_PROFILE_DIGEST_TAGS.items():
+        values = _array(profile[name], f"native profile {name}")
+        if len(values) != 32:
+            _fail(f"native profile {name} must contain exactly 32 bytes")
+        digest = bytes(_integer(value, f"native profile {name} byte", maximum=255) for value in values)
+        if not any(digest):
+            _fail(f"native profile {name} must be nonzero")
+        if name != "mint_genesis_roster_id":
+            parity = "eq" if "_eq_" in name else "ep"
+            low_modulus = (0x224698FC094CF91B992D30ED00000001 if parity == "eq" else
+                           0x224698FC0994A8DD8C46EB2100000001)
+            if int.from_bytes(digest, "little") >= (1 << 254) + low_modulus:
+                _fail(f"native profile {name} is not a canonical Pasta scalar")
+            helper = ("mint_hash_shard" if name.startswith("mint_hash_shard_") else
+                      "mint_hash_claim" if name.startswith("mint_hash_claim_") else "mint_credit")
+            if digest.hex() != helpers[helper][f"{parity}_protocol_digest"]:
+                _fail(f"native profile {name} differs from its compiled helper role")
+            digests.append(digest)
+        parts[tag] = digest
+    if len(set(digests)) != len(digests):
+        _fail("native profile protocol roles must be distinct")
+    preimage = bytearray(b"iroha:kagemusha:v1:paired-recursive-circuit-profile\x00")
+    preimage.extend((1).to_bytes(4, "little"))
+    for tag in range(1, 30):
+        preimage.append(tag)
+        preimage.extend(parts[tag])
+    return hashlib.sha256(preimage).hexdigest()
 
 
 def rust_release_profile_digest(
@@ -1390,6 +1635,11 @@ class EvidenceVerifier:
         artifact_set_digest = rust_artifact_set_digest(artifact_projection)
         vk_digest = rust_vk_set_digest(artifact_projection, protocols)
         profile_inputs = self._candidate_profile_inputs(self.manifest["profiles"])
+        provider_policy = [dict(row["provider_policy"]) for row in profile_inputs]
+        self.provider_policy_root = rust_provider_policy_root(
+            [row["hardware_profile"] for row in profile_inputs], provider_policy
+        )
+        self.provider_policy = {row["hardware_profile_id"]: row for row in provider_policy}
         candidate_context, candidate_context_digest = release_candidate_context(
             source_archive=_object(
                 source["source_archive"], "candidate source archive", {"sha256", "byte_len"}
@@ -1414,6 +1664,7 @@ class EvidenceVerifier:
             self.manifest["global_reports"],
             source=source,
             artifact_set_digest=artifact_set_digest,
+            protocols=protocols,
         )
         profiles = self._verify_profiles(
             self.manifest["profiles"], protocols=protocols, vk_digest=vk_digest
@@ -1469,6 +1720,8 @@ class EvidenceVerifier:
             "ep_protocol_digest": protocols["state_ep_protocol_digest"],
             "artifact_set_digest": artifact_set_digest,
             "hardware_policy_digest": hardware_policy_digest,
+            "provider_policy_root": self.provider_policy_root,
+            "provider_policy": provider_policy,
             "evidence_closure": evidence_closure,
             **global_reports,
             "profile_qualifications": profiles,
@@ -1612,6 +1865,7 @@ class EvidenceVerifier:
         rows = _array(raw_rows, "candidate profile inputs")
         profile_fields = {
             "hardware_profile",
+            "provider_policy",
             "suite_id",
             "qualification_report",
             "physical_evidence",
@@ -1634,6 +1888,9 @@ class EvidenceVerifier:
             result.append(
                 {
                     "hardware_profile": dict(hardware),
+                    "provider_policy": dict(_object(
+                        row["provider_policy"], "candidate provider policy", PROVIDER_POLICY_FIELDS
+                    )),
                     "suite_id": _digest(row["suite_id"], f"candidate profile {index} suite id"),
                 }
             )
@@ -1670,6 +1927,8 @@ class EvidenceVerifier:
             report_schema = _string(
                 row["report_schema"], f"verifier command {command_id!r} report schema"
             )
+            if report_schema == "iroha.kagemusha_v1.sender_release_command_projection":
+                _fail("sender structural parser reports are nested physical evidence only")
             if report_schema not in trusted.report_schemas:
                 _fail(f"verifier command {command_id!r} is not allowed for its report schema")
             args_raw = _array(row["arguments"], f"verifier command {command_id!r} arguments")
@@ -1969,6 +2228,7 @@ class EvidenceVerifier:
         *,
         source: Mapping[str, object],
         artifact_set_digest: str,
+        protocols: Mapping[str, object],
     ) -> dict[str, object]:
         reports = _object(
             raw,
@@ -1983,10 +2243,11 @@ class EvidenceVerifier:
         shape = self._report(
             paths["circuit_shape"],
             "iroha.kagemusha_v1.circuit_shape_report",
-            {"k", "relations", "helpers"},
+            {"k", "relations", "helpers", "native_profile"},
         )
         if shape["k"] != HALO2_K:
             _fail("circuit-shape report must exercise k = 16")
+        native_profile_digest = rust_native_profile_digest(shape["native_profile"], protocols)
         relation_shapes = self._shape_rows(shape["relations"], RELATIONS, "relation")
         helper_shapes = self._shape_rows(shape["helpers"], HELPERS, "helper")
         self.circuit_shapes = {
@@ -2046,6 +2307,7 @@ class EvidenceVerifier:
 
         return {
             "circuit_shape_report": _binding(self.files[paths["circuit_shape"]]),
+            "native_profile_digest": native_profile_digest,
             "security_review_report": _binding(self.files[paths["security_review"]]),
             "kat_report": _binding(self.files[paths["kat"]]),
             "fuzz_report": _binding(self.files[paths["fuzz"]]),
@@ -2112,6 +2374,8 @@ class EvidenceVerifier:
         hardware: Mapping[str, object],
         qualification_path: str,
         qualification: Mapping[str, object],
+        suite_id: str,
+        vk_digest: str,
     ) -> None:
         """Close raw physical evidence and independently observed native OEM validation.
 
@@ -2160,8 +2424,12 @@ class EvidenceVerifier:
             _fail("physical transcript does not derive the exact qualification report")
         document = load_json_object(self.payloads[paths["transcript"]], "physical transcript")
         profile, endpoint, run = document["profile"], document["endpoint"], document["run"]
+        sender_context = next(event["data"] for event in document["events"] if event["kind"] == "sender_validity_context")
+        if sender_context["vk_digest"] != vk_digest or any(credential["suite_id"] != suite_id for credential in sender_context["credentials"]):
+            _fail("physical sender evidence substitutes the candidate VK set or exact enabled suite")
         expected_profile = {
             "hardware_profile_id": hardware["hardware_profile_id"],
+            "hardware_policy_id": self.provider_policy_root,
             "provider_id": hardware["provider_id"],
             "qualification_report_digest": hardware["qualification_report_digest"],
             "policy_epoch": hardware["policy_epoch"],
@@ -2183,6 +2451,7 @@ class EvidenceVerifier:
 
         body = {
             "candidate_context_digest", "artifact_set_digest", "hardware_profile_id",
+            "provider_authority_commitment", "provider_profile_index",
             "provider_id", "policy_epoch", "capability_mask", "hardware_policy_id",
             "platform_class", "device_id", "product_id", "firmware_digest", "os_build_digest",
             "product_class_digest", "firmware_policy_digest", "attestation_verifier_sha256",
@@ -2192,6 +2461,9 @@ class EvidenceVerifier:
         }
         report = self._report(paths["oem_report"], OEM_ATTESTATION_REPORT_SCHEMA, body)
         expected = {
+            **{key: self.provider_policy[hardware["hardware_profile_id"]][key] for key in (
+                "provider_authority_commitment", "provider_profile_index",
+            )},
             **{key: hardware[key] for key in (
                 "hardware_profile_id", "provider_id", "policy_epoch", "capability_mask",
                 "product_class_digest", "firmware_policy_digest",
@@ -2233,6 +2505,7 @@ class EvidenceVerifier:
     ) -> dict[str, object]:
         fields = {
             "hardware_profile",
+            "provider_policy",
             "suite_id",
             "qualification_report",
             "physical_evidence",
@@ -2305,7 +2578,8 @@ class EvidenceVerifier:
             _fail("physical qualification report omits a required physical check")
         _true(qualification["passed"], "physical qualification passed")
         self._verify_physical_evidence(
-            profile["physical_evidence"], hardware_profile, qualification_path, qualification
+            profile["physical_evidence"], hardware_profile, qualification_path, qualification,
+            suite_id, vk_digest,
         )
         profile_projection["qualification_report"] = _binding(
             self.files[qualification_path]

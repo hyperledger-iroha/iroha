@@ -59,12 +59,14 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
+mod game;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_commands;
 mod ledger_state_finality;
+mod nft_market;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "app_api")]
@@ -78,7 +80,6 @@ mod push;
 pub mod query_load_profiles;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
-mod race;
 mod vpn;
 #[cfg(test)]
 use ledger_state_finality::StateFinalityResponse;
@@ -230,7 +231,8 @@ use iroha_core::{
         SoracloudRuntimeReplicaPlan, authoritative_soracloud_sequence,
     },
     state::{
-        BlockProofError, PendingQueuePlanAdmissionDisposition, QueuePlanAdmissionRegistryMatch,
+        BlockProofError, PendingQueuePlanAdmissionDisposition,
+        PendingQueuePlanAdmissionPersistenceOutcome, QueuePlanAdmissionRegistryMatch,
         State as CoreState, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
         WorldReadOnly,
     },
@@ -1145,6 +1147,8 @@ mod iso20022_bridge;
 mod limits;
 mod mcp;
 mod musubi;
+#[cfg(feature = "app_api")]
+mod offline_asset_registration;
 mod panic_recovery;
 #[cfg(feature = "app_api")]
 mod predicates;
@@ -18219,31 +18223,85 @@ async fn handler_get_configuration(
     check_operator_rate_limit(&app, &headers, Some(remote_ip), "v1/configuration", true).await?;
     routing::handle_get_configuration(app.kiso.clone()).await
 }
-/// Public native race profile and proof qualification.
-async fn handler_race_capabilities(
-    State(app): State<SharedAppState>, headers: axum::http::HeaderMap,
+/// Exact native marketplace policy and reviewed rollout qualification.
+async fn handler_nft_offer_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    check_access(&app,&headers,Some(remote.ip()),"v1/races/capabilities").await?;
-    race::capabilities(&app)
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/nft-offers/capabilities",
+    )
+    .await?;
+    nft_market::capabilities(&app)
 }
-/// Bounded public native race discovery.
-async fn handler_race_list(
-    State(app): State<SharedAppState>, headers: axum::http::HeaderMap,
+/// Bounded public discovery of native NFT sale offers.
+async fn handler_nft_offer_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoQuery(params): NoritoQuery<race::RaceListParams>,
+    NoritoQuery(params): NoritoQuery<nft_market::NftOfferListParams>,
 ) -> Result<Response, Error> {
-    check_access(&app,&headers,Some(remote.ip()),"v1/races").await?;
-    race::list(&app,params)
+    check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers").await?;
+    nft_market::list(&app, params)
 }
-/// Public exact native race state.
-async fn handler_race_get(
-    State(app): State<SharedAppState>, headers: axum::http::HeaderMap,
+/// Exact immutable seller terms and retained terminal decision.
+async fn handler_nft_offer_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    check_access(&app,&headers,Some(remote.ip()),"v1/races/by-id").await?;
-    race::get(&app,&id)
+    check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers/by-id").await?;
+    nft_market::get(&app, &id)
+}
+/// Public native game session profile and proof qualification.
+async fn handler_game_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/capabilities").await?;
+    game::capabilities(&app)
+}
+/// Bounded public native game session discovery.
+async fn handler_game_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(params): NoritoQuery<game::GameListParams>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/sessions").await?;
+    game::list(&app, params)
+}
+/// Public exact native game session state.
+async fn handler_game_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/sessions/by-id").await?;
+    game::get(&app, &id)
+}
+/// Public bounded native execution-proof verification receipt.
+async fn handler_game_verification(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/games/verifications/by-id",
+    )
+    .await?;
+    game::verification(&app, &id)
 }
 /// GET /v1/vpn/profile — public Sora VPN profile snapshot for wallet clients.
 async fn handler_get_vpn_profile(
@@ -28978,38 +29036,6 @@ fn validate_queue_plan_admission_publication(
                 .to_owned(),
         );
     }
-    let carrier_height = u64::try_from(app.state.committed_height())
-        .map_err(|_| "local committed height does not fit QueuePlan classification".to_owned())?
-        .checked_add(1)
-        .ok_or_else(|| "local QueuePlan carrier height overflowed".to_owned())?;
-    let (classified, disposition) = app
-        .state
-        .classify_pending_queue_plan_admission(&publication.certificate, carrier_height)
-        .map_err(|error| {
-            format!("QueuePlan admission publication cannot be classified: {error}")
-        })?;
-    if classified.certificate.binding != binding {
-        return Err(
-            "QueuePlan admission publication changed during canonical classification".to_owned(),
-        );
-    }
-    match disposition {
-        PendingQueuePlanAdmissionDisposition::Exact
-        | PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
-        PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
-            return Err(
-                "canonical WSV already binds this entrypoint to another QueuePlan admission"
-                    .to_owned(),
-            );
-        }
-        PendingQueuePlanAdmissionDisposition::Stale
-        | PendingQueuePlanAdmissionDisposition::Future => {
-            return Err(
-                "QueuePlan admission publication is stale or ahead of canonical authority"
-                    .to_owned(),
-            );
-        }
-    }
     Ok(binding)
 }
 #[cfg(feature = "connect")]
@@ -29027,31 +29053,48 @@ fn ingest_queue_plan_admission_publication(
     publication: &QueuePlanAdmissionPublicationV1,
 ) -> Result<QueuePlanAdmissionPublicationIngestOutcome, String> {
     let binding = validate_queue_plan_admission_publication(app, publication)?;
-    match app
+    let outcome = app
         .state
-        .queue_plan_admission_binding_registry_match(&binding)
-    {
-        Ok(QueuePlanAdmissionRegistryMatch::Exact) => {
+        .persist_classified_queue_plan_admission(&publication.certificate)
+        .map_err(|error| format!("QueuePlan publication persistence failed: {error}"))?;
+    let certificate_hash = match outcome {
+        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => {
+            if admission.certificate.binding != binding {
+                return Err("QueuePlan admission changed during publication ingestion".to_owned());
+            }
             return Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted);
         }
-        Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
-            return Err(
-                "canonical WSV raced this publication with another QueuePlan admission".to_owned(),
-            );
+        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+            admission,
+            disposition,
+        } => {
+            if admission.certificate.binding != binding {
+                return Err("QueuePlan admission changed during publication ingestion".to_owned());
+            }
+            return Err(match disposition {
+                PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
+                    "canonical WSV raced this publication with another QueuePlan admission"
+                        .to_owned()
+                }
+                PendingQueuePlanAdmissionDisposition::Stale => {
+                    "QueuePlan admission became stale during publication ingestion".to_owned()
+                }
+                _ => {
+                    "QueuePlan admission persistence returned an invalid rejection state".to_owned()
+                }
+            });
         }
-        Err(error) => {
-            return Err(format!(
-                "canonical QueuePlan admission marker became malformed: {error}"
-            ));
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+            admission,
+            certificate_hash,
+            ..
+        } => {
+            if admission.certificate.binding != binding {
+                return Err("QueuePlan admission changed during publication ingestion".to_owned());
+            }
+            certificate_hash
         }
-        Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
-    }
-    let certificate_hash = app
-        .kura
-        .persist_pending_queue_plan_admission_certificate(&publication.certificate)
-        .map_err(|error| {
-            format!("failed to persist certified QueuePlan admission publication: {error}")
-        })?;
+    };
     let sumeragi_notified = app
         .sumeragi
         .as_ref()
@@ -29070,7 +29113,7 @@ async fn persist_queue_plan_admission_certificate(
     if response.status() != StatusCode::ACCEPTED {
         return response;
     }
-    let snapshot =
+    let mut snapshot =
         response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1)
             .await;
     let certificate = match decode_queue_plan_synced_certificate(&snapshot.body) {
@@ -29101,39 +29144,72 @@ async fn persist_queue_plan_admission_certificate(
             format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
         );
     }
-    match app
+    let outcome = match app
         .state
-        .queue_plan_admission_binding_registry_match(expected_binding)
+        .persist_classified_queue_plan_admission(&snapshot.body)
     {
-        Ok(QueuePlanAdmissionRegistryMatch::Exact | QueuePlanAdmissionRegistryMatch::Absent) => {}
-        Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
-            return queue_plan_admission_registry_conflict_response(
-                expected_binding.entrypoint_hash.clone(),
-                "canonical WSV already binds this transaction entrypoint to a different QueuePlan admission",
-            );
-        }
-        Err(error) => {
-            return queue_plan_admission_registry_conflict_response(
-                expected_binding.entrypoint_hash.clone(),
-                format!("canonical QueuePlan admission marker is malformed: {error}"),
-            );
-        }
-    }
-    let certificate_hash = match app
-        .kura
-        .persist_pending_queue_plan_admission_certificate(&snapshot.body)
-    {
-        Ok(certificate_hash) => certificate_hash,
+        Ok(outcome) => outcome,
         Err(error) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
                 expected_binding.signed_transaction_hash.clone(),
                 format!(
-                    "failed to persist the exact QueuePlan certificate before carrier wake: {error}"
+                    "failed to classify and persist the exact QueuePlan certificate before carrier wake: {error}"
                 ),
             );
         }
     };
+    let (certificate_hash, durable_certificate) = match outcome {
+        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => {
+            if admission.certificate.binding != *expected_binding {
+                return queue_plan_outcome_unknown_response(
+                    expected_binding.entrypoint_hash.clone(),
+                    expected_binding.signed_transaction_hash.clone(),
+                    "canonical QueuePlan application differs from the exact ingress binding",
+                );
+            }
+            return torii_proxy_snapshot_to_response(snapshot);
+        }
+        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+            admission,
+            disposition,
+        } => {
+            if admission.certificate.binding != *expected_binding {
+                return queue_plan_outcome_unknown_response(
+                    expected_binding.entrypoint_hash.clone(),
+                    expected_binding.signed_transaction_hash.clone(),
+                    "rejected QueuePlan admission differs from the exact ingress binding",
+                );
+            }
+            if disposition == PendingQueuePlanAdmissionDisposition::DefinitiveConflict {
+                return queue_plan_admission_registry_conflict_response(
+                    expected_binding.entrypoint_hash.clone(),
+                    "canonical WSV already binds this transaction entrypoint to a different QueuePlan admission",
+                );
+            }
+            return queue_plan_outcome_unknown_response(
+                expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
+                "the aggregated QueuePlan certificate became stale before durable persistence",
+            );
+        }
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+            admission,
+            certificate_hash,
+            certificate,
+            ..
+        } => {
+            if admission.certificate.binding != *expected_binding {
+                return queue_plan_outcome_unknown_response(
+                    expected_binding.entrypoint_hash.clone(),
+                    expected_binding.signed_transaction_hash.clone(),
+                    "durable QueuePlan admission differs from the exact ingress binding",
+                );
+            }
+            (certificate_hash, certificate)
+        }
+    };
+    snapshot.body = durable_certificate;
     match disseminate_queue_plan_admission_publication(app, &snapshot.body, expected_binding) {
         Ok(target_count) => {
             iroha_logger::debug!(
@@ -31691,14 +31767,21 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                         error,
                                     );
                                 }
-                                match app.queue.plan_admission_context_with_state(
-                                    app.state.as_ref(),
-                                    &routing_plan,
-                                ) {
-                                    Ok(current_context)
-                                        if current_context
-                                            == admission_binding.admission_context =>
-                                    {
+                                let locally_owned =
+                                    app.queue.has_revalidatable_durable_plan_claim_with_state(
+                                        &accepted_tx,
+                                        app.state.as_ref(),
+                                        &routing_plan,
+                                        &admission_binding.admission_context,
+                                    );
+                                let context_disposition =
+                                    app.queue.classify_plan_admission_context_with_state(
+                                        app.state.as_ref(),
+                                        &routing_plan,
+                                        &admission_binding.admission_context,
+                                    );
+                                match context_disposition {
+                                    Ok(queue::QueuePlanAdmissionContextDisposition::Current) => {
                                         let coordinator = admission_binding
                                             .admission_context
                                             .route_incarnations
@@ -31712,16 +31795,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                             });
                                         (Some(admission_binding), execute_locally)
                                     }
-                                    Ok(_)
-                                        if app
-                                            .queue
-                                            .has_revalidatable_durable_plan_claim_with_state(
-                                                &accepted_tx,
-                                                app.state.as_ref(),
-                                                &routing_plan,
-                                                &admission_binding.admission_context,
-                                            ) =>
-                                    {
+                                    Err(_) if locally_owned => {
                                         let coordinator = admission_binding
                                             .admission_context
                                             .route_incarnations
@@ -31735,42 +31809,19 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                             });
                                         (Some(admission_binding), execute_locally)
                                     }
-                                    Ok(_) => {
+                                    Ok(queue::QueuePlanAdmissionContextDisposition::Future) => {
                                         return torii_proxy_error_response(
-                                            StatusCode::CONFLICT,
-                                            "queue_plan_admission_context_mismatch",
-                                            "QueuePlanSynced admission context no longer matches the active lane/authority generation and has no revalidatable local durable claim",
+                                            StatusCode::SERVICE_UNAVAILABLE,
+                                            "queue_plan_admission_context_future",
+                                            "QueuePlanSynced admission context is ahead of the local canonical frontier; retry after catch-up",
                                         );
-                                    }
-                                    Err(_)
-                                        if app
-                                            .queue
-                                            .has_revalidatable_durable_plan_claim_with_state(
-                                                &accepted_tx,
-                                                app.state.as_ref(),
-                                                &routing_plan,
-                                                &admission_binding.admission_context,
-                                            ) =>
-                                    {
-                                        let coordinator = admission_binding
-                                            .admission_context
-                                            .route_incarnations
-                                            .first()
-                                            .expect("validated binding has a coordinator");
-                                        let execute_locally = app
-                                            .local_peer_id
-                                            .as_ref()
-                                            .is_some_and(|local_peer_id| {
-                                                coordinator.validator_set.contains(local_peer_id)
-                                            });
-                                        (Some(admission_binding), execute_locally)
                                     }
                                     Err(error) => {
                                         return torii_proxy_error_response(
-                                            StatusCode::SERVICE_UNAVAILABLE,
-                                            "route_unavailable",
+                                            StatusCode::CONFLICT,
+                                            "queue_plan_admission_context_mismatch",
                                             format!(
-                                                "failed to revalidate QueuePlanSynced admission context: {error}"
+                                                "QueuePlanSynced admission context is not canonical at the local frontier: {error}"
                                             ),
                                         );
                                     }
@@ -50125,9 +50176,13 @@ impl Torii {
             READYZ => unauthenticated_get(handler_readyz);
             LIVEZ => unauthenticated_get(handler_livez);
             NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
-            RACE_CAPABILITIES => public_get(handler_race_capabilities);
-            RACE_LIST => public_get(handler_race_list);
-            RACE_GET => public_get(handler_race_get);
+            NFT_OFFER_CAPABILITIES => public_get(handler_nft_offer_capabilities);
+            NFT_OFFER_LIST => public_get(handler_nft_offer_list);
+            NFT_OFFER_GET => public_get(handler_nft_offer_get);
+            GAME_CAPABILITIES => public_get(handler_game_capabilities);
+            GAME_SESSION_LIST => public_get(handler_game_list);
+            GAME_SESSION_GET => public_get(handler_game_get);
+            GAME_VERIFICATION_GET => public_get(handler_game_verification);
             VPN_PROFILE => public_get(handler_get_vpn_profile);
             VPN_QUOTE_CREATE => limited_canonical_signature_post(handler_create_vpn_quote, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
             VPN_SESSION_CREATE => limited_canonical_signature_post(handler_create_vpn_session, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
@@ -51106,6 +51161,7 @@ impl Torii {
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => optional_canonical_signature_get(handler_explorer_account_detail);
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => optional_canonical_signature_get(handler_explorer_account_qr);
             EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => optional_canonical_signature_get(handler_explorer_domain_detail);
+            OFFLINE_ASSET_REGISTRATION_GET => optional_canonical_signature_get(offline_asset_registration::handler);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => optional_canonical_signature_get(handler_explorer_asset_definition_detail);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => optional_canonical_signature_get(handler_explorer_asset_definition_econometrics);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => optional_canonical_signature_get(handler_explorer_asset_definition_snapshot);
@@ -56078,7 +56134,8 @@ mod gateway_runtime_config_tests {
             .provider
             .as_ref()
             .expect("test ACME provider binding");
-        let mapped_provider = gateway_runtime_provider_binding(source_provider);
+        let mapped_provider =
+            gateway_runtime_provider_binding(source_provider).expect("valid ACME provider binding");
         assert_eq!(
             mapped_provider.provider_handle(),
             source_provider.provider_handle.as_str()
@@ -56094,7 +56151,8 @@ mod gateway_runtime_config_tests {
         let source = compliance_config(PathBuf::from(
             "/var/lib/iroha/sorafs/compliance-checkpoint.norito",
         ));
-        let mapped = gateway_compliance_controller_config(&source);
+        let mapped = gateway_compliance_controller_config(&source)
+            .expect("valid compliance controller configuration");
         assert_eq!(mapped.trust_policy.policy_id, source.policy_id);
         assert_eq!(mapped.region_scope, format!("region:{}", source.region_id));
         assert_eq!(
@@ -56539,7 +56597,7 @@ fn build_por_components(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod por_runtime_readiness_tests {
-    use super::{por_runtime_readiness_error, validate_por_runtime_ready};
+    use super::{ToriiBuildError, por_runtime_readiness_error, validate_por_runtime_ready};
     fn configured_por() -> iroha_config::parameters::actual::SorafsPor {
         let mut config = iroha_config::parameters::actual::SorafsPor {
             enabled: true,

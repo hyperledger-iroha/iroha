@@ -35,7 +35,7 @@ use crate::zk::kagemusha_v1_recursion::{
 const TEST_SUITE_COMMITMENT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:suite-commitment";
 
 #[derive(Clone, Copy, Debug)]
-struct AcceptSnapshotRecursiveVerifierV1;
+pub(super) struct AcceptSnapshotRecursiveVerifierV1;
 
 impl KagemushaRecursiveVerifierV1 for AcceptSnapshotRecursiveVerifierV1 {
     fn verify_state_proof_and_decide(
@@ -69,9 +69,24 @@ impl KagemushaRecursiveVerifierV1 for AcceptSnapshotRecursiveVerifierV1 {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct AcceptSnapshotGuardVerifierV1;
+pub(super) struct AcceptSnapshotGuardVerifierV1;
 
 impl KagemushaGuardBundleVerifierV1 for AcceptSnapshotGuardVerifierV1 {
+    // Structural snapshot fixtures only; the dedicated recovery tests use a signed simulated CAS.
+    fn verify_recovery_checkpoint_cas(
+        &self,
+        _: &KagemushaRecoveryCheckpointStatementV1,
+        _: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn verify_current_recovery_checkpoint(
+        &self,
+        _: &DurabilityAnchorStatementV1,
+        _: &KagemushaRecoveryJournalsV1,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn verify_mint_reservation(
         &self,
         _statement: &MintReservationStatementV1,
@@ -91,6 +106,7 @@ impl KagemushaGuardBundleVerifierV1 for AcceptSnapshotGuardVerifierV1 {
     fn verify_bootstrap(
         &self,
         _statement: &BootstrapStatementV1,
+        _normalized: &KagemushaNormalizedGuardStatementV1,
         _guard_bundle: &[u8],
     ) -> Result<(), String> {
         Ok(())
@@ -99,6 +115,8 @@ impl KagemushaGuardBundleVerifierV1 for AcceptSnapshotGuardVerifierV1 {
     fn verify_transition(
         &self,
         _statement: &HardwareTransitionStatementV1,
+        _proof_statement: &TransitionProofStatementV1,
+        _normalized: &KagemushaNormalizedGuardStatementV1,
         _guard_bundle: &[u8],
     ) -> Result<(), String> {
         Ok(())
@@ -119,6 +137,110 @@ impl KagemushaGuardBundleVerifierV1 for AcceptSnapshotGuardVerifierV1 {
     ) -> Result<(), String> {
         Ok(())
     }
+}
+
+fn snapshot_recovery_journals() -> KagemushaRecoveryJournalsV1 {
+    // Explicitly synthetic native journals for structural Core fixtures, not production authority.
+    KagemushaRecoveryJournalsV1 {
+        coordinator: KagemushaRecoveryJournalPrefixV1 {
+            sequence: 1,
+            head: [201; 32],
+            byte_len: 100,
+        },
+        responses: KagemushaRecoveryJournalPrefixV1 {
+            sequence: 1,
+            head: [202; 32],
+            byte_len: 100,
+        },
+        response_history_root: [203; 32],
+        retirement_transition_id: [204; 32],
+    }
+}
+
+pub(super) fn snapshot_enrollment_binding(
+    state: &KagemushaStateV1,
+) -> KagemushaRecoveryEnrollmentBindingV1 {
+    // Explicit synthetic owner for structural Core fixtures; no verified enrollment constructor.
+    let owner = iroha_data_model::kagemusha::KagemushaRetailEnrollmentOwnerV1 {
+        account_id: AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![211; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        ),
+        runtime: iroha_data_model::kagemusha::KagemushaRetailEnrollmentRuntimeV1 {
+            fi_id: "snapshot-fi".parse().unwrap(),
+            ledger_dataspace_id: iroha_data_model::nexus::DataSpaceId::new(10),
+            authentication_namespace: "snapshot-fi".parse().unwrap(),
+            network_id: state.lane.network_id,
+            asset: state.lane.asset.clone(),
+            asset_incarnation: state.asset_incarnation,
+            scale: state.lane.scale,
+        },
+        lane_id: state.lane.device_lane_id,
+    };
+    KagemushaRecoveryEnrollmentBindingV1 {
+        enrollment_id: owner.enrollment_id().unwrap(),
+        owner,
+    }
+}
+
+fn snapshot_initial_metadata(
+    state: &KagemushaStateV1,
+    release: &KagemushaStateProofReleaseV1,
+    credential: KagemushaHardwareCredentialV1,
+) -> KagemushaRecoveryMetadataV1 {
+    KagemushaRecoveryMetadataV1::initial(
+        state,
+        release,
+        credential,
+        snapshot_enrollment_binding(state),
+        snapshot_recovery_journals(),
+        [205; 32],
+    )
+    .unwrap()
+}
+
+fn snapshot_initial_publish<R, H>(
+    machine: KagemushaStateMachineV1<R, AcceptSnapshotGuardVerifierV1, H>,
+) -> KagemushaStateMachineV1<R, AcceptSnapshotGuardVerifierV1, H>
+where
+    R: KagemushaRecursiveVerifierV1,
+    H: KagemushaAuthenticatedHistoryStoreV1,
+{
+    let mut machine = machine;
+    let snapshot = machine.snapshot().unwrap();
+    let candidate = KagemushaRecoveryCheckpointCandidateV1 {
+        before_snapshot_commitment: snapshot.snapshot_commitment,
+        statement: snapshot
+            .recovery_metadata
+            .checkpoint_statement(snapshot.recovery_anchor()),
+        snapshot,
+    };
+    machine
+        .install_recovery_checkpoint(&candidate, vec![206])
+        .unwrap();
+    machine
+}
+
+fn snapshot_publish_checkpoint<R, H>(
+    machine: KagemushaStateMachineV1<R, AcceptSnapshotGuardVerifierV1, H>,
+) -> KagemushaStateMachineV1<R, AcceptSnapshotGuardVerifierV1, H>
+where
+    R: KagemushaRecursiveVerifierV1,
+    H: KagemushaAuthenticatedHistoryStoreV1,
+{
+    let id = snapshot_indexed_digest(
+        b"synthetic-snapshot-checkpoint",
+        u64::try_from(machine.recovery_metadata.revision).unwrap(),
+    );
+    let candidate = machine
+        .prepare_recovery_checkpoint(id, machine.recovery_metadata.journals.clone())
+        .unwrap();
+    machine
+        .stage_recovery_checkpoint(candidate)
+        .unwrap()
+        .finish(vec![207])
+        .unwrap()
 }
 
 fn hardware_test_lane() -> KagemushaLaneIdV1 {
@@ -150,7 +272,7 @@ fn snapshot_indexed_digest(label: &[u8], index: u64) -> DigestV1 {
     hasher.finalize().into()
 }
 
-fn snapshot_device_public_key(signing_key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
+pub(super) fn snapshot_device_public_key(signing_key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
     KagemushaDevicePublicKeyV1::from_sec1_bytes(
         signing_key
             .verifying_key()
@@ -160,7 +282,7 @@ fn snapshot_device_public_key(signing_key: &SigningKey) -> KagemushaDevicePublic
     .expect("canonical snapshot-test P-256 key")
 }
 
-fn snapshot_device_signature(
+pub(super) fn snapshot_device_signature(
     signing_key: &SigningKey,
     message: &[u8],
 ) -> KagemushaDeviceSignatureV1 {
@@ -248,7 +370,7 @@ fn snapshot_hardware_credential(
     credential
 }
 
-fn snapshot_paired_proof(
+pub(super) fn snapshot_paired_proof(
     semantic_digest: DigestV1,
     eq_protocol_digest: DigestV1,
     ep_protocol_digest: DigestV1,
@@ -669,6 +791,12 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     )
     .expect("empty authenticated history");
     let mut machine = KagemushaStateMachineV1 {
+        recovery_metadata: snapshot_initial_metadata(
+            &state,
+            &proof_release,
+            old_credential.clone(),
+        ),
+        published_checkpoint: None,
         state,
         journal_revision: 0,
         inbox_revision: 0,
@@ -685,6 +813,7 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         recursive_verifier: AcceptSnapshotRecursiveVerifierV1,
         guard_verifier: AcceptSnapshotGuardVerifierV1,
     };
+    machine = snapshot_initial_publish(machine);
 
     let mint_amount = 4;
     let (mint_authorization, mint_credit, mint_opening) = snapshot_mint_credit(
@@ -769,6 +898,11 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     machine.journal_revision = 0;
     machine.inbox_revision = 0;
     machine.accepted_recipient_bindings.insert(current_policy);
+    assert_eq!(machine.recovery_metadata.revision, 1);
+    assert_eq!(
+        machine.accepted_credential_floor().credential,
+        old_credential
+    );
 
     let peer_amount = 3;
     let (request, payment, peer_opening, acknowledgement) = snapshot_peer_payment(
@@ -800,10 +934,9 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     let peer_credit_id = CreditIdV1(payment.output.credit_id);
     assert_eq!(machine.inbox_revision(), 1);
 
+    machine = snapshot_publish_checkpoint(machine);
+    let anchor = machine.recovery_checkpoint().clone();
     let snapshot = machine.snapshot().expect("canonical recovery snapshot");
-    let anchor = machine
-        .seal_durability_anchor(vec![0x94])
-        .expect("hardware-sealed recovery anchor");
     let canonical = norito::encode_canonical(&snapshot).expect("encode canonical state snapshot");
     let decoded: KagemushaStateSnapshotV1 =
         norito::decode_from_bytes(&canonical).expect("decode canonical state snapshot");
@@ -875,6 +1008,8 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
                 decoded.clone(),
                 &stale_anchor,
                 proof_release.clone(),
+                proof_release.clone(),
+                machine.enrollment_binding(),
                 &path,
                 credentials.clone(),
                 8 * 1024 * 1024,
@@ -888,6 +1023,8 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
                 decoded.clone(),
                 &anchor,
                 proof_release.clone(),
+                proof_release.clone(),
+                machine.enrollment_binding(),
                 &path,
                 credentials.clone(),
                 8 * 1024 * 1024,
@@ -900,6 +1037,8 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
             decoded.clone(),
             &anchor,
             proof_release.clone(),
+            proof_release.clone(),
+            machine.enrollment_binding(),
             &path,
             credentials,
             8 * 1024 * 1024,
@@ -913,7 +1052,9 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     let restored = KagemushaStateMachineV1::restore(
         decoded,
         &anchor,
+        proof_release.clone(),
         proof_release,
+        machine.enrollment_binding(),
         KagemushaMemoryAuthenticatedHistoryStoreV1::new(8 * 1024 * 1024),
         AcceptSnapshotRecursiveVerifierV1,
         AcceptSnapshotGuardVerifierV1,
@@ -1056,6 +1197,8 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
     )
     .expect("empty aggregate authenticated history");
     let mut machine = KagemushaStateMachineV1 {
+        recovery_metadata: snapshot_initial_metadata(&state, &proof_release, credential.clone()),
+        published_checkpoint: None,
         state,
         journal_revision: 0,
         inbox_revision: 0,
@@ -1072,6 +1215,7 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         recursive_verifier: AcceptSnapshotRecursiveVerifierV1,
         guard_verifier: AcceptSnapshotGuardVerifierV1,
     };
+    machine = snapshot_initial_publish(machine);
 
     for index in 0..CREDIT_COUNT {
         let (request, payment, opening, acknowledgement) = snapshot_peer_payment(
@@ -1125,10 +1269,9 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
     assert!(machine.pending_credits.is_empty());
     assert_eq!(machine.consumed_credits.len(), CREDIT_COUNT as usize);
     let history_store = machine.authenticated_history.clone().into_store();
+    machine = snapshot_publish_checkpoint(machine);
+    let anchor = machine.recovery_checkpoint().clone();
     let snapshot = machine.snapshot().expect("aggregate recovery snapshot");
-    let anchor = machine
-        .seal_durability_anchor(vec![0x97])
-        .expect("aggregate hardware-sealed recovery anchor");
     let canonical = norito::encode_canonical(&snapshot).expect("encode aggregate snapshot");
     let decoded: KagemushaStateSnapshotV1 =
         norito::decode_from_bytes(&canonical).expect("decode aggregate snapshot");
@@ -1193,7 +1336,9 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
     let restored = KagemushaStateMachineV1::restore(
         decoded,
         &anchor,
+        proof_release.clone(),
         proof_release,
+        machine.enrollment_binding(),
         history_store,
         AcceptSnapshotRecursiveVerifierV1,
         AcceptSnapshotGuardVerifierV1,
@@ -1467,4 +1612,4 @@ fn sender_reservation_uses_complete_core_slot_not_only_wire_envelope_floor() {
 
 #[cfg(unix)]
 #[path = "coordinator_operation_store_tests.rs"]
-mod coordinator_operation_store_tests;
+pub(super) mod coordinator_operation_store_tests;

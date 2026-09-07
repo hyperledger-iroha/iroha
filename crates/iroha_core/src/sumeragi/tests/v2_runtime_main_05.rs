@@ -883,6 +883,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
             validated.clone(),
             &validate_pending,
             ready_lifecycle_ordinal,
+            None,
         )
         .expect("publish LocalProposalReady behind the unrelated FIFO incumbent");
     assert!(matches!(
@@ -1005,6 +1006,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
             validated.clone(),
             &validate_pending,
             ready_lifecycle_ordinal,
+            None,
         )
         .expect("the exact completed LocalProposalReady owner coalesces");
     assert_eq!(
@@ -1055,6 +1057,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
             validated,
             &validate_pending,
             foreign_ordinal,
+            None,
         )
         .expect("a redundant completion never installs the foreign coordinator owner");
     assert_eq!(
@@ -1070,6 +1073,400 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
     );
     assert!(!runtime.fail_closed);
 }
+
+fn enqueue_owned_local_proposal_ready_for_timeout_test(
+    runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+    context: &wire::HeightContext,
+    tag: EventTag,
+    marker: u8,
+    physical_completion: Option<super::super::v2_worker::LifecycleValidatePhysicalCompletionV1>,
+) -> (u128, u128) {
+    let manifest = runtime_manifest(context, marker);
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    let local = runtime
+        .mint_local_proposal_effect_ownership(tag, &manifest)
+        .expect("mint the active producer's local Store owner");
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let store_ownership = local
+        .exact_store_task_ownership(&store_effect, &manifest)
+        .expect("retain the local Store owner");
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project the local Store owner into Validate");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("bind the exact local Validate predecessor");
+    let lifecycle_ordinal = validate_ownership.owner().lifecycle_ordinal();
+    let admission = runtime
+        .enqueue_local_proposal_with_lifecycle_pending(
+            tag,
+            manifest,
+            durable,
+            validated,
+            &validate_pending,
+            lifecycle_ordinal,
+            physical_completion,
+        )
+        .expect("enqueue the lifecycle-owned LocalProposalReady completion");
+    assert!(matches!(
+        admission,
+        LocalProposalReadyCommandAdmission::Admitted(_)
+    ));
+    let physical_admission_ordinal = runtime
+        .ingress
+        .commands
+        .back()
+        .and_then(|queued| queued.admission_ordinal)
+        .expect("LocalProposalReady owns one physical queue position");
+    assert!(lifecycle_ordinal < physical_admission_ordinal);
+    (lifecycle_ordinal, physical_admission_ordinal)
+}
+
+#[test]
+fn local_proposal_admission_clock_uses_a_strict_absolute_deadline() {
+    let started_at = Instant::now();
+    let timeout = Duration::from_millis(10);
+    let clock = LocalProposalAdmissionClock {
+        tag: EventTag::new(1, 0, Generation::new(1)),
+        started_at: Some(started_at),
+        timeout,
+    };
+    assert!(clock.admits_before_deadline(started_at));
+    assert!(clock.admits_before_deadline(started_at + timeout - Duration::from_nanos(1)));
+    assert!(!clock.admits_before_deadline(started_at + timeout));
+    assert!(!clock.admits_before_deadline(started_at + timeout + Duration::from_nanos(1)));
+    if let Some(before_start) = started_at.checked_sub(Duration::from_nanos(1)) {
+        assert!(!clock.admits_before_deadline(before_start));
+    }
+    let unarmed = LocalProposalAdmissionClock {
+        started_at: None,
+        ..clock
+    };
+    assert!(unarmed.admits_before_deadline(started_at));
+}
+
+#[test]
+fn local_proposal_admitted_before_clock_activation_retains_its_exact_handoff() {
+    let directory = TempDir::new().expect("pre-arm Ready runtime");
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(0);
+    let (mut runtime, context, _) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 2, 2),
+        Some(local_validator),
+    );
+    let tag = runtime.round_tag();
+    runtime
+        .reconcile_active_view_producer(tag, true)
+        .expect("reserve actual current producer");
+    assert!(!runtime.clocks_armed);
+    let (_, admission_ordinal) = enqueue_owned_local_proposal_ready_for_timeout_test(
+        &mut runtime,
+        &context,
+        tag,
+        0xA8,
+        None,
+    );
+    let queued = runtime
+        .ingress
+        .commands
+        .back()
+        .expect("retain pre-arm Ready");
+    assert!(queued.local_proposal_ready_before_deadline);
+    let occurrence = queued
+        .queue_occurrence_owner
+        .clone()
+        .expect("seal the actual queue occurrence");
+    let started_at = Instant::now();
+    runtime
+        .arm_live_clocks(started_at)
+        .expect("activate current round clocks");
+    assert_eq!(
+        runtime
+            .ingress
+            .commands
+            .back()
+            .and_then(|queued| queued.queue_occurrence_owner.as_ref()),
+        Some(&occurrence)
+    );
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(started_at + runtime.round_timeout())
+        .expect("timely pre-arm Ready retains one bounded handoff")
+    else {
+        panic!("current Ready unexpectedly idled")
+    };
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("retain scheduler owner");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady
+    );
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = scheduler.candidate else {
+        panic!("Ready must retain exact selection ownership")
+    };
+    assert_eq!(candidate.admission_ordinal, admission_ordinal);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        }
+    )));
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("retain actual Sign successors");
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn pre_timeout_local_proposal_ready_gets_one_bounded_handoff_turn() {
+    let directory = TempDir::new().expect("temporary pre-timeout local proposal directory");
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(0);
+    let (mut runtime, context, _) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 2, 2),
+        Some(local_validator),
+    );
+    let now = Instant::now();
+    let tag = runtime.round_tag();
+    runtime
+        .reconcile_active_view_producer(tag, true)
+        .expect("reserve the active-view local producer before clocks arm");
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm the local leader runtime");
+    let (ready_lifecycle_ordinal, ready_admission_ordinal) =
+        enqueue_owned_local_proposal_ready_for_timeout_test(
+            &mut runtime,
+            &context,
+            tag,
+            0x93,
+            None,
+        );
+    let deadline = now + runtime.round_timeout();
+
+    let RuntimeStep::Advanced(sign_effects) = runtime
+        .step(deadline)
+        .expect("the pre-cut local proposal owns one bounded deadline turn")
+    else {
+        panic!("pre-timeout LocalProposalReady unexpectedly idled")
+    };
+    assert!(matches!(
+        sign_effects.as_slice(),
+        [AdapterEffect::Sign {
+            tag: effect_tag,
+            request: SignRequest::Proposal(_),
+        }] if *effect_tag == tag
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the bounded handoff retains scheduler ownership");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady
+    );
+    assert!(scheduler.timeout_due);
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = scheduler.candidate else {
+        panic!("the bounded handoff must own the exact LocalProposalReady candidate")
+    };
+    assert_eq!(candidate.kind, RuntimeCommandKind::LocalProposalReady);
+    assert_eq!(candidate.admission_ordinal, ready_admission_ordinal);
+    let timeout_owner = runtime
+        .frozen_timeout_owner_for_test(deadline)
+        .expect("the deadline owner remains frozen after the bounded handoff");
+    assert!(ready_lifecycle_ordinal < timeout_owner.lifecycle_ordinal());
+    assert!(ready_admission_ordinal < timeout_owner.lifecycle_ordinal());
+    runtime
+        .take_effect_ownership(sign_effects.len())
+        .expect("the Proposal Sign inherits the local handoff owner");
+
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(deadline)
+        .expect("the still-due timeout owns the following turn")
+    else {
+        panic!("the still-due timeout unexpectedly idled")
+    };
+    let timeout_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the following timeout retains scheduler ownership");
+    assert_eq!(
+        timeout_scheduler.selected,
+        RuntimeSelectedOwnerKind::Timeout
+    );
+    runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("the timeout effects retain their frozen owner");
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn late_local_proposal_ready_cannot_beat_a_timeout_that_has_not_yet_been_frozen() {
+    let directory = TempDir::new().expect("late Ready publication runtime");
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(0);
+    let queue = RuntimeQueueConfig::new(8, 2, 2);
+    let (runtime, context, _) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        queue,
+        Some(local_validator),
+    );
+    let (mut runtime, startup) = SerializedV2Runtime::new(
+        runtime.into_driver(),
+        Vec::new(),
+        Instant::now(),
+        Duration::from_millis(10),
+        queue,
+    )
+    .expect("configure a real short deadline on the actual WAL adapter");
+    assert!(startup.is_empty());
+    let tag = runtime.round_tag();
+    runtime
+        .reconcile_active_view_producer(tag, true)
+        .expect("reserve the actual current producer");
+    let started_at = Instant::now();
+    runtime
+        .arm_live_clocks(started_at)
+        .expect("arm actual live clocks");
+    let deadline = started_at + runtime.round_timeout();
+    std::thread::sleep(
+        deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+    );
+    assert!(Instant::now() > deadline);
+    assert!(
+        runtime.timeout_owner.is_none(),
+        "no Runtime turn has yet frozen the elapsed deadline"
+    );
+    let (_, admission_ordinal) = enqueue_owned_local_proposal_ready_for_timeout_test(
+        &mut runtime,
+        &context,
+        tag,
+        0xA7,
+        None,
+    );
+    let queued = runtime
+        .ingress
+        .commands
+        .back()
+        .expect("retain the exact late Ready occurrence");
+    assert!(
+        queued.admitted_at > deadline,
+        "the callback itself arrived after the absolute deadline"
+    );
+    assert!(!queued.local_proposal_ready_before_deadline);
+    assert!(runtime.timeout_owner.is_none());
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(Instant::now())
+        .expect("the first due step must select Timeout")
+    else {
+        panic!("an elapsed deadline must own one runtime step")
+    };
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("actual scheduler owner");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::Timeout,
+        "a smaller admission ordinal cannot establish earlier wall-clock completion"
+    );
+    assert_eq!(scheduler.queue_before.len, 1);
+    assert_eq!(scheduler.queue_after.len, 1);
+    assert_eq!(
+        runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.admission_ordinal),
+        Some(admission_ordinal)
+    );
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        }
+    )));
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("retain exact timeout successors");
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn post_timeout_local_proposal_ready_does_not_bypass_deadline() {
+    let directory = TempDir::new().expect("temporary post-timeout local proposal directory");
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(0);
+    let (mut runtime, context, _) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 2, 2),
+        Some(local_validator),
+    );
+    let now = Instant::now();
+    let tag = runtime.round_tag();
+    runtime
+        .reconcile_active_view_producer(tag, true)
+        .expect("reserve the active-view local producer before clocks arm");
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm the local leader runtime");
+    let deadline = now + runtime.round_timeout();
+    let timeout_owner = runtime
+        .frozen_timeout_owner_for_test(deadline)
+        .expect("freeze the deadline before the validation completion arrives");
+    let (ready_lifecycle_ordinal, ready_admission_ordinal) =
+        enqueue_owned_local_proposal_ready_for_timeout_test(
+            &mut runtime,
+            &context,
+            tag,
+            0x94,
+            None,
+        );
+    assert!(ready_lifecycle_ordinal < timeout_owner.lifecycle_ordinal());
+    assert!(timeout_owner.lifecycle_ordinal() < ready_admission_ordinal);
+
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(deadline)
+        .expect("a post-cut local proposal cannot bypass the timeout")
+    else {
+        panic!("the due timeout unexpectedly idled")
+    };
+    assert!(!timeout_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        }
+    )));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the timeout retains scheduler ownership");
+    assert_eq!(scheduler.selected, RuntimeSelectedOwnerKind::Timeout);
+    assert_eq!(scheduler.queue_before.len, 1);
+    assert_eq!(scheduler.queue_after.len, 1);
+    assert_eq!(runtime.queued_commands(), 1);
+    runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("the timeout effects retain their frozen owner");
+    assert!(!runtime.fail_closed);
+}
+
 #[test]
 fn body_available_rejects_second_persistent_lifecycle_before_mutation() {
     let directory = TempDir::new().expect("temporary persistent-root conflict directory");

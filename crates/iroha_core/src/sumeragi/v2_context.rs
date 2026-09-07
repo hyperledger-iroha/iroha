@@ -17,7 +17,7 @@ use crate::{
     smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
-        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer,
+        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer_with_role,
         nexus_active_lane_ids, public_lane_validator_record_matches_key,
     },
 };
@@ -25,6 +25,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
+    consensus::ConsensusKeyRole,
     isi::RegisterBox,
     isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     parameter::system::ConsensusHandshakeMetadata,
@@ -299,8 +300,13 @@ pub fn freeze_staged_genesis_v2(
         if !staged_world.peers().iter().any(|peer| peer == voter) {
             return Err(V2GenesisBootstrapError::VoterMissingFromStagedWorld);
         }
-        let staged_pop = live_consensus_key_pop_for_peer(staged_world, voter, 1)
-            .ok_or(V2GenesisBootstrapError::MissingLiveConsensusKey)?;
+        let staged_pop = live_consensus_key_pop_for_peer_with_role(
+            staged_world,
+            voter,
+            1,
+            ConsensusKeyRole::Validator,
+        )
+        .ok_or(V2GenesisBootstrapError::MissingLiveConsensusKey)?;
         if signed_pops.get(voter) != Some(&staged_pop) {
             return Err(V2GenesisBootstrapError::ProofOfPossessionMismatch);
         }
@@ -989,8 +995,13 @@ fn finalized_next_epoch_snapshot_with_roster(
     let validator_set_pops = roster
         .iter()
         .map(|entry| {
-            live_consensus_key_pop_for_peer(state.world(), &entry.validator, successor_height)
-                .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
+            live_consensus_key_pop_for_peer_with_role(
+                state.world(),
+                &entry.validator,
+                successor_height,
+                ConsensusKeyRole::Validator,
+            )
+            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
         })
         .collect::<Result<Vec<_>, _>>()?;
     wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
@@ -1099,18 +1110,26 @@ mod tests {
         account::AccountId,
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        isi::RegisterPeerWithPop,
+        isi::{RegisterCommitteePeerWithPop, RegisterPeerWithPop, SetParameter},
         metadata::Metadata,
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneValidatorRecord,
-            PublicLaneValidatorStatus,
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneStakeShare,
+            PublicLaneValidatorRecord, PublicLaneValidatorStatus,
         },
-        parameter::system::SumeragiNposParameters,
+        parameter::{
+            Parameter,
+            custom::CustomParameter,
+            system::{
+                ConsensusFingerprint, ConsensusHandshakeMetadata,
+                KagemushaMintFinalityNextEpochParameterV1, SumeragiConsensusMode,
+                SumeragiNposParameters, consensus_metadata,
+            },
+        },
         peer::PeerId,
         prelude::{InstructionBox, TransactionBuilder},
     };
     use iroha_genesis::GenesisBlock;
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::{json::Json, numeric::Quantity};
     use std::num::NonZeroU64;
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -1188,6 +1207,14 @@ mod tests {
         duplicate_first: bool,
         corrupt_first_pop: bool,
     ) -> GenesisBlock {
+        signed_roster_genesis_with_extra(voters, duplicate_first, corrupt_first_pop, Vec::new())
+    }
+    fn signed_roster_genesis_with_extra(
+        voters: &[KeyPair],
+        duplicate_first: bool,
+        corrupt_first_pop: bool,
+        extra_instructions: Vec<InstructionBox>,
+    ) -> GenesisBlock {
         let authority =
             KeyPair::try_from_seed(b"v2-context-genesis-authority".to_vec(), Algorithm::Ed25519)
                 .expect("deterministic genesis authority");
@@ -1212,6 +1239,48 @@ mod tests {
                 PeerId::new(voters[0].public_key().clone()),
                 pop,
             )));
+        }
+        instructions.extend(extra_instructions);
+        if (voters.is_empty() || voters.len() == 4) && !duplicate_first && !corrupt_first_pop {
+            // The empty-voter negative still needs a well-formed signed metadata
+            // instruction so it reaches the independent voting-roster boundary.
+            let metadata_voters = if voters.is_empty() {
+                (1_u8..=4)
+                    .map(|seed| {
+                        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                            .expect("deterministic metadata-only voter")
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                voters.to_vec()
+            };
+            let mut roster = metadata_voters
+                .iter()
+                .map(|key| wire::ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+            let metadata = ConsensusHandshakeMetadata {
+                mode: SumeragiConsensusMode::Permissioned,
+                block_cadence_ms: NonZeroU64::new(1_000).expect("non-zero test cadence"),
+                wire_protocol_version: u32::from(wire::PROTOCOL_VERSION),
+                consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
+                kagemusha_mint_finality:
+                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
+                sumeragi_v2: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
+            };
+            metadata
+                .validate()
+                .expect("valid signed genesis consensus metadata fixture");
+            let metadata = norito::json::value::to_value(&metadata)
+                .expect("serialize signed genesis consensus metadata fixture");
+            let metadata = Json::from_norito_value_ref(&metadata)
+                .expect("encode signed genesis consensus metadata fixture");
+            instructions.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
+                CustomParameter::new(consensus_metadata::handshake_meta_id(), metadata),
+            ))));
         }
         let transaction = TransactionBuilder::new_genesis(
             AccountId::new(authority.public_key().clone()),
@@ -1262,6 +1331,42 @@ mod tests {
         assert_eq!(observed.len(), voters.len());
     }
     #[test]
+    fn signed_genesis_roster_ignores_proof_bound_committee_peers() {
+        let voters = [0x61_u8, 0x62, 0x63, 0x64].map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS voter")
+        });
+        let committee = KeyPair::try_from_seed(vec![0x65; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS committee peer");
+        let committee_peer = PeerId::new(committee.public_key().clone());
+        let committee_pop = iroha_crypto::bls_normal_pop_prove(committee.private_key())
+            .expect("committee PoP fixture");
+        let genesis = signed_roster_genesis_with_extra(
+            &voters,
+            false,
+            false,
+            vec![InstructionBox::from(RegisterCommitteePeerWithPop::new(
+                committee_peer.clone(),
+                committee_pop,
+            ))],
+        );
+
+        let observed = signed_genesis_voting_peers(&genesis).expect("signed global roster");
+        let mut expected = voters
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(observed, expected);
+        assert!(!observed.contains(&committee_peer));
+        assert!(
+            !signed_genesis_validator_pops(&genesis)
+                .expect("signed validator PoPs")
+                .contains_key(&committee_peer),
+            "committee peer registrations must never widen the signed global voter roster"
+        );
+    }
+    #[test]
     fn signed_genesis_roster_rejects_duplicate_or_invalid_pop() {
         let voter = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
             .expect("deterministic BLS voter");
@@ -1308,11 +1413,12 @@ mod tests {
                         .expect("valid finality PoP")
                 })
                 .collect::<Vec<_>>();
-            let network_id = test_network_id(0x42);
+            let network_id = NetworkId::from_genesis_hash(genesis.0.hash());
             let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
                 crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 0, &roster,
                 );
+            let signed_parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
             let context = wire::HeightContext {
                 network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
@@ -1327,16 +1433,9 @@ mod tests {
                 roster,
                 kagemusha_mint_finality_epoch_id,
                 kagemusha_mint_finality_epoch_roster,
-                nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
-                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4096,
-                    max_chunk_count: 8,
-                },
+                nexus_amx_context_hash: Hash::prehashed(signed_parameters.nexus_amx_context_hash),
+                execution_policy_hash: Hash::prehashed(signed_parameters.execution_policy_hash),
+                da_layout: signed_parameters.da_layout,
                 leader_seed: [0xA7; 32],
             };
             (context, validator_set_pops)
@@ -1367,6 +1466,13 @@ mod tests {
     #[test]
     fn staged_genesis_rejects_an_empty_signed_voting_roster() {
         let genesis = signed_roster_genesis(&[], false, false);
+        iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+            .expect("the empty-voter negative carries valid signed metadata");
+        assert!(
+            signed_genesis_voting_peers(&genesis)
+                .expect("the signed voting roster is independently readable")
+                .is_empty()
+        );
         let state = lane_hash_world(&[]);
         let staged = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
@@ -1400,10 +1506,24 @@ mod tests {
     fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
         let world = World::default();
         {
-            let mut block = world.public_lane_validators.block();
+            let mut block = world.block();
             for (lane, peer, stake) in records {
                 let record = lane_record(peer, *lane, *stake);
-                block.insert((*lane, record.validator.clone()), record);
+                let validator = record.validator.clone();
+                block
+                    .public_lane_validators
+                    .insert((*lane, validator.clone()), record);
+                block.public_lane_stake_shares.insert(
+                    (*lane, validator.clone(), validator.clone()),
+                    PublicLaneStakeShare {
+                        lane_id: *lane,
+                        validator: validator.clone(),
+                        staker: validator,
+                        bonded: Quantity::from(*stake),
+                        pending_unbonds: Default::default(),
+                        metadata: Metadata::default(),
+                    },
+                );
             }
             block.commit();
         }
@@ -1644,7 +1764,7 @@ mod tests {
                     1,
                     Hash::new(b"context fixture executed block wire"),
                 ),
-            signers: vec![0, 1, 2, 3],
+            signers: (0..context.quorum.min_signers).collect(),
             aggregate_signature: vec![0xA5; 48],
         };
         let validator_set_pops = vec![vec![0xA6]; context.roster.len()];
@@ -1736,6 +1856,27 @@ mod tests {
             next_pops
         );
     }
+    fn install_next_mint_roster(
+        world: &World,
+        network_id: NetworkId,
+        epoch: u64,
+        roster: &[wire::ValidatorPower],
+    ) {
+        let parameter = KagemushaMintFinalityNextEpochParameterV1 {
+            roster: crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                network_id, epoch, roster,
+            ),
+        };
+        parameter
+            .validate()
+            .expect("valid separately finalized next-epoch mint roster");
+        let mut block = world.block();
+        block.parameters.get_mut().custom.insert(
+            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
+            parameter.into_custom_parameter(),
+        );
+        block.commit();
+    }
     #[test]
     fn next_epoch_snapshot_obeys_successor_key_activation_and_expiry() {
         const BOUNDARY_HEIGHT: u64 = 7;
@@ -1755,6 +1896,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let chain_id = ChainId::from("v2-expiry-boundary-test");
+        let network_id = test_network_id(0x72);
         let state_with_lifecycle = |expire_first: bool| {
             let mut world = World::new();
             for (index, key) in keys.iter().enumerate() {
@@ -1781,37 +1923,55 @@ mod tests {
                     .consensus_keys_by_pk
                     .insert(record.public_key.to_string(), vec![id]);
             }
-            State::new_with_chain_for_testing(
+            install_next_mint_roster(&world, network_id, 5, &roster);
+            State::new_with_chain_and_network_id_for_testing(
                 world,
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
+                network_id,
             )
         };
         let expiring_state = state_with_lifecycle(true);
         let expiring_view = expiring_state.view();
         let expiring_peer = &roster[0].validator;
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, BOUNDARY_HEIGHT)
-                .is_some(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                expiring_peer,
+                BOUNDARY_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_some(),
             "fixture key must still authenticate the boundary height"
         );
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, SUCCESSOR_HEIGHT)
-                .is_none(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                expiring_peer,
+                SUCCESSOR_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_none(),
             "a key is expired at its exclusive expiry height"
         );
         let scheduled_peer = &roster[1].validator;
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), scheduled_peer, BOUNDARY_HEIGHT)
-                .is_none(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                scheduled_peer,
+                BOUNDARY_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_none(),
             "a scheduled key must not activate early"
         );
         assert!(
-            live_consensus_key_pop_for_peer(
+            live_consensus_key_pop_for_peer_with_role(
                 expiring_view.world(),
                 scheduled_peer,
-                SUCCESSOR_HEIGHT
+                SUCCESSOR_HEIGHT,
+                ConsensusKeyRole::Validator,
             )
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
@@ -1827,7 +1987,7 @@ mod tests {
             kagemusha_mint_finality_epoch_roster,
             epoch_end_height: BOUNDARY_HEIGHT,
             mode: wire::ConsensusMode::Permissioned,
-            roster,
+            roster: roster.clone(),
             leader_seed: [0x72; 32],
         };
         assert!(matches!(
@@ -1861,7 +2021,10 @@ mod tests {
     fn npos_boundary_fails_closed_without_finalized_pre_boundary_beacon_pulse() {
         const BOUNDARY_HEIGHT: u64 = 7;
         let chain_id = ChainId::from("v2-npos-missing-pre-boundary-record");
+        let network_id = test_network_id(0x73);
+        let election_roster = roster(&[1, 1, 1, 1]);
         let world = World::new();
+        install_next_mint_roster(&world, network_id, 4, &election_roster);
         {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
@@ -1874,14 +2037,14 @@ mod tests {
             );
             block.commit();
         }
-        let state = State::new_with_chain_for_testing(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
+            network_id,
         );
         let view = state.view();
-        let election_roster = roster(&[1, 1, 1, 1]);
         let election = FrozenElectionInputs {
             epoch: 3,
             kagemusha_mint_finality_epoch_roster:

@@ -1,0 +1,16 @@
+# Optional overlay for native execution-proof transport qualification.
+# Merge with a complete, reviewed four-validator runtime configuration.
+# This does not qualify a proof profile or enable staked game sessions.
+[network]
+# Whole signed transactions still contain their typed execution proof bytes.
+max_frame_bytes_tx_gossip = 8388608
+# Connect has its own reliable low-priority topic; health remains at its default cap.
+max_frame_bytes_connect = 8388608
+
+[torii.connect]
+# A four-MiB unsigned transaction adds 216 browser Connect framing/AEAD bytes.
+frame_max_bytes = 4198400
+session_buffer_max_bytes = 8388608
+# Bound concurrent sessions while qualifying memory and throughput on actual peers.
+ws_max_sessions = 16
+ws_per_ip_max_sessions = 8

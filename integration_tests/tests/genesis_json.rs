@@ -97,6 +97,7 @@ fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bo
             && grant.object().payload() == &Json::default()
     })
 }
+
 fn load_raw_genesis_transaction() -> RawGenesisTransaction {
     eprintln!(
         "Using an explicit topology-bound integration-test genesis; checked-in `.template.json` sources are intentionally non-signable"

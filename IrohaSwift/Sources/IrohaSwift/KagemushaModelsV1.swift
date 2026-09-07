@@ -61,14 +61,21 @@ public struct KagemushaAssetDefinitionIDV1: Equatable, Hashable, Sendable {
   public let canonicalPayload: Data
 
   public init(_ literal: String) throws {
-    canonicalPayload = try CanonicalNorito.encodeCompactAssetDefinitionId(literal)
+    try self.init(canonicalPayload: CanonicalNorito.encodeCompactAssetDefinitionId(literal))
   }
 
   public init(canonicalPayload: Data) throws {
-    guard !canonicalPayload.isEmpty, canonicalPayload.count <= 512 else {
+    // AssetDefinitionId is exactly sixteen compact byte fields. Validate the
+    // UUIDv4 version and RFC4122 variant enforced by Rust from_uuid_bytes at
+    // this shared boundary so every enclosing codec admits the same identity.
+    guard canonicalPayload.count == 32 else { throw kagemushaInvalid("asset") }
+    let payload = Array(canonicalPayload)
+    guard stride(from: 0, to: 32, by: 2).allSatisfy({ payload[$0] == 1 }),
+      payload[13] >> 4 == 4, payload[17] & 0xc0 == 0x80
+    else {
       throw kagemushaInvalid("asset")
     }
-    self.canonicalPayload = Data(canonicalPayload)
+    self.canonicalPayload = Data(payload)
   }
 }
 

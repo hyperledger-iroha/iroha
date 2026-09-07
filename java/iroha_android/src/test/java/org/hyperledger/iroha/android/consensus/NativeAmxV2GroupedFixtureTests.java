@@ -30,6 +30,67 @@ import org.junit.Test;
 
 /** Shared grouped Native AMX v2 fixture-consumption tests. */
 public final class NativeAmxV2GroupedFixtureTests {
+  private static Map<String, Object> flatParticipantSettlement() {
+    final Map<String, Object> value = new java.util.LinkedHashMap<>();
+    value.put("lane_id", 0L);
+    value.put("dataspace_id", 0L);
+    value.put("lane_incarnation", "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C");
+    value.put("participant_lane_block_height", 1L);
+    value.put("authority_context_height", 2L);
+    value.put("previous_native_settlement_hash", null);
+    value.put("source_ids", Arrays.asList(String.join("", java.util.Collections.nCopies(32, "F0")), String.join("", java.util.Collections.nCopies(32, "10"))));
+    return value;
+  }
+
+  @Test
+  public void participantSettlementPreservesFifoAndHasNoRetiredShape() {
+    final Map<String, Object> wire = flatParticipantSettlement();
+    final NativeAmxV2Models.ParticipantSettlement parsed = NativeAmxV2Models.parseParticipantSettlement(wire);
+    assertEquals(0L, parsed.laneId());
+    assertEquals(BigInteger.ZERO, parsed.dataspaceId());
+    assertEquals(BigInteger.ONE, parsed.participantLaneBlockHeight());
+    assertEquals(BigInteger.valueOf(2L), parsed.authorityContextHeight());
+    assertEquals(String.join("", java.util.Collections.nCopies(32, "F0")), parsed.sourceIds().get(0).value());
+    assertEquals(String.join("", java.util.Collections.nCopies(32, "10")), parsed.sourceIds().get(1).value());
+    assertEquals("hash:350CB3C0D8728E39820775AC522B345C84631FA81BA164F72FB70043657012CF#EB51", parsed.computedHash().value());
+    final Map<String, Object> reversed = new java.util.LinkedHashMap<>(wire);
+    reversed.put("source_ids", Arrays.asList(parsed.sourceIds().get(1).value(), parsed.sourceIds().get(0).value()));
+    assertFalse(parsed.computedHash().equals(NativeAmxV2Models.parseParticipantSettlement(reversed).computedHash()));
+    assertEquals(null, parsed.previousNativeSettlementHash());
+    final Map<String, Object> firstWithPrevious = new java.util.LinkedHashMap<>(wire);
+    firstWithPrevious.put("previous_native_settlement_hash", wire.get("lane_incarnation"));
+    assertThrows(IllegalArgumentException.class, () -> NativeAmxV2Models.parseParticipantSettlement(firstWithPrevious));
+    final Map<String, Object> later = new java.util.LinkedHashMap<>(firstWithPrevious);
+    later.put("participant_lane_block_height", 2L);
+    assertEquals(wire.get("lane_incarnation"), NativeAmxV2Models.parseParticipantSettlement(later).previousNativeSettlementHash().value());
+    later.put("previous_native_settlement_hash", null);
+    assertEquals(null, NativeAmxV2Models.parseParticipantSettlement(later).previousNativeSettlementHash());
+    assertThrows(UnsupportedOperationException.class, () -> parsed.sourceIds().clear());
+    for (final String field : new ArrayList<>(wire.keySet())) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.remove(field);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2Models.parseParticipantSettlement(invalid));
+    }
+    for (final String retired : Arrays.asList("block_height", "tx_count", "receipts", "native_amx_receipts",
+        "total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance", "swap_metadata", "nexus_fee_receipts")) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.put(retired, null);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2Models.parseParticipantSettlement(invalid));
+    }
+    for (final String height : Arrays.asList("participant_lane_block_height", "authority_context_height")) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.put(height, 0L);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2Models.parseParticipantSettlement(invalid));
+    }
+    for (final List<String> sources : Arrays.asList(java.util.Collections.<String>emptyList(),
+        Arrays.asList(String.format("%064X", 0L)),
+        Arrays.asList(String.format("%064X", 1L), String.format("%064X", 1L)))) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.put("source_ids", sources);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2Models.parseParticipantSettlement(invalid));
+    }
+  }
+
   private static final BigInteger U64_MAX =
       BigInteger.ONE.shiftLeft(Long.SIZE).subtract(BigInteger.ONE);
   private static final byte[] MERKLE_LEAF_NODE_DOMAIN =
@@ -63,11 +124,11 @@ public final class NativeAmxV2GroupedFixtureTests {
         firstLeg.participantProposal().proposalHash().value());
     assertEquals(null, firstLeg.participantProposal().payloadBlockHint());
     assertEquals(
-        "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+        "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813",
         firstLeg.participantSettlementHash().value());
     final NativeAmxV2Models.Leg remoteLeg = group.receipts().get(0).legs().get(1);
     assertEquals(
-        "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+        "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240",
         remoteLeg.participantSettlementHash().value());
     assertTrue(
         NativeAmxV2Models.isCanonicalBlsNormalPeerId(
@@ -164,6 +225,7 @@ public final class NativeAmxV2GroupedFixtureTests {
   public void rustOwnedNegativeCorpusIsConsumable() throws Exception {
     final Map<String, Object> canonical = fixture();
     final List<Object> controls = array(canonical, "negative_controls");
+    assertEquals(58, controls.size());
     final Set<String> identifiers = new HashSet<>();
     for (final Object controlValue : controls) {
       identifiers.add(string(object(controlValue), "id"));
@@ -178,6 +240,8 @@ public final class NativeAmxV2GroupedFixtureTests {
                 "coherent_duplicate_validator_set",
                 "coherent_over_quorum_requirement",
                 "manifest_leaf_hash_tampering",
+                "missing_previous_native_settlement_hash",
+                "manifest_missing_previous_native_settlement_hash",
                 "non_canonical_validator_peer_id",
                 "execution_commitment_merge_carrier_wrong_version",
                 "execution_commitment_missing_merge_carrier_field")));
@@ -300,6 +364,12 @@ public final class NativeAmxV2GroupedFixtureTests {
         manifestCount == artifacts.size() && artifacts.size() == 1);
     final Map<String, Object> artifact = object(artifacts.get(0));
     final Map<String, Object> leaf = object(artifact, "leaf");
+    require(leaf.containsKey("previous_native_settlement_hash"));
+    final Object previousNativeHash = leaf.get("previous_native_settlement_hash");
+    if (previousNativeHash != null) {
+      new NativeAmxV2.ConsensusHash(string(leaf, "previous_native_settlement_hash"));
+      require(number(leaf, "participant_height") > 1);
+    }
     final Map<String, Object> proof = object(artifact, "proof");
     require(number(artifact, "version") == 1L && number(leaf, "version") == 1L);
     require(number(artifact, "leaf_index") == 0L && number(proof, "leaf_index") == 0L);
@@ -381,6 +451,9 @@ public final class NativeAmxV2GroupedFixtureTests {
           Objects.equals(matchingLeg.get("participant_settlement_hash"), leaf.get("settlement_hash")));
       final Map<String, Object> body =
           object(object(matchingLeg, "prepare_qc"), "body");
+      final Map<String, Object> settlement = object(matchingLeg, "participant_settlement");
+      require(settlement.containsKey("previous_native_settlement_hash"));
+      require(Objects.equals(settlement.get("previous_native_settlement_hash"), previousNativeHash));
       require(Objects.equals(body.get("source_id"), member.get("source_id")));
       require(
           Objects.equals(body.get("tx_entrypoint_hash"), member.get("entrypoint_hash")));

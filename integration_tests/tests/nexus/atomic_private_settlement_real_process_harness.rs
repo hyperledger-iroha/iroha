@@ -1,6 +1,8 @@
 use base64::Engine as _;
 use futures_util::StreamExt as _;
-use iroha::data_model::block::consensus_v2::recommended_data_availability_layout;
+use iroha::data_model::block::consensus_v2::{
+    HeightContextId, recommended_data_availability_layout,
+};
 use iroha::data_model::events::{
     EventBox,
     pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -63,6 +65,10 @@ const FAULT_BUNDLE_EXPIRY_BLOCKS: u64 = 96;
 const FAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
 const FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1: &[u8] =
     b"iroha:aps-fault-continuous-observation:v1\0";
+const FAULT_CONTINUOUS_OBSERVATION_PHASE_DOMAIN_V1: &[u8] =
+    b"iroha:aps-fault-continuous-observation-phase:v1\0";
+const FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1: &str = "expected_transport_unavailable";
+const FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER: u64 = 20_000;
 const LEAKAGE_BLOCK_WIRE_MAGIC_V1: &[u8; 8] = b"APSBLK1\0";
 const LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1: &[u8] = b"iroha:aps-leakage-artifact:v1\0";
 const LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1: &[u8; 8] = b"APSRAW1\0";
@@ -80,6 +86,80 @@ struct RealProcessBenchmarkPayloadV1 {
     warmup: bool,
     stages: Vec<String>,
     resources: Vec<String>,
+}
+
+/// Bound input for one fresh correctness run, before any benchmark campaign.
+#[derive(Clone, Debug, norito::JsonDeserialize, norito::JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct RealProcessSmokeRequestV1 {
+    version: u8,
+    protocol: String,
+    kind: String,
+    request_id: String,
+    invocation_nonce: String,
+    commit: String,
+    seed: u64,
+    run: u64,
+}
+
+fn validate_real_process_smoke_request(request: &RealProcessSmokeRequestV1) -> Result<()> {
+    ensure!(
+        request.version == 1
+            && request.protocol == "AtomicPrivateSettlementV1"
+            && request.kind == "smoke"
+            && request.run < 10
+            && lowercase_digest(&request.request_id, &[64])
+            && lowercase_digest(&request.invocation_nonce, &[64])
+            && lowercase_digest(&request.commit, &[40, 64]),
+        "malformed bound N=3 smoke request"
+    );
+    Ok(())
+}
+
+#[test]
+fn smoke_request_rejects_unbound_or_noncanonical_inputs() {
+    let valid = RealProcessSmokeRequestV1 {
+        version: 1,
+        protocol: "AtomicPrivateSettlementV1".to_owned(),
+        kind: "smoke".to_owned(),
+        request_id: "a".repeat(64),
+        invocation_nonce: "b".repeat(64),
+        commit: "c".repeat(40),
+        seed: u64::MAX,
+        run: 9,
+    };
+    validate_real_process_smoke_request(&valid).expect("bound request validates");
+    for field in [
+        "version",
+        "protocol",
+        "kind",
+        "request_id",
+        "invocation_nonce",
+        "commit",
+        "run",
+    ] {
+        let mut altered = valid.clone();
+        match field {
+            "version" => altered.version = 2,
+            "protocol" => altered.protocol.clear(),
+            "kind" => altered.kind = "benchmark".to_owned(),
+            "request_id" => altered.request_id = "0".repeat(64),
+            "invocation_nonce" => altered.invocation_nonce = "B".repeat(64),
+            "commit" => altered.commit = "c".repeat(39),
+            "run" => altered.run = 10,
+            _ => unreachable!(),
+        }
+        assert!(
+            validate_real_process_smoke_request(&altered).is_err(),
+            "accepted {field}"
+        );
+    }
+    let mut value = norito::json::to_value(&valid).expect("request JSON");
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("skip_network".to_owned(), true.into());
+    assert!(norito::json::from_value::<RealProcessSmokeRequestV1>(value).is_err());
 }
 
 #[derive(Debug, norito::JsonDeserialize)]
@@ -213,6 +293,7 @@ struct RealProcessLeakageRequestV1 {
 }
 
 enum RealProcessBoundRequestV1 {
+    Smoke(RealProcessSmokeRequestV1),
     Benchmark(RealProcessBenchmarkRequestV1),
     Fault(RealProcessFaultRequestV1),
     Leakage(RealProcessLeakageRequestV1),
@@ -443,11 +524,35 @@ struct FaultObservationRecordV1 {
 struct FaultContinuousObservationSummaryV1 {
     peer_index: usize,
     check_count: u64,
+    poll_failure_count: u64,
     first_response_sha256: String,
     last_response_sha256: String,
     response_chain_sha256: String,
     baseline_observations: u64,
     finalized_observations: u64,
+    phase_coverage: Vec<FaultContinuousObservationPhaseSummaryV1>,
+}
+
+#[derive(Clone, Debug, norito::JsonSerialize)]
+struct FaultContinuousObservationPhaseSummaryV1 {
+    phase: String,
+    expected_unavailable: bool,
+    finalization_allowed: bool,
+    successful_observations: u64,
+    poll_failures: u64,
+    baseline_observations: u64,
+    finalized_observations: u64,
+    checkpoint_attempt: u64,
+    checkpoint_control_bindings: Vec<String>,
+    attempt_chain_sha256: String,
+    attempts: Vec<FaultContinuousObservationAttemptRunV1>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, norito::JsonSerialize)]
+struct FaultContinuousObservationAttemptRunV1 {
+    class: String,
+    evidence: String,
+    repetitions: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -658,8 +763,8 @@ fn validate_real_process_request_common(
     );
     ensure!(
         minimum_signed_rs16_da_observations
-            == u64::try_from(shape.peer_count()).expect("peer count fits u64"),
-        "signed RS16 observation minimum must cover every validator"
+            == u64::try_from(shape.process_count()).expect("process count fits u64"),
+        "signed RS16 observation minimum must cover every validator and committee observer"
     );
     ensure!(
         participant_visibilities
@@ -1361,6 +1466,12 @@ fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, Strin
         .and_then(HarnessJsonValue::as_str)
         .ok_or_else(|| eyre!("real-process request lacks kind"))?;
     let request = match kind {
+        "smoke" => {
+            let request: RealProcessSmokeRequestV1 =
+                norito::json::from_value(value).wrap_err("decode strict smoke request")?;
+            validate_real_process_smoke_request(&request)?;
+            RealProcessBoundRequestV1::Smoke(request)
+        }
         "benchmark" => {
             let request: RealProcessBenchmarkRequestV1 =
                 norito::json::from_value(value).wrap_err("decode strict benchmark request")?;
@@ -1640,7 +1751,7 @@ fn regular_tree_bytes(root: &Path) -> Result<u64> {
 }
 
 fn network_storage_bytes(network: &Network) -> Result<u64> {
-    network.peers().iter().try_fold(0_u64, |total, peer| {
+    network.all_peers().try_fold(0_u64, |total, peer| {
         total
             .checked_add(regular_tree_bytes(&peer.kura_store_dir())?)
             .ok_or_else(|| eyre!("network storage total overflow"))
@@ -1684,10 +1795,10 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
     );
     ensure!(!path.exists(), "leakage port manifest path already exists");
     let mut torii_ports = network
-        .peers()
-        .iter()
+        .all_peers()
         .map(|peer| peer.api_address().port())
         .collect::<Vec<_>>();
+    let processes = network.all_peers().collect::<Vec<_>>();
     let mut public_p2p_ports = Vec::new();
     let mut restricted_p2p_ports = Vec::new();
     for lane in 0..shape.lane_count() {
@@ -1701,7 +1812,7 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
             LaneVisibility::Restricted => &mut restricted_p2p_ports,
         };
         destination.extend(
-            network.peers()[shape.validator_range(lane)]
+            processes[shape.committee_range(lane)]
                 .iter()
                 .map(|peer| peer.p2p_address().port()),
         );
@@ -1720,9 +1831,9 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
         .chain(&restricted_p2p_ports)
         .copied()
         .collect::<BTreeSet<_>>();
-    let (expected_public_p2p, expected_restricted_p2p) = shape.p2p_validator_counts_by_visibility();
+    let (expected_public_p2p, expected_restricted_p2p) = shape.p2p_process_counts_by_visibility();
     ensure!(
-        torii_ports.len() == shape.peer_count()
+        torii_ports.len() == shape.process_count()
             && public_p2p_ports.len() == expected_public_p2p
             && restricted_p2p_ports.len() == expected_restricted_p2p
             && all_ports.len()
@@ -2078,8 +2189,7 @@ fn leakage_query_records(
     expected: &iroha::data_model::nexus::PrivateSettlementReceiptV1,
 ) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
     let captured = network
-        .peers()
-        .iter()
+        .all_peers()
         .enumerate()
         .map(|(peer_index, peer)| {
             let response = peer
@@ -2112,8 +2222,7 @@ fn leakage_telemetry_records(
     runtime: &tokio::runtime::Runtime,
 ) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
     let sources = network
-        .peers()
-        .iter()
+        .all_peers()
         .map(|peer| {
             let status = peer.client().get_status()?;
             let status = norito::encode_canonical(&status)?;
@@ -2167,8 +2276,8 @@ fn leakage_operator_log_records(
 ) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
     let snapshots = network.startup_snapshot();
     ensure!(
-        snapshots.len() == network.peers().len(),
-        "leakage log snapshot omitted a validator"
+        snapshots.len() == network.all_peers().count(),
+        "leakage log snapshot omitted a validator or committee observer"
     );
     let mut sources = Vec::with_capacity(snapshots.len() * 2);
     let rows = snapshots
@@ -2207,7 +2316,7 @@ fn leakage_operator_log_records(
 }
 
 fn verify_controller_readiness(network: &Network, runtime: &tokio::runtime::Runtime) -> Result<()> {
-    for peer in network.peers() {
+    for peer in network.all_peers() {
         let control = peer
             .consensus_message_control()
             .ok_or_else(|| eyre!("peer {} lacks authenticated message control", peer.id()))?;
@@ -2253,7 +2362,7 @@ fn collect_process_inventory(
         revision: revision.to_owned(),
         health_observed: sample_process_resources(&[coordinator_pid]).is_ok(),
     }];
-    for (index, peer) in network.peers().iter().enumerate() {
+    for (index, peer) in network.all_peers().enumerate() {
         let pid = runtime
             .block_on(peer.process_id())
             .ok_or_else(|| eyre!("peer {} has no live child PID", peer.id()))?;
@@ -2282,7 +2391,7 @@ fn collect_process_inventory(
         });
     }
     ensure!(
-        rows.len() == shape.peer_count() + 1
+        rows.len() == shape.process_count() + 1
             && rows.iter().all(|row| row.health_observed)
             && rows
                 .iter()
@@ -2300,6 +2409,173 @@ fn canonical_harness_json_bytes<T: norito::json::JsonSerialize>(value: &T) -> Re
     norito::json::to_string(&value)
         .map(String::into_bytes)
         .wrap_err("encode canonical harness evidence JSON")
+}
+
+/// Digest of a retained correctness-run artifact; private configuration bytes stay local.
+#[derive(Clone, Debug, norito::JsonSerialize)]
+struct SmokeEvidenceFileV1 {
+    name: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct SmokeProcessInventoryRowV1 {
+    peer_index: usize,
+    peer_id: PeerId,
+    committee_index: usize,
+    validator_index: usize,
+    pid: u32,
+    executable_sha256: String,
+    configuration_sha256: String,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct SmokeContinuousEvidenceV1 {
+    summary: FaultContinuousObservationSummaryV1,
+    observations: Vec<FaultStateObservationV1>,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct SmokeRestartV1 {
+    peer_index: usize,
+    before_pid: u32,
+    after_pid: u32,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct RealProcessSmokeResultV1 {
+    version: u8,
+    protocol: String,
+    kind: String,
+    request: RealProcessSmokeRequestV1,
+    request_sha256: String,
+    network_id: HarnessJsonValue,
+    participants: usize,
+    processes: usize,
+    restarted: usize,
+    activation_height: u64,
+    authority_context_height: u64,
+    finalized_height: u64,
+    signed_rs16_observations: u64,
+    continuous_checks: u64,
+    passed: bool,
+    artifacts: Vec<SmokeEvidenceFileV1>,
+}
+
+fn write_smoke_evidence<T: norito::json::JsonSerialize>(
+    root: &Path,
+    name: &str,
+    value: &T,
+) -> Result<SmokeEvidenceFileV1> {
+    ensure!(
+        name.ends_with(".json")
+            && name.bytes().all(|byte| byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'.'))
+            && !name.starts_with('.'),
+        "smoke evidence name is not a canonical basename"
+    );
+    let metadata = fs::symlink_metadata(root)?;
+    ensure!(
+        metadata.file_type().is_dir() && metadata.permissions().mode() & 0o777 == 0o700,
+        "smoke evidence requires an owner-only regular directory"
+    );
+    let raw = canonical_harness_json_bytes(value)?;
+    ensure!(
+        raw.len() <= HARNESS_MAX_JSON_BYTES,
+        "smoke evidence exceeds its byte bound"
+    );
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(name))?;
+    file.write_all(&raw)?;
+    file.sync_all()?;
+    File::open(root)?.sync_all()?;
+    Ok(SmokeEvidenceFileV1 {
+        name: name.to_owned(),
+        bytes: u64::try_from(raw.len())?,
+        sha256: sha256_hex(&raw),
+    })
+}
+
+#[test]
+fn smoke_evidence_binds_bytes_and_rejects_overwrite_or_path_escape() {
+    let temporary = tempfile::tempdir().expect("temporary evidence directory");
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let value = norito::json!({"state": "pending"});
+    let artifact = write_smoke_evidence(temporary.path(), "state-before.json", &value).unwrap();
+    let path = temporary.path().join(&artifact.name);
+    let raw = fs::read(&path).unwrap();
+    assert_eq!(artifact.sha256, sha256_hex(&raw));
+    assert_eq!(artifact.bytes, raw.len() as u64);
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(write_smoke_evidence(temporary.path(), "state-before.json", &value).is_err());
+    for name in [
+        "../escape.json",
+        "/absolute.json",
+        ".hidden.json",
+        "nested/file.json",
+        "state.JSON",
+    ] {
+        assert!(write_smoke_evidence(temporary.path(), name, &value).is_err());
+    }
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(write_smoke_evidence(temporary.path(), "unsafe.json", &value).is_err());
+}
+
+fn smoke_process_inventory(
+    network: &Network,
+    runtime: &tokio::runtime::Runtime,
+    shape: TopologyShape,
+) -> Result<Vec<SmokeProcessInventoryRowV1>> {
+    let expected_sha = std::env::var(HARNESS_VALIDATOR_SHA_ENV)
+        .wrap_err("missing smoke validator executable digest")?;
+    ensure!(
+        lowercase_digest(&expected_sha, &[64]),
+        "malformed smoke executable digest"
+    );
+    let mut pids = BTreeSet::new();
+    let mut peers = BTreeSet::new();
+    let mut inventory = Vec::new();
+    for (index, peer) in network.all_peers().enumerate() {
+        let pid = runtime
+            .block_on(peer.process_id())
+            .ok_or_else(|| eyre!("smoke peer has no PID"))?;
+        ensure!(
+            pids.insert(pid)
+                && peers.insert(peer.id().clone())
+                && peer.client().get_status().is_ok()
+                && sha256_regular_file(&executable_for_pid(pid)?)? == expected_sha,
+            "smoke process inventory has duplicate, unhealthy or substituted validators"
+        );
+        // Retain only a commitment to the complete ordered input layers: they
+        // contain runtime private keys and must not enter a research artifact.
+        let layers = network
+            .config_layers_for_peer(peer)
+            .map(|layer| toml::to_string(layer.as_ref()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let configuration_sha256 = sha256_hex(&canonical_harness_json_bytes(&layers)?);
+        inventory.push(SmokeProcessInventoryRowV1 {
+            peer_index: index,
+            peer_id: peer.id().clone(),
+            committee_index: index / VALIDATORS_PER_LANE,
+            validator_index: index % VALIDATORS_PER_LANE,
+            pid,
+            executable_sha256: expected_sha.clone(),
+            configuration_sha256,
+        });
+    }
+    ensure!(
+        inventory.len() == shape.process_count(),
+        "smoke process inventory is incomplete"
+    );
+    Ok(inventory)
 }
 
 fn canonical_harness_json_value_bytes(value: &HarnessJsonValue) -> Result<Vec<u8>> {
@@ -2353,6 +2629,10 @@ fn fault_control_occurrence(
     })
 }
 
+fn fault_checkpoint_acknowledgement_binding(control: &FaultControlOccurrenceV1) -> String {
+    format!("acknowledgement:{}", control.acknowledgement_sha256)
+}
+
 fn fault_record_id(
     participants: usize,
     seed: u64,
@@ -2369,10 +2649,26 @@ fn fault_derivation_bytes(
     leg_ordinal: usize,
     purpose: &[u8],
 ) -> [u8; 32] {
+    fault_derivation_bytes_from_run(
+        request.seed,
+        request.run,
+        bundle_ordinal,
+        leg_ordinal,
+        purpose,
+    )
+}
+
+fn fault_derivation_bytes_from_run(
+    seed: u64,
+    run: u64,
+    bundle_ordinal: usize,
+    leg_ordinal: usize,
+    purpose: &[u8],
+) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"iroha:atomic-private-settlement:fault-campaign:v1\0");
-    digest.update(request.seed.to_le_bytes());
-    digest.update(request.run.to_le_bytes());
+    digest.update(seed.to_le_bytes());
+    digest.update(run.to_le_bytes());
     digest.update(
         u64::try_from(bundle_ordinal)
             .unwrap_or(u64::MAX)
@@ -2906,14 +3202,13 @@ fn capture_fault_state_observation(
 
 fn capture_fault_state_snapshot(network: &Network, label: &str) -> Result<FaultStateSnapshotV1> {
     let validators = network
-        .peers()
-        .iter()
+        .all_peers()
         .enumerate()
         .map(|(peer_index, peer)| capture_fault_state_observation(peer_index, peer))
         .collect::<Result<Vec<_>>>()?;
     ensure!(
-        validators.len() == network.peers().len(),
-        "fault state snapshot omitted a validator"
+        validators.len() == network.all_peers().count(),
+        "fault state snapshot omitted a validator or committee observer"
     );
     Ok(FaultStateSnapshotV1 {
         label: label.to_owned(),
@@ -3018,20 +3313,262 @@ fn classify_fault_continuous_observation(
     Ok(FaultContinuousObservationClassV1::Finalized)
 }
 
+fn normalize_fault_observer_transport_failure(error: &eyre::Report) -> Option<&'static str> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .filter(|error| {
+                error.is_connect()
+                    || (error.is_timeout()
+                        && !error.is_body()
+                        && !error.is_decode()
+                        && !error.is_status())
+            })
+            .map(|_| FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1)
+    })
+}
+
+struct FaultContinuousObservationPhaseAccumulatorV1 {
+    phase: String,
+    expected_unavailable: bool,
+    finalization_allowed: bool,
+    successful_observations: u64,
+    poll_failures: u64,
+    baseline_observations: u64,
+    finalized_observations: u64,
+    checkpoint: Option<(u64, u64)>,
+    checkpoint_control_bindings: Vec<String>,
+    attempt_chain: Sha256,
+    attempts: Vec<FaultContinuousObservationAttemptRunV1>,
+}
+
+impl FaultContinuousObservationPhaseAccumulatorV1 {
+    fn new(
+        peer_index: usize,
+        phase_index: usize,
+        phase: &str,
+        expected_unavailable: bool,
+        finalization_allowed: bool,
+        bundle_id: &[u8; Hash::LENGTH],
+    ) -> Self {
+        let mut attempt_chain = Sha256::new();
+        attempt_chain.update(FAULT_CONTINUOUS_OBSERVATION_PHASE_DOMAIN_V1);
+        attempt_chain.update(bundle_id);
+        attempt_chain.update(
+            u64::try_from(peer_index)
+                .expect("peer index fits u64")
+                .to_le_bytes(),
+        );
+        attempt_chain.update(
+            u64::try_from(phase_index)
+                .expect("phase index fits u64")
+                .to_le_bytes(),
+        );
+        attempt_chain.update(
+            u64::try_from(phase.len())
+                .expect("phase length fits u64")
+                .to_le_bytes(),
+        );
+        attempt_chain.update(phase.as_bytes());
+        attempt_chain.update([u8::from(expected_unavailable)]);
+        attempt_chain.update([u8::from(finalization_allowed)]);
+        Self {
+            phase: phase.to_owned(),
+            expected_unavailable,
+            finalization_allowed,
+            successful_observations: 0,
+            poll_failures: 0,
+            baseline_observations: 0,
+            finalized_observations: 0,
+            checkpoint: None,
+            checkpoint_control_bindings: Vec::new(),
+            attempt_chain,
+            attempts: Vec::new(),
+        }
+    }
+
+    fn append_attempt(&mut self, class: &str, evidence: &str) -> Result<()> {
+        let attempts = self
+            .successful_observations
+            .checked_add(self.poll_failures)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| eyre!("continuous APS phase attempt count overflow"))?;
+        ensure!(
+            attempts <= FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER,
+            "continuous APS phase attempt stream exceeded its bound"
+        );
+        if let Some(last) = self.attempts.last_mut()
+            && last.class == class
+            && last.evidence == evidence
+        {
+            last.repetitions = last
+                .repetitions
+                .checked_add(1)
+                .ok_or_else(|| eyre!("continuous APS attempt-run count overflow"))?;
+        } else {
+            self.attempts.push(FaultContinuousObservationAttemptRunV1 {
+                class: class.to_owned(),
+                evidence: evidence.to_owned(),
+                repetitions: 1,
+            });
+        }
+        Ok(())
+    }
+
+    fn record_success(
+        &mut self,
+        class: FaultContinuousObservationClassV1,
+        observation: &FaultStateObservationV1,
+        response_digest: &[u8],
+    ) -> Result<()> {
+        let (class_name, class_tag) = match class {
+            FaultContinuousObservationClassV1::Baseline => {
+                self.baseline_observations = self
+                    .baseline_observations
+                    .checked_add(1)
+                    .ok_or_else(|| eyre!("continuous APS phase baseline count overflow"))?;
+                ("baseline", 1_u8)
+            }
+            FaultContinuousObservationClassV1::Finalized => {
+                ensure!(
+                    self.finalization_allowed,
+                    "continuous APS observer saw finalization in disallowed phase `{}`",
+                    self.phase
+                );
+                self.finalized_observations = self
+                    .finalized_observations
+                    .checked_add(1)
+                    .ok_or_else(|| eyre!("continuous APS phase finalized count overflow"))?;
+                ("finalized", 2_u8)
+            }
+        };
+        self.append_attempt(class_name, &observation.response_hex)?;
+        self.successful_observations = self
+            .successful_observations
+            .checked_add(1)
+            .ok_or_else(|| eyre!("continuous APS phase success count overflow"))?;
+        self.attempt_chain.update([class_tag]);
+        self.attempt_chain.update(response_digest);
+        Ok(())
+    }
+
+    fn record_poll_failure(&mut self) -> Result<()> {
+        self.append_attempt(
+            "expected_unavailable",
+            FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1,
+        )?;
+        self.poll_failures = self
+            .poll_failures
+            .checked_add(1)
+            .ok_or_else(|| eyre!("continuous APS phase poll-failure count overflow"))?;
+        self.attempt_chain.update([0_u8]);
+        self.attempt_chain
+            .update(FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1.as_bytes());
+        Ok(())
+    }
+
+    fn checkpoint(&mut self, control_bindings: &[String]) -> Result<()> {
+        ensure!(
+            self.checkpoint.is_none(),
+            "continuous APS observer phase `{}` was checkpointed twice",
+            self.phase
+        );
+        ensure!(
+            control_bindings.len() <= 32
+                && control_bindings.iter().all(|binding| {
+                    let Some((kind, digest)) = binding.split_once(':') else {
+                        return false;
+                    };
+                    matches!(kind, "command" | "acknowledgement")
+                        && digest.len() == 64
+                        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        && digest.bytes().all(|byte| !byte.is_ascii_uppercase())
+                }),
+            "continuous APS checkpoint control bindings are invalid"
+        );
+        self.checkpoint = Some((self.successful_observations, self.poll_failures));
+        self.checkpoint_control_bindings = control_bindings.to_vec();
+        Ok(())
+    }
+
+    fn coverage_met(&self) -> bool {
+        let Some((success_checkpoint, failure_checkpoint)) = self.checkpoint else {
+            return false;
+        };
+        if self.expected_unavailable {
+            self.poll_failures > failure_checkpoint
+        } else {
+            self.successful_observations > success_checkpoint && self.poll_failures == 0
+        }
+    }
+
+    fn finish(mut self) -> Result<FaultContinuousObservationPhaseSummaryV1> {
+        ensure!(
+            self.coverage_met(),
+            "continuous APS observer phase `{}` lacks its required peer coverage",
+            self.phase
+        );
+        let (checkpoint_successes, checkpoint_failures) = self
+            .checkpoint
+            .ok_or_else(|| eyre!("continuous APS observer phase lacks its fault checkpoint"))?;
+        let checkpoint_attempt = checkpoint_successes
+            .checked_add(checkpoint_failures)
+            .ok_or_else(|| eyre!("continuous APS checkpoint attempt count overflow"))?;
+        self.attempt_chain.update(b"checkpoint\0");
+        self.attempt_chain.update(checkpoint_attempt.to_le_bytes());
+        self.attempt_chain.update(b"checkpoint-controls\0");
+        self.attempt_chain.update(
+            u64::try_from(self.checkpoint_control_bindings.len())
+                .expect("checkpoint control count fits u64")
+                .to_le_bytes(),
+        );
+        for binding in &self.checkpoint_control_bindings {
+            self.attempt_chain.update(
+                u64::try_from(binding.len())
+                    .expect("checkpoint control binding length fits u64")
+                    .to_le_bytes(),
+            );
+            self.attempt_chain.update(binding.as_bytes());
+        }
+        Ok(FaultContinuousObservationPhaseSummaryV1 {
+            phase: self.phase,
+            expected_unavailable: self.expected_unavailable,
+            finalization_allowed: self.finalization_allowed,
+            successful_observations: self.successful_observations,
+            poll_failures: self.poll_failures,
+            baseline_observations: self.baseline_observations,
+            finalized_observations: self.finalized_observations,
+            checkpoint_attempt,
+            checkpoint_control_bindings: self.checkpoint_control_bindings,
+            attempt_chain_sha256: hex::encode(self.attempt_chain.finalize()),
+            attempts: self.attempts,
+        })
+    }
+}
+
 struct FaultContinuousObservationAccumulatorV1 {
     peer_index: usize,
     check_count: u64,
+    poll_failure_count: u64,
     first_response_sha256: Option<String>,
     last_response_sha256: Option<String>,
     response_chain: Sha256,
     baseline_observations: u64,
     finalized_observations: u64,
+    seen_finalized: bool,
+    bundle_id: [u8; Hash::LENGTH],
+    phase_coverage: Vec<FaultContinuousObservationPhaseAccumulatorV1>,
 }
 
 impl FaultContinuousObservationAccumulatorV1 {
-    fn new(peer_index: usize) -> Self {
+    fn new(
+        peer_index: usize,
+        bundle_id: [u8; Hash::LENGTH],
+        preflight_finalization_allowed: bool,
+    ) -> Self {
         let mut response_chain = Sha256::new();
         response_chain.update(FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1);
+        response_chain.update(bundle_id);
         response_chain.update(
             u64::try_from(peer_index)
                 .expect("peer index fits u64")
@@ -3040,12 +3577,56 @@ impl FaultContinuousObservationAccumulatorV1 {
         Self {
             peer_index,
             check_count: 0,
+            poll_failure_count: 0,
             first_response_sha256: None,
             last_response_sha256: None,
             response_chain,
             baseline_observations: 0,
             finalized_observations: 0,
+            seen_finalized: false,
+            bundle_id,
+            phase_coverage: vec![FaultContinuousObservationPhaseAccumulatorV1::new(
+                peer_index,
+                0,
+                "preflight",
+                false,
+                preflight_finalization_allowed,
+                &bundle_id,
+            )],
         }
+    }
+
+    fn start_phase(
+        &mut self,
+        phase: &str,
+        expected_unavailable: bool,
+        finalization_allowed: bool,
+    ) -> Result<usize> {
+        ensure!(
+            !phase.is_empty()
+                && phase.len() <= 64
+                && phase
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+            "continuous APS observer phase name is not canonical"
+        );
+        ensure!(
+            self.phase_coverage
+                .iter()
+                .all(|existing| existing.phase != phase),
+            "continuous APS observer phase `{phase}` was reused"
+        );
+        let phase_index = self.phase_coverage.len();
+        self.phase_coverage
+            .push(FaultContinuousObservationPhaseAccumulatorV1::new(
+                self.peer_index,
+                phase_index,
+                phase,
+                expected_unavailable,
+                finalization_allowed,
+                &self.bundle_id,
+            ));
+        Ok(phase_index)
     }
 
     fn record(
@@ -3053,7 +3634,15 @@ impl FaultContinuousObservationAccumulatorV1 {
         baseline: &FaultStateObservationV1,
         observation: &FaultStateObservationV1,
         participants: usize,
+        phase_index: usize,
     ) -> Result<()> {
+        ensure!(
+            self.check_count
+                .checked_add(self.poll_failure_count)
+                .and_then(|count| count.checked_add(1))
+                .is_some_and(|count| count <= FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER),
+            "continuous APS attempt stream exceeded its per-peer bound"
+        );
         let class = classify_fault_continuous_observation(baseline, observation, participants)?;
         let digest = hex::decode(&observation.response_sha256)
             .wrap_err("decode continuous APS response digest")?;
@@ -3061,6 +3650,15 @@ impl FaultContinuousObservationAccumulatorV1 {
             digest.len() == Hash::LENGTH,
             "continuous APS response digest has the wrong length"
         );
+        let phase = self
+            .phase_coverage
+            .get_mut(phase_index)
+            .ok_or_else(|| eyre!("continuous APS observer selected an unknown phase"))?;
+        ensure!(
+            !matches!(class, FaultContinuousObservationClassV1::Baseline) || !self.seen_finalized,
+            "continuous APS observer saw finalized state roll back to baseline"
+        );
+        phase.record_success(class, observation, &digest)?;
         self.check_count = self
             .check_count
             .checked_add(1)
@@ -3077,6 +3675,7 @@ impl FaultContinuousObservationAccumulatorV1 {
                     .ok_or_else(|| eyre!("continuous APS baseline count overflow"))?;
             }
             FaultContinuousObservationClassV1::Finalized => {
+                self.seen_finalized = true;
                 self.finalized_observations = self
                     .finalized_observations
                     .checked_add(1)
@@ -3086,14 +3685,95 @@ impl FaultContinuousObservationAccumulatorV1 {
         Ok(())
     }
 
+    fn record_current_poll(
+        &mut self,
+        baseline: &FaultStateObservationV1,
+        observation: &FaultStateObservationV1,
+        participants: usize,
+        phase_index: usize,
+        attempt_epoch: u64,
+        checkpoint_epoch: u64,
+        retained: Option<&mut Vec<FaultStateObservationV1>>,
+    ) -> Result<bool> {
+        if attempt_epoch != checkpoint_epoch {
+            return Ok(false);
+        }
+        if let Some(rows) = retained.as_ref() {
+            ensure!(
+                rows.len() < LEAKAGE_MAX_OBSERVATIONS_PER_PEER,
+                "continuous APS evidence exceeded its per-peer bound"
+            );
+        }
+        self.record(baseline, observation, participants, phase_index)?;
+        if let Some(rows) = retained {
+            rows.push(observation.clone());
+        }
+        Ok(true)
+    }
+
+    fn record_poll_failure(&mut self, phase_index: usize) -> Result<bool> {
+        ensure!(
+            self.check_count
+                .checked_add(self.poll_failure_count)
+                .and_then(|count| count.checked_add(1))
+                .is_some_and(|count| count <= FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER),
+            "continuous APS attempt stream exceeded its per-peer bound"
+        );
+        let phase = self
+            .phase_coverage
+            .get_mut(phase_index)
+            .ok_or_else(|| eyre!("continuous APS observer selected an unknown phase"))?;
+        phase.record_poll_failure()?;
+        let expected_unavailable = phase.expected_unavailable;
+        self.poll_failure_count = self
+            .poll_failure_count
+            .checked_add(1)
+            .ok_or_else(|| eyre!("continuous APS poll-failure count overflow"))?;
+        Ok(expected_unavailable)
+    }
+
+    fn checkpoint_phase(&mut self, phase_index: usize, control_bindings: &[String]) -> Result<()> {
+        self.phase_coverage
+            .get_mut(phase_index)
+            .ok_or_else(|| eyre!("continuous APS observer selected an unknown phase"))?
+            .checkpoint(control_bindings)
+    }
+
+    fn phase_coverage_met(&self, phase_index: usize) -> Result<bool> {
+        self.phase_coverage
+            .get(phase_index)
+            .map(FaultContinuousObservationPhaseAccumulatorV1::coverage_met)
+            .ok_or_else(|| eyre!("continuous APS observer selected an unknown phase"))
+    }
+
     fn finish(self) -> Result<FaultContinuousObservationSummaryV1> {
         ensure!(
             self.check_count >= 3,
             "continuous APS observer did not record a live poll between its bound endpoints"
         );
+        let phase_successes = self.phase_coverage.iter().try_fold(0_u64, |total, phase| {
+            total
+                .checked_add(phase.successful_observations)
+                .ok_or_else(|| eyre!("continuous APS phase success total overflow"))
+        })?;
+        let phase_failures = self.phase_coverage.iter().try_fold(0_u64, |total, phase| {
+            total
+                .checked_add(phase.poll_failures)
+                .ok_or_else(|| eyre!("continuous APS phase failure total overflow"))
+        })?;
+        ensure!(
+            phase_successes == self.check_count && phase_failures == self.poll_failure_count,
+            "continuous APS phase totals do not equal the peer summary"
+        );
+        let phase_coverage = self
+            .phase_coverage
+            .into_iter()
+            .map(FaultContinuousObservationPhaseAccumulatorV1::finish)
+            .collect::<Result<Vec<_>>>()?;
         Ok(FaultContinuousObservationSummaryV1 {
             peer_index: self.peer_index,
             check_count: self.check_count,
+            poll_failure_count: self.poll_failure_count,
             first_response_sha256: self
                 .first_response_sha256
                 .ok_or_else(|| eyre!("continuous APS observer lacks a first response"))?,
@@ -3103,17 +3783,22 @@ impl FaultContinuousObservationAccumulatorV1 {
             response_chain_sha256: hex::encode(self.response_chain.finalize()),
             baseline_observations: self.baseline_observations,
             finalized_observations: self.finalized_observations,
+            phase_coverage,
         })
     }
 }
 
 struct FaultContinuousObserverV1 {
     stop: Arc<AtomicBool>,
+    active_phase: Arc<AtomicU64>,
+    observed_phase: Arc<AtomicU64>,
+    checkpoint_epoch: Arc<AtomicU64>,
     accumulators: Arc<Mutex<Vec<FaultContinuousObservationAccumulatorV1>>>,
     retained_observations: Option<Arc<Mutex<Vec<Vec<FaultStateObservationV1>>>>>,
     failure: Arc<Mutex<Option<String>>>,
     baselines: Vec<FaultStateObservationV1>,
     participants: usize,
+    phase_complete: bool,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -3122,35 +3807,63 @@ impl FaultContinuousObserverV1 {
         network: &Network,
         before: &FaultStateSnapshotV1,
         participants: usize,
+        bundle_id: &Hash,
+        preflight_finalization_allowed: bool,
     ) -> Result<Self> {
-        Self::start_internal(network, before, participants, false)
+        Self::start_internal(
+            network,
+            before,
+            participants,
+            bundle_id,
+            preflight_finalization_allowed,
+            false,
+        )
     }
 
     fn start_retaining_evidence(
         network: &Network,
         before: &FaultStateSnapshotV1,
         participants: usize,
+        bundle_id: &Hash,
+        preflight_finalization_allowed: bool,
     ) -> Result<Self> {
-        Self::start_internal(network, before, participants, true)
+        Self::start_internal(
+            network,
+            before,
+            participants,
+            bundle_id,
+            preflight_finalization_allowed,
+            true,
+        )
     }
 
     fn start_internal(
         network: &Network,
         before: &FaultStateSnapshotV1,
         participants: usize,
+        bundle_id: &Hash,
+        preflight_finalization_allowed: bool,
         retain_evidence: bool,
     ) -> Result<Self> {
         ensure_fault_state_converged(before)?;
         ensure!(
-            before.validators.len() == network.peers().len(),
-            "continuous APS observer baseline omits validators"
+            before.validators.len() == network.all_peers().count(),
+            "continuous APS observer baseline omits validators or committee observers"
         );
         let baselines = before.validators.clone();
+        let bundle_id: [u8; Hash::LENGTH] = *bundle_id.as_ref();
         let mut initial = (0..baselines.len())
-            .map(FaultContinuousObservationAccumulatorV1::new)
+            .map(|peer_index| {
+                FaultContinuousObservationAccumulatorV1::new(
+                    peer_index,
+                    bundle_id,
+                    preflight_finalization_allowed,
+                )
+            })
             .collect::<Vec<_>>();
         for (accumulator, observation) in initial.iter_mut().zip(&baselines) {
-            accumulator.record(observation, observation, participants)?;
+            accumulator.checkpoint_phase(0, &[])?;
+            accumulator.record(observation, observation, participants, 0)?;
         }
         let accumulators = Arc::new(Mutex::new(initial));
         let retained_observations = retain_evidence.then(|| {
@@ -3164,44 +3877,101 @@ impl FaultContinuousObserverV1 {
         });
         let failure = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
-        let peers = network.peers().to_vec();
+        let active_phase = Arc::new(AtomicU64::new(0));
+        let observed_phase = Arc::new(AtomicU64::new(0));
+        let checkpoint_epoch = Arc::new(AtomicU64::new(0));
+        let peers = network.all_peers().cloned().collect::<Vec<_>>();
         let thread_baselines = baselines.clone();
         let thread_accumulators = Arc::clone(&accumulators);
         let thread_retained_observations = retained_observations.clone();
         let thread_failure = Arc::clone(&failure);
         let thread_stop = Arc::clone(&stop);
+        let thread_active_phase = Arc::clone(&active_phase);
+        let thread_observed_phase = Arc::clone(&observed_phase);
+        let thread_checkpoint_epoch = Arc::clone(&checkpoint_epoch);
         let handle = thread::Builder::new()
             .name("aps-fault-continuous-observer".to_owned())
             .spawn(move || {
                 while !thread_stop.load(Ordering::Relaxed) {
+                    let phase_index = usize::try_from(thread_active_phase.load(Ordering::Acquire))
+                        .expect("continuous APS phase index fits usize");
+                    thread_observed_phase.store(
+                        u64::try_from(phase_index).expect("continuous APS phase index fits u64"),
+                        Ordering::Release,
+                    );
                     for (peer_index, peer) in peers.iter().enumerate() {
                         if thread_stop.load(Ordering::Relaxed) {
                             break;
                         }
-                        let Ok(observation) = capture_fault_state_observation(peer_index, peer)
-                        else {
-                            continue;
-                        };
-                        if let Some(retained) = &thread_retained_observations {
-                            let mut retained = retained
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            if retained[peer_index].len() >= LEAKAGE_MAX_OBSERVATIONS_PER_PEER {
-                                *thread_failure
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
-                                    "continuous APS evidence exceeded its per-peer bound"
-                                        .to_owned(),
-                                );
+                        let attempt_epoch = thread_checkpoint_epoch.load(Ordering::Acquire);
+                        let observation = match capture_fault_state_observation(peer_index, peer) {
+                            Ok(observation) => observation,
+                            Err(error) => {
+                                if normalize_fault_observer_transport_failure(&error).is_none() {
+                                    *thread_failure
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
+                                        format!(
+                                            "validator #{peer_index} returned invalid APS state evidence"
+                                        ),
+                                    );
+                                    thread_stop.store(true, Ordering::Relaxed);
+                                    break;
+                                }
+                                let expected_unavailable = {
+                                    let mut accumulators = thread_accumulators
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    if thread_checkpoint_epoch.load(Ordering::Acquire)
+                                        != attempt_epoch
+                                    {
+                                        continue;
+                                    }
+                                    accumulators[peer_index].record_poll_failure(phase_index)
+                                };
+                                match expected_unavailable {
+                                    Ok(true) => continue,
+                                    Ok(false) => {
+                                        *thread_failure
+                                            .lock()
+                                            .unwrap_or_else(
+                                                std::sync::PoisonError::into_inner,
+                                            ) = Some(format!(
+                                            "unexpected peer #{peer_index} poll failure"
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        *thread_failure
+                                            .lock()
+                                            .unwrap_or_else(
+                                                std::sync::PoisonError::into_inner,
+                                            ) = Some(error.to_string());
+                                    }
+                                }
                                 thread_stop.store(true, Ordering::Relaxed);
                                 break;
                             }
-                            retained[peer_index].push(observation.clone());
-                        }
-                        let result = thread_accumulators
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)[peer_index]
-                            .record(&thread_baselines[peer_index], &observation, participants);
+                        };
+                        let result = {
+                            // Match observe_snapshot's accumulator -> evidence lock order.
+                            // An in-flight poll discarded by a checkpoint must be absent
+                            // from both the summary and its retained response sequence.
+                            let mut accumulators = thread_accumulators
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let mut retained = thread_retained_observations.as_ref().map(|rows| {
+                                rows.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                            });
+                            accumulators[peer_index].record_current_poll(
+                                &thread_baselines[peer_index],
+                                &observation,
+                                participants,
+                                phase_index,
+                                attempt_epoch,
+                                thread_checkpoint_epoch.load(Ordering::Acquire),
+                                retained.as_mut().map(|rows| &mut rows[peer_index]),
+                            )
+                        };
                         if let Err(error) = result {
                             *thread_failure
                                 .lock()
@@ -3216,16 +3986,21 @@ impl FaultContinuousObserverV1 {
                     }
                 }
             })?;
-        let observer = Self {
+        let mut observer = Self {
             stop,
+            active_phase,
+            observed_phase,
+            checkpoint_epoch,
             accumulators,
             retained_observations,
             failure,
             baselines,
             participants,
+            phase_complete: false,
             handle: Some(handle),
         };
         observer.wait_for_initial_poll()?;
+        observer.phase_complete = true;
         Ok(observer)
     }
 
@@ -3246,13 +4021,142 @@ impl FaultContinuousObserverV1 {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .iter()
-                .all(|accumulator| accumulator.check_count >= 2)
+                .all(|accumulator| {
+                    accumulator.check_count >= 2
+                        && matches!(accumulator.phase_coverage_met(0), Ok(true))
+                })
             {
                 return Ok(());
             }
             ensure!(
                 started.elapsed() <= FAULT_CONTROL_TIMEOUT,
                 "continuous APS observer did not poll every validator before the trial"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn begin_phase(
+        &mut self,
+        phase: &str,
+        expected_unavailable: &[usize],
+        finalization_allowed: bool,
+    ) -> Result<()> {
+        ensure!(
+            self.phase_complete,
+            "continuous APS observer cannot replace an incomplete phase"
+        );
+        ensure!(
+            self.handle.is_some() && !self.stop.load(Ordering::Relaxed),
+            "continuous APS observer cannot begin a phase after stopping"
+        );
+        let expected = expected_unavailable
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            expected.len() == expected_unavailable.len()
+                && expected
+                    .iter()
+                    .all(|peer_index| *peer_index < self.baselines.len()),
+            "continuous APS observer expected-unavailable peer set is invalid"
+        );
+        let phase_index = {
+            let mut accumulators = self
+                .accumulators
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut phase_index = None;
+            for accumulator in accumulators.iter_mut() {
+                let current = accumulator.start_phase(
+                    phase,
+                    expected.contains(&accumulator.peer_index),
+                    finalization_allowed,
+                )?;
+                ensure!(
+                    phase_index.map_or(true, |expected| expected == current),
+                    "continuous APS observer phase indexes diverged"
+                );
+                phase_index = Some(current);
+            }
+            phase_index.ok_or_else(|| eyre!("continuous APS observer has no peers"))?
+        };
+        let phase_index = u64::try_from(phase_index).expect("continuous APS phase index fits u64");
+        self.active_phase.store(phase_index, Ordering::Release);
+        self.phase_complete = false;
+        let started = Instant::now();
+        while self.observed_phase.load(Ordering::Acquire) != phase_index {
+            if let Some(error) = self
+                .failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .cloned()
+            {
+                return Err(eyre!("continuous APS observer rejected state: {error}"));
+            }
+            ensure!(
+                started.elapsed() <= FAULT_CONTROL_TIMEOUT,
+                "continuous APS observer did not enter its requested phase"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    }
+
+    fn checkpoint_active_phase(&self, control_bindings: &[String]) -> Result<()> {
+        ensure!(
+            !self.phase_complete,
+            "continuous APS observer cannot checkpoint a completed phase"
+        );
+        let phase_index = usize::try_from(self.active_phase.load(Ordering::Acquire))
+            .expect("continuous APS phase index fits usize");
+        self.checkpoint_epoch.fetch_add(1, Ordering::AcqRel);
+        let mut accumulators = self
+            .accumulators
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for accumulator in accumulators.iter_mut() {
+            accumulator.checkpoint_phase(phase_index, control_bindings)?;
+        }
+        Ok(())
+    }
+
+    fn active_phase_coverage_met(&self) -> Result<bool> {
+        let phase_index = usize::try_from(self.active_phase.load(Ordering::Acquire))
+            .expect("continuous APS phase index fits usize");
+        self.accumulators
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .try_fold(true, |covered, accumulator| {
+                Ok(covered && accumulator.phase_coverage_met(phase_index)?)
+            })
+    }
+
+    fn complete_phase(&mut self) -> Result<()> {
+        ensure!(
+            !self.phase_complete,
+            "continuous APS observer phase was completed twice"
+        );
+        let started = Instant::now();
+        loop {
+            if let Some(error) = self
+                .failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .cloned()
+            {
+                return Err(eyre!("continuous APS observer rejected state: {error}"));
+            }
+            if self.active_phase_coverage_met()? {
+                self.phase_complete = true;
+                return Ok(());
+            }
+            ensure!(
+                started.elapsed() <= FAULT_CONTROL_TIMEOUT,
+                "continuous APS observer did not cover every peer in the active phase"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -3267,12 +4171,14 @@ impl FaultContinuousObserverV1 {
             .accumulators
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let phase_index = usize::try_from(self.active_phase.load(Ordering::Acquire))
+            .expect("continuous APS phase index fits usize");
         for ((accumulator, baseline), observation) in accumulators
             .iter_mut()
             .zip(&self.baselines)
             .zip(&snapshot.validators)
         {
-            accumulator.record(baseline, observation, self.participants)?;
+            accumulator.record(baseline, observation, self.participants, phase_index)?;
         }
         if let Some(retained) = &self.retained_observations {
             let mut retained = retained
@@ -3336,8 +4242,38 @@ impl FaultContinuousObserverV1 {
         Vec<FaultContinuousObservationSummaryV1>,
         Vec<Vec<FaultStateObservationV1>>,
     )> {
+        ensure!(
+            self.phase_complete,
+            "continuous APS observer cannot finish with an incomplete phase"
+        );
+        let terminal_finalization_allowed =
+            after
+                .validators
+                .iter()
+                .try_fold(false, |allowed, observation| -> Result<bool> {
+                    let baseline = self
+                        .baselines
+                        .get(observation.peer_index)
+                        .ok_or_else(|| eyre!("terminal APS observation has an unknown peer"))?;
+                    Ok(allowed
+                        || matches!(
+                            classify_fault_continuous_observation(
+                                baseline,
+                                observation,
+                                self.participants
+                            )?,
+                            FaultContinuousObservationClassV1::Finalized
+                        ))
+                })?;
+        self.begin_phase("terminal", &[], terminal_finalization_allowed)?;
+        self.checkpoint_active_phase(&[])?;
         self.stop_and_join()?;
         self.observe_snapshot(after)?;
+        ensure!(
+            self.active_phase_coverage_met()?,
+            "continuous APS terminal observation did not cover every peer"
+        );
+        self.phase_complete = true;
         let accumulators = {
             let mut guard = self
                 .accumulators
@@ -3625,12 +4561,59 @@ fn ensure_fault_ledger_unchanged_before_finality(
     Ok(())
 }
 
-fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Result<u64> {
+/// One immutable global decision, independent of equivalent QC signer subsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedRs16FinalityAnchorV1 {
+    block_hash: HashOf<BlockHeader>,
+    context_id: HeightContextId,
+}
+
+/// Complete all-process observations of the same authorized global decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedRs16FinalityObservationsV1 {
+    observations: u64,
+    anchor: SignedRs16FinalityAnchorV1,
+}
+
+fn ensure_signed_rs16_finality_identity(
+    expected_roster: &BTreeSet<PeerId>,
+    observed_roster: &[PeerId],
+    previous_anchor: Option<SignedRs16FinalityAnchorV1>,
+    observed_anchor: SignedRs16FinalityAnchorV1,
+) -> Result<()> {
+    ensure!(
+        expected_roster.len() == VALIDATORS_PER_LANE
+            && observed_roster.len() == VALIDATORS_PER_LANE
+            && observed_roster.iter().cloned().collect::<BTreeSet<_>>() == *expected_roster,
+        "signed finality substituted the configured global committee"
+    );
+    ensure!(
+        previous_anchor.is_none_or(|previous| previous == observed_anchor),
+        "validators returned conflicting finalized blocks or height contexts"
+    );
+    Ok(())
+}
+
+fn verify_signed_rs16_finality(
+    network: &Network,
+    finalized_height: u64,
+) -> Result<SignedRs16FinalityObservationsV1> {
+    Ok(collect_signed_rs16_finality(network, finalized_height, None)?.0)
+}
+
+fn collect_signed_rs16_finality(
+    network: &Network,
+    finalized_height: u64,
+    evidence: Option<(&Path, &str)>,
+) -> Result<(SignedRs16FinalityObservationsV1, Vec<SmokeEvidenceFileV1>)> {
     let height = NonZeroU64::new(finalized_height)
         .ok_or_else(|| eyre!("finalized receipt height is zero"))?;
     let expected_layout = recommended_data_availability_layout();
+    let expected_roster = network.validators().iter().map(|peer| peer.id()).collect();
     let mut observations = 0_u64;
-    for peer in network.peers() {
+    let mut anchor = None;
+    let mut files = Vec::new();
+    for (peer_index, peer) in network.all_peers().enumerate() {
         let (proof, block_hash) = peer
             .client()
             .get_bridge_finality_anchor(height, network.network_id())
@@ -3638,6 +4621,7 @@ fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Resu
         let artifact = &proof.finality_artifact;
         ensure!(
             proof.block_header.hash() == block_hash
+                && proof.block_header.height() == height
                 && artifact.height_context.roster.len() == VALIDATORS_PER_LANE
                 && artifact.height_context.quorum.min_signers == 3
                 && artifact.commit_qc.signers.len() == 3
@@ -3645,9 +4629,90 @@ fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Resu
             "peer {} did not return a signed 3-of-4 RS16 finality artifact",
             peer.id()
         );
+        let observed_anchor = SignedRs16FinalityAnchorV1 {
+            block_hash,
+            context_id: artifact.height_context.id(),
+        };
+        let observed_roster = artifact
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        ensure_signed_rs16_finality_identity(
+            &expected_roster,
+            &observed_roster,
+            anchor,
+            observed_anchor,
+        )?;
+        anchor = Some(observed_anchor);
         observations += 1;
+        if let Some((root, prefix)) = evidence {
+            files.push(write_smoke_evidence(
+                root,
+                &format!("{prefix}-{peer_index:02}.json"),
+                &proof,
+            )?);
+        }
     }
-    Ok(observations)
+    Ok((
+        SignedRs16FinalityObservationsV1 {
+            observations,
+            anchor: anchor.ok_or_else(|| eyre!("finality observations omitted every validator"))?,
+        },
+        files,
+    ))
+}
+
+#[test]
+fn signed_rs16_finality_rejects_substituted_global_authority_and_conflicting_decisions() {
+    let peers = (1_u8..=5)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic finality test key")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = peers[..4].iter().cloned().collect::<BTreeSet<_>>();
+    let anchor = SignedRs16FinalityAnchorV1 {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finality-block")),
+        context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"finality-context",
+        ))),
+    };
+    assert!(ensure_signed_rs16_finality_identity(&expected, &peers[..4], None, anchor).is_ok());
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[..4], Some(anchor), anchor).is_ok()
+    );
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[1..], Some(anchor), anchor).is_err()
+    );
+    let mut duplicated = peers[..4].to_vec();
+    duplicated[3] = duplicated[0].clone();
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &duplicated, Some(anchor), anchor).is_err()
+    );
+    let changed_block = SignedRs16FinalityAnchorV1 {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting-block")),
+        ..anchor
+    };
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[..4], Some(anchor), changed_block)
+            .is_err()
+    );
+    let changed_context = SignedRs16FinalityAnchorV1 {
+        context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"conflicting-context",
+        ))),
+        ..anchor
+    };
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[..4], Some(anchor), changed_context)
+            .is_err()
+    );
 }
 
 fn prepare_fault_bundle(
@@ -3880,6 +4945,7 @@ fn route_control_type(phase: PrivateSettlementRouteControlPhase) -> &'static str
 fn exercise_route_loss<F>(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
+    observer: &mut FaultContinuousObserverV1,
     peer_index: usize,
     phase: PrivateSettlementRouteControlPhase,
     bundle_id: Hash,
@@ -3890,7 +4956,8 @@ fn exercise_route_loss<F>(
 where
     F: FnMut() -> Result<()>,
 {
-    let peer = &network.peers()[peer_index];
+    observer.begin_phase(&format!("{}_loss", route_control_type(phase)), &[], false)?;
+    let peer = process_peer(network, peer_index);
     let control = peer
         .consensus_message_control()
         .ok_or_else(|| eyre!("fault peer lacks APS route control"))?;
@@ -3939,6 +5006,9 @@ where
         None,
         None,
     )?;
+    observer
+        .checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&loss_occurrence)])?;
+    observer.complete_phase()?;
 
     let healing = control.arm_private_settlement_route_control(
         phase,
@@ -3968,6 +5038,10 @@ where
         None,
         None,
     )?;
+    observer.begin_phase("post_recovery", &[], true)?;
+    observer.checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(
+        &healing_occurrence,
+    )])?;
     let nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
     Ok((vec![loss_occurrence, healing_occurrence], nonfinalized))
 }
@@ -3975,6 +5049,7 @@ where
 fn exercise_route_hold<F>(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
+    observer: &mut FaultContinuousObserverV1,
     peer_index: usize,
     phase: PrivateSettlementRouteControlPhase,
     bundle_id: Hash,
@@ -3984,7 +5059,8 @@ fn exercise_route_hold<F>(
 where
     F: FnOnce() -> Result<()> + Send + 'static,
 {
-    let peer = &network.peers()[peer_index];
+    observer.begin_phase(&format!("{}_hold", route_control_type(phase)), &[], false)?;
+    let peer = process_peer(network, peer_index);
     let control = peer
         .consensus_message_control()
         .ok_or_else(|| eyre!("fault peer lacks APS route control"))?;
@@ -4010,7 +5086,18 @@ where
             && hold_ack.released == 0,
         "APS Hold acknowledgement is not exact"
     );
+    let hold_occurrence = fault_control_occurrence(
+        route_control_type(phase),
+        Some(peer_index),
+        hold.canonical_bytes,
+        hold_ack_bytes,
+        None,
+        None,
+    )?;
+    observer
+        .checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&hold_occurrence)])?;
     let nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
+    observer.complete_phase()?;
     let pass = control.arm_private_settlement_route_control(
         phase,
         PrivateSettlementRouteControlAction::Pass,
@@ -4032,27 +5119,18 @@ where
             && pass_ack.released == 1,
         "APS Hold-to-Pass acknowledgement lost predecessor evidence"
     );
-    Ok((
-        vec![
-            fault_control_occurrence(
-                route_control_type(phase),
-                Some(peer_index),
-                hold.canonical_bytes,
-                hold_ack_bytes,
-                None,
-                None,
-            )?,
-            fault_control_occurrence(
-                route_control_type(phase),
-                Some(peer_index),
-                pass.canonical_bytes,
-                pass_ack_bytes,
-                None,
-                None,
-            )?,
-        ],
-        nonfinalized,
-    ))
+    let pass_occurrence = fault_control_occurrence(
+        route_control_type(phase),
+        Some(peer_index),
+        pass.canonical_bytes,
+        pass_ack_bytes,
+        None,
+        None,
+    )?;
+    observer.begin_phase("post_recovery", &[], true)?;
+    observer
+        .checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&pass_occurrence)])?;
+    Ok((vec![hold_occurrence, pass_occurrence], nonfinalized))
 }
 
 fn stop_peer_for_quorum_progress(
@@ -4061,7 +5139,7 @@ fn stop_peer_for_quorum_progress(
     peer_index: usize,
     revision: u64,
 ) -> Result<FaultStoppedPeerV1> {
-    let peer = network.peers()[peer_index].clone();
+    let peer = process_peer(network, peer_index).clone();
     let before_pid = runtime
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("quorum-unavailability target has no live PID"))?;
@@ -4092,7 +5170,9 @@ fn restart_quorum_progress_peer(
     runtime: &tokio::runtime::Runtime,
     stopped: FaultStoppedPeerV1,
 ) -> Result<FaultControlOccurrenceV1> {
-    let config_layers = network.config_layers().collect::<Vec<_>>();
+    let config_layers = network
+        .config_layers_for_peer(&stopped.peer)
+        .collect::<Vec<_>>();
     runtime.block_on(stopped.peer.start_checked(config_layers.iter(), None))?;
     let after_pid = runtime
         .block_on(stopped.peer.process_id())
@@ -4124,11 +5204,12 @@ fn restart_quorum_progress_peer(
 fn restart_peer_with_evidence(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
+    observer: &mut FaultContinuousObserverV1,
     peer_index: usize,
     revision: u64,
     control_type: &str,
 ) -> Result<FaultControlOccurrenceV1> {
-    let peer = network.peers()[peer_index].clone();
+    let peer = process_peer(network, peer_index).clone();
     let before_pid = runtime
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("restart target has no live PID"))?;
@@ -4140,11 +5221,15 @@ fn restart_peer_with_evidence(
         before_pid,
     };
     let command_bytes = canonical_harness_json_bytes(&command)?;
-    let config_layers = network.config_layers().collect::<Vec<_>>();
+    let config_layers = network.config_layers_for_peer(&peer).collect::<Vec<_>>();
+    observer.begin_phase(control_type, &[peer_index], false)?;
     ensure!(
-        runtime.block_on(peer.shutdown_if_started()),
+        runtime.block_on(peer.shutdown_if_started())
+            && runtime.block_on(peer.process_id()).is_none(),
         "restart target was not running"
     );
+    observer.checkpoint_active_phase(&[format!("command:{}", sha256_hex(&command_bytes))])?;
+    observer.complete_phase()?;
     runtime.block_on(peer.start_checked(config_layers.iter(), None))?;
     let after_pid = runtime
         .block_on(peer.process_id())
@@ -4163,14 +5248,18 @@ fn restart_peer_with_evidence(
         after_pid,
         health_observed: true,
     };
-    fault_control_occurrence(
+    let occurrence = fault_control_occurrence(
         control_type,
         Some(peer_index),
         command_bytes,
         canonical_harness_json_bytes(&acknowledgement)?,
         Some(before_pid),
         Some(after_pid),
-    )
+    )?;
+    observer.begin_phase("global_recovery", &[], false)?;
+    observer.checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&occurrence)])?;
+    observer.complete_phase()?;
+    Ok(occurrence)
 }
 
 fn aggregate_fault_phase_votes(
@@ -4463,20 +5552,22 @@ fn carrier_hold_rules(
 fn exercise_consensus_carrier_hold(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
+    observer: &mut FaultContinuousObserverV1,
     sponsor: &Client,
     submit: PrivateSettlementBundleSubmitRequestV1,
 ) -> Result<(Vec<FaultControlOccurrenceV1>, FaultStateSnapshotV1)> {
+    observer.begin_phase("consensus_carrier_hold", &[], false)?;
     let height = sponsor
         .get_status()?
         .blocks
         .checked_add(1)
         .ok_or_else(|| eyre!("carrier control height overflow"))?;
-    let global_peer_ids = network.peers()[0..VALIDATORS_PER_LANE]
+    let global_peer_ids = network.validators()[0..VALIDATORS_PER_LANE]
         .iter()
         .map(NetworkPeer::id)
         .collect::<Vec<_>>();
     for receiver_index in 0..VALIDATORS_PER_LANE {
-        let control = network.peers()[receiver_index]
+        let control = network.validators()[receiver_index]
             .consensus_message_control()
             .ok_or_else(|| eyre!("global peer lacks consensus carrier control"))?;
         runtime.block_on(control.apply(
@@ -4498,7 +5589,7 @@ fn exercise_consensus_carrier_hold(
     let hold_evidence = loop {
         let evidence = (0..VALIDATORS_PER_LANE)
             .map(|index| {
-                network.peers()[index]
+                network.validators()[index]
                     .consensus_message_control()
                     .ok_or_else(|| eyre!("global peer lacks consensus carrier control"))?
                     .read_current_evidence()
@@ -4528,8 +5619,14 @@ fn exercise_consensus_carrier_hold(
             None,
         )?);
     }
+    let hold_bindings = controls
+        .iter()
+        .map(fault_checkpoint_acknowledgement_binding)
+        .collect::<Vec<_>>();
+    observer.checkpoint_active_phase(&hold_bindings)?;
+    observer.complete_phase()?;
     for peer_index in 0..VALIDATORS_PER_LANE {
-        let control = network.peers()[peer_index]
+        let control = network.validators()[peer_index]
             .consensus_message_control()
             .ok_or_else(|| eyre!("global peer lacks consensus carrier control"))?;
         runtime.block_on(control.heal_and_release_all(FAULT_CONTROL_TIMEOUT))?;
@@ -4543,6 +5640,12 @@ fn exercise_consensus_carrier_hold(
             None,
         )?);
     }
+    observer.begin_phase("post_recovery", &[], true)?;
+    let healing_bindings = controls[VALIDATORS_PER_LANE..]
+        .iter()
+        .map(fault_checkpoint_acknowledgement_binding)
+        .collect::<Vec<_>>();
+    observer.checkpoint_active_phase(&healing_bindings)?;
     submit_thread
         .join()
         .map_err(|_| eyre!("carrier submit thread panicked"))??;
@@ -4587,16 +5690,24 @@ fn restart_ack_occurrence(
 fn trigger_persistence_cut_and_restart<F>(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
+    observer: &mut FaultContinuousObserverV1,
     peer_index: usize,
     phase: NativeAmxFaultPhase,
     bundle_id: Hash,
     restart_revision: u64,
+    persistence_finalization_allowed: bool,
+    post_recovery_finalization_allowed: bool,
     trigger: F,
 ) -> Result<Vec<FaultControlOccurrenceV1>>
 where
     F: FnOnce() -> Result<()>,
 {
-    let peer = network.peers()[peer_index].clone();
+    observer.begin_phase(
+        "persistence_cut",
+        &[peer_index],
+        persistence_finalization_allowed,
+    )?;
+    let peer = process_peer(network, peer_index).clone();
     let control = peer
         .consensus_message_control()
         .ok_or_else(|| eyre!("crash target lacks persistence control"))?;
@@ -4624,11 +5735,14 @@ where
         None,
         None,
     )?;
-    let config_layers = network.config_layers().collect::<Vec<_>>();
+    let config_layers = network.config_layers_for_peer(&peer).collect::<Vec<_>>();
     ensure!(
-        runtime.block_on(peer.shutdown_if_started()),
+        runtime.block_on(peer.shutdown_if_started())
+            && runtime.block_on(peer.process_id()).is_none(),
         "crash-cut child was not reapable"
     );
+    observer.checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&persistence)])?;
+    observer.complete_phase()?;
     runtime.block_on(peer.start_checked(config_layers.iter(), None))?;
     let after_pid = runtime
         .block_on(peer.process_id())
@@ -4642,16 +5756,16 @@ where
     } else {
         "validator_restart"
     };
-    Ok(vec![
-        persistence,
-        restart_ack_occurrence(
-            peer_index,
-            restart_revision,
-            restart_type,
-            before_pid,
-            after_pid,
-        )?,
-    ])
+    let restart = restart_ack_occurrence(
+        peer_index,
+        restart_revision,
+        restart_type,
+        before_pid,
+        after_pid,
+    )?;
+    observer.begin_phase("post_recovery", &[], post_recovery_finalization_allowed)?;
+    observer.checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&restart)])?;
+    Ok(vec![persistence, restart])
 }
 
 fn wait_for_fault_state_reverted(
@@ -4779,7 +5893,13 @@ fn run_fresh_route_fault_trial(
     let before = wait_for_converged_fault_state_snapshot(network, "before")?;
     let mut controls = Vec::new();
     let mut inventory = None;
-    let observer = FaultContinuousObserverV1::start(network, &before, request.participants)?;
+    let mut observer = FaultContinuousObserverV1::start(
+        network,
+        &before,
+        request.participants,
+        &bundle.manifest.bundle_id,
+        false,
+    )?;
 
     match fault {
         FreshRouteFaultV1::Loss {
@@ -4790,6 +5910,7 @@ fn run_fresh_route_fault_trial(
             let (observed, nonfinalized) = exercise_route_loss(
                 network,
                 runtime,
+                &mut observer,
                 VALIDATORS_PER_LANE,
                 PrivateSettlementRouteControlPhase::RestrictedDa,
                 bundle.manifest.bundle_id,
@@ -4817,6 +5938,7 @@ fn run_fresh_route_fault_trial(
             let (observed, nonfinalized) = exercise_route_hold(
                 network,
                 runtime,
+                &mut observer,
                 VALIDATORS_PER_LANE,
                 PrivateSettlementRouteControlPhase::RestrictedDa,
                 bundle.manifest.bundle_id,
@@ -4844,6 +5966,7 @@ fn run_fresh_route_fault_trial(
             let (observed, nonfinalized) = exercise_route_loss(
                 network,
                 runtime,
+                &mut observer,
                 VALIDATORS_PER_LANE,
                 PrivateSettlementRouteControlPhase::Prepare,
                 bundle.manifest.bundle_id,
@@ -4875,6 +5998,7 @@ fn run_fresh_route_fault_trial(
             let (observed, nonfinalized) = exercise_route_hold(
                 network,
                 runtime,
+                &mut observer,
                 VALIDATORS_PER_LANE,
                 PrivateSettlementRouteControlPhase::Prepare,
                 bundle.manifest.bundle_id,
@@ -4926,6 +6050,7 @@ fn run_fresh_route_fault_trial(
             let (observed, nonfinalized) = exercise_route_loss(
                 network,
                 runtime,
+                &mut observer,
                 VALIDATORS_PER_LANE,
                 PrivateSettlementRouteControlPhase::Commit,
                 bundle.manifest.bundle_id,
@@ -4957,6 +6082,7 @@ fn run_fresh_route_fault_trial(
             let (observed, nonfinalized) = exercise_route_hold(
                 network,
                 runtime,
+                &mut observer,
                 VALIDATORS_PER_LANE,
                 PrivateSettlementRouteControlPhase::Commit,
                 bundle.manifest.bundle_id,
@@ -4978,16 +6104,30 @@ fn run_fresh_route_fault_trial(
         _ => {}
     }
     let unavailable = if matches!(fault, FreshRouteFaultV1::CarrierHold) {
-        (0..request.participants)
-            .map(|dataspace_ordinal| {
+        let expected_unavailable = (0..request.participants)
+            .map(|dataspace_ordinal| (dataspace_ordinal + 1) * VALIDATORS_PER_LANE)
+            .collect::<Vec<_>>();
+        observer.begin_phase("committee_unavailable", &expected_unavailable, false)?;
+        let stopped = expected_unavailable
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(dataspace_ordinal, peer_index)| {
                 stop_peer_for_quorum_progress(
                     network,
                     runtime,
-                    (dataspace_ordinal + 1) * VALIDATORS_PER_LANE,
+                    peer_index,
                     u64::try_from(dataspace_ordinal + 1).expect("participant ordinal fits u64"),
                 )
             })
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?;
+        let stop_bindings = stopped
+            .iter()
+            .map(|stopped| format!("command:{}", sha256_hex(&stopped.command_bytes)))
+            .collect::<Vec<_>>();
+        observer.checkpoint_active_phase(&stop_bindings)?;
+        observer.complete_phase()?;
+        stopped
     } else {
         Vec::new()
     };
@@ -5013,15 +6153,25 @@ fn run_fresh_route_fault_trial(
                 }),
             "Commit did not make exact 3-of-4 progress with committee seat 0 unavailable"
         );
-        for stopped in unavailable {
-            controls.push(restart_quorum_progress_peer(network, runtime, stopped)?);
-        }
+        let recovery_controls = unavailable
+            .into_iter()
+            .map(|stopped| restart_quorum_progress_peer(network, runtime, stopped))
+            .collect::<Result<Vec<_>>>()?;
+        observer.begin_phase("committee_recovery", &[], false)?;
+        let recovery_bindings = recovery_controls
+            .iter()
+            .map(fault_checkpoint_acknowledgement_binding)
+            .collect::<Vec<_>>();
+        observer.checkpoint_active_phase(&recovery_bindings)?;
+        observer.complete_phase()?;
+        controls.extend(recovery_controls);
     }
     let fee_before_finalization = sponsor_nexus_fee_balance(sponsor)?;
     let (nonfinalized, receipt) = if matches!(fault, FreshRouteFaultV1::CarrierHold) {
         controls.push(restart_peer_with_evidence(
             network,
             runtime,
+            &mut observer,
             0,
             u64::try_from(request.participants + 1)?,
             "global_restart",
@@ -5074,7 +6224,7 @@ fn run_fresh_route_fault_trial(
         );
         let replay = submit.clone();
         let (carrier_controls, nonfinalized) =
-            exercise_consensus_carrier_hold(network, runtime, sponsor, submit)?;
+            exercise_consensus_carrier_hold(network, runtime, &mut observer, sponsor, submit)?;
         controls.extend(carrier_controls);
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
         ensure!(
@@ -5106,8 +6256,9 @@ fn run_fresh_route_fault_trial(
     ensure_fault_prepare_lock_planes_full_v1(&before, &nonfinalized, request.participants)?;
     let after = wait_for_converged_fault_state_snapshot(network, "after")?;
     ensure_fault_state_finalized_once(&before, &after, request.participants)?;
+    observer.complete_phase()?;
     let continuous_observations = observer.finish(&after)?;
-    let signed_rs16 = verify_signed_rs16_finality(network, receipt.finalized_height)?;
+    let signed_rs16 = verify_signed_rs16_finality(network, receipt.finalized_height)?.observations;
     let (collection, trial_index) = match fault {
         FreshRouteFaultV1::Loss { trial_index, .. } => ("loss_trials", trial_index),
         FreshRouteFaultV1::Hold { trial_index, .. } => ("phase_cut_partitions", trial_index),
@@ -5176,7 +6327,13 @@ fn run_fresh_crash_trial(
         committees,
     )?;
     let before = wait_for_converged_fault_state_snapshot(network, "before")?;
-    let observer = FaultContinuousObserverV1::start(network, &before, request.participants)?;
+    let mut observer = FaultContinuousObserverV1::start(
+        network,
+        &before,
+        request.participants,
+        &bundle.manifest.bundle_id,
+        false,
+    )?;
     let fee_before_settlement_carriers = sponsor_nexus_fee_balance(sponsor)?;
     let mut fee_after_registration = None;
     let phase = crash_boundary_phase(trial_index)?;
@@ -5268,10 +6425,13 @@ fn run_fresh_crash_trial(
         0 => trigger_persistence_cut_and_restart(
             network,
             runtime,
+            &mut observer,
             peer_index,
             phase,
             bundle.manifest.bundle_id,
             u64::try_from(trial_index + 1)?,
+            finalization_cut,
+            expected_finalized,
             || {
                 sponsor
                     .request_private_settlement_availability_share_v1(
@@ -5284,10 +6444,13 @@ fn run_fresh_crash_trial(
         1 => trigger_persistence_cut_and_restart(
             network,
             runtime,
+            &mut observer,
             peer_index,
             phase,
             bundle.manifest.bundle_id,
             u64::try_from(trial_index + 1)?,
+            finalization_cut,
+            expected_finalized,
             || {
                 sponsor
                     .request_private_settlement_prepare_vote_v1(
@@ -5311,10 +6474,13 @@ fn run_fresh_crash_trial(
             trigger_persistence_cut_and_restart(
                 network,
                 runtime,
+                &mut observer,
                 peer_index,
                 phase,
                 bundle.manifest.bundle_id,
                 u64::try_from(trial_index + 1)?,
+                finalization_cut,
+                expected_finalized,
                 || {
                     sponsor
                         .persist_private_settlement_phase_certificate_v1(
@@ -5335,10 +6501,13 @@ fn run_fresh_crash_trial(
             trigger_persistence_cut_and_restart(
                 network,
                 runtime,
+                &mut observer,
                 peer_index,
                 phase,
                 bundle.manifest.bundle_id,
                 u64::try_from(trial_index + 1)?,
+                finalization_cut,
+                expected_finalized,
                 || {
                     sponsor
                         .submit_private_settlement_bundle_v1(&submit)
@@ -5361,10 +6530,13 @@ fn run_fresh_crash_trial(
             trigger_persistence_cut_and_restart(
                 network,
                 runtime,
+                &mut observer,
                 peer_index,
                 phase,
                 bundle.manifest.bundle_id,
                 u64::try_from(trial_index + 1)?,
+                finalization_cut,
+                expected_finalized,
                 || {
                     sponsor
                         .persist_private_settlement_phase_certificate_v1(
@@ -5391,10 +6563,13 @@ fn run_fresh_crash_trial(
             trigger_persistence_cut_and_restart(
                 network,
                 runtime,
+                &mut observer,
                 peer_index,
                 phase,
                 bundle.manifest.bundle_id,
                 u64::try_from(trial_index + 1)?,
+                finalization_cut,
+                expected_finalized,
                 || {
                     sponsor
                         .submit_private_settlement_bundle_v1(&submit)
@@ -5456,7 +6631,7 @@ fn run_fresh_crash_trial(
         ensure_fault_state_finalized_once(&before, &after, request.participants)?;
         (
             after,
-            verify_signed_rs16_finality(network, receipt.finalized_height)?,
+            verify_signed_rs16_finality(network, receipt.finalized_height)?.observations,
         )
     } else if finalization_cut {
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
@@ -5472,7 +6647,7 @@ fn run_fresh_crash_trial(
         ensure_fault_state_finalized_once(&before, &after, request.participants)?;
         (
             after,
-            verify_signed_rs16_finality(network, receipt.finalized_height)?,
+            verify_signed_rs16_finality(network, receipt.finalized_height)?.observations,
         )
     } else {
         advance_fault_bundle_past_expiry(sponsor, &bundle)?;
@@ -5480,6 +6655,7 @@ fn run_fresh_crash_trial(
         ensure_fault_state_reverted(&before, &after)?;
         (after, 0)
     };
+    observer.complete_phase()?;
     let continuous_observations = observer.finish(&after)?;
     Ok((
         FaultTrialDraftV1 {
@@ -6211,8 +7387,8 @@ fn wait_for_transparent_control_balances(
                 transparent_control_asset_id(expectation.asset_ordinal, expectation.owner_ordinal);
             let owner_key = transparent_control_keypair(expectation.owner_ordinal);
             let lane = expectation.asset_ordinal + 1;
-            for peer_index in shape.validator_range(lane) {
-                let client = network.peers()[peer_index]
+            for peer_index in shape.committee_range(lane) {
+                let client = process_peer(network, peer_index)
                     .client_for(asset_id.account(), owner_key.private_key().clone());
                 match client.query_single(FindAssetById::new(asset_id.clone())) {
                     Ok(asset) => {
@@ -6280,9 +7456,10 @@ fn wait_for_identical_native_amx_receipt(
     let started = Instant::now();
     let mut last_observed = Vec::new();
     while started.elapsed() <= FINALITY_TIMEOUT {
-        let mut receipts = Vec::with_capacity(network.peers().len());
+        let process_count = network.all_peers().count();
+        let mut receipts = Vec::with_capacity(process_count);
         last_observed.clear();
-        for (peer_index, peer) in network.peers().iter().enumerate() {
+        for (peer_index, peer) in network.all_peers().enumerate() {
             match peer.client().get_sumeragi_diagnostics() {
                 Ok(diagnostics) => match native_receipt_from_diagnostics(&diagnostics, source_id) {
                     Ok(Some(receipt)) => {
@@ -6300,7 +7477,7 @@ fn wait_for_identical_native_amx_receipt(
                 Err(error) => last_observed.push(format!("peer#{peer_index}:error={error}")),
             }
         }
-        if receipts.len() == network.peers().len() {
+        if receipts.len() == process_count {
             let expected = receipts[0].clone();
             ensure!(
                 receipts.iter().all(|receipt| *receipt == expected),
@@ -6344,9 +7521,10 @@ fn wait_for_identical_canonical_carrier(
     let started = Instant::now();
     let mut last_observed = Vec::new();
     while started.elapsed() <= FINALITY_TIMEOUT {
-        let mut headers = Vec::with_capacity(network.peers().len());
+        let process_count = network.all_peers().count();
+        let mut headers = Vec::with_capacity(process_count);
         last_observed.clear();
-        for (peer_index, peer) in network.peers().iter().enumerate() {
+        for (peer_index, peer) in network.all_peers().enumerate() {
             match canonical_carrier_header(&peer.client(), entrypoint_hash) {
                 Ok(Some(header)) => {
                     last_observed.push(format!(
@@ -6360,7 +7538,7 @@ fn wait_for_identical_canonical_carrier(
                 Err(error) => last_observed.push(format!("peer#{peer_index}:error={error}")),
             }
         }
-        if headers.len() == network.peers().len() {
+        if headers.len() == process_count {
             let expected = headers[0].clone();
             ensure!(
                 headers.iter().all(|header| *header == expected),
@@ -6453,8 +7631,8 @@ fn grant_transparent_control_consents(network: &Network, settlements: &[DvpIsi])
         let counterparty_ordinal = offset + 1;
         let counterparty_key = transparent_control_keypair(counterparty_ordinal);
         let counterparty = transparent_control_account_id(counterparty_ordinal);
-        let client =
-            network.peers()[0].client_for(&counterparty, counterparty_key.private_key().clone());
+        let client = network.validators()[0]
+            .client_for(&counterparty, counterparty_key.private_key().clone());
         let permission = transparent_control_permission(settlement, counterparty_ordinal);
         let transaction = client.build_transaction(
             [InstructionBox::from(Grant::account_permission(
@@ -6488,7 +7666,7 @@ fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIs
             let counterparty_key = transparent_control_keypair(counterparty_ordinal);
             let expected: Permission =
                 transparent_control_permission(settlement, counterparty_ordinal).into();
-            for (peer_index, peer) in network.peers().iter().enumerate() {
+            for (peer_index, peer) in network.all_peers().enumerate() {
                 let client = peer.client_for(&counterparty, counterparty_key.private_key().clone());
                 match client
                     .query(FindPermissionsByAccountId::new(counterparty.clone()))
@@ -6574,7 +7752,7 @@ fn run_real_process_transparent_control_benchmark(
     let authority_key = transparent_control_keypair(0);
     let authority_id = transparent_control_account_id(0);
     let authority =
-        network.peers()[0].client_for(&authority_id, authority_key.private_key().clone());
+        network.validators()[0].client_for(&authority_id, authority_key.private_key().clone());
     let settlements = transparent_control_dvps(&request)?;
     ensure!(
         settlements.len() == request.participants - 1,
@@ -6591,13 +7769,12 @@ fn run_real_process_transparent_control_benchmark(
     )?;
     let final_balances = transparent_control_balance_expectations(request.participants, true)?;
     let atomicity_clients = network
-        .peers()
-        .iter()
+        .all_peers()
         .map(NetworkPeer::client)
         .collect::<Vec<_>>();
     ensure!(
-        atomicity_clients.len() == shape.peer_count(),
-        "transparent-control atomicity observer does not cover every validator"
+        atomicity_clients.len() == shape.process_count(),
+        "transparent-control atomicity observer does not cover every process"
     );
     let atomicity_observer = TransparentControlAtomicityObserver::start(
         atomicity_clients.clone(),
@@ -6664,7 +7841,7 @@ fn run_real_process_transparent_control_benchmark(
             && wait_for_identical_canonical_carrier(&network, entrypoint_hash)? == carrier,
         "replay changed the durable Native AMX receipt or canonical carrier"
     );
-    for peer in network.peers() {
+    for peer in network.all_peers() {
         ensure!(
             canonical_carrier_header(&peer.client(), replay_entrypoint)?.is_none(),
             "rejected settlement-id replay appeared in canonical history"
@@ -6672,7 +7849,7 @@ fn run_real_process_transparent_control_benchmark(
     }
 
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, carrier.height().get())?;
+        verify_signed_rs16_finality(&network, carrier.height().get())?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -6778,7 +7955,7 @@ where
 {
     let mut sources = Vec::new();
     let mut total = 0_usize;
-    for (peer_index, peer) in network.peers().iter().enumerate() {
+    for (peer_index, peer) in network.all_peers().enumerate() {
         let peer_sources = collect_leakage_source_files(&peer.kura_store_dir(), &mut selected)?;
         for (relative, bytes) in peer_sources {
             total = total
@@ -6914,6 +8091,8 @@ fn run_real_process_leakage_campaign(
         &network,
         &before,
         request.participants,
+        &manifest.bundle_id,
+        true,
     )?;
     let materials = provisional_materials(manifest, &prepared, &committees)?;
     let certificates = materials
@@ -7115,7 +8294,7 @@ fn run_real_process_leakage_campaign(
     let (continuous_observations, continuous_observation_evidence) =
         observer.finish_with_evidence(&after)?;
     ensure!(
-        continuous_observations.len() == shape.peer_count()
+        continuous_observations.len() == shape.process_count()
             && continuous_observations
                 .iter()
                 .all(|row| row.check_count >= 3 && row.finalized_observations >= 1),
@@ -7130,7 +8309,7 @@ fn run_real_process_leakage_campaign(
                     .ok_or_else(|| eyre!("leakage atomicity check count overflow"))
             })?;
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, receipt.finalized_height)?;
+        verify_signed_rs16_finality(&network, receipt.finalized_height)?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 leakage finality observations are incomplete"
@@ -7507,8 +8686,13 @@ fn run_real_process_private_benchmark(
         "pool activation did not land at the manifest authority context"
     );
     let atomicity_before = wait_for_converged_fault_state_snapshot(&network, "benchmark-before")?;
-    let atomicity_observer =
-        FaultContinuousObserverV1::start(&network, &atomicity_before, request.participants)?;
+    let atomicity_observer = FaultContinuousObserverV1::start(
+        &network,
+        &atomicity_before,
+        request.participants,
+        &manifest.bundle_id,
+        true,
+    )?;
 
     let upload_started = Instant::now();
     let materials = provisional_materials(manifest, &prepared, &committees)?;
@@ -7715,11 +8899,11 @@ fn run_real_process_private_benchmark(
     ensure_fault_state_finalized_once(&atomicity_before, &atomicity_after, request.participants)?;
     let atomicity_observations = atomicity_observer.finish(&atomicity_after)?;
     ensure!(
-        atomicity_observations.len() == network.peers().len(),
-        "private benchmark atomicity observer omitted a validator"
+        atomicity_observations.len() == network.all_peers().count(),
+        "private benchmark atomicity observer omitted a validator or committee observer"
     );
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, receipt.finalized_height)?;
+        verify_signed_rs16_finality(&network, receipt.finalized_height)?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -7912,6 +9096,34 @@ fn real_process_request_digest_validation_is_fail_closed() {
     assert!(!lowercase_digest("not-a-digest", &[64]));
 }
 
+#[test]
+fn fault_bundle_governance_derivation_is_reproducible_and_disjoint() {
+    let purposes: &[&[u8]] = &[b"audit-policy", b"pool-id", b"asset-binding-salt"];
+    let maximum_participants = 16;
+    let mut materials = BTreeSet::new();
+    for bundle_ordinal in 0..FAULT_CAMPAIGN_TRIALS {
+        for leg_ordinal in 0..maximum_participants {
+            for purpose in purposes {
+                let material =
+                    fault_derivation_bytes_from_run(17, 29, bundle_ordinal, leg_ordinal, purpose);
+                assert_eq!(
+                    material,
+                    fault_derivation_bytes_from_run(17, 29, bundle_ordinal, leg_ordinal, purpose,),
+                    "fault campaign derivation must be reproducible"
+                );
+                assert!(
+                    materials.insert(material),
+                    "fault bundle {bundle_ordinal} leg {leg_ordinal} reused {purpose:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        materials.len(),
+        FAULT_CAMPAIGN_TRIALS * maximum_participants * purposes.len()
+    );
+}
+
 fn fault_observation_fixture(
     peer_index: usize,
     ledger_byte: char,
@@ -7971,16 +9183,210 @@ fn fault_continuous_observer_accepts_only_baseline_or_complete_finalization() {
         );
     assert!(classify_fault_continuous_observation(&baseline, &malformed_lock, 2).is_err());
 
-    let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0);
-    accumulator.record(&baseline, &baseline, 2).unwrap();
-    accumulator.record(&baseline, &baseline, 2).unwrap();
-    accumulator.record(&baseline, &finalized, 2).unwrap();
+    let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], true);
+    accumulator.checkpoint_phase(0, &[]).unwrap();
+    accumulator.record(&baseline, &baseline, 2, 0).unwrap();
+    accumulator.record(&baseline, &baseline, 2, 0).unwrap();
+    accumulator.record(&baseline, &finalized, 2, 0).unwrap();
     let summary = accumulator.finish().unwrap();
     assert_eq!(summary.check_count, 3);
+    assert_eq!(summary.poll_failure_count, 0);
     assert_eq!(summary.baseline_observations, 2);
     assert_eq!(summary.finalized_observations, 1);
     assert_eq!(summary.first_response_sha256, baseline.response_sha256);
     assert_eq!(summary.last_response_sha256, finalized.response_sha256);
+    assert_eq!(summary.phase_coverage.len(), 1);
+    assert_eq!(summary.phase_coverage[0].phase, "preflight");
+    assert_eq!(summary.phase_coverage[0].successful_observations, 3);
+    assert_eq!(summary.phase_coverage[0].poll_failures, 0);
+}
+
+#[test]
+fn fault_continuous_observer_discards_stale_polls_from_counts_and_evidence() {
+    let baseline = fault_observation_fixture(0, 'a', 0);
+    let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], false);
+    accumulator.checkpoint_phase(0, &[]).unwrap();
+    let mut retained = Vec::new();
+    let initial_chain = accumulator.response_chain.clone().finalize();
+    assert!(
+        !accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 0, 1, Some(&mut retained))
+            .unwrap()
+    );
+    assert_eq!(accumulator.check_count, 0);
+    assert!(retained.is_empty());
+    assert_eq!(accumulator.response_chain.clone().finalize(), initial_chain);
+    assert!(
+        accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 1, 1, Some(&mut retained))
+            .unwrap()
+    );
+    assert_eq!(accumulator.check_count, retained.len() as u64);
+    assert_eq!(retained[0].response_sha256, baseline.response_sha256);
+    let accepted_chain = accumulator.response_chain.clone().finalize();
+    assert!(
+        !accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 1, 2, Some(&mut retained))
+            .unwrap()
+    );
+    assert_eq!(accumulator.check_count, retained.len() as u64);
+    assert_eq!(
+        accumulator.response_chain.clone().finalize(),
+        accepted_chain
+    );
+    retained.resize(LEAKAGE_MAX_OBSERVATIONS_PER_PEER, baseline.clone());
+    assert!(
+        accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 2, 2, Some(&mut retained))
+            .is_err()
+    );
+    assert_eq!(accumulator.check_count, 1);
+    assert_eq!(
+        accumulator.response_chain.clone().finalize(),
+        accepted_chain
+    );
+}
+
+#[test]
+fn fault_continuous_observer_hashes_expected_outages_and_rejects_wrong_coverage() {
+    let baseline = fault_observation_fixture(0, 'a', 0);
+    let finalized = fault_observation_fixture(0, 'b', 2);
+    let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], false);
+    accumulator.checkpoint_phase(0, &[]).unwrap();
+    accumulator.record(&baseline, &baseline, 2, 0).unwrap();
+    accumulator.record(&baseline, &baseline, 2, 0).unwrap();
+    let outage = accumulator
+        .start_phase("persistence_cut", true, false)
+        .unwrap();
+    assert!(accumulator.record_poll_failure(outage).unwrap());
+    assert!(!accumulator.phase_coverage_met(outage).unwrap());
+    let binding = format!("acknowledgement:{}", "a".repeat(64));
+    accumulator.checkpoint_phase(outage, &[binding]).unwrap();
+    assert!(!accumulator.phase_coverage_met(outage).unwrap());
+    assert!(accumulator.record_poll_failure(outage).unwrap());
+    assert!(accumulator.phase_coverage_met(outage).unwrap());
+    let recovery = accumulator
+        .start_phase("post_recovery", false, false)
+        .unwrap();
+    accumulator.checkpoint_phase(recovery, &[]).unwrap();
+    accumulator
+        .record(&baseline, &baseline, 2, recovery)
+        .unwrap();
+    let terminal = accumulator.start_phase("terminal", false, true).unwrap();
+    accumulator.checkpoint_phase(terminal, &[]).unwrap();
+    accumulator
+        .record(&baseline, &finalized, 2, terminal)
+        .unwrap();
+    let summary = accumulator.finish().unwrap();
+    assert_eq!(summary.poll_failure_count, 2);
+    assert_eq!(
+        summary
+            .phase_coverage
+            .iter()
+            .map(|phase| phase.phase.as_str())
+            .collect::<Vec<_>>(),
+        vec!["preflight", "persistence_cut", "post_recovery", "terminal"]
+    );
+    let outage = &summary.phase_coverage[1];
+    assert!(outage.expected_unavailable);
+    assert_eq!(outage.successful_observations, 0);
+    assert_eq!(outage.poll_failures, 2);
+    assert_eq!(outage.checkpoint_attempt, 1);
+    assert_eq!(outage.checkpoint_control_bindings.len(), 1);
+    assert_eq!(outage.attempts.len(), 1);
+    assert_eq!(
+        outage.attempts[0].evidence,
+        FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1
+    );
+
+    let mut unexpected = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], false);
+    unexpected.checkpoint_phase(0, &[]).unwrap();
+    for _ in 0..3 {
+        unexpected.record(&baseline, &baseline, 2, 0).unwrap();
+    }
+    assert!(!unexpected.record_poll_failure(0).unwrap());
+    assert!(unexpected.finish().is_err());
+
+    let mut unobserved_outage =
+        FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], false);
+    unobserved_outage.checkpoint_phase(0, &[]).unwrap();
+    for _ in 0..3 {
+        unobserved_outage
+            .record(&baseline, &baseline, 2, 0)
+            .unwrap();
+    }
+    let outage = unobserved_outage
+        .start_phase("persistence_cut", true, false)
+        .unwrap();
+    unobserved_outage
+        .checkpoint_phase(outage, &[format!("command:{}", "b".repeat(64))])
+        .unwrap();
+    unobserved_outage
+        .record(&baseline, &baseline, 2, outage)
+        .unwrap();
+    assert!(unobserved_outage.finish().is_err());
+}
+
+#[test]
+fn fault_continuous_observer_rejects_premature_finalization_and_rollback() {
+    let baseline = fault_observation_fixture(0, 'a', 0);
+    let finalized = fault_observation_fixture(0, 'b', 2);
+
+    let mut premature = FaultContinuousObservationAccumulatorV1::new(0, [7; Hash::LENGTH], false);
+    premature.checkpoint_phase(0, &[]).unwrap();
+    assert!(premature.record(&baseline, &finalized, 2, 0).is_err());
+
+    let mut rollback = FaultContinuousObservationAccumulatorV1::new(0, [7; Hash::LENGTH], true);
+    rollback.checkpoint_phase(0, &[]).unwrap();
+    rollback.record(&baseline, &baseline, 2, 0).unwrap();
+    rollback.record(&baseline, &finalized, 2, 0).unwrap();
+    assert!(rollback.record(&baseline, &baseline, 2, 0).is_err());
+}
+
+#[test]
+fn fault_continuous_observer_chains_bind_the_bundle() {
+    let baseline = fault_observation_fixture(0, 'a', 0);
+    let summarize = |bundle_id| {
+        let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0, bundle_id, false);
+        accumulator.checkpoint_phase(0, &[]).unwrap();
+        for _ in 0..3 {
+            accumulator.record(&baseline, &baseline, 2, 0).unwrap();
+        }
+        accumulator.finish().unwrap()
+    };
+    let first = summarize([1; Hash::LENGTH]);
+    let second = summarize([2; Hash::LENGTH]);
+    assert_ne!(first.response_chain_sha256, second.response_chain_sha256);
+    assert_ne!(
+        first.phase_coverage[0].attempt_chain_sha256,
+        second.phase_coverage[0].attempt_chain_sha256
+    );
+}
+
+#[test]
+fn fault_continuous_observer_normalizes_only_connect_or_timeout_errors() {
+    for private_error in ["private malformed body", "private cache-header detail"] {
+        let report = eyre::Report::msg(private_error);
+        assert_eq!(normalize_fault_observer_transport_failure(&report), None);
+    }
+
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let endpoint = listener.local_addr().unwrap();
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(20))
+        .build()
+        .unwrap();
+    let timeout = client
+        .get(format!("http://{endpoint}/"))
+        .send()
+        .unwrap_err();
+    assert!(timeout.is_timeout());
+    let report = eyre::Report::new(timeout);
+    assert_eq!(
+        normalize_fault_observer_transport_failure(&report),
+        Some(FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1)
+    );
 }
 
 #[test]

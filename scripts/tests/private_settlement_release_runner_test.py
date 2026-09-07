@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack, contextmanager
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import stat
 import struct
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "private_settlement_release_runner.py"
@@ -765,7 +769,7 @@ def _route_occurrence(
     acknowledgement_bytes = MODULE.canonical_bytes(acknowledgement)
     return {
         "control_type": phase,
-        "peer_index": 0,
+        "peer_index": MODULE.VALIDATORS_PER_DATASPACE,
         "command_sha256": command_sha,
         "command_hex": command_bytes.hex(),
         "acknowledgement_sha256": MODULE.hashlib.sha256(
@@ -951,6 +955,113 @@ def _rewrite_state_observation(
     )
 
 
+def _refresh_fault_observation_summary(
+    summary: dict[str, Any], bundle_id: str
+) -> None:
+    """Recompute the real V1 attempt and response chains for a test summary."""
+
+    peer_index = summary["peer_index"]
+    response_chain = MODULE.hashlib.sha256()
+    response_chain.update(MODULE.FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1)
+    response_chain.update(bytes.fromhex(bundle_id))
+    response_chain.update(MODULE.struct.pack("<Q", peer_index))
+    first_response = None
+    last_response = None
+    total_successes = 0
+    total_failures = 0
+    total_baseline = 0
+    total_finalized = 0
+    for phase_index, phase in enumerate(summary["phase_coverage"]):
+        attempt_chain = MODULE.hashlib.sha256()
+        attempt_chain.update(MODULE.FAULT_CONTINUOUS_OBSERVATION_PHASE_DOMAIN_V1)
+        attempt_chain.update(bytes.fromhex(bundle_id))
+        attempt_chain.update(MODULE.struct.pack("<Q", peer_index))
+        attempt_chain.update(MODULE.struct.pack("<Q", phase_index))
+        phase_name = phase["phase"].encode("ascii")
+        attempt_chain.update(MODULE.struct.pack("<Q", len(phase_name)))
+        attempt_chain.update(phase_name)
+        attempt_chain.update(bytes((int(phase["expected_unavailable"]),)))
+        attempt_chain.update(bytes((int(phase["finalization_allowed"]),)))
+        phase_successes = 0
+        phase_failures = 0
+        phase_baseline = 0
+        phase_finalized = 0
+        for attempt in phase["attempts"]:
+            for _ in range(attempt["repetitions"]):
+                attempt_class = attempt["class"]
+                if attempt_class == "expected_unavailable":
+                    phase_failures += 1
+                    attempt_chain.update(b"\x00")
+                    attempt_chain.update(
+                        MODULE.FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1.encode(
+                            "ascii"
+                        )
+                    )
+                    continue
+                response_digest = MODULE.hashlib.sha256(
+                    bytes.fromhex(attempt["evidence"])
+                ).digest()
+                phase_successes += 1
+                if attempt_class == "baseline":
+                    phase_baseline += 1
+                    attempt_chain.update(b"\x01")
+                elif attempt_class == "finalized":
+                    phase_finalized += 1
+                    attempt_chain.update(b"\x02")
+                else:
+                    raise AssertionError(f"unknown fixture attempt class {attempt_class}")
+                attempt_chain.update(response_digest)
+                response_chain.update(response_digest)
+                response_hex = response_digest.hex()
+                first_response = first_response or response_hex
+                last_response = response_hex
+        checkpoint = phase["checkpoint_attempt"]
+        bindings = phase["checkpoint_control_bindings"]
+        attempt_chain.update(b"checkpoint\0")
+        attempt_chain.update(MODULE.struct.pack("<Q", checkpoint))
+        attempt_chain.update(b"checkpoint-controls\0")
+        attempt_chain.update(MODULE.struct.pack("<Q", len(bindings)))
+        for binding in bindings:
+            encoded = binding.encode("ascii")
+            attempt_chain.update(MODULE.struct.pack("<Q", len(encoded)))
+            attempt_chain.update(encoded)
+        phase.update(
+            {
+                "successful_observations": phase_successes,
+                "poll_failures": phase_failures,
+                "baseline_observations": phase_baseline,
+                "finalized_observations": phase_finalized,
+                "attempt_chain_sha256": attempt_chain.hexdigest(),
+            }
+        )
+        total_successes += phase_successes
+        total_failures += phase_failures
+        total_baseline += phase_baseline
+        total_finalized += phase_finalized
+    assert first_response is not None and last_response is not None
+    summary.update(
+        {
+            "check_count": total_successes,
+            "poll_failure_count": total_failures,
+            "first_response_sha256": first_response,
+            "last_response_sha256": last_response,
+            "response_chain_sha256": response_chain.hexdigest(),
+            "baseline_observations": total_baseline,
+            "finalized_observations": total_finalized,
+        }
+    )
+
+
+def _refresh_fault_observation_row(row: dict[str, Any]) -> None:
+    """Recompute all continuous summary bindings in a test observation row."""
+
+    for summary in row["continuous_observations"]:
+        _refresh_fault_observation_summary(summary, row["bundle_id"])
+    row["continuous_checks"] = sum(
+        summary["check_count"] for summary in row["continuous_observations"]
+    )
+
+
 def write_fault_evidence(
     evidence_dir: Path,
     payload: dict[str, Any],
@@ -1061,14 +1172,6 @@ def write_fault_evidence(
                 )
                 revision += 1
             elif collection == "phase_cut_partitions":
-                for carrier_action in ("hold", "heal"):
-                    for peer_index in range(MODULE.GLOBAL_VALIDATORS):
-                        trial_controls.append(
-                            _consensus_carrier_occurrence(
-                                peer_index, carrier_action, revision
-                            )
-                        )
-                        revision += 1
                 for dataspace_ordinal in range(participants):
                     before_pid = 600 + dataspace_ordinal * 2
                     trial_controls.append(
@@ -1103,6 +1206,14 @@ def write_fault_evidence(
                     )
                 )
                 revision += 1
+                for carrier_action in ("hold", "heal"):
+                    for peer_index in range(MODULE.GLOBAL_VALIDATORS):
+                        trial_controls.append(
+                            _consensus_carrier_occurrence(
+                                peer_index, carrier_action, revision
+                            )
+                        )
+                        revision += 1
             else:
                 boundary = trial["boundary"]
                 phase = crash_phases[boundary]
@@ -1145,17 +1256,21 @@ def write_fault_evidence(
                     "receipt_publication",
                 }:
                     expected_after_state = "finalized"
-            controls.append(
-                {
-                    "record": record_id,
-                    "bundle_id": bundle_id,
-                    "participants": participants,
-                    "seed": seed,
-                    "run": run,
-                    "collection": collection,
-                    "trial_index": index,
-                    "controls": trial_controls,
-                }
+            control_row = {
+                "record": record_id,
+                "bundle_id": bundle_id,
+                "participants": participants,
+                "seed": seed,
+                "run": run,
+                "collection": collection,
+                "trial_index": index,
+                "controls": trial_controls,
+            }
+            controls.append(control_row)
+            phase_contract = MODULE._fault_observation_phase_contract(
+                control_row,
+                collection=collection,
+                label=f"fixture.{collection}[{index}]",
             )
             snapshots = []
             full_lock_boundary = collection != "crash_recoveries" or trial[
@@ -1185,28 +1300,72 @@ def write_fault_evidence(
                 )
             continuous_observations = []
             for peer_index in range(peer_count):
-                first_response = snapshots[0]["validators"][peer_index]["response_sha256"]
-                middle_response = snapshots[1]["validators"][peer_index]["response_sha256"]
-                last_response = snapshots[2]["validators"][peer_index]["response_sha256"]
-                continuous_observations.append(
-                    {
-                        "peer_index": peer_index,
-                        "check_count": 3,
-                        "first_response_sha256": first_response,
-                        "last_response_sha256": last_response,
-                        "response_chain_sha256": MODULE.hashlib.sha256(
-                            bytes.fromhex(first_response)
-                            + bytes.fromhex(middle_response)
-                            + bytes.fromhex(last_response)
-                        ).hexdigest(),
-                        "baseline_observations": (
-                            2 if expected_after_state == "finalized" else 3
-                        ),
-                        "finalized_observations": (
-                            1 if expected_after_state == "finalized" else 0
-                        ),
-                    }
-                )
+                baseline_response = snapshots[0]["validators"][peer_index][
+                    "response_hex"
+                ]
+                final_response = snapshots[2]["validators"][peer_index][
+                    "response_hex"
+                ]
+                phase_coverage = []
+                for (
+                    phase_name,
+                    expected_unavailable_peers,
+                    finalization_allowed,
+                    checkpoint_bindings,
+                ) in phase_contract:
+                    expected_unavailable = peer_index in expected_unavailable_peers
+                    if expected_unavailable:
+                        attempts = [
+                            {
+                                "class": "expected_unavailable",
+                                "evidence": MODULE.FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1,
+                                "repetitions": 1,
+                            }
+                        ]
+                    else:
+                        terminal_finalized = (
+                            phase_name == "terminal"
+                            and expected_after_state == "finalized"
+                        )
+                        attempts = [
+                            {
+                                "class": (
+                                    "finalized" if terminal_finalized else "baseline"
+                                ),
+                                "evidence": (
+                                    final_response
+                                    if terminal_finalized
+                                    else baseline_response
+                                ),
+                                "repetitions": 2 if phase_name == "preflight" else 1,
+                            }
+                        ]
+                    phase_coverage.append(
+                        {
+                            "phase": phase_name,
+                            "expected_unavailable": expected_unavailable,
+                            "finalization_allowed": finalization_allowed,
+                            "successful_observations": 0,
+                            "poll_failures": 0,
+                            "baseline_observations": 0,
+                            "finalized_observations": 0,
+                            "checkpoint_attempt": 0,
+                            "checkpoint_control_bindings": list(
+                                checkpoint_bindings
+                            ),
+                            "attempt_chain_sha256": "",
+                            "attempts": attempts,
+                        }
+                    )
+                summary = {
+                    "peer_index": peer_index,
+                    "phase_coverage": phase_coverage,
+                }
+                _refresh_fault_observation_summary(summary, bundle_id)
+                continuous_observations.append(summary)
+            continuous_checks = sum(
+                summary["check_count"] for summary in continuous_observations
+            )
             observations.append(
                 {
                     "record": record_id,
@@ -1217,14 +1376,14 @@ def write_fault_evidence(
                     "collection": collection,
                     "trial_index": index,
                     "expected_after_state": expected_after_state,
-                    "continuous_checks": peer_count * 3,
+                    "continuous_checks": continuous_checks,
                     "continuous_observations": continuous_observations,
                     "partial_visibility_observed": False,
                     "partial_spendable_observations": 0,
                     "snapshots": snapshots,
                 }
             )
-            total_checks += peer_count * 3
+            total_checks += continuous_checks
 
     control_path = evidence_dir / MODULE.FAULT_CONTROL_EVIDENCE_FILE
     observation_path = evidence_dir / MODULE.FAULT_OBSERVATION_EVIDENCE_FILE
@@ -1273,8 +1432,168 @@ def response(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class CanonicalHashLiteralTests(unittest.TestCase):
+    """Check canonical hash checksums against independent bitwise fixtures."""
+
+    def test_fixed_checksum_vectors_preserve_literal_bytes(self) -> None:
+        vectors = (
+            ("0" * 64, "D52F"),
+            ("F" * 64, "C6C0"),
+            ("0123456789ABCDEF" * 4, "EFDA"),
+            ("4" * 64, "B84D"),
+        )
+        for body, checksum in vectors:
+            with self.subTest(body=body):
+                literal = f"hash:{body}#{checksum}"
+                self.assertEqual(_iroha_hash_literal(body), literal)
+                self.assertEqual(
+                    MODULE.canonical_iroha_hash_body(literal, "hash_test"),
+                    body.lower(),
+                )
+
+    def test_standard_library_crc_matches_independent_bit_loop(self) -> None:
+        # Keep _iroha_hash_literal's independent polynomial bit loop: using
+        # the production helper to construct these literals would hide drift.
+        for offset in range(32):
+            for value in range(256):
+                body_bytes = bytearray(32)
+                body_bytes[offset] = value
+                body = body_bytes.hex()
+                with self.subTest(offset=offset, value=value):
+                    self.assertEqual(
+                        MODULE.canonical_iroha_hash_body(
+                            _iroha_hash_literal(body), "hash_test"
+                        ),
+                        body,
+                    )
+        for index in range(256):
+            body = hashlib.sha256(index.to_bytes(2, "big")).hexdigest()
+            with self.subTest(dense_body=index):
+                self.assertEqual(
+                    MODULE.canonical_iroha_hash_body(
+                        _iroha_hash_literal(body), "hash_test"
+                    ),
+                    body,
+                )
+
+    def test_malformed_syntax_and_checksum_corruption_fail_closed(self) -> None:
+        body = "0123456789ABCDEF" * 4
+        literal = f"hash:{body}#EFDA"
+        malformed = (
+            None,
+            True,
+            1,
+            [],
+            {},
+            literal.encode("ascii"),
+            literal.lower(),
+            literal[:-4] + "efda",
+            literal.replace("hash:", "Hash:"),
+            literal.replace("hash:", "hash"),
+            literal.replace("#", ":"),
+            "hash:#EFDA",
+            f"hash:{body[:-1]}#EFDA",
+            f"hash:{body}0#EFDA",
+            f"hash:{body[:-1]}G#EFDA",
+            f"hash:{body[:-1]}Ｆ#EFDA",
+            literal[:-1],
+            literal + "0",
+            literal[:-1] + "G",
+            " " + literal,
+            literal + " ",
+            literal + "\n",
+            literal + "\0",
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    MODULE.RunnerError,
+                    "hash_test is not a canonical Iroha hash literal",
+                ):
+                    MODULE.canonical_iroha_hash_body(value, "hash_test")
+        for bit in range(16):
+            corrupted = literal[:-4] + f"{0xEFDA ^ (1 << bit):04X}"
+            with self.subTest(checksum_bit=bit), self.assertRaisesRegex(
+                MODULE.RunnerError, "hash_test has an invalid Iroha hash checksum"
+            ):
+                MODULE.canonical_iroha_hash_body(corrupted, "hash_test")
+        for offset in range(64):
+            replacement = "1" if body[offset] == "0" else "0"
+            corrupted = f"hash:{body[:offset]}{replacement}{body[offset + 1:]}#EFDA"
+            with self.subTest(body_offset=offset), self.assertRaisesRegex(
+                MODULE.RunnerError, "hash_test has an invalid Iroha hash checksum"
+            ):
+                MODULE.canonical_iroha_hash_body(corrupted, "hash_test")
+
+
 class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
     """Exercise deterministic planning and fail-closed response materialization."""
+
+    def test_smoke_prerequisite_binds_gate_and_execution_source(self) -> None:
+        import private_settlement_smoke_campaign as smoke
+
+        campaign = {
+            "source": {"commit": COMMIT, "tree": "1" * 40, "source_sha256": "2" * 64},
+            "artifacts": {"validator": {"sha256": "3" * 64}, "integration": {"sha256": "4" * 64}},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            MODULE.write_json(root / "campaign.json", campaign)
+            with mock.patch.object(smoke, "validate_campaign", return_value=campaign) as validate, mock.patch.object(
+                smoke, "source_seal", return_value=campaign["source"]
+            ) as seal:
+                receipt = MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
+            validate.assert_called_once_with(root, expected_commit=COMMIT)
+            seal.assert_called_once_with(root, COMMIT)
+            self.assertEqual(receipt["campaign_sha256"], MODULE.file_binding(root / "campaign.json")["sha256"])
+            self.assertEqual(receipt["runs"], 10)
+            self.assertNotIn(str(root), MODULE.canonical_bytes(receipt).decode())
+
+            with mock.patch.object(smoke, "validate_campaign", return_value=campaign), mock.patch.object(
+                smoke, "source_seal", return_value={**campaign["source"], "source_sha256": "5" * 64}
+            ), self.assertRaisesRegex(MODULE.RunnerError, "execution source differs"):
+                MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
+
+            def substitute_after_validation(*_args: Any) -> dict[str, Any]:
+                MODULE.write_json(root / "campaign.json", {**campaign, "substituted": True})
+                return campaign["source"]
+
+            with mock.patch.object(smoke, "validate_campaign", return_value=campaign), mock.patch.object(
+                smoke, "source_seal", side_effect=substitute_after_validation
+            ), self.assertRaisesRegex(MODULE.RunnerError, "changed after validation"):
+                MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
+
+    def test_release_execution_rejects_missing_smoke_before_starting_work(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source, output = root / "source", root / "new-parent" / "output"
+            source.mkdir()
+            frozen_plan = {"commit": COMMIT, "jobs": [], "harness": {"sha256": EXECUTABLE}}
+            with mock.patch.object(MODULE, "load_plan", return_value=(frozen_plan, root)), mock.patch.object(
+                MODULE, "validate_campaign_timeout"
+            ), mock.patch.object(MODULE, "file_binding", return_value={}), mock.patch.object(
+                MODULE, "verify_source_checkout"
+            ), mock.patch.object(MODULE, "verify_harness", return_value=frozen_plan["harness"]), mock.patch.object(
+                MODULE, "invoke_harness"
+            ) as invoke, self.assertRaisesRegex(MODULE.RunnerError, "smoke prerequisite failed"):
+                MODULE.execute_plan(
+                    root / "plan.json", output, source_root=source,
+                    harness=root / "harness", smoke_campaign=root / "missing-smoke",
+                    timeout_seconds=7_200,
+                )
+            invoke.assert_not_called()
+            self.assertFalse(output.parent.exists())
+
+    def test_release_execution_cli_requires_explicit_smoke_evidence(self) -> None:
+        arguments = ["execute", "--plan", "/plan", "--output-dir", "/output",
+                     "--source-root", "/source", "--harness", "/harness"]
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as error, self.assertRaises(SystemExit) as result:
+            MODULE.parse_args(arguments)
+        self.assertEqual(result.exception.code, 2)
+        self.assertIn("--smoke-campaign", error.getvalue())
+        self.assertEqual(
+            MODULE.parse_args(arguments + ["--smoke-campaign", "/smoke"]).smoke_campaign, Path("/smoke")
+        )
 
     def test_job_matrix_is_complete_canonical_and_deterministic(self) -> None:
         canaries = MODULE.build_canary_manifest(COMMIT)
@@ -1449,34 +1768,285 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 evidence / MODULE.FAULT_CONTROL_EVIDENCE_FILE,
                 "fault controls",
             )
+            control_by_record = MODULE.validate_fault_control_records(
+                control_rows, participants=3, seed=7, run=2
+            )
+
+            def validate_observations(candidate: list[dict[str, Any]]) -> None:
+                MODULE.validate_fault_observation_records(
+                    candidate,
+                    participants=3,
+                    seed=7,
+                    run=2,
+                    control_by_record=control_by_record,
+                )
+
             too_short = copy.deepcopy(rows)
             too_short[0]["continuous_observations"][0]["check_count"] = 2
             with self.assertRaisesRegex(MODULE.RunnerError, "lacks a live polling"):
-                MODULE.validate_fault_observation_records(
-                    too_short, participants=3, seed=7, run=2
+                validate_observations(too_short)
+            missing_phase = copy.deepcopy(rows)
+            missing_phase[0]["continuous_observations"][0]["phase_coverage"].pop()
+            with self.assertRaisesRegex(MODULE.RunnerError, "incomplete phase coverage"):
+                validate_observations(missing_phase)
+            carrier_row = next(
+                row
+                for row in rows
+                if row["collection"] == "phase_cut_partitions"
+                and row["trial_index"] == 3
+            )
+            wrong_exemption = copy.deepcopy(rows)
+            wrong_exemption_row = next(
+                row
+                for row in wrong_exemption
+                if row["record"] == carrier_row["record"]
+            )
+            committee_phase = next(
+                phase
+                for phase in wrong_exemption_row["continuous_observations"][1][
+                    "phase_coverage"
+                ]
+                if phase["phase"] == "committee_unavailable"
+            )
+            committee_phase["expected_unavailable"] = True
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "contradicts authenticated controls"
+            ):
+                validate_observations(wrong_exemption)
+            missing_outage = copy.deepcopy(rows)
+            missing_outage_row = next(
+                row
+                for row in missing_outage
+                if row["record"] == carrier_row["record"]
+            )
+            expected_peer = missing_outage_row["continuous_observations"][4]
+            expected_phase = next(
+                phase
+                for phase in expected_peer["phase_coverage"]
+                if phase["phase"] == "committee_unavailable"
+            )
+            expected_phase["attempts"] = [
+                {
+                    "class": "baseline",
+                    "evidence": missing_outage_row["snapshots"][0]["validators"][4][
+                        "response_hex"
+                    ],
+                    "repetitions": 1,
+                }
+            ]
+            _refresh_fault_observation_row(missing_outage_row)
+            with self.assertRaisesRegex(MODULE.RunnerError, "did not observe.*outage"):
+                validate_observations(missing_outage)
+            unexpected_failure = copy.deepcopy(rows)
+            unexpected_failure_row = next(
+                row
+                for row in unexpected_failure
+                if row["record"] == carrier_row["record"]
+            )
+            available_peer = unexpected_failure_row["continuous_observations"][1]
+            available_phase = next(
+                phase
+                for phase in available_peer["phase_coverage"]
+                if phase["phase"] == "committee_unavailable"
+            )
+            available_phase["attempts"] = [
+                {
+                    "class": "expected_unavailable",
+                    "evidence": MODULE.FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1,
+                    "repetitions": 1,
+                }
+            ]
+            _refresh_fault_observation_row(unexpected_failure_row)
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "unallowlisted poll failure"
+            ):
+                validate_observations(unexpected_failure)
+            raw_poll_error = copy.deepcopy(rows)
+            raw_poll_error[0]["continuous_observations"][0]["phase_coverage"][0][
+                "error"
+            ] = "private endpoint error"
+            with self.assertRaisesRegex(MODULE.RunnerError, "unknown=\\['error'\\]"):
+                validate_observations(raw_poll_error)
+            forged_chain = copy.deepcopy(rows)
+            forged_chain[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempt_chain_sha256"
+            ] = "f" * 64
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(forged_chain)
+            inflated_stream = copy.deepcopy(rows)
+            inflated_stream[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempts"
+            ][0]["repetitions"] += 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(inflated_stream)
+            deleted_stream = copy.deepcopy(rows)
+            deleted_stream[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempts"
+            ] = []
+            with self.assertRaisesRegex(MODULE.RunnerError, "no ordered phase attempts"):
+                validate_observations(deleted_stream)
+            adjacent_rle = copy.deepcopy(rows)
+            adjacent_phase = adjacent_rle[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][0]
+            adjacent_phase["attempts"] = [
+                {
+                    **copy.deepcopy(adjacent_phase["attempts"][0]),
+                    "repetitions": 1,
+                },
+                {
+                    **copy.deepcopy(adjacent_phase["attempts"][0]),
+                    "repetitions": 1,
+                },
+            ]
+            _refresh_fault_observation_row(adjacent_rle[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "non-canonical attempt stream"):
+                validate_observations(adjacent_rle)
+            reordered_stream = copy.deepcopy(rows)
+            reordered_phase = reordered_stream[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][0]
+            original_run = copy.deepcopy(reordered_phase["attempts"][0])
+            nonfinalized_response = reordered_stream[0]["snapshots"][1]["validators"][
+                0
+            ]["response_hex"]
+            reordered_phase["attempts"] = [
+                {**original_run, "repetitions": 1},
+                {
+                    "class": "baseline",
+                    "evidence": nonfinalized_response,
+                    "repetitions": 1,
+                },
+            ]
+            _refresh_fault_observation_row(reordered_stream[0])
+            reordered_phase["attempts"].reverse()
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(reordered_stream)
+            transplanted_peer = copy.deepcopy(rows)
+            transplanted_peer[0]["continuous_observations"][1]["phase_coverage"][0] = (
+                copy.deepcopy(
+                    transplanted_peer[0]["continuous_observations"][0][
+                        "phase_coverage"
+                    ][0]
                 )
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(transplanted_peer)
+            transplanted_bundle = copy.deepcopy(rows)
+            transplanted_bundle[1]["continuous_observations"][0]["phase_coverage"][0] = (
+                copy.deepcopy(
+                    transplanted_bundle[0]["continuous_observations"][0][
+                        "phase_coverage"
+                    ][0]
+                )
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(transplanted_bundle)
+            wrong_checkpoint_binding = copy.deepcopy(rows)
+            wrong_checkpoint_binding[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][1]["checkpoint_control_bindings"] = [
+                f"acknowledgement:{'f' * 64}"
+            ]
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "contradicts authenticated controls"
+            ):
+                validate_observations(wrong_checkpoint_binding)
+            moved_checkpoint = copy.deepcopy(rows)
+            moved_phase = moved_checkpoint[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][1]
+            moved_phase["checkpoint_attempt"] = 1
+            _refresh_fault_observation_row(moved_checkpoint[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "no post-checkpoint attempt"):
+                validate_observations(moved_checkpoint)
+            private_failure = copy.deepcopy(rows)
+            private_failure_row = next(
+                row
+                for row in private_failure
+                if row["record"] == carrier_row["record"]
+            )
+            private_failure_phase = next(
+                phase
+                for phase in private_failure_row["continuous_observations"][4][
+                    "phase_coverage"
+                ]
+                if phase["phase"] == "committee_unavailable"
+            )
+            private_failure_phase["attempts"][0]["evidence"] = (
+                "private connection detail"
+            )
+            _refresh_fault_observation_row(private_failure_row)
+            with self.assertRaisesRegex(MODULE.RunnerError, "unallowlisted poll failure"):
+                validate_observations(private_failure)
+            malformed_success = copy.deepcopy(rows)
+            malformed_success[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempts"
+            ][0]["evidence"] = MODULE.canonical_bytes({}).hex()
+            _refresh_fault_observation_row(malformed_success[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "missing="):
+                validate_observations(malformed_success)
+            premature_finalization = copy.deepcopy(rows)
+            premature_phase = premature_finalization[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][1]
+            premature_phase["attempts"] = [
+                {
+                    "class": "finalized",
+                    "evidence": premature_finalization[0]["snapshots"][2][
+                        "validators"
+                    ][0]["response_hex"],
+                    "repetitions": 1,
+                }
+            ]
+            _refresh_fault_observation_row(premature_finalization[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "finalized in a disallowed phase"):
+                validate_observations(premature_finalization)
+            finalized_then_baseline = copy.deepcopy(rows)
+            rollback_phase = finalized_then_baseline[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][2]
+            rollback_phase["attempts"] = [
+                {
+                    "class": "finalized",
+                    "evidence": finalized_then_baseline[0]["snapshots"][2][
+                        "validators"
+                    ][0]["response_hex"],
+                    "repetitions": 1,
+                },
+                {
+                    "class": "baseline",
+                    "evidence": finalized_then_baseline[0]["snapshots"][0][
+                        "validators"
+                    ][0]["response_hex"],
+                    "repetitions": 1,
+                },
+            ]
+            _refresh_fault_observation_row(finalized_then_baseline[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "finalized state rolled back"):
+                validate_observations(finalized_then_baseline)
             unanchored = copy.deepcopy(rows)
             unanchored[0]["continuous_observations"][0][
                 "first_response_sha256"
             ] = "f" * 64
             with self.assertRaisesRegex(MODULE.RunnerError, "exemplar endpoints"):
-                MODULE.validate_fault_observation_records(
-                    unanchored, participants=3, seed=7, run=2
-                )
+                validate_observations(unanchored)
             unclassified = copy.deepcopy(rows)
             unclassified[0]["continuous_observations"][0][
                 "baseline_observations"
             ] -= 1
             with self.assertRaisesRegex(MODULE.RunnerError, "unclassified observation"):
-                MODULE.validate_fault_observation_records(
-                    unclassified, participants=3, seed=7, run=2
-                )
+                validate_observations(unclassified)
+            swapped_aggregates = copy.deepcopy(rows)
+            swapped_summary = swapped_aggregates[0]["continuous_observations"][0]
+            swapped_summary["baseline_observations"] -= 1
+            swapped_summary["finalized_observations"] += 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "phase totals"):
+                validate_observations(swapped_aggregates)
             reused_bundle = copy.deepcopy(rows)
             reused_bundle[1]["bundle_id"] = reused_bundle[0]["bundle_id"]
             with self.assertRaisesRegex(MODULE.RunnerError, "reuses an APS bundle"):
-                MODULE.validate_fault_observation_records(
-                    reused_bundle, participants=3, seed=7, run=2
-                )
+                validate_observations(reused_bundle)
             missing_registration_recovery = copy.deepcopy(rows)
             registration_row = next(
                 row
@@ -1490,9 +2060,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "full replicated Prepare lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    missing_registration_recovery, participants=3, seed=7, run=2
-                )
+                validate_observations(missing_registration_recovery)
             mixed_lock_plane = copy.deepcopy(rows)
             mixed_row = next(
                 row
@@ -1505,9 +2073,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "full replicated Prepare lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    mixed_lock_plane, participants=3, seed=7, run=2
-                )
+                validate_observations(mixed_lock_plane)
             divergent_replicated_lock = copy.deepcopy(rows)
             divergent_replicated_row = next(
                 row
@@ -1521,9 +2087,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "full replicated Prepare lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    divergent_replicated_lock, participants=3, seed=7, run=2
-                )
+                validate_observations(divergent_replicated_lock)
             incomplete_local_lock = copy.deepcopy(rows)
             incomplete_local_row = next(
                 row
@@ -1549,9 +2113,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "complete local leg lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    incomplete_local_lock, participants=3, seed=7, run=2
-                )
+                validate_observations(incomplete_local_lock)
             divergent_local_lock = copy.deepcopy(rows)
             divergent_local_row = next(
                 row
@@ -1565,9 +2127,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "divergent committee-local locks"
             ):
-                MODULE.validate_fault_observation_records(
-                    divergent_local_lock, participants=3, seed=7, run=2
-                )
+                validate_observations(divergent_local_lock)
             bad_hash_checksum = copy.deepcopy(rows)
             bad_hash_row = next(
                 row
@@ -1585,9 +2145,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 commitment=invalid_hash,
             )
             with self.assertRaisesRegex(MODULE.RunnerError, "checksum"):
-                MODULE.validate_fault_observation_records(
-                    bad_hash_checksum, participants=3, seed=7, run=2
-                )
+                validate_observations(bad_hash_checksum)
             substituted_control_bundle = copy.deepcopy(control_rows)
             substituted_control_bundle[0]["bundle_id"] = "e" * 64
             with self.assertRaisesRegex(MODULE.RunnerError, "binds another APS bundle"):
@@ -1635,6 +2193,32 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     carrier,
                     collection="phase_cut_partitions",
                     trial=payload["phase_cut_partitions"][3],
+                    label="carrier",
+                )
+
+            extra_route_control = copy.deepcopy(
+                by_record["n3:s7:r2:phase_cut_partitions:3"]
+            )
+            extra_route_control["controls"].append(
+                _route_occurrence(
+                    "prepare",
+                    "hold",
+                    99_999,
+                    bundle_id=extra_route_control["bundle_id"],
+                    seed=7,
+                    drop_first=0,
+                    match_limit=1,
+                    matched=1,
+                    passed=0,
+                    dropped=0,
+                    held=1,
+                    released=0,
+                )
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "control allowlist"):
+                MODULE._fault_observation_phase_contract(
+                    extra_route_control,
+                    collection="phase_cut_partitions",
                     label="carrier",
                 )
 
@@ -1715,6 +2299,166 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     collection="crash_recoveries",
                     trial=payload["crash_recoveries"][8],
                     label="receipt",
+                )
+
+    def test_fault_evidence_cache_binds_capture_to_each_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identity = {
+                "record": "n3:s7:r2:loss_trials:0",
+                "participants": 3,
+                "seed": 7,
+                "run": 2,
+                "collection": "loss_trials",
+                "trial_index": 0,
+                "bundle_id": "a" * 64,
+            }
+
+            def write_jsonl(name: str, rows: list[dict[str, Any]]) -> tuple[Path, bytes]:
+                path = root / name
+                payload = b"".join(
+                    MODULE.canonical_bytes(row) + b"\n" for row in rows
+                )
+                path.write_bytes(payload)
+                return path, payload
+
+            transcript_one_path, transcript_one = write_jsonl(
+                "control-one.jsonl", [{**identity, "variant": "one"}]
+            )
+            transcript_two_path, transcript_two = write_jsonl(
+                "control-two.jsonl", [{**identity, "variant": "two"}]
+            )
+            capture_entry = {
+                **identity,
+                "partial_visibility_observed": False,
+                "partial_spendable_observations": 0,
+            }
+            capture_path, capture = write_jsonl("capture.jsonl", [capture_entry])
+            transcript_one_sha = hashlib.sha256(transcript_one).hexdigest()
+            transcript_two_sha = hashlib.sha256(transcript_two).hexdigest()
+            capture_sha = hashlib.sha256(capture).hexdigest()
+
+            def raw_record(transcript_sha: str) -> dict[str, Any]:
+                return {
+                    "participants": 3,
+                    "seed": 7,
+                    "run": 2,
+                    "loss_trials": [
+                        {
+                            "control_transcript_sha256": transcript_sha,
+                            "control_transcript_record": identity["record"],
+                            "observation_capture_sha256": capture_sha,
+                            "observation_capture_record": identity["record"],
+                            "partial_visibility_observed": False,
+                        }
+                    ],
+                    "phase_cut_partitions": [],
+                    "crash_recoveries": [],
+                    "atomicity": {"partial_spendable_observations": 0},
+                }
+
+            raw_one_path, _raw_one = write_jsonl(
+                "raw-one.jsonl", [raw_record(transcript_one_sha)]
+            )
+            raw_two_path, _raw_two = write_jsonl(
+                "raw-two.jsonl", [raw_record(transcript_two_sha)]
+            )
+            artifact = MODULE.release_evidence.Artifact
+            artifacts = [
+                artifact(
+                    kind="operator_log",
+                    path=MODULE.PurePosixPath(transcript_one_path.name),
+                    sha256=transcript_one_sha,
+                    bytes=len(transcript_one),
+                ),
+                artifact(
+                    kind="operator_log",
+                    path=MODULE.PurePosixPath(transcript_two_path.name),
+                    sha256=transcript_two_sha,
+                    bytes=len(transcript_two),
+                ),
+                artifact(
+                    kind="sanitized_capture",
+                    path=MODULE.PurePosixPath(capture_path.name),
+                    sha256=capture_sha,
+                    bytes=len(capture),
+                ),
+            ]
+
+            class FakeValidator:
+                def __init__(self) -> None:
+                    self.capture_transcripts: list[str] = []
+
+                def validate_fault_control_records(
+                    self, records: list[dict[str, Any]], **_kwargs: Any
+                ) -> dict[str, dict[str, Any]]:
+                    return {record["record"]: record for record in records}
+
+                def validate_fault_observation_records(
+                    self,
+                    _records: list[dict[str, Any]],
+                    *,
+                    control_by_record: dict[str, dict[str, Any]],
+                    **_kwargs: Any,
+                ) -> None:
+                    self.capture_transcripts.append(
+                        next(iter(control_by_record.values()))["variant"]
+                    )
+
+                def validate_fault_trial_control_semantics(
+                    self, *_args: Any, **_kwargs: Any
+                ) -> None:
+                    return None
+
+            validator = FakeValidator()
+            with mock.patch.object(
+                MODULE.release_evidence,
+                "_load_fault_evidence_validator",
+                return_value=validator,
+            ):
+                MODULE.release_evidence._validate_fault_trial_evidence_bindings(
+                    [raw_one_path, raw_two_path], artifacts, root
+                )
+            self.assertEqual(validator.capture_transcripts, ["one", "two"])
+
+            mismatched_capture = copy.deepcopy(capture_entry)
+            mismatched_capture["bundle_id"] = "b" * 64
+            _mismatch_path, mismatch_payload = write_jsonl(
+                "capture-mismatch.jsonl", [mismatched_capture]
+            )
+            mismatch_sha = hashlib.sha256(mismatch_payload).hexdigest()
+            mismatch_artifacts = [
+                artifacts[0],
+                artifact(
+                    kind="sanitized_capture",
+                    path=MODULE.PurePosixPath("capture-mismatch.jsonl"),
+                    sha256=mismatch_sha,
+                    bytes=len(mismatch_payload),
+                ),
+            ]
+            mismatch_raw_path, _mismatch_raw = write_jsonl(
+                "raw-mismatch.jsonl",
+                [
+                    {
+                        **raw_record(transcript_one_sha),
+                        "loss_trials": [
+                            {
+                                **raw_record(transcript_one_sha)["loss_trials"][0],
+                                "observation_capture_sha256": mismatch_sha,
+                            }
+                        ],
+                    }
+                ],
+            )
+            with mock.patch.object(
+                MODULE.release_evidence,
+                "_load_fault_evidence_validator",
+                return_value=FakeValidator(),
+            ), self.assertRaisesRegex(
+                MODULE.release_evidence.EvidenceError, "bundle_id"
+            ):
+                MODULE.release_evidence._validate_fault_trial_evidence_bindings(
+                    [mismatch_raw_path], mismatch_artifacts, root
                 )
 
     def test_any_missing_control_acknowledgement_fails_closed(self) -> None:
@@ -2416,14 +3160,22 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             harness = Path(temporary) / "empty-harness.sh"
             harness.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(harness, 0o700)
-            with self.assertRaisesRegex(
-                MODULE.RunnerError, "without a regular response"
-            ):
+            process = mock.Mock(pid=987654, wait=mock.Mock(return_value=0),
+                                poll=mock.Mock(return_value=0))
+            with mock.patch.object(MODULE.subprocess, "Popen", return_value=process), mock.patch.object(
+                MODULE, "_process_group_exists", return_value=False
+            ), self.assertRaisesRegex(MODULE.RunnerError, "without a regular response"):
                 MODULE.invoke_harness(
-                    harness,
+                    harness.resolve(),
                     {"kind": "fault"},
+                    attempt_dir=Path(temporary).resolve() / "retained-attempt",
                     timeout_seconds=5,
                 )
+            attempt = Path(temporary).resolve() / "retained-attempt"
+            self.assertTrue((attempt / "request.json").is_file())
+            self.assertTrue((attempt / "stdout.log").is_file())
+            self.assertTrue((attempt / "stderr.log").is_file())
+            self.assertFalse(MODULE.read_json_file(attempt / "response-outcome.json", "test outcome")["passed"])
 
     def test_publication_fragment_replays_applicable_final_validators(self) -> None:
         from scripts.tests.private_settlement_release_evidence_test import (
@@ -2463,6 +3215,22 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(MODULE.RunnerError, "at most"):
             MODULE.verify_seed_policy(tuple(range(MODULE.MAX_FAULT_SEEDS + 1)))
+
+    def test_fault_timeout_covers_activation_and_nonfinalized_expiry_floor(self) -> None:
+        expected_floor = (
+            MODULE.PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS
+            + MODULE.FAULT_NONFINALIZED_EXPIRY_TRIALS
+            * (MODULE.FAULT_BUNDLE_EXPIRY_BLOCKS + 1)
+        ) * MODULE.REAL_PROCESS_BLOCK_CADENCE_SECONDS
+        self.assertEqual(MODULE.FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS, expected_floor)
+        self.assertGreater(MODULE.DEFAULT_HARNESS_TIMEOUT_SECONDS, expected_floor)
+
+        with self.assertRaisesRegex(MODULE.RunnerError, "protocol floor"):
+            MODULE.validate_campaign_timeout(
+                [{"kind": "fault"}], expected_floor - 1
+            )
+        MODULE.validate_campaign_timeout([{"kind": "fault"}], expected_floor)
+        MODULE.validate_campaign_timeout([{"kind": "benchmark"}], 1)
         with self.assertRaisesRegex(MODULE.RunnerError, "warmups"):
             MODULE.build_configuration(
                 3,
@@ -2512,6 +3280,294 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             source = Path(temporary)
             with self.assertRaisesRegex(MODULE.RunnerError, "outside"):
                 MODULE.require_external_output(source / "evidence", source)
+
+
+class PrivateSettlementFailureRetentionTests(unittest.TestCase):
+    """Exercise disk retention with synthetic responses and no real processes."""
+
+    @staticmethod
+    def fake_process(*, response_bytes: bytes | None = b"{}", exit_code: int = 0):
+        """Return a Popen stand-in that writes real raw files but starts no process."""
+
+        def start(command, **options):
+            request_path = Path(command[command.index("--aps-request") + 1])
+            response_path = Path(command[command.index("--aps-response") + 1])
+            evidence = Path(command[command.index("--aps-evidence-dir") + 1])
+            options["stdout"].write(b"retained synthetic stdout\n")
+            options["stderr"].write(b"retained synthetic stderr\n")
+            if response_bytes is not None:
+                response_path.write_bytes(response_bytes)
+                response_path.chmod(0o600)
+            request = json.loads(request_path.read_text())
+            if request.get("kind") != "benchmark":
+                (evidence / "raw.bin").write_bytes(b"retained raw capture\x00")
+            return mock.Mock(pid=987654, wait=mock.Mock(return_value=exit_code),
+                             poll=mock.Mock(return_value=exit_code))
+
+        return start
+
+    @contextmanager
+    def execution_fixture(self, root: Path):
+        """Stub network semantics while exercising all persistent execution stages.
+
+        This reduced synthetic matrix tests bookkeeping only. Production plan,
+        process, report and smoke validators remain mandatory and unchanged.
+        """
+
+        source = root / "source"
+        source.mkdir()
+        harness = root / "synthetic-harness"
+        harness.write_text("synthetic executable bytes\n")
+        harness.chmod(0o700)
+        frozen = {
+            "commit": COMMIT,
+            "harness": MODULE.file_binding(harness),
+            "jobs": [
+                {"request_id": f"{index:064x}", "kind": kind, **extra}
+                for index, (kind, extra) in enumerate((
+                    ("fault", {}), ("benchmark", {}),
+                    ("leakage", {"variant": "left"}),
+                    ("leakage", {"variant": "right"}),
+                ), 1)
+            ],
+            "requirements": {"seeds": [0], "warmups": 0, "measured": 1,
+                             "bootstrap_iterations": 100},
+            "benchmark_baseline": None,
+        }
+        for key, value in (("hardware", {}), ("canary_manifest", {}),
+                           ("configuration_manifest", {"configurations": []})):
+            path = root / f"{key}.json"
+            MODULE.write_json(path, value)
+            frozen[key] = {"path": path.name, **MODULE.file_binding(path)}
+        plan_path = root / "plan.json"
+        MODULE.write_json(plan_path, frozen)
+        output = root / "retained-campaign"
+        with ExitStack() as stack:
+            def patch(target, name, **kwargs):
+                return stack.enter_context(mock.patch.object(target, name, **kwargs))
+
+            patch(MODULE, "PARTICIPANTS", new=(3,))
+            patch(MODULE, "PROFILES", new=("private",))
+            patch(MODULE, "load_plan", return_value=(frozen, root))
+            patch(MODULE, "verify_source_checkout")
+            smoke = patch(MODULE, "validate_smoke_prerequisite", return_value={"passed": True, "runs": 10})
+            patch(MODULE, "build_request", side_effect=lambda _plan, _root, job: dict(job))
+            process = patch(MODULE.subprocess, "Popen", side_effect=self.fake_process())
+            patch(MODULE, "_process_group_exists", return_value=False)
+            patch(MODULE, "materialize_fault_response", return_value=({"synthetic": "fault"}, []))
+            benchmark = patch(MODULE, "materialize_benchmark_response", return_value={"synthetic": "benchmark"})
+            patch(MODULE, "validate_leakage_response", return_value=({"messages": 1}, []))
+            patch(MODULE.fault_report, "load_runs", return_value=[])
+            patch(MODULE.fault_report, "input_bindings", return_value=[])
+            patch(MODULE.fault_report, "build_report", return_value={"passed": True})
+            patch(MODULE.benchmark_report, "load_jsonl", return_value=[])
+            patch(MODULE.benchmark_report, "build_report", return_value={"passed": True})
+            for name in ("write_fault_csv", "write_benchmark_csv"):
+                patch(MODULE, name, side_effect=lambda path, _rows: path.write_text("synthetic\n"))
+            patch(MODULE, "differential_pair_manifest", return_value={})
+            leakage = patch(MODULE.leakage_audit, "run_audit", return_value={"passed": True})
+            patch(MODULE, "validate_publication_fragment")
+            yield {
+                "plan": frozen, "output": output, "smoke": smoke,
+                "process": process, "benchmark": benchmark, "leakage": leakage,
+                "execute": lambda: MODULE.execute_plan(
+                    plan_path, output, source_root=source, harness=harness,
+                    smoke_campaign=root / "synthetic-smoke", timeout_seconds=7_200,
+                ),
+            }
+
+    def assert_no_success(self, output: Path) -> dict[str, Any]:
+        self.assertFalse((output / "release-artifact-fragment-v1.json").exists())
+        failure = json.loads((output / "failure.json").read_text())
+        self.assertIs(failure["passed"], False)
+        self.assertEqual(failure["planned_jobs"], 4)
+        return failure
+
+    def test_private_records_and_attempt_directories_are_fresh_and_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            attempt = root / "attempt"
+            previous = os.umask(0)
+            try:
+                MODULE.fresh_private_directory(attempt)
+                MODULE.private_record(attempt / "outcome.json", {"passed": False})
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(attempt.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((attempt / "outcome.json").stat().st_mode), 0o600)
+            with self.assertRaises(FileExistsError):
+                MODULE.fresh_private_directory(attempt)
+            with self.assertRaises(FileExistsError):
+                MODULE.private_record(attempt / "outcome.json", {"passed": True})
+            self.assertFalse(json.loads((attempt / "outcome.json").read_text())["passed"])
+            with self.assertRaisesRegex(MODULE.RunnerError, "absolute and canonical"):
+                MODULE.fresh_private_directory(Path("relative-attempt"))
+
+    def test_retained_inventory_does_not_follow_harness_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            evidence = root / "evidence"
+            evidence.mkdir()
+            external = root / "outside.txt"
+            external.write_text("not an evidence file")
+            (evidence / "link").symlink_to(external)
+            (evidence / "raw.bin").write_bytes(b"capture")
+            inventory = MODULE.retained_file_inventory(evidence)
+            self.assertEqual(inventory[0], {"path": "link", "kind": "symlink", "target": str(external)})
+            self.assertEqual(inventory[1]["sha256"], hashlib.sha256(b"capture").hexdigest())
+
+    def test_failed_harness_responses_preserve_all_raw_evidence(self) -> None:
+        cases = ((7, b'{"partial":true}', "exited 7"),
+                 (0, None, "without a regular response"),
+                 (0, b'{"truncated":', "not valid JSON"))
+        for exit_code, raw_response, reason in cases:
+            with self.subTest(exit_code=exit_code, response=raw_response), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                attempt = root / "attempt"
+                with mock.patch.object(MODULE.subprocess, "Popen", side_effect=self.fake_process(
+                    response_bytes=raw_response, exit_code=exit_code
+                )), mock.patch.object(MODULE, "_process_group_exists", return_value=False), mock.patch.object(
+                    MODULE, "_terminate_owned_process_group"
+                ) as terminate, self.assertRaisesRegex(MODULE.RunnerError, reason):
+                    MODULE.invoke_harness(root / "synthetic-harness", {"kind": "fault", "request_id": "1" * 64},
+                                          attempt_dir=attempt, timeout_seconds=1)
+                terminate.assert_not_called()
+                self.assertEqual((attempt / "stdout.log").read_bytes(), b"retained synthetic stdout\n")
+                self.assertEqual((attempt / "stderr.log").read_bytes(), b"retained synthetic stderr\n")
+                self.assertEqual((attempt / "evidence" / "raw.bin").read_bytes(), b"retained raw capture\x00")
+                if raw_response is None:
+                    self.assertFalse((attempt / "response.json").exists())
+                else:
+                    self.assertEqual((attempt / "response.json").read_bytes(), raw_response)
+                self.assertEqual(json.loads((attempt / "process-outcome.json").read_text())["exit_code"], exit_code)
+                outcome = json.loads((attempt / "response-outcome.json").read_text())
+                self.assertFalse(outcome["passed"])
+                self.assertIn("request.json", {entry["path"] for entry in outcome["retained_files"]})
+
+    def test_semantic_failure_retains_earlier_success_and_complete_denominator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            fixture["benchmark"].side_effect = MODULE.RunnerError("synthetic semantic failure")
+            with self.assertRaisesRegex(MODULE.RunnerError, "synthetic semantic failure"):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            jobs = fixture["plan"]["jobs"]
+            self.assertEqual([job["request_id"] for job in failure["completed_jobs"]], [jobs[0]["request_id"]])
+            self.assertEqual(failure["failed_job"]["request_id"], jobs[1]["request_id"])
+            self.assertEqual(failure["not_started_request_ids"], [job["request_id"] for job in jobs[2:]])
+            self.assertEqual(json.loads((fixture["output"] / "frozen-plan.json").read_text()), fixture["plan"])
+            attempts = sorted((fixture["output"] / "attempts").iterdir())
+            self.assertEqual(len(attempts), 2)
+            for index, attempt in enumerate(attempts):
+                self.assertEqual((attempt / "response.json").read_bytes(), b"{}")
+                self.assertTrue((attempt / "stdout.log").is_file())
+                self.assertEqual(json.loads((attempt / "validation-outcome.json").read_text())["passed"], index == 0)
+            fixture["smoke"].assert_called_once()
+            self.assertEqual(fixture["process"].call_count, 2)
+            with self.assertRaisesRegex(MODULE.RunnerError, "already exists"):
+                fixture["execute"]()
+
+    def test_report_failure_retains_failing_report_and_all_completed_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            report = {"passed": False, "reason": "synthetic canary mismatch"}
+            fixture["leakage"].return_value = report
+            with self.assertRaisesRegex(MODULE.RunnerError, "leakage audit found"):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "reports")
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+            self.assertIsNone(failure["failed_job"])
+            self.assertEqual(failure["not_started_request_ids"], [])
+            report_path = fixture["output"] / "publication" / "reports" / "leakage-report-v1.json"
+            self.assertEqual(json.loads(report_path.read_text()), report)
+            self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/response.json"))), 4)
+
+    def test_final_smoke_revalidation_failure_never_publishes_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            fixture["smoke"].side_effect = [{"passed": True, "runs": 10},
+                                           MODULE.RunnerError("smoke evidence changed")]
+            with self.assertRaisesRegex(MODULE.RunnerError, "smoke evidence changed"):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "final_revalidation")
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+            self.assertEqual(fixture["smoke"].call_count, 2)
+            self.assertFalse((fixture["output"] / "campaign-validation.json").exists())
+            self.assertFalse(list(fixture["output"].glob("*.pending.json")))
+
+    def test_fragment_is_published_only_after_pending_file_and_directory_sync(self) -> None:
+        for fail_at in (1, 2, 3):
+            with self.subTest(fsync_call=fail_at), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                final = root / "fragment.json"
+                real_fsync = os.fsync
+                calls = 0
+
+                def sync(descriptor):
+                    nonlocal calls
+                    calls += 1
+                    if calls == fail_at:
+                        raise OSError("synthetic fsync failure")
+                    real_fsync(descriptor)
+
+                with mock.patch.object(MODULE.os, "fsync", side_effect=sync), self.assertRaisesRegex(OSError, "fsync failure"):
+                    MODULE.publish_campaign_fragment(final, {"passed": True})
+                self.assertFalse(final.exists())
+                self.assertEqual(json.loads((root / "fragment.pending.json").read_text()), {"passed": True})
+
+    def test_fragment_write_failure_retains_partial_pending_and_campaign_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            record = MODULE.private_record
+
+            def fail_pending(path, value):
+                if path.name == "release-artifact-fragment-v1.pending.json":
+                    path.write_bytes(b'{"partial":')
+                    raise OSError("synthetic fragment write failure")
+                record(path, value)
+
+            with mock.patch.object(MODULE, "private_record", side_effect=fail_pending), self.assertRaisesRegex(
+                OSError, "fragment write failure"
+            ):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "publication")
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+            pending = fixture["output"] / "release-artifact-fragment-v1.pending.json"
+            self.assertEqual(pending.read_bytes(), b'{"partial":')
+            self.assertTrue((fixture["output"] / "campaign-validation.json").is_file())
+
+    def test_fragment_directory_sync_failure_retains_pending_and_campaign_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            final = fixture["output"] / "release-artifact-fragment-v1.json"
+            real_fsync = os.fsync
+            failed = False
+
+            def fail_publication_sync(descriptor):
+                nonlocal failed
+                if final.exists() and not failed:
+                    failed = True
+                    raise OSError("synthetic publication directory sync failure")
+                real_fsync(descriptor)
+
+            with mock.patch.object(MODULE.os, "fsync", side_effect=fail_publication_sync), self.assertRaisesRegex(
+                OSError, "publication directory sync failure"
+            ):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "publication")
+            pending = fixture["output"] / "release-artifact-fragment-v1.pending.json"
+            self.assertTrue(json.loads(pending.read_text())["real_process_campaign_complete"])
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+
+    def test_successful_campaign_retains_attempts_and_publishes_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            final = fixture["execute"]()
+            self.assertEqual(final.name, "release-artifact-fragment-v1.json")
+            self.assertTrue(json.loads(final.read_text())["real_process_campaign_complete"])
+            self.assertFalse((fixture["output"] / "failure.json").exists())
+            self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/validation-outcome.json"))), 4)
+            self.assertEqual(final.read_bytes(), (fixture["output"] / "release-artifact-fragment-v1.pending.json").read_bytes())
+            self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o600)
+            self.assertEqual(fixture["smoke"].call_count, 2)
 
 
 if __name__ == "__main__":

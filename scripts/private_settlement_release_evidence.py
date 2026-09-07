@@ -2762,6 +2762,12 @@ def _validate_fault_trial_evidence_bindings(
 
     record_cache: dict[PurePosixPath, dict[str, dict[str, Any]]] = {}
     validated_files: set[tuple[PurePosixPath, str, int, int, int]] = set()
+    validated_capture_pairs: set[
+        tuple[PurePosixPath, PurePosixPath, int, int, int]
+    ] = set()
+    validated_control_records: dict[
+        tuple[PurePosixPath, str, int, int, int], dict[str, Mapping[str, Any]]
+    ] = {}
     validator = _load_fault_evidence_validator()
 
     def archived_records(
@@ -2899,6 +2905,11 @@ def _validate_fault_trial_evidence_bindings(
                     )
                     transcript_key = (transcript_artifact.path, "control", *binding)
                     capture_key = (capture_artifact.path, "capture", *binding)
+                    capture_pair_key = (
+                        capture_artifact.path,
+                        transcript_artifact.path,
+                        *binding,
+                    )
                     try:
                         if transcript_key not in validated_files:
                             bound_transcript_records = [
@@ -2911,14 +2922,16 @@ def _validate_fault_trial_evidence_bindings(
                                 )
                                 == binding
                             ]
-                            validator.validate_fault_control_records(
-                                bound_transcript_records,
-                                participants=binding[0],
-                                seed=binding[1],
-                                run=binding[2],
+                            validated_control_records[transcript_key] = (
+                                validator.validate_fault_control_records(
+                                    bound_transcript_records,
+                                    participants=binding[0],
+                                    seed=binding[1],
+                                    run=binding[2],
+                                )
                             )
                             validated_files.add(transcript_key)
-                        if capture_key not in validated_files:
+                        if capture_pair_key not in validated_capture_pairs:
                             bound_capture_records = [
                                 entry
                                 for entry in capture_records.values()
@@ -2934,8 +2947,12 @@ def _validate_fault_trial_evidence_bindings(
                                 participants=binding[0],
                                 seed=binding[1],
                                 run=binding[2],
+                                control_by_record=validated_control_records[
+                                    transcript_key
+                                ],
                             )
                             validated_files.add(capture_key)
+                            validated_capture_pairs.add(capture_pair_key)
                         validator.validate_fault_trial_control_semantics(
                             transcript_entry,
                             collection=collection,
@@ -2947,6 +2964,13 @@ def _validate_fault_trial_evidence_bindings(
                             f"{path}:{line_number}.{collection}[{index}] "
                             f"nested fault evidence is invalid: {error}"
                         ) from error
+                    if capture_entry.get("bundle_id") != transcript_entry.get(
+                        "bundle_id"
+                    ):
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] observation "
+                            "bundle_id does not match its control transcript"
+                        )
                     if (
                         capture_entry["partial_visibility_observed"]
                         != trial["partial_visibility_observed"]

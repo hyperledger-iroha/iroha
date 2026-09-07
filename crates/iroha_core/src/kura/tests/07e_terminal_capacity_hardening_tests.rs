@@ -121,24 +121,6 @@ macro_rules! signed_lifecycle_attempt_fixture {
     };
 }
 
-macro_rules! install_default_lane_markers_for_lifecycle_test {
-    ($context:literal; $kura:ident, $lane_config:ident $(,)?) => {
-        for entry in $lane_config.entries() {
-            let incarnation = Hash::new(
-                format!(
-                    "kura-lane-incarnation:{}:{}",
-                    entry.lane_id.as_u32(),
-                    entry.dataspace_id.as_u64()
-                )
-                .as_bytes(),
-            );
-            $kura
-                .install_lane_incarnation_marker_for_test(entry, incarnation, 0)
-                .expect(concat!($context, ": install lifecycle lane marker"));
-        }
-    };
-}
-
 macro_rules! reopen_single_lifecycle_bootstrap {
     (
         $context:literal; $config:ident, $lane_config:ident, $network_id:ident,
@@ -247,11 +229,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     assert!(check_production_in_flight_first_release_transition(activate).is_some());
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated bootstrap Kura");
-    install_default_lane_markers_for_lifecycle_test!(
-        "authenticated bootstrap";
-        kura,
-        lane_config
-    );
+    // Publish exactly the incarnation authenticated by the signed payload;
+    // preinstalling unrelated default markers would corrupt that binding.
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
     drop(kura);
@@ -327,7 +306,22 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     ));
     assert!(!bootstrap_path.exists());
     drop(kura);
-    assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
+    let foreign_catalog = LaneCatalog::default();
+    let foreign_config = RuntimeLaneConfig::from_catalog(&foreign_catalog);
+    let files_before_foreign_open = snapshot_regular_files_recursively(temp_dir.path());
+    assert!(
+        matches!(
+            Kura::new_with_configured_lane_catalog(&config, &foreign_config, &foreign_catalog),
+            Err(Error::IO(source, _)) if source.kind() == ErrorKind::InvalidData
+                && source.to_string().contains("configured lane catalog baseline mismatch")
+        ),
+        "a different configured catalog must not recover the admitted bootstrap temporary"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        files_before_foreign_open,
+        "rejected catalog authority must not quarantine or rewrite the pending publication"
+    );
     assert!(bootstrap_atomic_temp.exists());
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("startup quarantines the real pre-rename bootstrap temporary");
@@ -1757,9 +1751,7 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-            network_id, epoch, &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, epoch, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -1822,11 +1814,8 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
 
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated carrier-hint promotion Kura");
-    install_default_lane_markers_for_lifecycle_test!(
-        "carrier-hint promotion";
-        kura,
-        lane_config
-    );
+    // Publish exactly the incarnation authenticated by the signed payload;
+    // preinstalling unrelated default markers would corrupt that binding.
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
     drop(kura);

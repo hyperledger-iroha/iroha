@@ -3997,6 +3997,7 @@ fn native_instruction_ds_effect_disposition(
     // control-plane records, or deferred-execution bookkeeping.
     audited_no_ds_effect!(
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
         // The exact-roster QC is the complete authority for this control-plane
         // operation. Applying it changes only threshold-key session records.
         iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,

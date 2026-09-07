@@ -15,7 +15,7 @@ Commands:
   down             Stop the current local Mochi sandbox.
   status           Print the current sandbox status.
   reset            Stop the sandbox and remove its runtime state.
-  env              Print shell exports for the current sandbox.
+  env              Print public connection exports and the private runtime file path.
   mcp-add-command  Print the Codex MCP add command for the current sandbox.
 
 Environment:
@@ -118,39 +118,29 @@ else:
 PY
 }
 
-dotenv_field() {
+require_private_env_file() {
   local env_file="$1"
-  local field="$2"
-  "$PYTHON_BIN" - "$env_file" "$field" <<'PY'
-import json
+  "$PYTHON_BIN" - "$env_file" <<'PYTHON'
 import os
+from pathlib import Path
 import stat
 import sys
 
-path, field = sys.argv[1], sys.argv[2]
-flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+# Validate custody without opening or reading the secret-bearing file.
 try:
-    descriptor = os.open(path, flags)
+    metadata = Path(sys.argv[1]).lstat()
+    valid = (
+        hasattr(os, "geteuid")
+        and stat.S_ISREG(metadata.st_mode)
+        and stat.S_IMODE(metadata.st_mode) == 0o600
+        and metadata.st_uid == os.geteuid()
+        and metadata.st_nlink == 1
+    )
 except OSError:
-    raise SystemExit(1)
-with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-    metadata = os.fstat(handle.fileno())
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 64 * 1024:
-        raise SystemExit(1)
-    if metadata.st_mode & 0o077:
-        raise SystemExit(1)
-    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
-        raise SystemExit(1)
-    for line in handle:
-        name, separator, raw_value = line.rstrip("\n").partition("=")
-        if separator and name == field:
-            value = raw_value.strip()
-            if value.startswith('"'):
-                value = json.loads(value)
-            print(value)
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
+    valid = False
+if not valid:
+    raise SystemExit("Mochi requires a regular, owner-owned 0600 .env.local with one link.")
+PYTHON
 }
 
 session_ready() {
@@ -400,7 +390,7 @@ require_session() {
 }
 
 cmd_env() {
-  local workspace_root profile_slug sandbox_root session_file env_file account_id private_key
+  local workspace_root profile_slug sandbox_root session_file env_file account_id
   workspace_root="$(resolve_workspace_root)"
   profile_slug="$(resolve_profile_slug)"
   sandbox_root="$(resolve_sandbox_root "$workspace_root" "$profile_slug")"
@@ -408,8 +398,10 @@ cmd_env() {
   env_file="${workspace_root}/.env.local"
 
   require_session "$session_file"
+  require_private_env_file "$env_file"
 
-  printf '# local dev only; rename variables to match your app\n'
+  printf '# local connection metadata; load IROHA_ENV_FILE inside your app\n'
+  printf 'export IROHA_ENV_FILE=%s\n' "$(shell_quote "$env_file")"
   printf 'export IROHA_API_BASE=%s\n' "$(shell_quote "$(json_field "$session_file" api_base)")"
   printf 'export IROHA_TORII_URL=%s\n' "$(shell_quote "$(json_field "$session_file" torii_url)")"
   printf 'export IROHA_CHAIN_ID=%s\n' "$(shell_quote "$(json_field "$session_file" chain_id)")"
@@ -417,9 +409,6 @@ cmd_env() {
 
   if account_id="$(json_field "$session_file" account_id 2>/dev/null)"; then
     printf 'export IROHA_ACCOUNT_ID=%s\n' "$(shell_quote "$account_id")"
-  fi
-  if private_key="$(dotenv_field "$env_file" IROHA_PRIVATE_KEY 2>/dev/null)"; then
-    printf 'export IROHA_PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
   fi
 }
 

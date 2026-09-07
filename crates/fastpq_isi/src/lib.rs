@@ -10,6 +10,7 @@
 pub mod params;
 pub mod poseidon;
 pub mod poseidon_digest384;
+mod poseidon_digest384_prefix;
 pub use params::{
     CANONICAL_PARAMETER_SETS, ExactDyadicBoundV1, FASTPQ_AGGREGATE_TARGETS_V1, FASTPQ_CATALOG_V1,
     FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1, FASTPQ_DIGEST_LANE_BITS_V1, FASTPQ_DIGEST_LANES_V1,
@@ -30,3 +31,4 @@ pub use poseidon_digest384::{
     goldilocks_digest384_lane_initial_state_v1, goldilocks_digest384_lane_round_constants_v1,
     hash_bytes_384_v1,
 };
+pub use poseidon_digest384_prefix::GoldilocksDigest384DomainPrefixV1;

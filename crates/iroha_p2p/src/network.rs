@@ -3552,6 +3552,7 @@ impl NetworkActorAdmittedTicketIdentity {
             message::Topic::TrustGossip => 10,
             message::Topic::Health => 11,
             message::Topic::Other => 12,
+            message::Topic::Connect => 13,
         });
         projection.extend_from_slice(&(self.shape.stream_wire_bytes as u128).to_le_bytes());
         projection.push(u8::from(self.shape.broadcast));
@@ -5013,6 +5014,7 @@ pub(crate) struct TopicFrameCaps {
     tx_gossip: usize,
     peer_gossip: usize,
     health: usize,
+    connect: usize,
     other: usize,
 }
 impl TopicFrameCaps {
@@ -5025,6 +5027,7 @@ impl TopicFrameCaps {
             tx_gossip: bytes,
             peer_gossip: bytes,
             health: bytes,
+            connect: bytes,
             other: bytes,
         }
     }
@@ -5038,10 +5041,11 @@ impl TopicFrameCaps {
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => self.tx_gossip,
             message::Topic::PeerGossip | message::Topic::TrustGossip => self.peer_gossip,
             message::Topic::Health => self.health,
+            message::Topic::Connect => self.connect,
             message::Topic::Other => self.other,
         }
     }
-    fn all(self) -> [usize; 7] {
+    fn all(self) -> [usize; 8] {
         [
             self.consensus,
             self.control,
@@ -5049,6 +5053,7 @@ impl TopicFrameCaps {
             self.tx_gossip,
             self.peer_gossip,
             self.health,
+            self.connect,
             self.other,
         ]
     }
@@ -5473,7 +5478,7 @@ fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
         message::Topic::Health => {
             SUBSCRIBER_QUEUE_FULL_HEALTH.fetch_add(1, Ordering::Relaxed);
         }
-        message::Topic::Other => {
+        message::Topic::Connect | message::Topic::Other => {
             SUBSCRIBER_QUEUE_FULL_OTHER.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -5506,7 +5511,7 @@ fn inc_subscriber_unrouted_for(topic: message::Topic) -> u64 {
         message::Topic::Health => {
             SUBSCRIBER_UNROUTED_HEALTH.fetch_add(1, Ordering::Relaxed);
         }
-        message::Topic::Other => {
+        message::Topic::Connect | message::Topic::Other => {
             SUBSCRIBER_UNROUTED_OTHER.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -5540,7 +5545,9 @@ fn inc_post_overflow_for(topic: message::Topic) {
             POST_OVERFLOWS_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed)
         }
         message::Topic::Health => POST_OVERFLOWS_HEALTH.fetch_add(1, Ordering::Relaxed),
-        message::Topic::Other => POST_OVERFLOWS_OTHER.fetch_add(1, Ordering::Relaxed),
+        message::Topic::Connect | message::Topic::Other => {
+            POST_OVERFLOWS_OTHER.fetch_add(1, Ordering::Relaxed)
+        }
     };
 }
 fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
@@ -5564,7 +5571,9 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
             POST_OVERFLOWS_HI_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed)
         }
         (true, message::Topic::Health) => POST_OVERFLOWS_HI_HEALTH.fetch_add(1, Ordering::Relaxed),
-        (true, message::Topic::Other) => POST_OVERFLOWS_HI_OTHER.fetch_add(1, Ordering::Relaxed),
+        (true, message::Topic::Connect | message::Topic::Other) => {
+            POST_OVERFLOWS_HI_OTHER.fetch_add(1, Ordering::Relaxed)
+        }
         (false, message::Topic::ConsensusSafety) => {
             POST_OVERFLOWS_LO_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed)
         }
@@ -5584,7 +5593,9 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
             POST_OVERFLOWS_LO_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed)
         }
         (false, message::Topic::Health) => POST_OVERFLOWS_LO_HEALTH.fetch_add(1, Ordering::Relaxed),
-        (false, message::Topic::Other) => POST_OVERFLOWS_LO_OTHER.fetch_add(1, Ordering::Relaxed),
+        (false, message::Topic::Connect | message::Topic::Other) => {
+            POST_OVERFLOWS_LO_OTHER.fetch_add(1, Ordering::Relaxed)
+        }
     };
 }
 /// Count of post channel overflows for topic Consensus.
@@ -5638,7 +5649,9 @@ pub(crate) fn record_inbound_cap_violation(topic: message::Topic) {
             CAP_VIOL_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed)
         }
         message::Topic::Health => CAP_VIOL_HEALTH.fetch_add(1, Ordering::Relaxed),
-        message::Topic::Other => CAP_VIOL_OTHER.fetch_add(1, Ordering::Relaxed),
+        message::Topic::Connect | message::Topic::Other => {
+            CAP_VIOL_OTHER.fetch_add(1, Ordering::Relaxed)
+        }
     };
 }
 /// Total number of dropped inbound messages exceeding the Consensus topic cap.
@@ -6560,6 +6573,7 @@ fn validate_transport_queue_geometry<E: Enc>(
         topic_caps.tx_gossip,
         topic_caps.peer_gossip,
         topic_caps.health,
+        topic_caps.connect,
         topic_caps.other,
     ]
     .into_iter()
@@ -6757,6 +6771,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 tx_gossip: usize::MAX,
                 peer_gossip: usize::MAX,
                 health: usize::MAX,
+                connect: usize::MAX,
                 other: usize::MAX,
             },
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
@@ -6946,6 +6961,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             max_frame_bytes_tx_gossip,
             max_frame_bytes_peer_gossip,
             max_frame_bytes_health,
+            max_frame_bytes_connect,
             max_frame_bytes_other,
             tcp_nodelay,
             tcp_keepalive,
@@ -6998,6 +7014,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             tx_gossip: max_frame_bytes_tx_gossip,
             peer_gossip: max_frame_bytes_peer_gossip,
             health: max_frame_bytes_health,
+            connect: max_frame_bytes_connect,
             other: max_frame_bytes_other,
         };
         let transport_geometry = validate_transport_queue_geometry::<E>(
@@ -7525,6 +7542,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             cap_tx_gossip: max_frame_bytes_tx_gossip,
             cap_peer_gossip: max_frame_bytes_peer_gossip,
             cap_health: max_frame_bytes_health,
+            cap_connect: max_frame_bytes_connect,
             cap_other: max_frame_bytes_other,
             dns_refresh_interval,
             dns_refresh_ttl,
@@ -7703,6 +7721,13 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
     #[must_use]
     pub fn subscriber_queue_cap(&self) -> core::num::NonZeroUsize {
         self.subscriber_queue_cap
+    }
+    /// Configured encoded frame bound for an outbound P2P topic.
+    ///
+    /// This reports local transport capacity, not consensus admission policy.
+    #[must_use]
+    pub fn outbound_topic_frame_cap(&self, topic: message::Topic) -> usize {
+        self.topic_frame_caps.for_topic(topic)
     }
     /// Per-lane count ownership reserved for each authenticated transport source.
     ///
@@ -9115,6 +9140,7 @@ mod accept_stream_tests {
             max_frame_bytes_tx_gossip: 262_144,
             max_frame_bytes_peer_gossip: 131_072,
             max_frame_bytes_health: 65_536,
+            max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
             max_frame_bytes_other: 262_144,
             quic_max_idle_timeout: None,
         }
@@ -9224,6 +9250,7 @@ mod accept_stream_tests {
             tx_gossip: 512,
             peer_gossip: 256,
             health: 128,
+            connect: 512,
             other: 512,
         };
         let max_ordinary = crate::frame_queue_charge_for::<ChaCha20Poly1305>(4_096)
@@ -9313,6 +9340,35 @@ mod accept_stream_tests {
         );
     }
     #[test]
+    fn connect_frame_cap_requires_matching_low_stream_capacity() {
+        let mut caps = TopicFrameCaps::uniform(32_768);
+        caps.connect = 8 * 1024 * 1024;
+        let required = crate::frame_queue_charge_for::<ChaCha20Poly1305>(caps.connect)
+            .expect("bounded Connect stream charge");
+        let validate = |low_bytes| {
+            validate_transport_queue_geometry::<ChaCha20Poly1305>(
+                16 * 1024 * 1024,
+                caps,
+                16 * 1024 * 1024,
+                low_bytes,
+                32 * 1024 * 1024,
+                32 * 1024 * 1024,
+                3,
+                1,
+                1,
+                1,
+                1,
+            )
+        };
+        validate(required).expect("exact low-stream Connect frame capacity");
+        assert!(
+            matches!(validate(required - 1), Err(Error::Io(error))
+            if error.to_string().contains("maximum eligible low-topic frame")),
+            "dedicated Connect frames must not bypass the low-stream byte geometry"
+        );
+    }
+
+    #[test]
     fn shipped_defaults_form_valid_chacha_transport_geometry() {
         use iroha_config::parameters::defaults::network as defaults;
         let topic_caps = TopicFrameCaps {
@@ -9322,6 +9378,7 @@ mod accept_stream_tests {
             tx_gossip: defaults::MAX_FRAME_BYTES_TX_GOSSIP.get(),
             peer_gossip: defaults::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
             health: defaults::MAX_FRAME_BYTES_HEALTH.get(),
+            connect: defaults::MAX_FRAME_BYTES_CONNECT.get(),
             other: defaults::MAX_FRAME_BYTES_OTHER.get(),
         };
         let geometry = validate_transport_queue_geometry::<ChaCha20Poly1305>(
@@ -11732,6 +11789,7 @@ struct NetworkBase<T: Pload, E: Enc> {
     cap_tx_gossip: usize,
     cap_peer_gossip: usize,
     cap_health: usize,
+    cap_connect: usize,
     cap_other: usize,
     /// Whether to disconnect on per-peer post overflow (bounded channels)
     disconnect_on_post_overflow: bool,
@@ -14584,6 +14642,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     tx_gossip: self.cap_tx_gossip,
                     peer_gossip: self.cap_peer_gossip,
                     health: self.cap_health,
+                    connect: self.cap_connect,
                     other: self.cap_other,
                 },
                 delivery_drain: Arc::clone(&delivery_drain),
@@ -15213,6 +15272,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => self.cap_tx_gossip,
             message::Topic::PeerGossip | message::Topic::TrustGossip => self.cap_peer_gossip,
             message::Topic::Health => self.cap_health,
+            message::Topic::Connect => self.cap_connect,
             message::Topic::Other => self.cap_other,
         };
         if size_bytes > cap {
@@ -15932,10 +15992,25 @@ mod tests {
             Topic::PeerGossip,
             Topic::TrustGossip,
             Topic::Health,
+            Topic::Connect,
             Topic::Other,
         ] {
             assert_eq!(topic.scheduling_priority(), Priority::Low);
         }
+    }
+    #[test]
+    fn connect_has_a_separate_reliable_low_priority_frame_bound() {
+        use message::{Priority, Topic};
+        let mut caps = TopicFrameCaps::uniform(32_768);
+        caps.connect = 8 * 1024 * 1024;
+        assert_eq!(caps.for_topic(Topic::Connect), 8 * 1024 * 1024);
+        assert_eq!(caps.for_topic(Topic::Health), 32_768);
+        assert_eq!(caps.for_topic(Topic::Other), 32_768);
+        assert_eq!(Topic::Connect.scheduling_priority(), Priority::Low);
+        assert!(
+            !Topic::Connect.is_best_effort(),
+            "wallet relay messages require a reliable stream"
+        );
     }
     #[test]
     fn reliable_progress_class_matches_actor_reservations_exactly() {
@@ -15968,6 +16043,7 @@ mod tests {
             ),
             (Topic::Control, Route::General, None),
             (Topic::Health, Route::General, None),
+            (Topic::Connect, Route::Connect, None),
             (Topic::Other, Route::General, None),
         ] {
             assert_eq!(reliable_progress_class(topic, route), expected);
@@ -16285,6 +16361,7 @@ mod tests {
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => network.cap_tx_gossip,
             message::Topic::PeerGossip | message::Topic::TrustGossip => network.cap_peer_gossip,
             message::Topic::Health => network.cap_health,
+            message::Topic::Connect => network.cap_connect,
             message::Topic::Other => network.cap_other,
         };
         assert!(
@@ -18799,6 +18876,7 @@ mod tests {
                 cap_tx_gossip: 1024,
                 cap_peer_gossip: 1024,
                 cap_health: 1024,
+                cap_connect: 1024,
                 cap_other: 1024,
                 disconnect_on_post_overflow: false,
                 _encryptor: core::marker::PhantomData,
@@ -26371,6 +26449,8 @@ pub mod message {
         TrustGossip,
         /// Health and diagnostics.
         Health,
+        /// Authenticated Connect wallet-session relay traffic; never shares the health cap.
+        Connect,
         /// Any other traffic not classified explicitly.
         Other,
     }
@@ -26393,6 +26473,7 @@ pub mod message {
                 | Topic::PeerGossip
                 | Topic::TrustGossip
                 | Topic::Health
+                | Topic::Connect
                 | Topic::Other => Priority::Low,
             }
         }

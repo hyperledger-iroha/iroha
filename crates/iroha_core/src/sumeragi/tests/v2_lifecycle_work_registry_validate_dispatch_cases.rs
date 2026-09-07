@@ -459,15 +459,26 @@ fn verified_store_context(marker: u8) -> (VerifiedHeightContext, wire::HeightCon
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
 fn durable_store_fixture(marker: u8) -> DurableStoreFixture {
+    durable_store_fixture_with_views_and_phase(marker, 2, 2, wire::GlobalPhase::Prepare)
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn durable_store_fixture_with_views_and_phase(
+    marker: u8,
+    tag_view: wire::View,
+    certified_view: wire::View,
+    phase: wire::GlobalPhase,
+) -> DurableStoreFixture {
     let (verified, context) = verified_store_context(marker);
     let round = wire::ConsensusRound {
         context_id: context.id(),
         height: context.height,
-        view: 2,
+        view: certified_view,
     };
     let tag = EventTag::new(
         round.height,
-        round.view,
+        tag_view,
         Generation::new(u64::from(marker) + 1),
     );
     let subject = wire::BlockSubject {
@@ -486,16 +497,16 @@ fn durable_store_fixture(marker: u8) -> DurableStoreFixture {
     let expected_manifest_hash = HashOf::new(&manifest);
     let durable_receipt =
         DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
+    let mut certificate =
+        certified_pipeline_prepare_certificate_for_test(&manifest, &durable_receipt);
+    certificate.phase = phase;
     let fetch_effect = AdapterEffect::FetchBody {
         tag,
         round,
         subject,
         manifest: Some(manifest.clone()),
         certified_sources: Vec::new(),
-        certificate: Some(certified_pipeline_prepare_certificate_for_test(
-            &manifest,
-            &durable_receipt,
-        )),
+        certificate: Some(certificate.clone()),
     };
     let effect = AdapterEffect::StoreBody {
         tag,
@@ -526,11 +537,13 @@ fn durable_store_fixture(marker: u8) -> DurableStoreFixture {
     let validate_pending = pending
         .project_store_validate_successor(&effect, &validate_effect)
         .expect("project exact certified Validate fixture pending");
-    let (replay_evidence, _validate_evidence) = certified_pipeline_replay_evidence_for_test(
+    let (replay_evidence, _validate_evidence) =
+        certified_pipeline_replay_evidence_with_certificate_for_test(
         tag,
         &manifest,
         &durable_receipt,
         &validate_pending,
+        certificate,
         &verified.context().roster[0].validator,
     )
     .expect("build exact certified Store replay evidence");
@@ -1862,11 +1875,15 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         (
             ReadyDurableValidateFixtureOutcome::Validated,
             DurableValidateCompletionPublication::PublishedValidated(published),
-        ) => ReadyValidateSuccessorV1::from_validated(published),
+        ) => ReadyValidateSuccessorV1::from_validated_without_physical_completion_for_test(
+            published,
+        ),
         (
             ReadyDurableValidateFixtureOutcome::Rejected,
             DurableValidateCompletionPublication::PublishedRejected(published),
-        ) => ReadyValidateSuccessorV1::from_rejected(published),
+        ) => ReadyValidateSuccessorV1::from_rejected_without_physical_completion_for_test(
+            published,
+        ),
         _ => panic!("Ready Validate fixture publication changed its requested outcome"),
     };
     let replacement_digest = holder.registry_for_test().entries[&fixture.address].digest;

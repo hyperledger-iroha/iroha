@@ -1,0 +1,1248 @@
+{
+  "scope": "isolated exact native model/reference source with JSON enabled; no normal Cargo model export, reachability proof, admission or profile qualification",
+  "vectors": [
+    {
+      "case": "touring_s1",
+      "encoded_hex": "00000000",
+      "framed_hex": "4E5254300000D45D09D5B7D7CAED0434E063BED98F5C0004000000000000004B9F1B1E3586A5F40000000000",
+      "json": "{\"kind\":\"touring_s1\",\"value\":null}",
+      "name": "ClassedRaceClassV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceClassV1",
+      "value": {
+        "kind": "touring_s1",
+        "value": null
+      }
+    },
+    {
+      "case": "all_controls",
+      "encoded_hex": "0400000000200800000000000000020000020100020200020400020800021000022000023F00",
+      "framed_hex": "4E52543000000CF2431BB0A51B05EEAE21D7ED1BEE5E00260000000000000069EABA25517666BD020400000000200800000000000000020000020100020200020400020800021000022000023F00",
+      "json": "{\"tick\":0,\"controls\":[0,1,2,4,8,16,32,63]}",
+      "name": "ClassedRaceInputFrameV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceInputFrameV1",
+      "value": {
+        "controls": [
+          0,
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          63
+        ],
+        "tick": 0
+      }
+    },
+    {
+      "case": "ordered_slots",
+      "encoded_hex": "04060000000B0300000000000000000207",
+      "framed_hex": "4E5254300000632146FAEBB6096960015112D480894200110000000000000055C5EB2AF0524B170204060000000B0300000000000000000207",
+      "json": "{\"tick\":6,\"slots\":[0,2,7]}",
+      "name": "ClassedRaceDnfEventV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceDnfEventV1",
+      "value": {
+        "slots": [
+          0,
+          2,
+          7
+        ],
+        "tick": 6
+      }
+    },
+    {
+      "case": "tokyo",
+      "encoded_hex": "00000000",
+      "framed_hex": "4E5254300000741786614B4AD154720F7B220058647C0004000000000000004B9F1B1E3586A5F40000000000",
+      "json": "{\"kind\":\"neon_tokyo\",\"value\":null}",
+      "name": "ClassedRaceTrackV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceTrackV1",
+      "value": {
+        "kind": "neon_tokyo",
+        "value": null
+      }
+    },
+    {
+      "case": "tokyo_initial",
+      "encoded_hex": "0400000000040000000004000000004802000000000000001F08000000000000000004F8F8FFFF0400000000040000000002E803010001001F08000000000000000004080700000400000000040000000002E80301000100",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B4210058000000000000003964622D21465788020400000000040000000004000000004802000000000000001F08000000000000000004F8F8FFFF0400000000040000000002E803010001001F08000000000000000004080700000400000000040000000002E80301000100",
+      "json": "{\"tick\":0,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"cars\":[{\"progress_mm\":0,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":0,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "tokyo_prefix",
+      "encoded_hex": "04000000000400000000040000000001002802000000000000000F0100010001000800000000000000000F010101000100080000000000000000080000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F00430000000000000074857366C80FB80C0204000000000400000000040000000001002802000000000000000F0100010001000800000000000000000F010101000100080000000000000000080000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"ticks\":0,\"terminal\":false,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":0},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":0}],\"winners\":[]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 0
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          }
+        ],
+        "terminal": false,
+        "ticks": 0,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "winners": []
+      }
+    },
+    {
+      "case": "tokyo_six_tick_technical_win",
+      "encoded_hex": "020100040000000004000000000102860106000000000000001404000000000E02000000000000000221000201001404010000000E02000000000000000221000201001404020000000E02000000000000000221000201001404030000000E02000000000000000221000201001404040000000E02000000000000000221000201001404050000000E02000000000000000221000201001801000000000000000F040600000009010000000000000001",
+      "framed_hex": "4E525430000084EE24B1CD7BBEF5676356DAEE607C5E00B0000000000000000171FB9027B9444702020100040000000004000000000102860106000000000000001404000000000E02000000000000000221000201001404010000000E02000000000000000221000201001404020000000E02000000000000000221000201001404030000000E02000000000000000221000201001404040000000E02000000000000000221000201001404050000000E02000000000000000221000201001801000000000000000F040600000009010000000000000001",
+      "json": "{\"version\":1,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"player_count\":2,\"frames\":[{\"tick\":0,\"controls\":[33,1]},{\"tick\":1,\"controls\":[33,1]},{\"tick\":2,\"controls\":[33,1]},{\"tick\":3,\"controls\":[33,1]},{\"tick\":4,\"controls\":[33,1]},{\"tick\":5,\"controls\":[33,1]}],\"dnf_events\":[{\"tick\":6,\"slots\":[1]}]}",
+      "name": "ClassedRaceReplayV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceReplayV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "dnf_events": [
+          {
+            "slots": [
+              1
+            ],
+            "tick": 6
+          }
+        ],
+        "frames": [
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 0
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 1
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 2
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 3
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 4
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 5
+          }
+        ],
+        "player_count": 2,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "version": 1
+      }
+    },
+    {
+      "case": "tokyo_technical_win",
+      "encoded_hex": "0406000000040000000004000000004D02000000000000001F089C0300000000000004F8F8FFFF040801000004000000000252030100010024089C0300000000000004080700000408010000040000000002E803010006010406000000",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B421005D0000000000000090AF7BE2762D1345020406000000040000000004000000004D02000000000000001F089C0300000000000004F8F8FFFF040801000004000000000252030100010024089C0300000000000004080700000408010000040000000002E803010006010406000000",
+      "json": "{\"tick\":6,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"cars\":[{\"progress_mm\":924,\"lateral_mm\":-1800,\"speed_mm_per_tick\":264,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":850,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":924,\"lateral_mm\":1800,\"speed_mm_per_tick\":264,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":6}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 850,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 924,
+            "speed_mm_per_tick": 264
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 6,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 924,
+            "speed_mm_per_tick": 264
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "tokyo_technical_win",
+      "encoded_hex": "04000000000400000000040600000001012D02000000000000000F010001000100089C03000000000000140101010006010406000000089C0300000000000009010000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F004900000000000000EAFD31920A11C5670204000000000400000000040600000001012D02000000000000000F010001000100089C03000000000000140101010006010406000000089C0300000000000009010000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"ticks\":6,\"terminal\":true,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":924},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":6,\"progress_mm\":924}],\"winners\":[0]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 924,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 6,
+            "finish_tick": null,
+            "progress_mm": 924,
+            "slot": 1
+          }
+        ],
+        "terminal": true,
+        "ticks": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "winners": [
+          0
+        ]
+      }
+    },
+    {
+      "case": "harbor",
+      "encoded_hex": "01000000",
+      "framed_hex": "4E5254300000741786614B4AD154720F7B220058647C000400000000000000973E373C6B0C4BE90001000000",
+      "json": "{\"kind\":\"harbor\",\"value\":null}",
+      "name": "ClassedRaceTrackV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceTrackV1",
+      "value": {
+        "kind": "harbor",
+        "value": null
+      }
+    },
+    {
+      "case": "harbor_initial",
+      "encoded_hex": "0400000000040000000004010000004802000000000000001F08000000000000000004F8F8FFFF0400000000040000000002E803010001001F08000000000000000004080700000400000000040000000002E80301000100",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B42100580000000000000034A4347FA8D4323E020400000000040000000004010000004802000000000000001F08000000000000000004F8F8FFFF0400000000040000000002E803010001001F08000000000000000004080700000400000000040000000002E80301000100",
+      "json": "{\"tick\":0,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"cars\":[{\"progress_mm\":0,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":0,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 0,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "harbor_prefix",
+      "encoded_hex": "04000000000401000000040000000001002802000000000000000F0100010001000800000000000000000F010101000100080000000000000000080000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F004300000000000000CD3328BA1D0E330D0204000000000401000000040000000001002802000000000000000F0100010001000800000000000000000F010101000100080000000000000000080000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"ticks\":0,\"terminal\":false,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":0},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":0}],\"winners\":[]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 0
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          }
+        ],
+        "terminal": false,
+        "ticks": 0,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        },
+        "winners": []
+      }
+    },
+    {
+      "case": "harbor_six_tick_technical_win",
+      "encoded_hex": "020100040000000004010000000102860106000000000000001404000000000E02000000000000000221000201001404010000000E02000000000000000221000201001404020000000E02000000000000000221000201001404030000000E02000000000000000221000201001404040000000E02000000000000000221000201001404050000000E02000000000000000221000201001801000000000000000F040600000009010000000000000001",
+      "framed_hex": "4E525430000084EE24B1CD7BBEF5676356DAEE607C5E00B000000000000000D951B923B20BB94702020100040000000004010000000102860106000000000000001404000000000E02000000000000000221000201001404010000000E02000000000000000221000201001404020000000E02000000000000000221000201001404030000000E02000000000000000221000201001404040000000E02000000000000000221000201001404050000000E02000000000000000221000201001801000000000000000F040600000009010000000000000001",
+      "json": "{\"version\":1,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"player_count\":2,\"frames\":[{\"tick\":0,\"controls\":[33,1]},{\"tick\":1,\"controls\":[33,1]},{\"tick\":2,\"controls\":[33,1]},{\"tick\":3,\"controls\":[33,1]},{\"tick\":4,\"controls\":[33,1]},{\"tick\":5,\"controls\":[33,1]}],\"dnf_events\":[{\"tick\":6,\"slots\":[1]}]}",
+      "name": "ClassedRaceReplayV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceReplayV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "dnf_events": [
+          {
+            "slots": [
+              1
+            ],
+            "tick": 6
+          }
+        ],
+        "frames": [
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 0
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 1
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 2
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 3
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 4
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 5
+          }
+        ],
+        "player_count": 2,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        },
+        "version": 1
+      }
+    },
+    {
+      "case": "harbor_technical_win",
+      "encoded_hex": "0406000000040000000004010000004D02000000000000001F089C0300000000000004F8F8FFFF040801000004000000000252030100010024089C0300000000000004080700000408010000040000000002E803010006010406000000",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B421005D00000000000000AD4E218BB8C27F7A020406000000040000000004010000004D02000000000000001F089C0300000000000004F8F8FFFF040801000004000000000252030100010024089C0300000000000004080700000408010000040000000002E803010006010406000000",
+      "json": "{\"tick\":6,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"cars\":[{\"progress_mm\":924,\"lateral_mm\":-1800,\"speed_mm_per_tick\":264,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":850,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":924,\"lateral_mm\":1800,\"speed_mm_per_tick\":264,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":6}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 850,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 924,
+            "speed_mm_per_tick": 264
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 6,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 924,
+            "speed_mm_per_tick": 264
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 6,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "harbor_technical_win",
+      "encoded_hex": "04000000000401000000040600000001012D02000000000000000F010001000100089C03000000000000140101010006010406000000089C0300000000000009010000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F004900000000000000EB1E3C436554ED270204000000000401000000040600000001012D02000000000000000F010001000100089C03000000000000140101010006010406000000089C0300000000000009010000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"ticks\":6,\"terminal\":true,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":924},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":6,\"progress_mm\":924}],\"winners\":[0]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 924,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 6,
+            "finish_tick": null,
+            "progress_mm": 924,
+            "slot": 1
+          }
+        ],
+        "terminal": true,
+        "ticks": 6,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        },
+        "winners": [
+          0
+        ]
+      }
+    },
+    {
+      "case": "sakura",
+      "encoded_hex": "02000000",
+      "framed_hex": "4E5254300000741786614B4AD154720F7B220058647C000400000000000000F3DC425A899278CF0002000000",
+      "json": "{\"kind\":\"sakura\",\"value\":null}",
+      "name": "ClassedRaceTrackV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceTrackV1",
+      "value": {
+        "kind": "sakura",
+        "value": null
+      }
+    },
+    {
+      "case": "sakura_initial",
+      "encoded_hex": "0400000000040000000004020000004802000000000000001F08000000000000000004F8F8FFFF0400000000040000000002E803010001001F08000000000000000004080700000400000000040000000002E80301000100",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B421005800000000000000A6FAC12618CC4476020400000000040000000004020000004802000000000000001F08000000000000000004F8F8FFFF0400000000040000000002E803010001001F08000000000000000004080700000400000000040000000002E80301000100",
+      "json": "{\"tick\":0,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"sakura\",\"value\":null},\"cars\":[{\"progress_mm\":0,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":0,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 0,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 0,
+        "track": {
+          "kind": "sakura",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "sakura_prefix",
+      "encoded_hex": "04000000000402000000040000000001002802000000000000000F0100010001000800000000000000000F010101000100080000000000000000080000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F00430000000000000006E8C4DE630CAE0F0204000000000402000000040000000001002802000000000000000F0100010001000800000000000000000F010101000100080000000000000000080000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"sakura\",\"value\":null},\"ticks\":0,\"terminal\":false,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":0},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":0}],\"winners\":[]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 0
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 0,
+            "slot": 1
+          }
+        ],
+        "terminal": false,
+        "ticks": 0,
+        "track": {
+          "kind": "sakura",
+          "value": null
+        },
+        "winners": []
+      }
+    },
+    {
+      "case": "sakura_six_tick_technical_win",
+      "encoded_hex": "020100040000000004020000000102860106000000000000001404000000000E02000000000000000221000201001404010000000E02000000000000000221000201001404020000000E02000000000000000221000201001404030000000E02000000000000000221000201001404040000000E02000000000000000221000201001404050000000E02000000000000000221000201001801000000000000000F040600000009010000000000000001",
+      "framed_hex": "4E525430000084EE24B1CD7BBEF5676356DAEE607C5E00B000000000000000B1307FF60CDCBF4602020100040000000004020000000102860106000000000000001404000000000E02000000000000000221000201001404010000000E02000000000000000221000201001404020000000E02000000000000000221000201001404030000000E02000000000000000221000201001404040000000E02000000000000000221000201001404050000000E02000000000000000221000201001801000000000000000F040600000009010000000000000001",
+      "json": "{\"version\":1,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"sakura\",\"value\":null},\"player_count\":2,\"frames\":[{\"tick\":0,\"controls\":[33,1]},{\"tick\":1,\"controls\":[33,1]},{\"tick\":2,\"controls\":[33,1]},{\"tick\":3,\"controls\":[33,1]},{\"tick\":4,\"controls\":[33,1]},{\"tick\":5,\"controls\":[33,1]}],\"dnf_events\":[{\"tick\":6,\"slots\":[1]}]}",
+      "name": "ClassedRaceReplayV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceReplayV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "dnf_events": [
+          {
+            "slots": [
+              1
+            ],
+            "tick": 6
+          }
+        ],
+        "frames": [
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 0
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 1
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 2
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 3
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 4
+          },
+          {
+            "controls": [
+              33,
+              1
+            ],
+            "tick": 5
+          }
+        ],
+        "player_count": 2,
+        "track": {
+          "kind": "sakura",
+          "value": null
+        },
+        "version": 1
+      }
+    },
+    {
+      "case": "sakura_technical_win",
+      "encoded_hex": "0406000000040000000004020000004D02000000000000001F089C0300000000000004F8F8FFFF040801000004000000000252030100010024089C0300000000000004080700000408010000040000000002E803010006010406000000",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B421005D00000000000000EA6DCE30EAF2CA3B020406000000040000000004020000004D02000000000000001F089C0300000000000004F8F8FFFF040801000004000000000252030100010024089C0300000000000004080700000408010000040000000002E803010006010406000000",
+      "json": "{\"tick\":6,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"sakura\",\"value\":null},\"cars\":[{\"progress_mm\":924,\"lateral_mm\":-1800,\"speed_mm_per_tick\":264,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":850,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":924,\"lateral_mm\":1800,\"speed_mm_per_tick\":264,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":6}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 850,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 924,
+            "speed_mm_per_tick": 264
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 6,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 924,
+            "speed_mm_per_tick": 264
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 6,
+        "track": {
+          "kind": "sakura",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "sakura_technical_win",
+      "encoded_hex": "04000000000402000000040600000001012D02000000000000000F010001000100089C03000000000000140101010006010406000000089C0300000000000009010000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F004900000000000000E83B2A30D59B95E70204000000000402000000040600000001012D02000000000000000F010001000100089C03000000000000140101010006010406000000089C0300000000000009010000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"sakura\",\"value\":null},\"ticks\":6,\"terminal\":true,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":924},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":6,\"progress_mm\":924}],\"winners\":[0]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 924,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 6,
+            "finish_tick": null,
+            "progress_mm": 924,
+            "slot": 1
+          }
+        ],
+        "terminal": true,
+        "ticks": 6,
+        "track": {
+          "kind": "sakura",
+          "value": null
+        },
+        "winners": [
+          0
+        ]
+      }
+    },
+    {
+      "case": "none_options",
+      "encoded_hex": "08000000000000000004F8F8FFFF0400000000040000000002E80301000100",
+      "framed_hex": "4E5254300000B3CE7241020D2AFC707BDF7D343F2BC9001F000000000000004E3C33F008C4709A0208000000000000000004F8F8FFFF0400000000040000000002E80301000100",
+      "json": "{\"progress_mm\":0,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null}",
+      "name": "ClassedRaceCarStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceCarStateV1",
+      "value": {
+        "boost_energy": 1000,
+        "dnf_tick": null,
+        "finish_tick": null,
+        "lateral_mm": -1800,
+        "lateral_velocity_mm_per_tick": 0,
+        "progress_mm": 0,
+        "speed_mm_per_tick": 0
+      }
+    },
+    {
+      "case": "finish_only",
+      "encoded_hex": "08808D5B000000000004F8F8FFFF0400000000040000000002E803060104050000000100",
+      "framed_hex": "4E5254300000B3CE7241020D2AFC707BDF7D343F2BC90024000000000000002999FC7A6D07B0FD0208808D5B000000000004F8F8FFFF0400000000040000000002E803060104050000000100",
+      "json": "{\"progress_mm\":6000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":5,\"dnf_tick\":null}",
+      "name": "ClassedRaceCarStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceCarStateV1",
+      "value": {
+        "boost_energy": 1000,
+        "dnf_tick": null,
+        "finish_tick": 5,
+        "lateral_mm": -1800,
+        "lateral_velocity_mm_per_tick": 0,
+        "progress_mm": 6000000,
+        "speed_mm_per_tick": 0
+      }
+    },
+    {
+      "case": "tied_finish",
+      "encoded_hex": "0406000000040000000004000000005202000000000000002408808D5B000000000004F8F8FFFF0400000000040000000002E8030601040500000001002408808D5B000000000004080700000400000000040000000002E803060104050000000100",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B4210062000000000000002BB0232B0E6EE072020406000000040000000004000000005202000000000000002408808D5B000000000004F8F8FFFF0400000000040000000002E8030601040500000001002408808D5B000000000004080700000400000000040000000002E803060104050000000100",
+      "json": "{\"tick\":6,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"cars\":[{\"progress_mm\":6000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":5,\"dnf_tick\":null},{\"progress_mm\":6000000,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":5,\"dnf_tick\":null}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": 5,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 6000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": 5,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 6000000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "tied_finish",
+      "encoded_hex": "040000000004000000000406000000010132020000000000000014010006010405000000010008808D5B000000000014010106010405000000010008808D5B00000000000A02000000000000000001",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F004F000000000000009661879F997C63A302040000000004000000000406000000010132020000000000000014010006010405000000010008808D5B000000000014010106010405000000010008808D5B00000000000A02000000000000000001",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"ticks\":6,\"terminal\":true,\"standings\":[{\"slot\":0,\"finish_tick\":5,\"dnf_tick\":null,\"progress_mm\":6000000},{\"slot\":1,\"finish_tick\":5,\"dnf_tick\":null,\"progress_mm\":6000000}],\"winners\":[0,1]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": 5,
+            "progress_mm": 6000000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": 5,
+            "progress_mm": 6000000,
+            "slot": 1
+          }
+        ],
+        "terminal": true,
+        "ticks": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "winners": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "case": "finished",
+      "encoded_hex": "010006010405000000010008808D5B0000000000",
+      "framed_hex": "4E5254300000DD526861B779DB397E1EFF51C218E06C001400000000000000B883EFE444BDBF7E02010006010405000000010008808D5B0000000000",
+      "json": "{\"slot\":0,\"finish_tick\":5,\"dnf_tick\":null,\"progress_mm\":6000000}",
+      "name": "ClassedRaceStandingV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStandingV1",
+      "value": {
+        "dnf_tick": null,
+        "finish_tick": 5,
+        "progress_mm": 6000000,
+        "slot": 0
+      }
+    },
+    {
+      "case": "finished_before_batch_boundary",
+      "encoded_hex": "040000000004000000000405000000010032020000000000000014010006010405000000010008808D5B000000000014010106010405000000010008808D5B0000000000080000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F004D000000000000004C3AC2F96913AEAF02040000000004000000000405000000010032020000000000000014010006010405000000010008808D5B000000000014010106010405000000010008808D5B0000000000080000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"ticks\":5,\"terminal\":false,\"standings\":[{\"slot\":0,\"finish_tick\":5,\"dnf_tick\":null,\"progress_mm\":6000000},{\"slot\":1,\"finish_tick\":5,\"dnf_tick\":null,\"progress_mm\":6000000}],\"winners\":[]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": 5,
+            "progress_mm": 6000000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": 5,
+            "progress_mm": 6000000,
+            "slot": 1
+          }
+        ],
+        "terminal": false,
+        "ticks": 5,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "winners": []
+      }
+    },
+    {
+      "case": "both_options",
+      "encoded_hex": "08808D5B000000000004F8F8FFFF0400000000040000000002E8030601040500000006010406000000",
+      "framed_hex": "4E5254300000B3CE7241020D2AFC707BDF7D343F2BC9002900000000000000C172676B2CA65C510208808D5B000000000004F8F8FFFF0400000000040000000002E8030601040500000006010406000000",
+      "json": "{\"progress_mm\":6000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":5,\"dnf_tick\":6}",
+      "name": "ClassedRaceCarStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceCarStateV1",
+      "value": {
+        "boost_energy": 1000,
+        "dnf_tick": 6,
+        "finish_tick": 5,
+        "lateral_mm": -1800,
+        "lateral_velocity_mm_per_tick": 0,
+        "progress_mm": 6000000,
+        "speed_mm_per_tick": 0
+      }
+    },
+    {
+      "case": "all_forfeit_after_finishing",
+      "encoded_hex": "0406000000040000000004000000005C02000000000000002908808D5B000000000004F8F8FFFF0400000000040000000002E80306010405000000060104060000002908808D5B000000000004080700000400000000040000000002E8030601040500000006010406000000",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B421006C00000000000000784F739C57180D9C020406000000040000000004000000005C02000000000000002908808D5B000000000004F8F8FFFF0400000000040000000002E80306010405000000060104060000002908808D5B000000000004080700000400000000040000000002E8030601040500000006010406000000",
+      "json": "{\"tick\":6,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"cars\":[{\"progress_mm\":6000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":5,\"dnf_tick\":6},{\"progress_mm\":6000000,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":5,\"dnf_tick\":6}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 6,
+            "finish_tick": 5,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 6000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": 6,
+            "finish_tick": 5,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 6000000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "all_forfeit_after_finishing",
+      "encoded_hex": "04000000000400000000040600000001013C0200000000000000190100060104050000000601040600000008808D5B0000000000190101060104050000000601040600000008808D5B0000000000080000000000000000",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F00570000000000000017D80E4642BA29CC0204000000000400000000040600000001013C0200000000000000190100060104050000000601040600000008808D5B0000000000190101060104050000000601040600000008808D5B0000000000080000000000000000",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"neon_tokyo\",\"value\":null},\"ticks\":6,\"terminal\":true,\"standings\":[{\"slot\":0,\"finish_tick\":5,\"dnf_tick\":6,\"progress_mm\":6000000},{\"slot\":1,\"finish_tick\":5,\"dnf_tick\":6,\"progress_mm\":6000000}],\"winners\":[]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": 6,
+            "finish_tick": 5,
+            "progress_mm": 6000000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": 6,
+            "finish_tick": 5,
+            "progress_mm": 6000000,
+            "slot": 1
+          }
+        ],
+        "terminal": true,
+        "ticks": 6,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "winners": []
+      }
+    },
+    {
+      "case": "finish_then_forfeit",
+      "encoded_hex": "0100060104050000000601040600000008808D5B0000000000",
+      "framed_hex": "4E5254300000DD526861B779DB397E1EFF51C218E06C00190000000000000003F27F75D5E3DA9C020100060104050000000601040600000008808D5B0000000000",
+      "json": "{\"slot\":0,\"finish_tick\":5,\"dnf_tick\":6,\"progress_mm\":6000000}",
+      "name": "ClassedRaceStandingV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStandingV1",
+      "value": {
+        "dnf_tick": 6,
+        "finish_tick": 5,
+        "progress_mm": 6000000,
+        "slot": 0
+      }
+    },
+    {
+      "case": "eight_car_timeout_tie",
+      "encoded_hex": "041815000004000000000401000000880208000000000000001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E803010001001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E803010001001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E803010001001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E80301000100",
+      "framed_hex": "4E52543000009E861350B2DE5E2104E3936F0A55B421001901000000000000701B94A5A9412DF402041815000004000000000401000000880208000000000000001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E803010001001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E803010001001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E803010001001F0840420F000000000004F8F8FFFF0400000000040000000002E803010001001F0840420F000000000004080700000400000000040000000002E80301000100",
+      "json": "{\"tick\":5400,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"cars\":[{\"progress_mm\":1000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null},{\"progress_mm\":1000000,\"lateral_mm\":1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":null}]}",
+      "name": "ClassedRaceStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStateV1",
+      "value": {
+        "cars": [
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": -1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          },
+          {
+            "boost_energy": 1000,
+            "dnf_tick": null,
+            "finish_tick": null,
+            "lateral_mm": 1800,
+            "lateral_velocity_mm_per_tick": 0,
+            "progress_mm": 1000000,
+            "speed_mm_per_tick": 0
+          }
+        ],
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "tick": 5400,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        }
+      }
+    },
+    {
+      "case": "eight_car_timeout_tie",
+      "encoded_hex": "0400000000040100000004181500000101880108000000000000000F0100010001000840420F00000000000F0101010001000840420F00000000000F0102010001000840420F00000000000F0103010001000840420F00000000000F0104010001000840420F00000000000F0105010001000840420F00000000000F0106010001000840420F00000000000F0107010001000840420F00000000001008000000000000000001020304050607",
+      "framed_hex": "4E52543000001F7149F296B62659CECC7FB01451774F00AC00000000000000BFE0CDD614C23B8C020400000000040100000004181500000101880108000000000000000F0100010001000840420F00000000000F0101010001000840420F00000000000F0102010001000840420F00000000000F0103010001000840420F00000000000F0104010001000840420F00000000000F0105010001000840420F00000000000F0106010001000840420F00000000000F0107010001000840420F00000000001008000000000000000001020304050607",
+      "json": "{\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"ticks\":5400,\"terminal\":true,\"standings\":[{\"slot\":0,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":1,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":2,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":3,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":4,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":5,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":6,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000},{\"slot\":7,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000}],\"winners\":[0,1,2,3,4,5,6,7]}",
+      "name": "ClassedRaceResultV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceResultV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "standings": [
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 0
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 1
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 2
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 3
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 4
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 5
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 6
+          },
+          {
+            "dnf_tick": null,
+            "finish_tick": null,
+            "progress_mm": 1000000,
+            "slot": 7
+          }
+        ],
+        "terminal": true,
+        "ticks": 5400,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        },
+        "winners": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ]
+      }
+    },
+    {
+      "case": "unfinished",
+      "encoded_hex": "0107010001000840420F0000000000",
+      "framed_hex": "4E5254300000DD526861B779DB397E1EFF51C218E06C000F0000000000000080BA00A8ED17D63F020107010001000840420F0000000000",
+      "json": "{\"slot\":7,\"finish_tick\":null,\"dnf_tick\":null,\"progress_mm\":1000000}",
+      "name": "ClassedRaceStandingV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceStandingV1",
+      "value": {
+        "dnf_tick": null,
+        "finish_tick": null,
+        "progress_mm": 1000000,
+        "slot": 7
+      }
+    },
+    {
+      "case": "dnf_only",
+      "encoded_hex": "0840420F000000000004F8F8FFFF0400000000040000000002E803010006010418150000",
+      "framed_hex": "4E5254300000B3CE7241020D2AFC707BDF7D343F2BC9002400000000000000EFD4D109D39D97DD020840420F000000000004F8F8FFFF0400000000040000000002E803010006010418150000",
+      "json": "{\"progress_mm\":1000000,\"lateral_mm\":-1800,\"speed_mm_per_tick\":0,\"lateral_velocity_mm_per_tick\":0,\"boost_energy\":1000,\"finish_tick\":null,\"dnf_tick\":5400}",
+      "name": "ClassedRaceCarStateV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceCarStateV1",
+      "value": {
+        "boost_energy": 1000,
+        "dnf_tick": 5400,
+        "finish_tick": null,
+        "lateral_mm": -1800,
+        "lateral_velocity_mm_per_tick": 0,
+        "progress_mm": 1000000,
+        "speed_mm_per_tick": 0
+      }
+    },
+    {
+      "case": "empty_practice",
+      "encoded_hex": "020100040000000004010000000101080000000000000000080000000000000000",
+      "framed_hex": "4E525430000084EE24B1CD7BBEF5676356DAEE607C5E002100000000000000C6CAFD5F6B7A2F5102020100040000000004010000000101080000000000000000080000000000000000",
+      "json": "{\"version\":1,\"class_id\":{\"kind\":\"touring_s1\",\"value\":null},\"track\":{\"kind\":\"harbor\",\"value\":null},\"player_count\":1,\"frames\":[],\"dnf_events\":[]}",
+      "name": "ClassedRaceReplayV1",
+      "rust_type_name": "iroha_data_model::classed_race_v1::ClassedRaceReplayV1",
+      "value": {
+        "class_id": {
+          "kind": "touring_s1",
+          "value": null
+        },
+        "dnf_events": [],
+        "frames": [],
+        "player_count": 1,
+        "track": {
+          "kind": "harbor",
+          "value": null
+        },
+        "version": 1
+      }
+    }
+  ],
+  "version": 1
+}

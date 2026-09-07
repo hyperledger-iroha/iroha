@@ -28,11 +28,11 @@ iroha-bfv-diagnostics-v1
 26	S	placeholder full-bootstrap digest	S	external audit artifact pair must reject archive digests copied from full-bootstrap placeholder material
 27	S	centered scale-round source-chain digest must be distinct from key digest	S	release audit key evidence shape must reject source-chain digests copied from proof-key digests before canonical source-chain mismatch
 28	S	native circuit fingerprint must be distinct from key material commitment	S	release audit key evidence shape must reject native circuit fingerprints copied from proof-key material commitments before fingerprint mismatch
-29	S	native payload digest must be distinct from key digest	S	release audit key evidence shape must reject native payload digests copied from proof-key digests before canonical payload mismatch
-30	S	generated circuit body digest must be distinct from native payload digest	S	release audit key evidence shape must reject generated body digests copied from native payload digests before canonical body mismatch
-31	S	native payload digest must be distinct from proof public-input schema payload digest	S	release audit key evidence shape must reject native payload digests copied from generated-body schema payload digests before canonical payload mismatch
-32	S	generated circuit body digest must be distinct from release-prover contract digest	S	release audit key evidence shape must reject generated body digests copied from release-prover contract digests before canonical body mismatch
-33	S	placeholder generated circuit body material	S	release audit key evidence must reject delayed placeholder generated-body digest sentinels before canonical mismatch
+29	S	native payload digest mismatch	S	release audit key evidence must reject a native payload commitment derived from unrelated proof-key bytes
+30	S	native payload digest must be distinct from generated circuit body digest	S	release audit key evidence shape must reject generated body digests copied from native payload digests before canonical body mismatch
+31	S	native payload digest mismatch	S	release audit key evidence must reject a native payload commitment derived from unrelated schema digest bytes
+32	S	generated circuit body digest mismatch	S	release audit key evidence must reject a generated-body commitment derived from unrelated release-contract digest bytes
+33	S	generated circuit body digest mismatch	S	release audit key evidence must reject a delayed placeholder body commitment against the canonical generated body
 34	S	generated circuit body hex	S	release-audit generated circuit body hex labels must be canonical lowercase
 35	S	only canonical generated circuit body hex labels	S	release-audit generated circuit body hex labels must reject separator aliases beside canonical labels
 36	S	generated circuit body hex	S	release-audit generated circuit body hex values must be canonical lowercase
@@ -56,10 +56,10 @@ iroha-bfv-diagnostics-v1
 54	S	placeholder	S	material digest validation must reject binary-framed internal evaluator-artifact transient digests
 55	S	generated circuit body digest mismatch	S	release audit manifests must reject stale generated circuit body digests before record comparison
 56	S	placeholder	S	release audit manifests must reject placeholder generated circuit body digests before canonical mismatch
-57	S	inert or placeholder generated circuit body material	S	release audit manifests must reject SHA-encoded placeholder generated circuit body digests before canonical mismatch
-58	S	inert or placeholder generated circuit body material	S	release audit signoffs must reject binary-decorated SHA placeholder generated circuit body digests before canonical mismatch
+57	S	generated circuit body digest mismatch	S	release audit manifests must reject a placeholder body commitment against the canonical generated body
+58	S	generated circuit body digest mismatch	S	release audit signoffs must reject a binary-decorated placeholder body commitment against the canonical generated body
 59	S	placeholder	S	release audit native payload digests must reject domain-hashed placeholders before canonical mismatch
-60	S	inert native payload digest	S	release audit native payload digests must reject raw SHA placeholder sentinels before canonical mismatch
+60	S	native payload digest mismatch	S	release audit native payload commitments must bind the canonical payload for the expected role
 61	S	verifier native payload digest must be distinct from prover native payload digest	S	standalone release audit manifests must reject verifier native payload digests copied from prover payload digests before canonical mismatch
 62	S	verifier native payload digest must be distinct from prover native payload digest	S	release audit manifest digesting must reject verifier native payload digests copied from prover payload digests before canonical mismatch
 63	S	generated circuit body digest must be distinct from native circuit fingerprint	S	standalone release audit manifests must reject generated body digests copied from native circuit fingerprints before canonical mismatch
@@ -133,23 +133,23 @@ iroha-bfv-diagnostics-v1
 131	S	canonical	S	native prover payload validation must reject noncanonical expected circuit ids before payload framing
 132	S	canonical v1 bytes	S	native verifier payload validation must reject noncanonical compressed Norito framing
 133	S	canonical	S	native verifier payload validation must reject noncanonical expected circuit ids before payload framing
-134	S	generated circuit body digest must be distinct from arithmetic trace profile digest	S	native verifier payload validation must reject generated-body digest aliases
-135	S	generated circuit body digest must be distinct from centered scale-round source-chain digest	S	native prover payload validation must reject generated-body digest aliases
-136	S	generated circuit body digest must be distinct from proof public-input schema payload digest	S	native verifier payload validation must reject generated-body digests copied from embedded schema payload digests before SHA replay
-137	S	generated circuit body digest must be distinct from proof public-input schema payload digest	S	native verifier material construction must reject generated-body digests copied from embedded schema payload digests before SHA replay
-138	S	generated circuit body digest must be distinct from release-prover contract digest	S	native prover payload validation must reject generated-body digests copied from embedded release-prover contract digests before SHA replay
+134	S	generated circuit body digest mismatch	S	native generated-body commitments must bind canonical body bytes instead of unrelated metadata digest bytes
+135	S	generated circuit body digest mismatch	S	native generated-body commitments must bind canonical body bytes instead of unrelated metadata digest bytes
+136	S	generated circuit body digest mismatch	S	native generated-body commitments must bind canonical body bytes instead of unrelated metadata digest bytes
+137	S	generated circuit body digest mismatch	S	native generated-body commitments must bind canonical body bytes instead of unrelated metadata digest bytes
+138	S	generated circuit body digest mismatch	S	native generated-body commitments must bind canonical body bytes instead of unrelated metadata digest bytes
 139	S	centered scale-round source-chain digest	S	native verifier material must reject generated bodies with stale centered source-chain digests
 140	S	centered scale-round source-chain digest	S	native prover payload must reject generated bodies with stale centered source-chain digests
 141	S	centered scale-round source-chain digest	S	native proof-key material must reject stale centered source-chain digests
 142	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native proof-key material must reject AIR digests copied from trace-profile digests before canonical mismatch
 143	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	role/circuit-bound native material admission must reject AIR digests copied from trace-profile digests before canonical mismatch
-144	S	native payload digest must be distinct from native circuit fingerprint	S	native proof-key material must reject payload digests copied from circuit fingerprints before SHA replay
-145	S	native payload digest must be distinct from native circuit fingerprint	S	role/circuit-bound native material admission must reject payload digests copied from circuit fingerprints before SHA replay
-146	S	native payload digest must be distinct from centered scale-round source-chain digest	S	native proof-key material must reject payload digests copied from source-chain digests before SHA replay
-147	S	native payload digest must be distinct from generated circuit body digest	S	native proof-key material must reject payload digests copied from generated-body digests before SHA replay
-148	S	native payload digest must be distinct from generated circuit body digest	S	role/circuit-bound native material admission must reject payload digests copied from generated-body digests before SHA replay
-149	S	native payload digest must be distinct from proof public-input schema payload digest	S	native proof-key material must reject payload digests copied from embedded schema payload digests before SHA replay
-150	S	native payload digest must be distinct from release-prover contract digest	S	native proof-key material must reject payload digests copied from embedded release-prover contract digests before SHA replay
+144	S	native proof key payload digest mismatch	S	native proof-key payload commitments must bind canonical payload bytes for the expected role instead of unrelated metadata digest bytes
+145	S	native proof key payload digest mismatch	S	native proof-key payload commitments must bind canonical payload bytes for the expected role instead of unrelated metadata digest bytes
+146	S	native proof key payload digest mismatch	S	native proof-key payload commitments must bind canonical payload bytes for the expected role instead of unrelated metadata digest bytes
+147	S	native payload digest must be distinct from generated circuit body digest	S	native proof-key material must reject native payload commitments copied from generated-body commitments
+148	S	native payload digest must be distinct from generated circuit body digest	S	role/circuit-bound admission must reject native payload commitments copied from generated-body commitments
+149	S	native proof key payload digest mismatch	S	native proof-key payload commitments must bind canonical payload bytes for the expected role instead of unrelated metadata digest bytes
+150	S	native proof key payload digest mismatch	S	native proof-key payload commitments must bind canonical payload bytes for the expected role instead of unrelated metadata digest bytes
 151	S	centered scale-round source-chain digest	S	native verifier payload must reject stale centered source-chain digests
 152	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native verifier payloads must reject AIR digests copied from trace-profile digests before canonical mismatch
 153	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native verifier material construction must reject AIR digests copied from trace-profile digests before canonical mismatch
@@ -187,13 +187,13 @@ iroha-bfv-diagnostics-v1
 185	S	placeholder text	S	raw native proof-key material validation must reject placeholder material before Norito decoding
 186	S	placeholder text	S	raw native proof-key material validation must reject binary-decorated placeholder material before Norito decoding
 187	S	placeholder text	S	raw native proof-key material validation must reject delayed placeholder material before Norito decoding
-188	S	SHA-256	S	native verifier material must reject non-SHA STARK payloads
+188	S	proof system	S	native verifier material must reject a retired proof-system profile
 189	S	exceeds n_log2	S	native verifier material must reject impossible STARK blowup/domain geometry
 190	S	placeholder text	S	native verifier payloads must reject binary-decorated generated circuit-body placeholder labels before canonical mismatch
 191	S	field count mismatch	S	native verifier material must bind the verifier payload field count
 192	S	circuit fingerprint mismatch	S	native material must bind the proof circuit fingerprint
 193	S	placeholder	S	native material must reject placeholder proof circuit fingerprints before canonical mismatch
-194	S	zero SHA-256 digest	S	native material must reject missing verifier payload digests
+194	S	zero six-lane Goldilocks digest	S	native material must reject missing verifier payload digests
 195	S	placeholder text	S	native material must reject digest-correct inert verifier payload text before payload decoding
 196	S	placeholder text	S	native material must reject generic proof-key placeholder payload text before payload decoding
 197	S	placeholder text	S	native material must reject delayed generic proof-key placeholder payload text before payload decoding

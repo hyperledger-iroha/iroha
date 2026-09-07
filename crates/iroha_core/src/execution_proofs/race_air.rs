@@ -6,7 +6,7 @@ use super::{
 };
 use iroha_data_model::execution_proofs::{RaceCarStateV1, RaceReplayV1, RaceStateV1};
 
-pub(super) const FIXED_PREFIX: usize = 7;
+pub(super) const FIXED_PREFIX: usize = 9;
 pub(super) const FIXED_PER_CAR: usize = 4;
 pub(super) const STATE_WIDTH: usize = 7;
 
@@ -14,6 +14,7 @@ pub(super) const STATE_WIDTH: usize = 7;
 pub(super) struct RaceAirV1 {
     pub(super) air: IntegerAirV1,
     pub(super) outputs: Vec<[Value; STATE_WIDTH]>,
+    pub(super) events: Vec<[Value; 3]>,
 }
 
 pub(super) fn car_values(car: &RaceCarStateV1) -> [i64; STATE_WIDTH] {
@@ -73,8 +74,10 @@ impl RaceAirV1 {
             }
         }
         let mut outputs = inputs.clone();
+        let mut events = Vec::with_capacity(players);
         let mut active = Vec::with_capacity(players);
         let mut any_active = zero;
+        let mut alive_count = zero;
         for (slot, car) in inputs.iter().enumerate() {
             let base = FIXED_PREFIX + slot * FIXED_PER_CAR;
             let acceleration = Value::fixed(base, -100, 40);
@@ -83,11 +86,11 @@ impl RaceAirV1 {
             let dnf_event = Value::fixed(base + 3, 0, 1);
             let unfinished = a.less(car[5], one);
             let present = a.less(car[6], one);
-            let removable = a.and(unfinished, present);
-            let remove = a.and(removable, dnf_event);
+            let remove = a.and(present, dnf_event);
             let dnf_tick = a.add_constant(tick, 1);
             let dnf = a.select(remove, dnf_tick, car[6]);
             let still_present = a.less(dnf, one);
+            alive_count = a.add(alive_count, still_present);
             let racing = a.and(unfinished, still_present);
             any_active = a.or(any_active, racing);
             let running = a.and(racing, enabled);
@@ -104,10 +107,15 @@ impl RaceAirV1 {
             let accelerated = a.add(car[2], acceleration);
             let positive = a.maximum(accelerated, zero);
             let mut speed = a.minimum(positive, top);
-            let steering = a.add(car[3], steer);
-            let drag = a.mul_constant(steering, 7);
-            let damped = a.divide(drag, 8);
-            let vx = a.clamp(damped, -320, 320);
+            let [vx, oil] = super::environment_air::lateral_velocity(
+                &mut a,
+                replay.track,
+                Value::fixed(7, 0, 1),
+                car[0],
+                car[1],
+                car[3],
+                steer,
+            );
 
             // Shift by one track length, so division is unsigned even on the staggered grid.
             let shifted = a.add_constant(car[0], length);
@@ -117,7 +125,10 @@ impl RaceAirV1 {
             let table = replay.track.curvature().map(i64::from);
             let curvature = a.lookup(segment, &table);
             let curve_speed = a.mul(curvature, speed);
-            let force = a.divide(curve_speed, 120);
+            let curve_force = a.divide(curve_speed, 120);
+            let wind_force = a.mul(Value::fixed(8, -32, 32), speed);
+            let wind_force = a.divide(wind_force, 2400);
+            let force = a.add(curve_force, wind_force);
             let steered = a.add(car[1], vx);
             let displaced = a.add(steered, force);
             let x = a.clamp(displaced, -9_000, 9_000);
@@ -127,6 +138,9 @@ impl RaceAirV1 {
             let slowed = a.maximum(slowed, zero);
             speed = a.select(offroad, slowed, speed);
             let progress = a.add(car[0], speed);
+            let [x, speed, solid_hit, kind] =
+                super::environment_air::impact(&mut a, replay.track, car[0], progress, x, speed);
+            events.push([a.and(running, oil), a.and(running, solid_hit), kind]);
             outputs[slot] = [
                 a.select(running, progress, car[0]),
                 a.select(running, x, car[1]),
@@ -139,6 +153,10 @@ impl RaceAirV1 {
         }
         // Extra frames after all cars stopped are forbidden, even if their state would be unchanged.
         a.gated_equate(batch_start_enabled, any_active, one);
+        if players >= 2 {
+            let below_quorum = a.less(alive_count, Value::constant(2));
+            a.gated_equate(batch_start_enabled, below_quorum, zero);
+        }
         for i in 0..players {
             for j in i + 1..players {
                 let longitudinal = a.sub(outputs[i][0], outputs[j][0]);
@@ -188,7 +206,11 @@ impl RaceAirV1 {
                 a.gated_equate(final_row, *value, Value::constant(expected));
             }
         }
-        Self { air: a, outputs }
+        Self {
+            air: a,
+            outputs,
+            events,
+        }
     }
 
     pub(super) fn fixed_row(
@@ -206,6 +228,8 @@ impl RaceAirV1 {
             i64::from(checkpoint_tick == Some(row as u32)),
             i64::from(row < replay.frames.len() && row % 6 == 0),
         ];
+        let (rain, wind) = super::environment::weather(replay.track, row.min(5400) as u32);
+        fixed.extend([rain, wind]);
         for slot in 0..usize::from(replay.player_count) {
             let control = replay
                 .frames
@@ -326,7 +350,105 @@ mod tests {
                 compiled.air.width(),
                 compiled.air.constraint_count()
             );
-            assert!(compiled.air.width() < 12_000);
+            assert!(compiled.air.width() < 16_000);
+        }
+    }
+
+    #[test]
+    fn full_duration_contacts_curvature_and_removal_match_reference() {
+        let track = RaceTrackV1::Harbor;
+        let mut replay = RaceReplayV1 {
+            track,
+            player_count: 8,
+            frames: vec![],
+            dnf_events: vec![RaceDnfEventV1 {
+                tick: 1200,
+                slots: vec![7],
+            }],
+        };
+        let mut reference = initial_race_state_v1(track, 8).expect("grid");
+        let mut expected = Vec::with_capacity(5401);
+        for tick in 0..5400 {
+            if tick == 1200 {
+                apply_race_dnf_v1(&mut reference, &[7]).expect("removal");
+            }
+            let controls = reference
+                .cars
+                .iter()
+                .enumerate()
+                .map(|(slot, car)| {
+                    if car.dnf_tick.is_some() {
+                        return 0;
+                    }
+                    let target = if slot % 2 == 0 { -1600 } else { 1600 };
+                    let steer = if tick < 90 {
+                        if slot % 2 == 0 { 8 } else { 4 }
+                    } else if car.lateral_mm + car.lateral_velocity_mm_per_tick * 8 > target + 150 {
+                        4
+                    } else if car.lateral_mm + car.lateral_velocity_mm_per_tick * 8 < target - 150 {
+                        8
+                    } else {
+                        0
+                    };
+                    1 | 16
+                        | steer
+                        | if (tick + slot as u32 * 11) % 90 < 25 {
+                            32
+                        } else {
+                            0
+                        }
+                })
+                .collect();
+            let frame = RaceInputFrameV1 { tick, controls };
+            step_race_v1(&mut reference, &frame).expect("reference tick");
+            replay.frames.push(frame);
+            expected.push(
+                reference
+                    .cars
+                    .iter()
+                    .flat_map(car_values)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        expected.push(
+            reference
+                .cars
+                .iter()
+                .flat_map(car_values)
+                .collect::<Vec<_>>(),
+        );
+        let compiled = RaceAirV1::compile(&replay, &reference, None);
+        let mut inputs = initial_race_state_v1(track, 8)
+            .expect("grid")
+            .cars
+            .iter()
+            .flat_map(car_values)
+            .collect::<Vec<_>>();
+        for (row_index, expected) in expected.iter().enumerate() {
+            let fixed = RaceAirV1::fixed_row(&replay, row_index, 8192, None);
+            let row = compiled.air.witness(&inputs, &fixed);
+            inputs = compiled.next_inputs(&row);
+            assert_eq!(&inputs, expected, "complete transition at tick {row_index}");
+            let fields = row.iter().copied().map(field).collect::<Vec<_>>();
+            let next_fixed = RaceAirV1::fixed_row(&replay, row_index + 1, 8192, None);
+            let next = compiled
+                .air
+                .witness(&inputs, &next_fixed)
+                .into_iter()
+                .map(field)
+                .collect::<Vec<_>>();
+            assert!(
+                compiled
+                    .air
+                    .residues(
+                        &fields,
+                        &next,
+                        &fixed.into_iter().map(field).collect::<Vec<_>>()
+                    )
+                    .iter()
+                    .all(|residue| *residue == field(0)),
+                "complete AIR at tick {row_index}"
+            );
         }
     }
 }

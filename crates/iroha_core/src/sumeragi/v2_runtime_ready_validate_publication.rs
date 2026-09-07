@@ -85,8 +85,17 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         validated_receipt: ValidatedBodyReceipt,
         pending: &PendingRuntimeEffectBinding,
         lifecycle_ordinal: u128,
+        physical_completion: Option<super::v2_worker::LifecycleValidatePhysicalCompletionV1>,
     ) -> Result<LocalProposalReadyCommandAdmission, EnqueueError> {
         if self.fail_closed || lifecycle_ordinal == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        if physical_completion.is_some_and(|completion| {
+            completion.dispatch_key().lifecycle_ordinal() != lifecycle_ordinal
+        }) {
+            self.latch_fail_closed(
+                "lifecycle local-proposal completion changed its guarded Validate owner",
+            );
             return Err(EnqueueError::FailClosed);
         }
         let identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
@@ -102,6 +111,22 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             durable_receipt,
             validated_receipt,
         };
+        let admitted_at = Instant::now();
+        let worker_completed_before_deadline = self.clocks_armed
+            && tag == self.round_tag
+            && physical_completion.is_some_and(|completion| {
+                let retained_at = completion.retained_at();
+                retained_at <= admitted_at
+                    && retained_at
+                        .checked_duration_since(self.round_started_at)
+                        .is_some_and(|elapsed| {
+                            elapsed
+                                < round_timeout_for_view(
+                                    self.base_round_timeout,
+                                    self.round_tag.view(),
+                                )
+                        })
+            });
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
         let mut tagged = match preflight {
@@ -126,7 +151,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                     tag,
                     CommandClass::Completion,
                     command,
-                    Instant::now(),
+                    admitted_at,
                     owner.causal_origin().clone(),
                     owner.lifecycle_ordinal(),
                 )?
@@ -149,7 +174,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                     tag,
                     CommandClass::Completion,
                     command,
-                    Instant::now(),
+                    admitted_at,
                     causal_lifecycle_key,
                     admission_ordinal,
                     producer_stage,
@@ -157,6 +182,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
+        tagged.local_proposal_ready_before_deadline = worker_completed_before_deadline;
         tagged.candidate_semantic_statement = pending.candidate_statement();
         if !tagged.validate_admission_identity() {
             self.latch_fail_closed(

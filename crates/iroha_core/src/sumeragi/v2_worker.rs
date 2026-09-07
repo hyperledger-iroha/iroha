@@ -1115,9 +1115,26 @@ struct V2IoCompletionOwnership {
     lifecycle_validate: Option<LifecycleValidateDispatchKeyV1>,
     lifecycle_certified_serve: Option<u128>,
 }
+impl V2IoCompletionOwnership {
+    /// Whether the lifecycle driver can consume this owner without a runtime
+    /// FIFO slot, even when its eventual adapter callback uses Completion
+    /// capacity.
+    const fn is_dedicated_lifecycle(self) -> bool {
+        self.lifecycle_decision_apply.is_some()
+            || self.recovered_lifecycle_sign.is_some()
+            || self.recovered_decision_fetch.is_some()
+            || self.lifecycle_validate.is_some()
+            || self.lifecycle_certified_serve.is_some()
+    }
+}
 #[derive(Debug, Default)]
 struct V2IoCompletionQueueState {
     owned: VecDeque<V2IoCompletionOwnership>,
+}
+#[derive(Clone, Copy, Debug)]
+enum V2IoCompletionRuntimeCutObservationV1 {
+    Empty { cut_at: Instant },
+    Pending(V2IoCompletionOwnership),
 }
 impl V2IoAdmission {
     fn new(auxiliary_capacity: usize, consensus_capacity: usize) -> Result<Self, String> {
@@ -1208,7 +1225,6 @@ impl V2IoAdmission {
     }
     fn retain_completion(
         &self,
-        retained_at: Instant,
         requires_runtime_capacity: bool,
         runtime_lifecycle_ordinal: Option<u128>,
         lifecycle_decision_apply: Option<LifecycleDecisionApplyDispatchKeyV1>,
@@ -1216,11 +1232,16 @@ impl V2IoAdmission {
         recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
         lifecycle_validate: Option<LifecycleValidateDispatchKeyV1>,
         lifecycle_certified_serve: Option<u128>,
-    ) {
+    ) -> Instant {
         let mut state = self
             .completion_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Mint the timestamp while holding the same mutex used by the
+        // Completion-to-Runtime cut.  A timestamp sampled before this lock
+        // could claim pre-cut ownership even though the worker only entered
+        // the physical completion queue after Runtime had won the cut.
+        let retained_at = Instant::now();
         assert!(
             state.owned.len() < self.completion_capacity,
             "Sumeragi v2 I/O worker exceeded bounded completion ownership"
@@ -1236,6 +1257,21 @@ impl V2IoAdmission {
             lifecycle_validate,
             lifecycle_certified_serve,
         });
+        retained_at
+    }
+    /// Observe the physical head, or mint an empty-lane timestamp, under the
+    /// exact completion-owner mutex.
+    fn completion_runtime_cut_observation(&self) -> V2IoCompletionRuntimeCutObservationV1 {
+        let state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.owned.front().copied().map_or_else(
+            || V2IoCompletionRuntimeCutObservationV1::Empty {
+                cut_at: Instant::now(),
+            },
+            V2IoCompletionRuntimeCutObservationV1::Pending,
+        )
     }
     fn abandon_latest_completion(&self) {
         let mut state = self
@@ -1327,13 +1363,13 @@ impl V2IoAdmission {
         &self,
         key: LifecycleValidateDispatchKeyV1,
         position: usize,
-    ) -> bool {
+    ) -> Option<Instant> {
         let mut state = self
             .completion_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(owner) = state.owned.get(position) else {
-            return false;
+            return None;
         };
         if owner.requires_runtime_capacity
             || owner.runtime_lifecycle_ordinal != Some(key.lifecycle_ordinal())
@@ -1345,9 +1381,9 @@ impl V2IoAdmission {
                 .count()
                 != 1
         {
-            return false;
+            return None;
         }
-        state.owned.remove(position).is_some()
+        state.owned.remove(position).map(|owner| owner.retained_at)
     }
     fn transfer_lifecycle_certified_serve_completion_at(
         &self,
@@ -3344,17 +3380,17 @@ impl V2IoCommandQueue {
         self: &Arc<Self>,
         key: LifecycleValidateDispatchKeyV1,
         ownership_position: usize,
-    ) -> bool {
+    ) -> Option<Instant> {
         let state = self.lock();
         let pending = state
             .lifecycle_validates
             .get(&key)
             .is_some_and(|tracked| tracked.state == V2IoWorkState::CompletionPending);
         drop(state);
-        pending
-            && self
-                .admission
+        pending.then(|| {
+            self.admission
                 .transfer_lifecycle_validate_completion_at(key, ownership_position)
+        })?
     }
     fn acknowledge_lifecycle_validate(&self, key: LifecycleValidateDispatchKeyV1) {
         let mut state = self.lock();

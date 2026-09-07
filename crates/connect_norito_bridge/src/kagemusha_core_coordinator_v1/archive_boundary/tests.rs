@@ -438,3 +438,102 @@ fn native_recovery_never_turns_missing_or_released_into_installed_bytes() {
         assert!(validate_request(method, &frame(&changed)).is_err());
     }
 }
+
+#[test]
+fn durable_reservations_and_transient_observations_use_disjoint_typed_commands() {
+    use crate::kagemusha_device_bridge_v1::{
+        COMMAND_HEADER_BYTES_V1, canonical_stock_command_for_tests,
+    };
+    for operation in KagemushaDeviceLifecycleOperationV1::ALL {
+        let (id, binding) =
+            if operation == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition {
+                let fixture: norito::json::Value = norito::json::from_str(include_str!(
+                    "../../../../../fixtures/offline/kagemusha_sender_reservation_v1.json"
+                ))
+                .unwrap();
+                (
+                    [7; 32],
+                    hex::decode(fixture["send_binding_hex"].as_str().unwrap()).unwrap(),
+                )
+            } else {
+                let command = canonical_stock_command_for_tests(operation)
+                    .expect("every device command has canonical fixture coverage");
+                (
+                    command[12..44].try_into().unwrap(),
+                    command[COMMAND_HEADER_BYTES_V1..].to_vec(),
+                )
+            };
+        let observation = is_observation_operation_v1(u32::from(operation.code()));
+        let durable_fields = vec![
+            u32::from(operation.code()).to_le_bytes().to_vec(),
+            id.to_vec(),
+            binding.clone(),
+        ];
+        let observation_fields = vec![durable_fields[0].clone(), binding.clone()];
+        let (method, fields, binding_index, wrong_method, wrong_fields) = if observation {
+            (
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                observation_fields,
+                1,
+                KagemushaCoreCoordinatorMethodV1::ReserveOperationId,
+                durable_fields,
+            )
+        } else {
+            (
+                KagemushaCoreCoordinatorMethodV1::ReserveOperationId,
+                durable_fields,
+                2,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                observation_fields,
+            )
+        };
+        assert!(validate_request(wrong_method, &frame(&wrong_fields)).is_err());
+        assert_eq!(
+            validate_request(method, &frame(&fields)),
+            Ok(()),
+            "op {}",
+            operation.code()
+        );
+        for bad in [
+            b"public-binding".to_vec(),
+            binding[..binding.len() - 1].to_vec(),
+            [binding.as_slice(), &[0]].concat(),
+        ] {
+            let mut invalid = fields.clone();
+            invalid[binding_index] = bad;
+            assert!(
+                validate_request(method, &frame(&invalid)).is_err(),
+                "op {} accepted malformed binding",
+                operation.code()
+            );
+        }
+        if observation {
+            let mut unchallenged_device_command =
+                canonical_stock_command_for_tests(operation).unwrap();
+            unchallenged_device_command[12..44].fill(0);
+            assert_eq!(
+                crate::kagemusha_device_bridge_v1::classify_stock_device_command_v1(
+                    &unchallenged_device_command,
+                ),
+                crate::kagemusha_device_bridge_v1::StockDeviceCommandDispositionV1::Malformed,
+            );
+            for other in [1, 13, 18, 21] {
+                if other == operation.code() {
+                    continue;
+                }
+                let mut wrong_operation = fields.clone();
+                wrong_operation[0] = u32::from(other).to_le_bytes().to_vec();
+                assert!(validate_request(method, &frame(&wrong_operation)).is_err());
+            }
+        }
+        if matches!(operation.code(), 14 | 17 | 19 | 20 | 22) {
+            let mut wrong_id = fields;
+            wrong_id[1] = [99; 32].to_vec();
+            assert!(
+                validate_request(method, &frame(&wrong_id)).is_err(),
+                "op {} accepted another persisted ID",
+                operation.code()
+            );
+        }
+    }
+}

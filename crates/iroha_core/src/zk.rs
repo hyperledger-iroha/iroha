@@ -60,6 +60,9 @@ pub(crate) mod pasta_cycle_loader;
 pub(crate) mod pasta_dense_msm;
 /// Shared fixed-profile accounting for Pasta IPA recursive proofs.
 pub(crate) mod pasta_ipa_recursion;
+/// Dedicated exact native Poseidon permutations for the paired Claim fold.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_native_poseidon;
 /// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_sha256;

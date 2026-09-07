@@ -7,7 +7,8 @@ use super::v2_core as reducer;
 #[path = "v2_leader_wire_consumer.rs"]
 mod leader_wire_consumer;
 pub(crate) use leader_wire_consumer::{
-    LeaderWireRecoveryAuthority, vote_statement_hash as leader_wire_vote_statement_hash,
+    LeaderWireConsumerPosition, LeaderWireRecoveryAuthority,
+    vote_statement_hash as leader_wire_vote_statement_hash,
 };
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
@@ -3061,6 +3062,14 @@ pub(in crate::sumeragi) struct LifecycleReducerFenceObservationV1 {
     generation: u64,
 }
 impl LifecycleReducerFenceObservationV1 {
+    /// Construct an exact reducer-fence observation for lifecycle unit tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn for_test(
+        source: super::v2_lifecycle_coordinator::WaitSource,
+        generation: u64,
+    ) -> Self {
+        Self { source, generation }
+    }
     /// Return the context-scoped external wait source.
     pub(in crate::sumeragi) const fn source(self) -> super::v2_lifecycle_coordinator::WaitSource {
         self.source
@@ -11840,7 +11849,6 @@ impl SumeragiV2Adapter {
         payload: &wire::ConsensusMessageV2Payload,
     ) -> Result<(Option<AdapterOutcome>, Option<IngressAdmission>), AdapterError> {
         let current_tag = self.reducer.current_tag();
-        let current_view = current_tag.view();
         self.reclaim_serviced_candidates()?;
         self.prune_ingress_records();
         let locked_commit_progress = match payload {
@@ -11862,27 +11870,30 @@ impl SumeragiV2Adapter {
         } else {
             false
         };
-        if !self
-            .leader_wire_recovery_authority()?
-            .admits_payload(payload)
-        {
-            // Already-owned future work remains retryable. Fresh ingress uses
-            // the same policy before it can reserve a token or FIFO position.
-            let future = match payload {
-                wire::ConsensusMessageV2Payload::Proposal(p) => p.round.view > current_view,
-                wire::ConsensusMessageV2Payload::Vote(v) => v.round.view > current_view,
-                wire::ConsensusMessageV2Payload::TimeoutVote(v) => v.round.view > current_view,
-                wire::ConsensusMessageV2Payload::QuorumCertificate(qc) => {
-                    qc.round.view > current_view
-                }
-                _ => false,
-            };
+        let authority = self.leader_wire_recovery_authority()?;
+        // Progress eligibility cannot erase an already witnessed equivocation.
+        // The retained same-signer record bounds this diagnostic exception:
+        // the existing-record branch below reports or suppresses the conflict
+        // and returns before any new ingress owner or reducer work is admitted.
+        let admitted = authority.admits_payload(payload);
+        let conflicts_with_retained = !admitted
+            && ingress_equivocation_identity(payload).is_some_and(|(key, fingerprint)| {
+                self.ingress_equivocations
+                    .get(&key)
+                    .is_some_and(|record| record.fingerprint != fingerprint)
+            });
+        if !admitted && !conflicts_with_retained {
+            // Potentially eligible work keeps its exact FIFO/ingress owner.
+            // This includes current Commit shares awaiting the local lock;
+            // only monotone obsolescence permits terminal retirement.
             return Ok((
-                Some(Self::ignored_outcome(if future {
-                    reducer::IgnoreReason::Busy
-                } else {
-                    reducer::IgnoreReason::IrrelevantView
-                })),
+                Some(Self::ignored_outcome(
+                    if authority.retains_payload(payload) {
+                        reducer::IgnoreReason::Busy
+                    } else {
+                        reducer::IgnoreReason::IrrelevantView
+                    },
+                )),
                 None,
             ));
         }
@@ -11899,6 +11910,7 @@ impl SumeragiV2Adapter {
         let artifact = IngressEquivocationArtifact::from_payload(payload)
             .ok_or(AdapterError::EquivocationArtifactMismatch)?;
         let deferred_owner = self.deferred_owns_ingress(key, fingerprint);
+        let height_decided = self.reducer.durable_state().decision().is_some();
         if let Some(record) = self.ingress_equivocations.get_mut(&key) {
             if record.fingerprint == fingerprint {
                 if deferred_owner
@@ -11953,6 +11965,18 @@ impl SumeragiV2Adapter {
             if record.equivocation_reported {
                 return Ok((
                     Some(Self::ignored_outcome(reducer::IgnoreReason::Duplicate)),
+                    None,
+                ));
+            }
+            if height_decided {
+                // Once this height has a durable Decision, a newly observed
+                // conflict cannot affect consensus safety. Emitting diagnostic
+                // work here would put that non-critical output ahead of the
+                // decided Apply and can deadlock a minimally sized executor.
+                // Preserve the original semantic record and terminally absorb
+                // the conflicting authenticated carrier instead.
+                return Ok((
+                    Some(Self::ignored_outcome(reducer::IgnoreReason::AlreadyDecided)),
                     None,
                 ));
             }
@@ -17477,10 +17501,17 @@ impl SumeragiV2Adapter {
         if message.validate_version().is_err() {
             return false;
         }
-        let current_view = self.reducer.current_tag().view();
-        let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
-        let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
         let payload = &message.payload;
+        // Admission can retire a well-authenticated old-view statement before
+        // it reaches the reducer. Use the same actual-WAL eligibility as
+        // `admit_authenticated_payload`; a lock or retained view range alone
+        // cannot prove that this exact FIFO owner will encounter Busy.
+        let Ok(authority) = self.leader_wire_recovery_authority() else {
+            return false;
+        };
+        if !authority.admits_payload(payload) {
+            return false;
+        }
         let locked_commit_progress = match payload {
             wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
             _ => false,
@@ -17510,30 +17541,17 @@ impl SumeragiV2Adapter {
         }
         let semantic_key = match payload {
             wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                if proposal.round.view != current_view {
-                    return false;
-                }
                 Some(IngressSemanticKey::Proposal {
                     round: proposal.round,
                     proposer: proposal.proposer,
                 })
             }
-            wire::ConsensusMessageV2Payload::Vote(vote) => {
-                if vote.round.view > current_view
-                    || (vote.round.view < oldest_retained_view && !locked_commit_progress)
-                {
-                    return false;
-                }
-                Some(IngressSemanticKey::Vote {
-                    round: vote.round,
-                    phase: vote.phase,
-                    signer: vote.signer,
-                })
-            }
+            wire::ConsensusMessageV2Payload::Vote(vote) => Some(IngressSemanticKey::Vote {
+                round: vote.round,
+                phase: vote.phase,
+                signer: vote.signer,
+            }),
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
-                    return false;
-                }
                 Some(IngressSemanticKey::TimeoutVote {
                     round: vote.round,
                     signer: vote.signer,

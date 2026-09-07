@@ -2194,9 +2194,29 @@ mod tests {
             header.set_prev_block_hash(Some(anchor.snapshot_block_hash));
             header.creation_time_ms = 3;
             header.merkle_root = None;
-        })
-        .commit_unchecked()
-        .unpack(|_| {});
+        });
+        let mut signed: SignedBlock = successor.into();
+        signed
+            .set_transaction_results_with_transcripts(
+                Vec::new(),
+                &[],
+                Vec::new(),
+                BTreeMap::new(),
+                Vec::new(),
+                AxtPolicySnapshot::default(),
+            )
+            .expect("snapshot successor carries its exact empty execution outputs");
+        signed.set_committed_fragment_count(0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::from_hash(key.private_key(), signed.header().hash()),
+        );
+        signed
+            .replace_signatures(std::collections::BTreeSet::from([signature]))
+            .expect("sign the complete snapshot successor header");
+        let successor = ValidBlock::new_unverified_for_tests(signed)
+            .commit_unchecked()
+            .unpack(|_| {});
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut state_block = state.block(successor.as_ref().header());
         let _events = state_block.apply_without_execution(&successor, topology.as_ref().to_owned());

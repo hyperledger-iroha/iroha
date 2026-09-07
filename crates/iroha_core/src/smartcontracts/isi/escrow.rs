@@ -1158,14 +1158,20 @@ pub(crate) fn is_native_escrow_custody_asset(
             .world
             .resolve_asset_id_for_current_scope(source_id)?
     };
-    Ok(state_transaction.world.races.iter().any(|(_, race)| race.asset_definition == *resolved_id.definition() && race.custody == *resolved_id.account()) || state_transaction
+    Ok(state_transaction
         .world
-        .asset_escrows
-        .iter()
-        .any(|(_, record)| {
-            record.asset_definition == *resolved_id.definition()
-                && record.custody == *resolved_id.account()
-        })
+        .game_custody_by_account
+        .get(resolved_id.account())
+        .and_then(|id| state_transaction.world.game_sessions.get(id))
+        .is_some_and(|session| session.asset_definition == *resolved_id.definition())
+        || state_transaction
+            .world
+            .asset_escrows
+            .iter()
+            .any(|(_, record)| {
+                record.asset_definition == *resolved_id.definition()
+                    && record.custody == *resolved_id.account()
+            })
         || state_transaction
             .world
             .vpn_leases
@@ -1183,11 +1189,16 @@ pub(crate) fn is_protocol_escrow_custody_account(
     state_transaction: &StateTransaction<'_, '_>,
     account_id: &AccountId,
 ) -> bool {
-    state_transaction.world.races.iter().any(|(_, race)| race.custody == *account_id) ||     state_transaction
+    state_transaction
         .world
-        .asset_escrows
-        .iter()
-        .any(|(_, record)| record.custody == *account_id)
+        .game_custody_by_account
+        .get(account_id)
+        .is_some()
+        || state_transaction
+            .world
+            .asset_escrows
+            .iter()
+            .any(|(_, record)| record.custody == *account_id)
         || state_transaction
             .world
             .vpn_leases

@@ -413,7 +413,7 @@ mod tests {
         ValidationFail, block::consensus::LaneBlockCommitment, merge::MergeQuorumCertificate,
         peer::PeerId, transaction::error::TransactionRejectionReason::*,
     };
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use nonzero_ext::nonzero;
     use std::vec::Vec;
     impl BlockHeader {
@@ -437,6 +437,17 @@ mod tests {
         }
     }
     fn sample_merge_entry() -> MergeLedgerEntry {
+        let mut lane_validators: Vec<_> = (0..4)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("BLS lane committee fixture keypair")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        lane_validators.sort();
         let lane_incarnation = Hash::new(b"pipeline-event-lane-incarnation");
         let settlement_commitment = LaneBlockCommitment {
             block_height: 9,
@@ -464,6 +475,9 @@ mod tests {
                 incarnation: lane_incarnation,
                 activation_height: 0,
             }],
+            lane_authority_catalog:
+                crate::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&[lane_validators])
+                    .expect("canonical pipeline event lane authority"),
             incarnation_root: Hash::new(b"pipeline-event-incarnation-root"),
             activation_root: Hash::new(b"pipeline-event-activation-root"),
             lane_snapshots: vec![crate::merge::MergeLaneSnapshot {

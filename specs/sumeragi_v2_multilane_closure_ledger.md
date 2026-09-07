@@ -406,7 +406,10 @@ fail closed.
 
 **Closure condition.** Immediately before Prepare signing, Commit signing, and
 block admission, resolve the exact active incarnation and require the exact
-current predecessor height/hash plus the contiguous next height. The check must
+current predecessor height/hash plus the contiguous next height, and authenticate
+the required nullable `previous_native_settlement_hash` against the same State
+snapshot. Lane height one requires null; at later heights null identifies the
+first Native control, which may follow ordinary lane blocks. The check must
 use authenticated State/Kura evidence and must not trust a proposer-local
 journal or cache.
 
@@ -442,16 +445,22 @@ and settlement. `State::native_amx_participant_frontier_markers` derives the
 replicated frontier, which `StateBlock::stage_native_amx_participant_frontiers`
 encodes only after the durable evidence token authenticates the same markers.
 
-**Closure condition.** Require 1–4,096 ordered, unique sources; exact
-transaction count and timestamp; the current source exactly once; zero
-participant effects; no nested fee or Native receipts; and valid mixed-role
-block-wide anchoring. Prepare and Commit must carry identical participant
+**Closure condition.** Require the exact seven-field
+`NativeAmxParticipantSettlement`: lane, dataspace, incarnation, participant lane
+height, authority height, required nullable previous Native settlement hash,
+and 1–4,096 unique sources in candidate order. Economic, timestamp,
+transaction-count, and nested-receipt fields are rejected even when zero or
+empty. Require the current source exactly once and valid mixed-role block-wide
+anchoring. Only same-route coordinator legs must equal the complete coordinator
+source vector; separate participant groups may span coordinator groups.
+Prepare and Commit must carry identical participant
 payloads. Group persistence and frontier publication are all-or-nothing.
 
 **Focused and adversarial tests.** Cover zero, one, 4,096, and 4,097 sources;
-partial, duplicate, reordered, or foreign sources; wrong timestamp or
-transaction count; missing current source; duplicate entrypoint; nonzero
-effects; nested receipts; mismatched Prepare/Commit; conflicting settlement or
+partial, duplicate, reordered, or foreign sources; retired timestamp,
+transaction-count, economic, or nested-receipt fields; missing current source;
+duplicate entrypoint; omitted or incorrect previous Native hash; mismatched
+Prepare/Commit; conflicting settlement or
 proposal; and valid/invalid mixed-role and same-route blocks.
 
 **Formal obligation and mutation.** Invariant `MLNativeGroupExactCover` states
@@ -474,7 +483,8 @@ or duplicate application.
 canonical manifest, empty root, leaf validation, root, and leaf count. Kura
 persists the leaf/proof artifact and exact participant receipt as separate,
 immutable, versioned files named by participant height. Each file binds route,
-incarnation, predecessor, descriptor, proposal, settlement, ordered
+incarnation, shared-lane predecessor, descriptor, proposal, settlement, required
+nullable previous Native settlement hash, ordered
 source/result membership, global application identity, and executed wire;
 same-height publication is no-clobber and accepts only byte-identical replay.
 `merge_native_amx_application_sources`,
@@ -493,8 +503,8 @@ to that route.
 
 **Closure condition.** Define a versioned canonical Native application
 manifest. Its Merkle leaves and proofs bind route, incarnation, predecessor,
-participant proposal, settlement, ordered source/result membership, and
-application block height/hash. Commit its root in every globally finalized
+participant proposal, settlement, previous Native settlement hash, ordered
+source/result membership, and application block height/hash. Commit its root in every globally finalized
 execution commitment, using a canonical empty root when no Native application
 exists. The manifest must be independently reconstructible from the canonical
 executed wire.
@@ -1677,14 +1687,14 @@ name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies. The current mutable-tree inventory
-is exactly 1,451 grouped and 1,453 diagnostics records. Their canonical hashes
-are
-recorded once in the owning corpus row and once in the release gate. The
-release receipt must reproduce those values from its immutable candidate;
-the mutable-tree values alone are not evidence. The two specialized static
-Python modules are canonically runner-bound and the browser distribution
-matches its source. The release corridor and receipt bind the Rust wire
+and Kotlin/Java Native model dependencies. The previous inventory contained
+1,451 grouped and 1,453 diagnostics records; its historical hashes are recorded
+in the owning corpus row and release gate. Those counts and hashes require
+review after the seven-field Native migration. The release receipt must bind
+the renewed inventory from its immutable candidate; mutable-tree values alone
+are not evidence. The two specialized static Python modules are runner-bound;
+their seven-field validation and the browser distribution require matching
+qualification. The release corridor and receipt bind the Rust wire
 consumer directly; the Swift, Kotlin,
 and Java wire suites are included in the diagnostics runner and its receipt
 counts. These are source-inventory constraints only;
@@ -1719,16 +1729,19 @@ paths named in `ML-API-02`.
 The mutable transitive closure inventory includes those production mirrors and
 their Kotlin/Java Native dependencies. Every reviewed input and both specialized
 static tests are tracked, runner-bound, and represented in the mutable closure;
-the browser JavaScript distribution matches its source. Cross-SDK accept-set
-closure remains Open until the generated artifacts are reproduced from the
-clean immutable candidate and one complete differential run agrees with Rust.
+the seven-field source migration requires renewed distribution and inventory
+qualification. Cross-SDK accept-set closure remains Open until generated
+artifacts are reproduced from the clean immutable candidate and one complete
+differential run agrees with Rust.
 
 **Closure condition.** Every SDK enforces a tagged phase object; independent
 global, coordinator, and participant views; distinct source-ID and typed
 entrypoint-hash types; grouped bounds; the mixed-role deferred-validation
 marker; ordered validator sets; exact bitmaps/quorum; 96-byte PoPs and
 signatures; and unique bounded receipt legs. SDK convenience parsing must not
-weaken consensus validation.
+weaken consensus validation. Participant settlement parsers require all seven
+fields, including an explicit null or canonical nonzero previous Native hash;
+they reject the retired recursive/economic shape and preserve source order.
 
 **Focused and adversarial tests.** Feed the same positive and negative corpus
 to every SDK. Include phase/view drift, source/entrypoint type swap, group bound
@@ -1760,24 +1773,35 @@ explicit production builder; single-source construction is labelled as a test
 fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
-consumers. The checked-in mutable-development corpus inventories 56 negative
-controls: 46 validate receipt groups and 10 validate application evidence. The
-corpus includes
+consumers. The seven-field generator and consumer contract require 58 negative
+controls: 47 validate receipt groups and 11 validate application evidence.
+The new `missing_previous_native_settlement_hash` and
+`manifest_missing_previous_native_settlement_hash` controls reject omitted
+nullable links. The mutable Rust generator and its check have completed for
+this seven-field corpus. Complete cross-SDK and immutable-candidate
+qualification remain pending; the required count alone is not execution evidence.
+The corpus also includes
 `execution_commitment_merge_carrier_wrong_version` and
 `execution_commitment_missing_merge_carrier_field`, plus the four-mutation
 `coherent_duplicate_validator_set` and
 `coherent_over_quorum_requirement` controls; `bounds.validators_max` is 128.
-The harness and source-bound release inventory both require that exact count.
-The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
-5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
-contains exactly 1,451 grouped and 1,453 diagnostics records. Its grouped and
-diagnostics suite-source SHA-256 values are
+The parity harness, release inventory, and receipt writer require that exact
+count. Their current grouped suite counts are OpenAPI 7, Python 65, JavaScript
+63, Swift 7, Kotlin 9, and Java 7. The mandatory grouped tests include strict
+seven-field bounds, nullable history-link validation, and rejection of the
+incorrect raw-Hash source-array encoding.
+The previous reviewed inventories required OpenAPI 7, Python 63, JavaScript 61,
+Swift 5, Kotlin 7, and Java 6 tests, with 1,451 grouped and 1,453 diagnostics
+records. Those counts and the following historical digests predate the
+seven-field migration and do not bind the current source. They remain recorded
+without renewal; source-inventory review and matching execution are pending.
+The previous grouped and diagnostics suite-source SHA-256 values were
 `ecef1796ff203f77891e91e6b492d85d13f70f10df6d85e8f9e1dfebf167d52b`
 and
 `33e2610b3878a45d58052448b394787df693dd4bb402e153ea8cc92126a8bc77`.
-The checked-in grouped fixture has SHA-256
+The previous grouped fixture had SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
-The diagnostics closure directly includes the 48-line wire fixture whose
+The previous diagnostics closure directly included the 48-line wire fixture whose
 SHA-256 is
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The source-bound corridor now requires two disjoint Rust fixture generations,
@@ -1947,7 +1971,7 @@ Native signing-boundary drift rejection, atomic grouped reservation commit,
 checked snapshot replay file/owner sealing, exact QueuePlan obligation
 authentication, ApplyCarrier authorization, and canonical historical
 autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `522/522` source consistency and also source-
-bind the synchronized 56-control grouped corpus. The planned-
+bind the synchronized 58-control grouped corpus. The planned-
 association Rust coverage described under `ML-NAT-06` is present in the focused
 source inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12 passive-
 diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static Python
@@ -2077,25 +2101,26 @@ Swift, Kotlin core-jvm, and mirrored Java suites against the same Rust-owned
 grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
-The mutable grouped inventory is OpenAPI `7`, Python `63`, JavaScript `61`,
-Swift `5`, Kotlin `7`, and Java `6`, with exactly 56 grouped Native negative
+The mutable grouped inventory is OpenAPI `7`, Python `65`, JavaScript `63`,
+Swift `7`, Kotlin `9`, and Java `7`, with exactly 58 grouped Native negative
 controls. The diagnostics inventory is Rust `14`, Python `129`, JavaScript
 source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
-derived and receipt-bound from the exact immutable candidate. The current
-mutable-tree closure contains exactly 1,451 grouped and 1,453 diagnostics
-records, with grouped and diagnostics suite-source SHA-256 values
+derived and receipt-bound from the exact immutable candidate. The previous
+reviewed closure contained 1,451 grouped and 1,453 diagnostics records, with
+grouped and diagnostics suite-source SHA-256 values
 `ecef1796ff203f77891e91e6b492d85d13f70f10df6d85e8f9e1dfebf167d52b`
 and
 `33e2610b3878a45d58052448b394787df693dd4bb402e153ea8cc92126a8bc77`.
-The current grouped JSON and wire TSV SHA-256 values are
+The previous grouped JSON and wire TSV SHA-256 values were
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
-Those are development fixture inventories, not SDK results. The changed
+Those historical development values predate the seven-field Native migration
+and do not bind the current source or constitute SDK results. The changed
 JavaScript production roots require fresh deterministic source/distribution
 regeneration from a clean exact candidate, as do the five OpenAPI artifacts.
 No complete immutable-candidate grouped or diagnostics harness execution,
@@ -2150,7 +2175,7 @@ diagnostics must be added here or mapped to a ledger row before release.
 - The former first-release autonomous and drain limitations are retired in the
   canonical English architecture/operator documents. Historical entries in
   `status.md` and `roadmap.md` remain historical and are not evidence.
-- The Rust-owned grouped and wire generators and the 56-control corpus are
+- The Rust-owned grouped and wire generators and the 58-control corpus are
   present. Current checked-in fixtures, OpenAPI files, JavaScript distribution,
   and parity hashes remain mutable artifacts awaiting immutable-candidate
   regeneration, so `ML-API-04`, `ML-WIRE-01`, and `G-SDK` stay Open.
@@ -2189,7 +2214,7 @@ marker must be classified here before release.
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
 - `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 866-production-test,
-  522-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
+  522-G-UNIT-test, and 58-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
   substitute for a complete SDK harness, formal-engine result, or network

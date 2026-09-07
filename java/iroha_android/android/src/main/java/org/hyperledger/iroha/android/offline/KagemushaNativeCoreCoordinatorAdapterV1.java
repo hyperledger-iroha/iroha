@@ -16,6 +16,11 @@ import org.hyperledger.iroha.sdk.offline.KagemushaNativeSenderRecoveryV1;
 
 /** Java typed mirror using Kotlin's real JNI coordinator and identical context binding checks. */
 public final class KagemushaNativeCoreCoordinatorAdapterV1 implements KagemushaNativeCoreCoordinatorV1 {
+  @Override
+  public byte[] beginObservation(final int operation, final byte[] canonicalCommand) {
+    return delegate.beginObservation(operation, canonicalCommand.clone());
+  }
+
   private final org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorAdapterV1 delegate;
 
   private KagemushaNativeCoreCoordinatorAdapterV1(

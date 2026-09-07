@@ -269,6 +269,7 @@ impl_direct_instruction_box!(crate::isi::runtime_upgrade::CancelRuntimeUpgrade);
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 // Allow direct boxing of consensus key lifecycle instructions.
+impl_direct_instruction_box!(crate::isi::register::RegisterCommitteePeerWithPop);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);
@@ -281,17 +282,25 @@ impl_direct_instruction_box!(crate::isi::endorsement::SubmitDomainEndorsement);
 impl_direct_instruction_box!(crate::isi::social::ClaimTwitterFollowReward);
 impl_direct_instruction_box!(crate::isi::social::SendToTwitter);
 impl_direct_instruction_box!(crate::isi::social::CancelTwitterEscrow);
-// Native race lifecycle is a public consensus-owned instruction surface.
-impl_direct_instruction_box!(crate::isi::race::OpenRaceV1);
-impl_direct_instruction_box!(crate::isi::race::JoinRaceV1);
-impl_direct_instruction_box!(crate::isi::race::StartRaceV1);
-impl_direct_instruction_box!(crate::isi::race::CommitRaceCheckpointV1);
-impl_direct_instruction_box!(crate::isi::race::ChallengeRaceV1);
-impl_direct_instruction_box!(crate::isi::race::CommitRaceInputsV1);
-impl_direct_instruction_box!(crate::isi::race::RevealRaceInputsV1);
-impl_direct_instruction_box!(crate::isi::race::AdvanceRaceDeadlineV1);
-impl_direct_instruction_box!(crate::isi::race::SubmitRaceProofV1);
-impl_direct_instruction_box!(crate::isi::race::ExpireRaceV1);
+// Generic game session lifecycle is a public consensus-owned instruction surface.
+impl_direct_instruction_box!(crate::isi::game::RegisterExecutionProofProfileV1);
+impl_direct_instruction_box!(crate::isi::game::VerifyExecutionProofV1);
+impl_direct_instruction_box!(crate::isi::game::SettleGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::OpenGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::JoinGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::StartGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::CommitGameCheckpointV1);
+impl_direct_instruction_box!(crate::isi::game::ChallengeGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::CommitGameInputsV1);
+impl_direct_instruction_box!(crate::isi::game::RevealGameInputsV1);
+impl_direct_instruction_box!(crate::isi::game::AdvanceGameDeadlineV1);
+impl_direct_instruction_box!(crate::isi::game::ExpireGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::ClaimGamePayoutV1);
+impl_direct_instruction_box!(crate::isi::game::StakeGameItemV1);
+// Native exact-price NFT offers.
+impl_direct_instruction_box!(crate::isi::nft_market::OfferNftV1);
+impl_direct_instruction_box!(crate::isi::nft_market::BuyNftV1);
+impl_direct_instruction_box!(crate::isi::nft_market::CancelNftOfferV1);
 // Allow direct boxing of native asset escrow instructions.
 impl_direct_instruction_box!(crate::isi::escrow::OpenAssetEscrow);
 impl_direct_instruction_box!(crate::isi::escrow::AcceptAssetEscrow);
@@ -1914,9 +1923,11 @@ pub use staking::*;
 pub use transfer::*;
 pub use transparent::*;
 pub use vpn::*;
-/// Native race lifecycle instructions.
-pub mod race;
-pub use race::*;
+/// Generic game session lifecycle instructions.
+pub mod game;
+/// Generic native NFT sales.
+pub mod nft_market;
+pub use game::*;
 pub use zk::*;
 isi_box! {
     /// Enum with all supported [`SetKeyValue`] instructions.

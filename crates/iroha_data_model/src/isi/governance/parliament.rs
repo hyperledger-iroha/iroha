@@ -594,6 +594,15 @@ pub enum ParliamentLifecycleTransitionV1 {
     /// Terminally record expiry of a public-finding endorsement window.
     #[codec(index = 20)]
     FailPublicFindingNoResult(ParliamentFailPublicFindingNoResultV1),
+    /// Register the first complete sortition generation using consensus-derived inputs.
+    ///
+    /// The enclosing attempt is the only caller-supplied binding. Core derives
+    /// all initially required bodies, sequence-zero election identifiers, the
+    /// canonical eligible citizen snapshot, configured seat counts, containing
+    /// execution height, and the attempt's exact future logical-beacon slot.
+    /// This intent cannot select members or request a retry generation.
+    #[codec(index = 21)]
+    RegisterInitialSortition,
 }
 
 /// Bounded audit classification for a Parliament lifecycle transition.
@@ -685,6 +694,9 @@ pub enum ParliamentLifecycleTransitionKindV1 {
     /// Objective public-finding endorsement-window expiry.
     #[codec(index = 23)]
     FailPublicFindingNoResult,
+    /// Initial sortition registration with all selection inputs derived by consensus.
+    #[codec(index = 24)]
+    RegisterInitialSortition,
 }
 
 /// Domain separating the digest of an exact Parliament lifecycle transition.
@@ -741,7 +753,9 @@ impl ParliamentLifecycleTransitionV1 {
     )]
     pub fn validate_static(&self) -> Result<(), &'static str> {
         match self {
-            Self::EscalateRisk(_) | Self::CompleteQualification => {}
+            Self::EscalateRisk(_)
+            | Self::CompleteQualification
+            | Self::RegisterInitialSortition => {}
             Self::RegisterSortitionRequest(payload) => {
                 if payload.requests.is_empty()
                     || payload.requests.len() > MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1
@@ -995,6 +1009,9 @@ impl ParliamentLifecycleTransitionV1 {
             Self::EscalateRisk(_) => ParliamentLifecycleTransitionKindV1::EscalateRisk,
             Self::CompleteQualification => {
                 ParliamentLifecycleTransitionKindV1::CompleteQualification
+            }
+            Self::RegisterInitialSortition => {
+                ParliamentLifecycleTransitionKindV1::RegisterInitialSortition
             }
             Self::RegisterSortitionRequest(_) => {
                 ParliamentLifecycleTransitionKindV1::RegisterSortitionRequest
@@ -1420,6 +1437,7 @@ mod tests {
             ParliamentLifecycleTransitionV1::FailPublicFindingNoResult(
                 ParliamentFailPublicFindingNoResultV1 { body_instance_id },
             ),
+            ParliamentLifecycleTransitionV1::RegisterInitialSortition,
         ];
         for (expected_index, variant) in variants.into_iter().enumerate() {
             let kind = variant.kind();
@@ -1444,6 +1462,94 @@ mod tests {
                     .expect("decode Parliament lifecycle instruction JSON fixture");
             assert_eq!(decoded_json, instruction);
         }
+    }
+
+    #[test]
+    fn initial_sortition_intent_has_only_the_enclosing_attempt_binding() {
+        let intent = ParliamentLifecycleTransitionV1::RegisterInitialSortition;
+        let instruction = transition(intent.clone());
+        instruction
+            .validate_static()
+            .expect("nonzero outer attempt is sufficient for static initial intent");
+        assert_eq!(intent.encode(), 21_u32.to_le_bytes());
+        assert_eq!(
+            intent.kind(),
+            ParliamentLifecycleTransitionKindV1::RegisterInitialSortition
+        );
+        assert_eq!(intent.kind().encode(), 24_u32.to_le_bytes());
+        assert_slice_roundtrip(instruction.clone());
+        let value = json::to_value(&instruction).expect("initial intent JSON");
+        let object = value.as_object().expect("instruction object");
+        assert_eq!(object.len(), 2);
+        let tagged = object
+            .get("transition")
+            .and_then(json::Value::as_object)
+            .expect("tagged initial transition");
+        assert_eq!(
+            tagged.len(),
+            2,
+            "initial intent must have only its tag and null content field"
+        );
+        assert_eq!(
+            tagged.get("payload"),
+            Some(&json::Value::Null),
+            "initial intent must have no caller-selected payload"
+        );
+        assert_eq!(
+            tagged.get("transition").and_then(json::Value::as_str),
+            Some("RegisterInitialSortition")
+        );
+        assert_ne!(
+            intent.digest_v1(),
+            ParliamentLifecycleTransitionV1::CompleteQualification.digest_v1()
+        );
+        let mut zero = instruction;
+        zero.governance_attempt_id = GovernanceAttemptId::new([0; 32]);
+        assert!(zero.validate_static().is_err());
+    }
+
+    #[test]
+    fn initial_sortition_json_rejects_caller_selection_and_schedule_fields() {
+        let instruction = transition(ParliamentLifecycleTransitionV1::RegisterInitialSortition);
+        let original = json::to_value(&instruction).expect("initial intent JSON");
+        for field in [
+            "candidates",
+            "candidate_root",
+            "candidate_count",
+            "target_seats",
+            "request_height",
+            "pulse_height",
+            "beacon_session_id",
+            "body",
+            "body_election_attempt_id",
+            "sequence",
+        ] {
+            let mut changed = original.clone();
+            changed
+                .as_object_mut()
+                .and_then(|object| object.get_mut("transition"))
+                .and_then(json::Value::as_object_mut)
+                .expect("tagged initial transition")
+                .insert(
+                    field.to_owned(),
+                    json::Value::String("caller selected".to_owned()),
+                );
+            assert!(
+                json::from_value::<SubmitParliamentLifecycleTransitionV1>(changed).is_err(),
+                "initial intent must reject caller field {field}"
+            );
+        }
+        let mut payload = original;
+        payload
+            .as_object_mut()
+            .and_then(|object| object.get_mut("transition"))
+            .and_then(json::Value::as_object_mut)
+            .expect("tagged initial transition")
+            .insert("payload".to_owned(), norito::json!({"candidate_count": 1}));
+        assert!(
+            json::from_value::<SubmitParliamentLifecycleTransitionV1>(payload).is_err(),
+            "a payloadless initial intent must reject a caller selection payload"
+        );
     }
 
     #[test]

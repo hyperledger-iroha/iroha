@@ -112,6 +112,8 @@ pub mod isi {
                 nft.content(),
             )?;
             let (nft_id, nft_value) = nft.clone().into_key_value();
+            super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &nft_id)?;
+            super::super::nft_custody::ensure_nft_destination_unreserved(&state_transaction.world, authority)?;
             if state_transaction.world.nft(&nft_id).is_ok() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
@@ -135,6 +137,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let nft_id = self.object().clone();
+            super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &nft_id)?;
             remove_nft_associated_permissions(state_transaction, &nft_id);
             state_transaction
                 .world
@@ -159,6 +162,7 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &nft_id)?;
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -188,6 +192,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let nft_id = self.object().clone();
+            super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &nft_id)?;
             let value = state_transaction.world.nft_mut(&nft_id).and_then(|nft| {
                 nft.content
                     .remove(self.key().as_ref())
@@ -216,6 +221,8 @@ pub mod isi {
                 object,
                 destination,
             } = self;
+            super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &object)?;
+            super::super::nft_custody::ensure_nft_destination_unreserved(&state_transaction.world, &destination)?;
             state_transaction.world.account(&source)?;
             let _created =
                 ensure_receiving_account(authority, &destination, None, state_transaction)?;

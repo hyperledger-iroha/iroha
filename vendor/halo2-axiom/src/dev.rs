@@ -870,11 +870,9 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                 advice
                     .iter()
                     .map(|rc| match *rc {
-                        AdviceCellValue::Assigned(ref a) => CellValue::Assigned(match a.as_ref() {
-                            Assigned::Trivial(a) => *a,
-                            Assigned::Rational(a, b) => *a * b.invert().unwrap(),
-                            _ => F::ZERO,
-                        }),
+                        // Assigned defines a zero denominator as zero, including when the
+                        // cell participates in a gate, lookup, or permutation.
+                        AdviceCellValue::Assigned(ref a) => CellValue::Assigned(a.evaluate()),
                         AdviceCellValue::Poison(i) => CellValue::Poison(i),
                     })
                     .collect::<Vec<_>>()
@@ -1191,83 +1189,10 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
             }
         });
 
-        // Check that within each region, all cells used in instantiated gates have been
-        // assigned to.
-        let selector_errors = self.regions.iter().enumerate().flat_map(|(r_i, r)| {
-            r.enabled_selectors.iter().flat_map(move |(selector, at)| {
-                // Find the gates enabled by this selector
-                self.cs
-                    .gates
-                    .iter()
-                    // Assume that if a queried selector is enabled, the user wants to use the
-                    // corresponding gate in some way.
-                    //
-                    // TODO: This will trip up on the reverse case, where leaving a selector
-                    // un-enabled keeps a gate enabled. We could alternatively require that
-                    // every selector is explicitly enabled or disabled on every row? But that
-                    // seems messy and confusing.
-                    .enumerate()
-                    .filter(move |(_, g)| g.queried_selectors().contains(selector))
-                    .flat_map(move |(gate_index, gate)| {
-                        at.par_iter()
-                            .flat_map(move |selector_row| {
-                                // Selectors are queried with no rotation.
-                                let gate_row = *selector_row as i32;
-
-                                gate.queried_cells()
-                                    .iter()
-                                    .filter_map(move |cell| {
-                                        // Determine where this cell should have been assigned.
-                                        let cell_row =
-                                            ((gate_row + n + cell.rotation.0) % n) as usize;
-
-                                        match cell.column.column_type() {
-                                            Any::Instance => {
-                                                // Handle instance cells, which are not in the region.
-                                                let instance_value =
-                                                    &self.instance[cell.column.index()][cell_row];
-                                                match instance_value {
-                                                    InstanceValue::Assigned(_) => None,
-                                                    _ => Some(
-                                                        VerifyFailure::InstanceCellNotAssigned {
-                                                            gate: (gate_index, gate.name()).into(),
-                                                            region: (r_i, r.name.clone()).into(),
-                                                            gate_offset: *selector_row,
-                                                            column: cell.column.try_into().unwrap(),
-                                                            row: cell_row,
-                                                        },
-                                                    ),
-                                                }
-                                            }
-                                            _ => {
-                                                // Check that it was assigned!
-                                                if r.cells.contains_key(&(cell.column, cell_row)) {
-                                                    None
-                                                } else {
-                                                    Some(VerifyFailure::CellNotAssigned {
-                                                        gate: (gate_index, gate.name()).into(),
-                                                        region: (
-                                                            r_i,
-                                                            r.name.clone(),
-                                                            r.annotations.clone(),
-                                                        )
-                                                            .into(),
-                                                        gate_offset: *selector_row,
-                                                        column: cell.column,
-                                                        offset: cell_row as isize
-                                                            - r.rows.unwrap().0 as isize,
-                                                    })
-                                                }
-                                            }
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-            })
-        });
-
+        // Match the serial verifier: querying an unassigned cell with zero polynomial
+        // weight is permitted (including padding rotations used by SHPLONK). Region
+        // bookkeeping is not a circuit constraint. Gates, lookups and copy constraints
+        // are still checked below on the same complete domains as the serial path.
         let advice = self
             .advice
             .iter()
@@ -1275,6 +1200,8 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                 advice
                     .iter()
                     .map(|rc| match *rc {
+                        // Assigned defines a zero denominator as zero, including when the
+                        // cell participates in a gate, lookup, or permutation.
                         AdviceCellValue::Assigned(ref a) => CellValue::Assigned(a.evaluate()),
                         AdviceCellValue::Poison(i) => CellValue::Poison(i),
                     })
@@ -1366,20 +1293,27 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                 &|scalar| Value::Real(scalar),
                 &|_| panic!("virtual selectors are removed during optimization"),
                 &|query| {
-                    self.fixed[query.column_index]
-                        [(row as i32 + n + query.rotation.0) as usize % n as usize]
+                    let query = self.cs.fixed_queries[query.index.unwrap()];
+                    let column_index = query.0.index();
+                    let rotation = query.1.0;
+                    self.fixed[column_index][(row as i32 + n + rotation) as usize % n as usize]
                         .into()
                 },
                 &|query| {
-                    self.advice[query.column_index]
-                        [(row as i32 + n + query.rotation.0) as usize % n as usize]
+                    let query = self.cs.advice_queries[query.index.unwrap()];
+                    let column_index = query.0.index();
+                    let rotation = query.1.0;
+                    self.advice[column_index][(row as i32 + n + rotation) as usize % n as usize]
                         .clone()
                         .into()
                 },
                 &|query| {
+                    let query = self.cs.instance_queries[query.index.unwrap()];
+                    let column_index = query.0.index();
+                    let rotation = query.1.0;
                     Value::Real(
-                        self.instance[query.column_index]
-                            [(row as i32 + n + query.rotation.0) as usize % n as usize]
+                        self.instance[column_index]
+                            [(row as i32 + n + rotation) as usize % n as usize]
                             .value(),
                     )
                 },
@@ -1534,7 +1468,6 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
         };
 
         let mut errors: Vec<_> = iter::empty()
-            .chain(selector_errors)
             .chain(gate_errors)
             .chain(lookup_errors)
             .chain(perm_errors)

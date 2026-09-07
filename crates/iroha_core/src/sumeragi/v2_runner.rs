@@ -88,7 +88,8 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
-        QueuePlanBatchSources, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        QueuePlanBatchSources, V2CleanupSupervisor, V2CompletionRuntimeCutDecisionV1,
+        durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -2060,6 +2061,9 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCheckpointV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
+    CompletionPendingAtRuntimeCut,
+    CompletionCapacityReliefStepped,
+    LiveApplyRuntimePredecessorStepped,
     RecoveredLifecycleOutputCompleted,
     RecoveredLifecycleOutputSourceRetained,
     SettledLiveWalSign,
@@ -2067,6 +2071,7 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     SettledReleasedValidateApply,
     PendingReleasedValidateApply,
     SettledLifecycleOutput,
+    DelayedLifecycleOutputAdmitted,
     PendingLifecycleOutput,
     SettledDurableValidate,
     PendingDurableValidate,
@@ -2086,6 +2091,17 @@ impl AdvanceExecutorYieldV1 {
     ) -> Self {
         Self { checkpoint, cause }
     }
+
+    /// Whether the next outer turn must re-enter Completion before Runtime.
+    pub(in crate::sumeragi) const fn requires_completion_retry(self) -> bool {
+        matches!(
+            self.cause,
+            AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
+                | AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped
+                | AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
+                | AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+        )
+    }
 }
 
 /// Exhaustive result of one bounded serialized executor slice.
@@ -2100,11 +2116,12 @@ pub(in crate::sumeragi) enum AdvanceExecutorSliceOutcomeV1 {
     Yielded(AdvanceExecutorYieldV1),
 }
 
-fn advance_executor(
+pub(in crate::sumeragi) fn advance_executor(
     receiver: &FairV2Ingress,
     lifecycle_owner: &mut super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
+    protected_live_apply_ordinal: Option<u128>,
     limit: usize,
 ) -> Result<AdvanceExecutorSliceOutcomeV1, V2RunnerError> {
     for _ in 0..limit.max(1) {
@@ -2163,11 +2180,52 @@ fn advance_executor(
                 ),
             ));
         }
-        if executor.has_pending_lifecycle_output_admissions() {
+        let (live_apply_runtime_predecessor, delayed_apply_successor) = if executor
+            .has_pending_lifecycle_output_admissions()
+            && let Some(ordinal) = protected_live_apply_ordinal
+        {
+            let attestation = lifecycle_owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .map_err(|error| {
+                    V2RunnerError::Service(format!(
+                        "failed to authenticate the Ready live Apply runtime predecessor: {error:?}"
+                    ))
+                })?;
+            match attestation {
+                Some(attestation)
+                    if matches!(
+                        attestation.mode(),
+                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+                    ) =>
+                {
+                    (None, true)
+                }
+                Some(attestation)
+                    if executor.lifecycle_decision_apply_runtime_predecessor_drain_available(
+                        &attestation,
+                    )? =>
+                {
+                    (Some(attestation), false)
+                }
+                Some(_) | None => (None, false),
+            }
+        } else {
+            (None, false)
+        };
+        if executor.has_pending_lifecycle_output_admissions()
+            && live_apply_runtime_predecessor.is_none()
+        {
             return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
-                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                    if delayed_apply_successor {
+                        AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                    } else {
+                        AdvanceExecutorYieldCauseV1::PendingLifecycleOutput
+                    },
                 ),
             ));
         }
@@ -2188,7 +2246,56 @@ fn advance_executor(
             ));
         }
         executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-        match executor.step(Instant::now(), services)? {
+        let completion_cut = services
+            .prepare_completion_runtime_cut(executor.remaining_completion_capacity() != 0)
+            .map_err(V2RunnerError::Service)?;
+        let (step, retry_completion_after_step) = match completion_cut {
+            V2CompletionRuntimeCutDecisionV1::RetryCompletion => {
+                return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                    AdvanceExecutorYieldV1::new(
+                        AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+                    ),
+                ));
+            }
+            V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut) => {
+                let step = match live_apply_runtime_predecessor.as_ref() {
+                    Some(attestation) => executor
+                        .step_lifecycle_decision_apply_runtime_predecessor_after_cut(
+                            completion_cut,
+                            attestation,
+                            services,
+                        )?,
+                    None => executor.step_after_completion_runtime_cut(completion_cut, services)?,
+                };
+                (step, false)
+            }
+            V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut) => {
+                let step = match live_apply_runtime_predecessor.as_ref() {
+                    Some(attestation) => executor
+                        .step_lifecycle_decision_apply_completion_capacity_relief_after_cut(
+                            completion_cut,
+                            attestation,
+                            services,
+                        )?,
+                    None => executor
+                        .step_completion_capacity_relief_after_cut(completion_cut, services)?,
+                };
+                (step, true)
+            }
+        };
+        let live_apply_predecessor_advanced = live_apply_runtime_predecessor.is_some()
+            && matches!(step, EffectExecutorStep::Advanced { .. });
+        match step {
+            EffectExecutorStep::Idle if live_apply_runtime_predecessor.is_some() => {}
+            EffectExecutorStep::Idle if retry_completion_after_step => {
+                return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                    AdvanceExecutorYieldV1::new(
+                        AdvanceExecutorYieldCheckpointV1::AfterStep,
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+                    ),
+                ));
+            }
             EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle),
             EffectExecutorStep::Advanced { .. } => {
                 // A PrepareQC can replace the protected lock without changing
@@ -2197,6 +2304,51 @@ fn advance_executor(
                 // reclaim service ownership for the superseded subject.
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
+        }
+        if let (Some(ordinal), Some(_)) = (
+            protected_live_apply_ordinal,
+            live_apply_runtime_predecessor.as_ref(),
+        ) {
+            let post_step = lifecycle_owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .map_err(|error| {
+                    V2RunnerError::Service(format!(
+                        "failed to reauthenticate the Ready live Apply runtime predecessor: {error:?}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "Ready live Apply runtime predecessor changed after its sealed step"
+                            .to_owned(),
+                    )
+                })?;
+            if !executor.lifecycle_decision_apply_runtime_predecessor_remains_exact(&post_step)? {
+                return Err(V2RunnerError::Service(
+                    "Ready live Apply runtime predecessor lost its exact post-step owner"
+                        .to_owned(),
+                ));
+            }
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    if live_apply_predecessor_advanced {
+                        AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
+                    } else {
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
+                    },
+                ),
+            ));
+        }
+        if retry_completion_after_step {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+                ),
+            ));
         }
         let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
             lifecycle_owner,
@@ -2906,39 +3058,41 @@ fn dispatch_lane_work_effects_with_progress(
             .can_retain_lane_work_effect_from_snapshot(&next_effect, queue_plan_sources.as_mut())
             .map_err(V2RunnerError::Service)?
         {
-            let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-            drop(effect);
             if next_effect.retries_from_native_catalog_after_source_retention() {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
                 // Catalog ownership survives a known-full worker just as it
                 // survives an enqueue race below. Do not let this peer pin the
                 // adapter's bounded delivery queue.
                 continue;
             }
-            if !lane_work.requeue_effect(next_effect) {
+            if !lane_work.rotate_next_effect() {
                 return Err(V2RunnerError::Service(
                     "lane-work scheduler could not restore a reserved effect".to_owned(),
                 ));
             }
             continue;
         }
-        let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-        drop(effect);
+        // Keep the original effect, exact reply routes and fair-ingress owner
+        // until the worker confirms transfer. Late local validation can fail
+        // after the capacity preflight, before any worker ownership exists.
         match dispatch_lane_work_effect_from_snapshot(
             services,
             next_effect,
             queue_plan_sources.as_mut(),
         )? {
             LaneWorkEffectDispatch::Complete => {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
                 dispatched = dispatched.saturating_add(1);
             }
             LaneWorkEffectDispatch::SourceRetained(effect) => {
                 if effect.retries_from_native_catalog_after_source_retention() {
+                    let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
                     // The compact body/peer catalog remains the source owner.
                     // Free this bounded delivery slot so the next cadence can
                     // rotate past a worker-saturated or silent peer.
                     continue;
                 }
-                if !lane_work.requeue_effect(effect) {
+                if !lane_work.rotate_next_effect() {
                     return Err(V2RunnerError::Service(
                         "lane-work scheduler could not retain a source-backpressured sidecar effect"
                             .to_owned(),
@@ -3082,6 +3236,11 @@ fn dispatch_lane_work_effect_from_snapshot(
                 ));
             }
         }
+    }
+    if services.lifecycle_output_guard().restart_required() {
+        return Err(V2RunnerError::Service(
+            "lane-work service admission requires process restart".to_owned(),
+        ));
     }
     Ok(LaneWorkEffectDispatch::Complete)
 }

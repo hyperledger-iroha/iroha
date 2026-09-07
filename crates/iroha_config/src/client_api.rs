@@ -3320,6 +3320,20 @@ mod test {
             .assert_eq(&format!("{actual}\n"));
         let parsed: ConfigGetDTO =
             norito::json::from_json(&actual).expect("configuration snapshot should deserialize");
+        // The integration target enables crc-key-hash through feature unification.
+        // Every public entry point must use the same field-dispatch hashes.
+        for decoded in [
+            norito::json::from_json_fast::<ConfigGetDTO>(&actual),
+            norito::json::from_json_fast_smart::<ConfigGetDTO>(&actual),
+        ] {
+            let decoded = decoded.expect("all configuration JSON paths must decode");
+            assert_eq!(decoded.public_key, value.public_key);
+            assert_eq!(decoded.confidential_gas.proof_base, 777_777);
+            assert_eq!(
+                decoded.network.chain_discriminant,
+                value.network.chain_discriminant
+            );
+        }
         assert_eq!(parsed.confidential_gas.proof_base, 777_777);
         assert_eq!(parsed.confidential_gas.per_public_input, 3_333);
         assert_eq!(parsed.confidential_gas.per_proof_byte, 42);

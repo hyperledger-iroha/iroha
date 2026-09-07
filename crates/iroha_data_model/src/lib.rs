@@ -63,6 +63,8 @@ pub use asset::{AssetDefinitionId, AssetId};
 pub mod block;
 /// Bridge-related data types.
 pub mod bridge;
+/// Application-owned upgraded racing replay and state types; no custody authority.
+pub mod classed_race_v1;
 /// Shared primitives reused across data model modules.
 pub mod common;
 /// Compute lane requests, manifests, and receipts.
@@ -160,8 +162,11 @@ pub mod qr_stream;
 pub mod query;
 /// Generic hidden-program RAM-LFE program policies and receipts.
 pub mod ram_lfe;
-/// Native trustless racing records and signed gameplay messages.
-pub mod race;
+/// Application-independent game session records and signed gameplay messages.
+pub mod game;
+pub mod game_resources;
+/// Native NFT custody and exact-price sale records.
+pub mod nft_market;
 /// Repo agreement descriptors and governance knobs.
 pub mod repo;
 /// Role-based access control definitions.

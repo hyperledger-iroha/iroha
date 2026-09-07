@@ -4154,7 +4154,7 @@ mod tests {
     ) -> Vec<u8> {
         let mut snapshots = snapshots.iter().collect::<Vec<_>>();
         snapshots.sort_by(|left, right| left.accumulator_id.cmp(&right.accumulator_id));
-        let entries = snapshots
+        let entries: Vec<_> = snapshots
             .into_iter()
             .map(|snapshot| {
                 let body = SccpReplayArchiveCheckpointBodyV1::from_snapshot(snapshot)

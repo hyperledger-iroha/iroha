@@ -27,7 +27,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
             },
         )
 
-        val provider = factory.open(availableBridge())
+        val provider = factory.open(availableBridge(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
 
         assertIs<KagemushaAuthenticatedHardwareProviderV1>(provider)
         assertEquals(1, creations)
@@ -36,7 +36,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
     @Test
     fun `missing or multiple native Core factories fail closed before creating a coordinator`() {
         val missing = assertFailsWith<IllegalStateException> {
-            factoryWith().open(availableBridge())
+            factoryWith().open(availableBridge(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
         }
         assertTrue(missing.message!!.contains("none was installed"))
 
@@ -46,7 +46,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
             coordinatorProxy()
         }
         val multiple = assertFailsWith<IllegalStateException> {
-            factoryWith(candidate(), candidate()).open(availableBridge())
+            factoryWith(candidate(), candidate()).open(availableBridge(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
         }
         assertTrue(multiple.message!!.contains("multiple were installed"))
         assertEquals(0, creations)
@@ -61,7 +61,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
         }
 
         assertFailsWith<IllegalStateException> {
-            factory.open(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
+            factory.open(KagemushaDeviceLifecycleBridgeV1.onlineOnly(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
         }
         assertEquals(0, discoveryCalls)
     }
@@ -75,7 +75,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
         )
 
         val failure = assertFailsWith<IllegalStateException> {
-            factory.open(availableBridge())
+            factory.open(availableBridge(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
         }
 
         assertTrue(failure.message!!.contains("could not be created"))
@@ -104,7 +104,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
 
         assertTrue(providers.isEmpty())
         val failure = assertFailsWith<IllegalStateException> {
-            KagemushaAndroidAuthenticatedHardwareProviderFactoryV1().open(availableBridge())
+            KagemushaAndroidAuthenticatedHardwareProviderFactoryV1().open(availableBridge(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
         }
         assertTrue(failure.message!!.contains("none was installed"))
     }

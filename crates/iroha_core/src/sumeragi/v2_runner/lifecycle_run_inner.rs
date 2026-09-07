@@ -922,7 +922,30 @@ fn run_lifecycle_active_height(
                         // remains fenced by the registered Validate owner.
                         executor
                             .set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-                        let _ = executor.step_pacemaker_once(Instant::now(), services)?;
+                        let completion_cut = services
+                            .prepare_completion_runtime_cut(
+                                executor.remaining_completion_capacity() != 0,
+                            )
+                            .map_err(V2RunnerError::Service)?;
+                        match completion_cut {
+                            V2CompletionRuntimeCutDecisionV1::RetryCompletion => {}
+                            V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut) => {
+                                let _ = executor.step_pacemaker_after_completion_runtime_cut(
+                                    completion_cut,
+                                    services,
+                                )?;
+                            }
+                            V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut) => {
+                                // The full FIFO necessarily retains a reserved
+                                // Completion-class owner. Retire exactly that
+                                // owner; Normal/Progress/timer work remains
+                                // fenced by AwaitingValidateSidecar.
+                                let _ = executor.step_completion_capacity_relief_after_cut(
+                                    completion_cut,
+                                    services,
+                                )?;
+                            }
+                        }
                         let directive = reconcile_executor_locked_body(executor, services)?;
                         local_proposal
                             .state
@@ -1012,7 +1035,8 @@ fn run_lifecycle_active_height(
                         lane_work.schedule_retransmission()?;
                         next_lane_retransmit = deadline_after(now, retransmit_interval);
                     }
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
+                    Ok::<_, V2RunnerError>(())
                 },
             )?;
         } else {
@@ -1257,7 +1281,14 @@ fn run_lifecycle_active_height(
                     // actor-owned admission rank; consuming the whole command
                     // capacity here would postpone its next retry for that
                     // entire synchronous batch.
-                    let executor_slice = advance_executor(receiver, owner, executor, services, 1)?;
+                    let executor_slice = advance_executor(
+                        receiver,
+                        owner,
+                        executor,
+                        services,
+                        producer_claim.required_ready_ordinal(),
+                        1,
+                    )?;
                     if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice {
                         return Ok::<_, V2RunnerError>((false, executor_slice, false));
                     }
@@ -1549,7 +1580,7 @@ fn run_lifecycle_active_height(
                     .with_runner_runtime(
                         &mut active_runner,
                         |_owner, executor, _services, _local_proposal| {
-                            let pending = lane_work.has_pending_historical_recovery();
+                            let pending = lane_work.has_pending_historical_recovery()?;
                             let durable = if pending {
                                 None
                             } else {

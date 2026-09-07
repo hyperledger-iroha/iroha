@@ -1,3 +1,9 @@
+/// Publication authority established by exact canonical carrier authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthenticatedMergeCarrierPublication {
+    PreFinalityTip,
+    Finalized,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct PostWsvLaneArtifactExecutionIdentity {
     lane_id: LaneId,
@@ -570,7 +576,7 @@ impl Kura {
         &self,
         entry: &MergeLedgerEntry,
         carrier: &SignedBlock,
-    ) -> Result<()> {
+    ) -> Result<AuthenticatedMergeCarrierPublication> {
         let entry_hash = crate::merge::merge_ledger_entry_hash(entry);
         if self.merge_log.lock().entry_by_hash(entry_hash)?.as_ref() != Some(entry) {
             return Err(Self::invalid_lane_artifact_error(
@@ -585,12 +591,12 @@ impl Kura {
             .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(carrier_height)?
             .is_some()
         {
-            return self
-                .authenticate_post_wsv_lane_artifact_carrier_under_prune_and_canonical_guards(
-                    entry,
-                    carrier_height,
-                    carrier_hash,
-                );
+            self.authenticate_post_wsv_lane_artifact_carrier_under_prune_and_canonical_guards(
+                entry,
+                carrier_height,
+                carrier_hash,
+            )?;
+            return Ok(AuthenticatedMergeCarrierPublication::Finalized);
         }
         let durable_tip = u64::try_from(self.exact_durable_blocks_count()?)?;
         if carrier_height != durable_tip {
@@ -620,7 +626,7 @@ impl Kura {
                 "pre-finality post-WSV reservation lost its exact canonical carrier",
             ));
         }
-        Ok(())
+        Ok(AuthenticatedMergeCarrierPublication::PreFinalityTip)
     }
     /// Authenticate an exact committed carrier while the caller holds prune
     /// and canonical-chain guards, then acquire geometry and sidecar in the
@@ -654,7 +660,15 @@ impl Kura {
         entry: &MergeLedgerEntry,
         carrier: &SignedBlock,
     ) -> Result<u64> {
-        self.authenticate_post_wsv_lane_artifact_carrier_pre_finality_under_prune_and_canonical_guards(
+        self.ensure_post_wsv_lane_artifact_budget_reservation_with_publication_under_prune_and_canonical_guards(entry, carrier)
+            .map(|(reserved_bytes, _)| reserved_bytes)
+    }
+    fn ensure_post_wsv_lane_artifact_budget_reservation_with_publication_under_prune_and_canonical_guards(
+        &self,
+        entry: &MergeLedgerEntry,
+        carrier: &SignedBlock,
+    ) -> Result<(u64, AuthenticatedMergeCarrierPublication)> {
+        let publication = self.authenticate_post_wsv_lane_artifact_carrier_pre_finality_under_prune_and_canonical_guards(
             entry, carrier,
         )?;
         let carrier_height = carrier.header().height().get();
@@ -663,12 +677,14 @@ impl Kura {
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
-        self.ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(
-            pending_canonical_bytes,
-            entry,
-            carrier_height,
-            carrier_hash,
-        )
+        let reserved_bytes = self
+            .ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(
+                pending_canonical_bytes,
+                entry,
+                carrier_height,
+                carrier_hash,
+            )?;
+        Ok((reserved_bytes, publication))
     }
     fn ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(
         &self,
@@ -1203,6 +1219,12 @@ impl Kura {
                     ),
                 );
             }
+        }
+        if !block.has_results() {
+            // Raw pending bodies have no execution-derived application manifest.
+            // Their canonical bytes and payload ownerships are already budgeted;
+            // result-bearing publication accounts its own authenticated evidence.
+            return Ok(total);
         }
         let native_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
             block,

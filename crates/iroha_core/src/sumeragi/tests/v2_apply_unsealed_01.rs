@@ -103,11 +103,12 @@ v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
         .try_sign_with_index(fixture.genesis_key.private_key(), 0)
         .expect("sign merge carrier")
         .unpack(|_| {});
-    let carrier = SignedBlock::from(carrier);
+    let carrier = complete_empty_fixture_block(SignedBlock::from(carrier), &fixture.genesis_key);
     fixture
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
         .expect("persist exact merge carrier and sidecar");
+    fixture.persist_exact_v2_finality_chain(&[&carrier]);
     fixture
         .state
         .seed_applied_merge_entry_for_v2_settlement_test(&entry)
@@ -796,12 +797,13 @@ v2_apply_test!(
             .expect("install exact post-carrier repair lane marker");
         fixture
             .kura
-            .store_block(Arc::new(parent))
+            .store_block(Arc::new(parent.clone()))
             .expect("persist post-carrier repair parent");
         fixture
             .kura
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist exact post-carrier repair entry and carrier");
+        fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
         let lane_count = entry
             .execution_batch
             .as_ref()
@@ -1170,8 +1172,56 @@ v2_apply_test!(
         assert!(queue.live_lane_reservations().is_empty());
     }
 );
+// Establish actual signed local custody before canonical Queue recovery. The
+// reservation identities must already be derived from this exact native payload.
+fn install_replayed_carrier_lifecycle_for_test(
+    fixture: &ApplyFixture,
+    entry: &MergeLedgerEntry,
+) -> LaneQueueReservationGroupBindingV1 {
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("replayed carrier execution batch");
+    assert_eq!(
+        batch.lanes.len(),
+        1,
+        "this fixture contains one exact carrier group"
+    );
+    let execution = &batch.lanes[0];
+    let payload = Kura::decode_autonomous_lane_merge_bundle(
+        &execution.source_bundle,
+        execution.autonomous_network_id,
+        execution.autonomous_epoch,
+    )
+    .expect("decode actual replayed carrier source")
+    .autonomous
+    .executable_payload;
+    let signer = &fixture.validator_keys[0];
+    let local_peer = PeerId::new(signer.public_key().clone());
+    fixture
+        .kura
+        .bind_local_peer_id(local_peer.clone())
+        .expect("bind the actual committee lifecycle validator");
+    let generation = fixture
+        .kura
+        .claim_autonomous_lifecycle_process_generation(payload.network_id, &local_peer)
+        .expect("claim the exact replayed carrier lifecycle generation");
+    fixture
+        .kura
+        .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
+        .expect("persist the actual owned replayed carrier payload");
+    install_live_lifecycle_cursor_for_apply_test(
+        fixture.kura.as_ref(),
+        &generation,
+        &payload,
+        fixture.context.id(),
+        &local_peer,
+        signer,
+    )
+}
+
 v2_apply_test!(
-    startup_reconciliation_consumes_replayed_committed_merge_reservation,
+    startup_reconciliation_completes_before_retirement_and_replays_terminal_journal,
     {
         let fixture = ApplyFixture::new_with_lane_lifecycle();
         let reservation_lane = install_recreatable_reservation_lane(&fixture);
@@ -1195,7 +1245,7 @@ v2_apply_test!(
         first_queue
             .install_lane_reservation_journal(&journal_path, 1024 * 1024)
             .expect("install first-process reservation journal");
-        let (reservation, entrypoint) = reserve_transaction_for_lane_test_with_identity(
+        let (initial_reservation, entrypoint) = reserve_transaction_for_lane_test_with_identity(
             fixture.state.as_ref(),
             &first_queue,
             transaction,
@@ -1203,6 +1253,12 @@ v2_apply_test!(
             reservation_lane.dataspace_id,
             Hash::new(b"stale committed reservation owner"),
             Hash::new(b"stale committed reservation proposal"),
+        );
+        let reservation = bind_exact_fixture_reservation_identity(
+            &fixture,
+            &first_queue,
+            initial_reservation,
+            &entrypoint,
         );
         // Reserve an independent uncommitted owner under the same original
         // incarnation before State advances or the lane is recreated. Its
@@ -1246,6 +1302,7 @@ v2_apply_test!(
         drop(stale_first_queue);
         let (parent, entry) =
             merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+        let group = install_replayed_carrier_lifecycle_for_test(&fixture, &entry);
         let carrier = body_with_exact_merge_execution_header(&entry);
         fixture
             .kura
@@ -1256,6 +1313,11 @@ v2_apply_test!(
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist committed merge carrier and exact sidecar");
         fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
+        fixture
+            .state
+            .block(parent.header())
+            .commit_world_overlay_for_testing()
+            .expect("finalize the fixture genesis world before corrupting State history");
         fixture.state.record_committed_entrypoints_for_tests(
             [reservation.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier transaction height"),
@@ -1277,13 +1339,16 @@ v2_apply_test!(
             &verified_context_for_fixture(&fixture, &fixture.context),
         )
         .expect_err("a durable Kura carrier absent from committed State history must fail");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::CommittedCarrierMismatch {
-                lane_id,
-                proposal_height: 1,
-            } if lane_id == reservation_lane.id
-        ));
+        assert!(
+            matches!(
+                error,
+                V2ReservationLifecycleError::CommittedCarrierMismatch {
+                    lane_id,
+                    proposal_height: 1,
+                } if lane_id == reservation_lane.id
+            ),
+            "cross-store carrier mismatch must preserve Queue ownership: {error:?}",
+        );
         assert_eq!(fixture.state.committed_height(), 0);
         assert_eq!(
             first_queue
@@ -1292,32 +1357,106 @@ v2_apply_test!(
             missing_history_snapshot,
             "missing canonical State history must not consume Queue ownership"
         );
-        commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-        fixture.state.record_committed_entrypoints_for_tests(
-            [reservation.entrypoint_hash],
-            NonZeroUsize::new(1).expect("deliberately mismatched State membership height"),
+        // The negative fixture already installed transaction membership at height two.
+        // Restore only the deliberately omitted canonical hash history; committing
+        // genesis again would violate the existing transaction frontier.
+        let mut block_hashes = fixture.state.block_hashes.block();
+        block_hashes.push_for_tests(parent.hash());
+        block_hashes.push_for_tests(carrier.hash());
+        block_hashes.commit_for_tests();
+        assert_eq!(fixture.state.committed_height(), 2);
+        assert_eq!(fixture.state.latest_block_hash_fast(), Some(carrier.hash()));
+        fixture
+            .kura
+            .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
+            .expect("persist the exact applied carrier receipt before lane recreation");
+        fixture
+            .state
+            .record_committed_queue_plan_entrypoints_for_tests(
+                [reservation.entrypoint_hash],
+                NonZeroUsize::new(2).expect("exact original committed carrier height"),
+            )
+            .expect(
+                "resolve the original committed QueuePlan obligation before recreating its lane",
+            );
+        let publication = fixture
+            .kura
+            .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&entry)
+            .expect("persist the complete canonical source-outcome set before Queue mutation")
+            .expect("one execution carrier has a canonical source-outcome set");
+        drop(publication);
+        let pending_inventory = fixture
+            .kura
+            .pending_autonomous_lifecycle_terminal_outcome_inventory()
+            .expect("inventory the complete Pending carrier");
+        assert_eq!(pending_inventory.len(), 1);
+        let expected_groups = pending_inventory[0]
+            .pending_reservation_groups()
+            .expect("retain the exact Pending group identity")
+            .to_vec();
+        assert_eq!(expected_groups.len(), 1);
+        assert_eq!(expected_groups[0].binding(), group);
+        let snapshot = first_queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture pending retirement Queue ownership");
+        {
+            let observer = first_queue.lock_lane_retirement_observer();
+            V2ApplyService::validate_autoscale_retirement_queue_binding(
+                &observer,
+                reservation.lane_id,
+                reservation.dataspace_id,
+                reservation.lane_incarnation,
+            )
+            .expect_err("production retirement must reject the unresolved canonical Queue owner");
+        }
+        assert_eq!(
+            first_queue
+                .lane_reservation_reconciliation_snapshot()
+                .unwrap(),
+            snapshot
         );
-        drop(first_queue);
-        let (old_incarnation, new_incarnation) =
-            replace_recreatable_reservation_lane(fixture.state.as_ref(), &reservation_lane);
-        assert_eq!(reservation.lane_incarnation, old_incarnation);
-        assert_ne!(reservation.lane_incarnation, new_incarnation);
-        assert_ne!(
+        let retirement_error = fixture
+            .state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![reservation_lane.clone()],
+                retire: vec![reservation_lane.id],
+            })
+            .expect_err("actual storage rotation must reject Pending canonical lifecycle debt");
+        assert!(
+            retirement_error
+                .to_string()
+                .contains("Pending autonomous lifecycle terminal outcome")
+                || retirement_error.to_string().contains("slot retirement"),
+            "unexpected terminality refusal: {retirement_error}"
+        );
+        assert_eq!(
+            fixture.state.lane_incarnation(reservation_lane.id),
+            Some(reservation.lane_incarnation)
+        );
+        assert!(
             fixture
-                .state
-                .lane_incarnation_at_height(reservation.lane_id, reservation.proposal_height,),
-            Some(reservation.lane_incarnation),
-            "fixture must exercise committed recovery after same-ID recreation"
+                .kura
+                .read_lane_block_application_receipt_without_sidecar_repair(
+                    reservation.lane_id,
+                    reservation.lane_block_height,
+                )
+                .is_some(),
+            "refused retirement must retain its active receipt"
         );
-        assert_eq!(stale_reservation.lane_incarnation, old_incarnation);
-        assert_ne!(stale_reservation.lane_incarnation, new_incarnation);
+        fixture
+            .state
+            .transactions
+            .overwrite_committed_entrypoint_membership_for_tests(
+                reservation.entrypoint_hash,
+                NonZeroUsize::new(1).expect("deliberately mismatched State membership height"),
+            );
         assert_eq!(
             fixture
                 .state
-                .lane_incarnation_at_height(reservation_lane.id, 3),
-            Some(new_incarnation),
-            "replacement incarnation B must activate at the next proposal height"
+                .committed_entrypoint_height(&reservation.entrypoint_hash),
+            NonZeroUsize::new(1)
         );
+        drop(first_queue);
         let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
         let replayed_queue = Queue::from_config(QueueConfig::default(), events_sender);
         let replay = replayed_queue
@@ -1332,7 +1471,7 @@ v2_apply_test!(
             .expect("install replayed queue-plan journal");
         replayed_queue
             .replay_plan_journal(fixture.state.as_ref())
-            .expect("replay committed QueuePlan claim after same-ID recreation");
+            .expect("replay committed QueuePlan claim before retirement");
         assert_eq!(replay.restored, 1);
         assert_eq!(replayed_queue.live_lane_reservations(), vec![reservation]);
         assert!(
@@ -1350,13 +1489,16 @@ v2_apply_test!(
             &verified_active_context,
         )
         .expect_err("State membership at another height must not consume ownership");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::CommittedCarrierMismatch {
-                lane_id,
-                proposal_height: 1,
-            } if lane_id == reservation_lane.id
-        ));
+        assert!(
+            matches!(
+                error,
+                V2ReservationLifecycleError::CommittedCarrierMismatch {
+                    lane_id,
+                    proposal_height: 1,
+                } if lane_id == reservation_lane.id
+            ),
+            "cross-store carrier mismatch must preserve Queue ownership: {error:?}",
+        );
         assert_eq!(
             replayed_queue
                 .lane_reservation_reconciliation_snapshot()
@@ -1364,9 +1506,18 @@ v2_apply_test!(
             mismatched_snapshot
         );
         assert!(replayed_queue.lane_reservation_startup_reconciliation_pending());
-        fixture.state.record_committed_entrypoints_for_tests(
-            [reservation.entrypoint_hash],
-            NonZeroUsize::new(2).expect("exact merge-carrier State height"),
+        fixture
+            .state
+            .transactions
+            .overwrite_committed_entrypoint_membership_for_tests(
+                reservation.entrypoint_hash,
+                NonZeroUsize::new(2).expect("exact merge-carrier State height"),
+            );
+        assert_eq!(
+            fixture
+                .state
+                .committed_entrypoint_height(&reservation.entrypoint_hash),
+            NonZeroUsize::new(2)
         );
         assert_eq!(
             reconcile_lane_reservation_ownership(
@@ -1407,11 +1558,101 @@ v2_apply_test!(
             .expect("repeat startup reconciliation"),
             LaneReservationReconciliationSummary::default()
         );
-        // The bypass above is deliberately limited to ownership already
-        // proved committed by State and one exact canonical carrier. An
-        // uncommitted owner from the original incarnation remains
-        // quarantined across replay until authenticated archived-terminal
-        // evidence exists for that complete group.
+        let stages = fixture
+            .kura
+            .pending_autonomous_lifecycle_terminal_outcome_inventory()
+            .expect("inventory completed canonical source outcomes");
+        assert!(
+            stages.is_empty(),
+            "Queue cleanup must durably complete the Kura source outcome"
+        );
+        let completed_stages = fixture
+            .kura
+            .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
+                fixture.context.network_id,
+                &expected_groups,
+            )
+            .expect("independently verify the actual native Complete outcome");
+        assert_eq!(completed_stages.len(), 1);
+        assert_eq!(completed_stages[0].binding(), group);
+        assert_eq!(
+            completed_stages[0].stage(),
+            crate::kura::AutonomousLifecycleTerminalOutcomeDurableStage::Complete
+        );
+        {
+            let observer = replayed_queue.lock_lane_retirement_observer();
+            V2ApplyService::validate_autoscale_retirement_queue_binding(
+                &observer,
+                reservation.lane_id,
+                reservation.dataspace_id,
+                reservation.lane_incarnation,
+            )
+            .expect("genuine Queue terminality permits production retirement");
+        }
+        let (old_incarnation, new_incarnation) =
+            replace_recreatable_reservation_lane(fixture.state.as_ref(), &reservation_lane);
+        assert_eq!(reservation.lane_incarnation, old_incarnation);
+        assert_ne!(reservation.lane_incarnation, new_incarnation);
+        assert_ne!(
+            fixture
+                .state
+                .lane_incarnation_at_height(reservation.lane_id, reservation.proposal_height,),
+            Some(reservation.lane_incarnation),
+            "fixture must exercise committed recovery after same-ID recreation"
+        );
+        assert_eq!(stale_reservation.lane_incarnation, old_incarnation);
+        assert_ne!(stale_reservation.lane_incarnation, new_incarnation);
+        assert_eq!(
+            fixture
+                .state
+                .lane_incarnation_at_height(reservation_lane.id, 3),
+            Some(new_incarnation),
+            "replacement incarnation B must activate at the next proposal height"
+        );
+        drop(replayed_queue);
+        let terminal_queue = Queue::from_config(
+            QueueConfig::default(),
+            fixture.service.events_sender.clone(),
+        );
+        let terminal_replay = terminal_queue
+            .install_lane_reservation_journal(&journal_path, 1024 * 1024)
+            .expect("replay actual completed reservation journal after rotation");
+        assert_eq!(terminal_replay.restored, 0);
+        assert_eq!(terminal_replay.commit_barriers, 0);
+        terminal_queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install actual completed QueuePlan journal after rotation");
+        terminal_queue
+            .replay_plan_journal(fixture.state.as_ref())
+            .expect("completed QueuePlan journal survives rotation");
+        let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
+        assert_eq!(
+            reconcile_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                &terminal_queue,
+                fixture.kura.as_ref(),
+                &verified_active_context,
+            )
+            .expect("terminal replay needs no retired Pending reconstruction"),
+            LaneReservationReconciliationSummary::default()
+        );
+        assert!(!terminal_queue.lane_reservation_startup_reconciliation_pending());
+        assert!(
+            fixture
+                .kura
+                .read_lane_block_application_receipt_without_sidecar_repair(
+                    reservation.lane_id,
+                    reservation.lane_block_height,
+                )
+                .is_none(),
+            "the completed old receipt must stay out of the active incarnation"
+        );
+        // A distinct uncommitted old-incarnation journal is invalid; it must
+        // remain quarantined rather than acquire canonical cleanup authority.
         let stale_replayed_queue = Queue::from_config(QueueConfig::default(), stale_events);
         stale_replayed_queue
             .install_lane_reservation_journal(&stale_reservation_path, 1024 * 1024)
@@ -1558,7 +1799,7 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_with_lane_lifecycle();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Queue::from_config(QueueConfig::default(), events_sender);
     let journal_dir = tempfile::tempdir().expect("committed suffix journal directory");
@@ -1611,6 +1852,64 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
             (entrypoint, key)
         })
         .collect::<Vec<_>>();
+    let (_, identity_entry) = merge_entry_with_reservations(&fixture.context, members.clone());
+    let identity_execution = &identity_entry
+        .execution_batch
+        .as_ref()
+        .expect("identity batch")
+        .lanes[0];
+    let identity_payload = Kura::decode_autonomous_lane_merge_bundle(
+        &identity_execution.source_bundle,
+        identity_execution.autonomous_network_id,
+        identity_execution.autonomous_epoch,
+    )
+    .expect("decode full ordered-group identity")
+    .executable_payload()
+    .clone();
+    let (reservation_owner_hash, proposal_identity_hash) =
+        super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+            fixture.context.network_id,
+            fixture.context.id(),
+            fixture.context.epoch,
+            &identity_payload.origin_proposal,
+            &identity_payload.producer,
+        )
+        .expect("derive exact complete-group lifecycle identity");
+    for (_, key) in &members {
+        queue
+            .release_lane_reservation(key)
+            .expect("release provisional group identity");
+    }
+    let first = members[0].1;
+    let reserved = queue
+        .reserve_transactions_for_lane(
+            fixture.state.as_ref(),
+            LaneQueueReservationScopeV1 {
+                lane_id: first.lane_id,
+                dataspace_id: first.dataspace_id,
+                lane_incarnation: first.lane_incarnation,
+                proposal_height: first.proposal_height,
+                lane_block_height: first.lane_block_height,
+                lane_block_view: first.lane_block_view,
+                reservation_owner_hash,
+                proposal_identity_hash,
+            },
+            NonZeroUsize::new(members.len()).expect("nonempty exact group"),
+        )
+        .expect("reserve the complete group under its actual lifecycle identity");
+    assert_eq!(reserved.len(), members.len());
+    let members = members
+        .into_iter()
+        .zip(reserved)
+        .map(|((entrypoint, initial), reserved)| {
+            assert_eq!(
+                reserved.key().entrypoint_hash,
+                initial.entrypoint_hash,
+                "re-reservation preserves FIFO"
+            );
+            (entrypoint, *reserved.key())
+        })
+        .collect::<Vec<_>>();
     let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
     assert_eq!(
         queue
@@ -1628,6 +1927,37 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
     );
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![keys[0]]);
     let (parent, entry) = merge_entry_with_reservations(&fixture.context, members);
+    let execution = &entry
+        .execution_batch
+        .as_ref()
+        .expect("committed prefix execution")
+        .lanes[0];
+    let payload = Kura::decode_autonomous_lane_merge_bundle(
+        &execution.source_bundle,
+        execution.autonomous_network_id,
+        execution.autonomous_epoch,
+    )
+    .expect("decode the actual committed prefix payload")
+    .executable_payload()
+    .clone();
+    fixture
+        .kura
+        .install_lane_incarnation_marker_for_test(
+            RuntimeLaneConfig::default().primary(),
+            payload.origin_proposal.descriptor.lane_incarnation,
+            0,
+        )
+        .expect("bind the committed prefix lifecycle namespace");
+    fixture
+        .kura
+        .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
+        .expect("persist the committed prefix lifecycle payload");
+    let producer = fixture
+        .validator_keys
+        .iter()
+        .find(|key| key.public_key() == payload.producer.public_key())
+        .expect("retain the real fixture producer key");
+    install_autonomous_crash_live_cursor(&fixture, &payload, producer);
     let carrier = body_with_exact_merge_execution_header(&entry);
     fixture
         .kura
@@ -1639,10 +1969,40 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
         .expect("persist full committed suffix merge group");
     fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_committed_entrypoints_for_tests(
-        keys.iter().map(|key| key.entrypoint_hash),
-        NonZeroUsize::new(2).expect("exact committed suffix carrier State height"),
-    );
+    fixture
+        .kura
+        .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
+        .expect("persist the exact applied carrier receipt before journal replay");
+    fixture
+        .state
+        .record_committed_queue_plan_entrypoints_for_tests(
+            keys.iter().map(|key| key.entrypoint_hash),
+            NonZeroUsize::new(2).expect("exact committed suffix carrier State height"),
+        )
+        .expect("resolve exact committed suffix QueuePlan obligations before restart");
+    // Startup reconciliation consumes checked replay receipts from both journals.
+    // Reopen the actual durable Commit-prefix/live-suffix history as a new Queue.
+    drop(queue);
+    let (events_sender, _replay_events_receiver) = tokio::sync::broadcast::channel(8);
+    let queue = Queue::from_config(QueueConfig::default(), events_sender);
+    let replay = queue
+        .install_lane_reservation_journal(
+            journal_dir.path().join("lane-reservations.norito"),
+            1024 * 1024,
+        )
+        .expect("replay committed suffix reservation journal");
+    assert_eq!((replay.restored, replay.commit_barriers), (2, 1));
+    queue
+        .install_plan_journal(
+            journal_dir.path().join("queue-plans.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("reopen committed suffix QueuePlan journal");
+    queue
+        .replay_plan_journal(fixture.state.as_ref())
+        .expect("replay the exact committed suffix QueuePlan claims");
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
     let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
     assert_eq!(
         reconcile_lane_reservation_ownership(
@@ -1790,121 +2150,304 @@ v2_apply_test!(
         assert_eq!(queue.lane_reservation_commit_barriers(), barriers_before);
     }
 );
-v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
-    let fixture = ApplyFixture::new_with_lane_lifecycle();
-    let reservation_lane = install_recreatable_reservation_lane(&fixture);
-    let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-    let queue = Queue::from_config(QueueConfig::default(), events_sender.clone());
-    let journal_dir = tempfile::tempdir().expect("replayed commit barrier journal directory");
-    let plan_path = journal_dir.path().join("queue-plans.norito");
-    let reservation_path = journal_dir.path().join("lane-reservations.norito");
-    queue
-        .install_plan_journal(&plan_path, 1024 * 1024, true)
-        .expect("install replayed commit barrier QueuePlan journal");
-    queue
-        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-        .expect("install replayed commit barrier reservation journal");
-    let owner = Hash::new(b"replayed commit barrier owner");
-    let proposal = Hash::new(b"replayed commit barrier proposal");
-    let transactions = std::iter::once(
-        fixture
-            .body
-            .external_transactions()
-            .next()
-            .expect("fixture transaction")
-            .clone(),
-    )
-    .chain(std::iter::once(
-        TransactionBuilder::new(
-            fixture.context.network_id,
-            fixture.service.genesis_account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+v2_apply_test!(
+    replayed_partial_queue_cleanup_completes_before_same_id_retirement,
+    {
+        let fixture = ApplyFixture::new_with_lane_lifecycle();
+        let reservation_lane = install_recreatable_reservation_lane(&fixture);
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Queue::from_config(QueueConfig::default(), events_sender.clone());
+        let journal_dir = tempfile::tempdir().expect("replayed commit barrier journal directory");
+        let plan_path = journal_dir.path().join("queue-plans.norito");
+        let reservation_path = journal_dir.path().join("lane-reservations.norito");
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install replayed commit barrier QueuePlan journal");
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("install replayed commit barrier reservation journal");
+        let owner = Hash::new(b"replayed commit barrier owner");
+        let proposal = Hash::new(b"replayed commit barrier proposal");
+        let transactions = std::iter::once(
+            fixture
+                .body
+                .external_transactions()
+                .next()
+                .expect("fixture transaction")
+                .clone(),
         )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "replayed commit barrier live suffix".to_owned(),
-        )])
-        .sign(fixture.genesis_key.private_key()),
-    ))
-    .map(|transaction| {
-        let (key, entrypoint) = reserve_transaction_for_lane_test_with_identity(
-            fixture.state.as_ref(),
-            &queue,
-            transaction,
-            reservation_lane.id,
-            reservation_lane.dataspace_id,
-            owner,
-            proposal,
-        );
-        (entrypoint, key)
-    })
-    .collect::<Vec<_>>();
-    let keys = transactions.iter().map(|(_, key)| *key).collect::<Vec<_>>();
-    queue
-        .commit_lane_reservation_group_prefix_for_test(&keys, 1)
-        .expect("retain exact replayed Commit barrier");
-    let (parent, entry) = merge_entry_with_reservations(&fixture.context, transactions);
-    let carrier = body_with_exact_merge_execution_header(&entry);
-    fixture
-        .kura
-        .store_block(Arc::new(parent.clone()))
-        .expect("persist replayed commit barrier parent");
-    fixture
-        .kura
-        .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
-        .expect("persist replayed commit barrier merge group");
-    fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
-    commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_committed_entrypoints_for_tests(
-        keys.iter().map(|key| key.entrypoint_hash),
-        NonZeroUsize::new(2).expect("exact replayed commit barrier carrier State height"),
-    );
-    drop(queue);
-    let (old_incarnation, new_incarnation) =
-        replace_recreatable_reservation_lane(fixture.state.as_ref(), &reservation_lane);
-    assert!(
-        keys.iter()
-            .all(|key| key.lane_incarnation == old_incarnation)
-    );
-    assert_ne!(old_incarnation, new_incarnation);
-    assert_eq!(
+        .chain(std::iter::once(
+            TransactionBuilder::new(
+                fixture.context.network_id,
+                fixture.service.genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                "replayed commit barrier live suffix".to_owned(),
+            )])
+            .sign(fixture.genesis_key.private_key()),
+        ))
+        .map(|transaction| {
+            let (key, entrypoint) = reserve_transaction_for_lane_test_with_identity(
+                fixture.state.as_ref(),
+                &queue,
+                transaction,
+                reservation_lane.id,
+                reservation_lane.dataspace_id,
+                owner,
+                proposal,
+            );
+            (entrypoint, key)
+        })
+        .collect::<Vec<_>>();
+        // The two-member proposal determines one actual producer-owned group.
+        // Re-reserve both members under that native identity before publishing custody.
+        let (_, provisional) =
+            merge_entry_with_reservations(&fixture.context, transactions.clone());
+        let provisional_payload = Kura::decode_autonomous_lane_merge_bundle(
+            &provisional.execution_batch.as_ref().unwrap().lanes[0].source_bundle,
+            fixture.context.network_id,
+            fixture.context.epoch,
+        )
+        .expect("decode provisional two-member source")
+        .autonomous
+        .executable_payload;
+        let (reservation_owner_hash, proposal_identity_hash) =
+            super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+                fixture.context.network_id,
+                fixture.context.id(),
+                fixture.context.epoch,
+                &provisional_payload.origin_proposal,
+                &provisional_payload.producer,
+            )
+            .expect("derive exact two-member lifecycle identity");
+        for (_, key) in &transactions {
+            queue
+                .release_lane_reservation(key)
+                .expect("release provisional setup identity");
+        }
+        let initial = transactions[0].1;
+        let corrected = queue
+            .reserve_transactions_for_lane(
+                fixture.state.as_ref(),
+                LaneQueueReservationScopeV1 {
+                    lane_id: initial.lane_id,
+                    dataspace_id: initial.dataspace_id,
+                    lane_incarnation: initial.lane_incarnation,
+                    proposal_height: initial.proposal_height,
+                    lane_block_height: initial.lane_block_height,
+                    lane_block_view: initial.lane_block_view,
+                    reservation_owner_hash,
+                    proposal_identity_hash,
+                },
+                NonZeroUsize::new(2).expect("exact two-member group"),
+            )
+            .expect("reserve actual two-member producer group");
+        assert_eq!(corrected.len(), 2);
+        let keys = corrected
+            .iter()
+            .map(|reserved| *reserved.key())
+            .collect::<Vec<_>>();
+        let transactions = transactions
+            .into_iter()
+            .zip(&keys)
+            .map(|((entrypoint, old), key)| {
+                assert_eq!(
+                    key.entrypoint_hash, old.entrypoint_hash,
+                    "exact FIFO membership is preserved"
+                );
+                (entrypoint, *key)
+            })
+            .collect();
+        let (parent, entry) = merge_entry_with_reservations(&fixture.context, transactions);
+        let group = install_replayed_carrier_lifecycle_for_test(&fixture, &entry);
+        let carrier = body_with_exact_merge_execution_header(&entry);
+        fixture
+            .kura
+            .store_block(Arc::new(parent.clone()))
+            .expect("persist replayed commit barrier parent");
+        fixture
+            .kura
+            .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+            .expect("persist replayed commit barrier merge group");
+        fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
+        commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
+        fixture
+            .kura
+            .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
+            .expect("persist the exact applied carrier receipt before journal replay");
         fixture
             .state
-            .lane_incarnation_at_height(reservation_lane.id, 3),
-        Some(new_incarnation)
-    );
-    let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
-    let queue = Queue::from_config(QueueConfig::default(), events_sender);
-    let replay = queue
-        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-        .expect("replay mixed Commit/live owner group");
-    assert_eq!(replay.restored, 1);
-    assert_eq!(replay.commit_barriers, 1);
-    queue
-        .install_plan_journal(&plan_path, 1024 * 1024, true)
-        .expect("install mixed Commit/live QueuePlan journal");
-    queue
-        .replay_plan_journal(fixture.state.as_ref())
-        .expect("replay quarantined mixed Commit/live plans");
-    assert!(queue.lane_reservation_startup_reconciliation_pending());
-    assert_eq!(
-        reconcile_lane_reservation_ownership(
+            .record_committed_queue_plan_entrypoints_for_tests(
+                keys.iter().map(|key| key.entrypoint_hash),
+                NonZeroUsize::new(2).expect("exact replayed commit barrier carrier State height"),
+            )
+            .expect("resolve exact committed QueuePlan obligations before replay");
+        let pending = fixture
+            .kura
+            .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&entry)
+            .expect("persist whole-carrier Pending before the first Queue mutation")
+            .expect("the execution carrier has a complete Pending set");
+        drop(pending);
+        let pending_inventory = fixture
+            .kura
+            .pending_autonomous_lifecycle_terminal_outcome_inventory()
+            .expect("inventory the exact two-member Pending carrier");
+        assert_eq!(pending_inventory.len(), 1);
+        let expected_groups = pending_inventory[0]
+            .pending_reservation_groups()
+            .expect("retain the exact Pending two-member identity")
+            .to_vec();
+        assert_eq!(expected_groups.len(), 1);
+        assert_eq!(expected_groups[0].binding(), group);
+        queue.hold_next_lane_reservation_commit_after_barrier_for_test();
+        let crash = finalize_committed_block_merge_reservations(
             fixture.state.as_ref(),
             &queue,
             fixture.kura.as_ref(),
-            &verified_active_context,
+            &carrier,
+            fixture.context.network_id,
         )
-        .expect("complete mixed Commit/live recovery"),
-        LaneReservationReconciliationSummary {
-            recovered: 2,
-            finalized_committed: 1,
-            ..LaneReservationReconciliationSummary::default()
+        .expect_err("the native post-tombstone crash hook withholds terminal Queue evidence");
+        assert!(
+            crash.to_string().contains("terminal"),
+            "unexpected injected cleanup error: {crash:?}"
+        );
+        assert_eq!(queue.lane_reservation_commit_barriers().len(), 2);
+        let snapshot = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture genuine interrupted cleanup");
+        {
+            let observer = queue.lock_lane_retirement_observer();
+            V2ApplyService::validate_autoscale_retirement_queue_binding(
+                &observer,
+                keys[0].lane_id,
+                keys[0].dataspace_id,
+                keys[0].lane_incarnation,
+            )
+            .expect_err("production retirement must retain genuine Commit barriers");
         }
-    );
-    assert!(queue.live_lane_reservations().is_empty());
-    assert!(queue.lane_reservation_commit_barriers().is_empty());
-    assert!(!queue.lane_reservation_startup_reconciliation_pending());
-});
+        let retirement_error = fixture
+            .state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![reservation_lane.clone()],
+                retire: vec![reservation_lane.id],
+            })
+            .expect_err("Pending canonical lifecycle debt must block actual archive publication");
+        assert!(
+            retirement_error
+                .to_string()
+                .contains("Pending autonomous lifecycle terminal outcome")
+                || retirement_error.to_string().contains("slot retirement"),
+            "unexpected terminality refusal: {retirement_error}"
+        );
+        assert_eq!(
+            queue.lane_reservation_reconciliation_snapshot().unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            fixture.state.lane_incarnation(reservation_lane.id),
+            Some(keys[0].lane_incarnation)
+        );
+        drop(queue);
+        let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
+        let queue = Queue::from_config(QueueConfig::default(), events_sender);
+        let replay = queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("replay mixed Commit/live owner group");
+        assert_eq!(replay.restored, 0);
+        assert_eq!(replay.commit_barriers, 2);
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install mixed Commit/live QueuePlan journal");
+        queue
+            .replay_plan_journal(fixture.state.as_ref())
+            .expect("replay quarantined mixed Commit/live plans");
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+        assert_eq!(
+            reconcile_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                &queue,
+                fixture.kura.as_ref(),
+                &verified_active_context,
+            )
+            .expect("complete mixed Commit/live recovery"),
+            LaneReservationReconciliationSummary {
+                recovered: 2,
+                finalized_committed: 0,
+                ..LaneReservationReconciliationSummary::default()
+            }
+        );
+        assert!(queue.live_lane_reservations().is_empty());
+        assert!(queue.lane_reservation_commit_barriers().is_empty());
+        assert!(!queue.lane_reservation_startup_reconciliation_pending());
+        let completed_stages = fixture
+            .kura
+            .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
+                fixture.context.network_id,
+                &expected_groups,
+            )
+            .expect("verify actual Queue-produced Complete custody");
+        assert_eq!(completed_stages.len(), 1);
+        assert_eq!(completed_stages[0].binding(), group);
+        assert_eq!(
+            completed_stages[0].stage(),
+            crate::kura::AutonomousLifecycleTerminalOutcomeDurableStage::Complete
+        );
+        {
+            let observer = queue.lock_lane_retirement_observer();
+            V2ApplyService::validate_autoscale_retirement_queue_binding(
+                &observer,
+                keys[0].lane_id,
+                keys[0].dataspace_id,
+                keys[0].lane_incarnation,
+            )
+            .expect("native cleanup removes all retirement Queue debt");
+        }
+        let (old_incarnation, new_incarnation) =
+            replace_recreatable_reservation_lane(fixture.state.as_ref(), &reservation_lane);
+        assert!(
+            keys.iter()
+                .all(|key| key.lane_incarnation == old_incarnation)
+        );
+        assert_ne!(old_incarnation, new_incarnation);
+        assert_eq!(
+            fixture
+                .state
+                .lane_incarnation_at_height(reservation_lane.id, 3),
+            Some(new_incarnation)
+        );
+        drop(queue);
+        let terminal_queue = Queue::from_config(
+            QueueConfig::default(),
+            fixture.service.events_sender.clone(),
+        );
+        let terminal_replay = terminal_queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("reopen the actual completed two-member journal after retirement");
+        assert_eq!(terminal_replay.restored, 0);
+        assert_eq!(terminal_replay.commit_barriers, 0);
+        terminal_queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("reopen completed two-member QueuePlan journal");
+        terminal_queue
+            .replay_plan_journal(fixture.state.as_ref())
+            .expect("replay terminal QueuePlan state");
+        let active = verified_successor_context_after_fixture_tip(&fixture);
+        assert_eq!(
+            reconcile_lane_reservation_ownership(
+                fixture.state.as_ref(),
+                &terminal_queue,
+                fixture.kura.as_ref(),
+                &active,
+            )
+            .expect("completed replay never reconstructs retired Pending custody"),
+            LaneReservationReconciliationSummary::default()
+        );
+        assert!(!terminal_queue.lane_reservation_startup_reconciliation_pending());
+    }
+);
 v2_apply_test!(
     startup_reconciliation_rejects_partial_state_group_without_mutation,
     {
@@ -2322,7 +2865,7 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(
-    finalized_hash_only_carrier_plans_recovery_before_queue_mutation,
+    zero_length_canonical_index_is_rejected_before_queue_mutation,
     {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let producer = KeyPair::try_from_seed(vec![0xBA; 32], Algorithm::BlsNormal)
@@ -2370,6 +2913,204 @@ v2_apply_test!(
             .kura
             .force_hash_only_block_for_testing(carrier_height)
             .expect("evict exact finalized carrier body");
+        // Startup quarantine is minted by replaying durable ownership into a
+        // fresh Queue; the live Queue used to create this crash image is open.
+        assert_eq!(Arc::strong_count(&queue), 1);
+        drop(queue);
+        let (events_sender, _replayed_events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("replay exact pruned-carrier QueuePlan payloads");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("replay exact pruned-carrier reservation ownership");
+        queue
+            .replay_plan_journal(fixture.state.as_ref())
+            .expect("replay exact pruned-carrier durable QueuePlan claims");
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+        let before = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture pruned-carrier ownership snapshot");
+        let error = plan_lane_reservation_ownership(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            &verified_context_for_fixture(&fixture, &fixture.context),
+            None,
+        )
+        .err()
+        .expect("zero-length canonical metadata is corruption, not recovery authority");
+        assert!(matches!(
+            error,
+            V2ReservationLifecycleError::Kura(crate::kura::Error::CorruptedBlockLength {
+                length: 0,
+                ..
+            })
+        ));
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("recapture rejected recovery ownership"),
+            before
+        );
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+        assert!(
+            fixture
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    payload.network_id,
+                    payload.epoch,
+                )
+                .expect("read unchanged retirement state")
+                .is_none()
+        );
+        assert_eq!(
+            fixture.kura.get_durable_block_hash(carrier_height),
+            Some(canonical_body.hash())
+        );
+    }
+);
+v2_apply_test!(
+    finalized_hash_only_carrier_plans_recovery_before_queue_mutation,
+    {
+        let fixture = ApplyFixture::new_with_options_and_retention(
+            false,
+            false,
+            false,
+            false,
+            NonZeroUsize::new(1).expect("retain the live tail"),
+        );
+        let mut genesis_store = fixture.reopen_body_store();
+        fixture
+            .execute(&mut genesis_store)
+            .expect("commit the retained genesis parent");
+        let context = successor_height_context(&fixture);
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+        let journal_dir = tempfile::tempdir().expect("pruned-carrier journal directory");
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install pruned-carrier queue-plan journal");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("install pruned-carrier reservation journal");
+        let (payload, _) =
+            reserve_canonical_successor_autonomous_batch(&fixture, &queue, &context, 2);
+        let descriptor = &payload.origin_proposal.descriptor;
+        fixture
+            .kura
+            .install_lane_incarnation_marker_for_test(
+                RuntimeLaneConfig::default().primary(),
+                descriptor.lane_incarnation,
+                0,
+            )
+            .expect("install pruned-carrier lane marker");
+        fixture
+            .kura
+            .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
+            .expect("persist exact pruned-carrier payload");
+        let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
+            &payload,
+            payload.network_id,
+            payload.epoch,
+        )
+        .expect("encode the exact authenticated successor payload");
+        let mut successor =
+            build_successor_apply_fixture_with_autonomous_payloads(&fixture, vec![envelope]);
+        fixture
+            .service
+            .execute(&successor.context, &mut successor.store, &successor.task)
+            .expect("finalize the actual non-genesis carrier before eviction");
+        let carrier_height = NonZeroUsize::new(2).expect("non-genesis carrier height");
+        let canonical_body = fixture
+            .kura
+            .get_block_without_merge_sidecar(carrier_height)
+            .expect("capture canonical carrier before body pruning");
+        let tail = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+            .chain(0, Some(canonical_body.as_ref()))
+            .try_sign_with_index(fixture.genesis_key.private_key(), 0)
+            .expect("sign the durable tail beyond the finalized carrier")
+            .unpack(|_| {});
+        let tail = complete_empty_fixture_block(SignedBlock::from(tail), &fixture.genesis_key);
+        fixture
+            .kura
+            .store_block(Arc::new(tail))
+            .expect("retain an inline successor tail");
+        let (_, payload_len) = fixture
+            .kura
+            .durable_block_payload_len_by_hash(canonical_body.hash())
+            .expect("read exact finality-authenticated eviction length")
+            .expect("carrier length");
+        assert_eq!(
+            fixture
+                .kura
+                .advertise_required_replicas_for_bench(carrier_height),
+            Some(payload_len)
+        );
+        assert_eq!(
+            fixture
+                .kura
+                .evict_block_bodies(payload_len)
+                .expect("evict via actual selected-keeper policy"),
+            payload_len
+        );
+        fixture
+            .kura
+            .remove_evicted_block_sidecar_for_testing(carrier_height)
+            .expect("model remote-only carrier after genuine eviction");
+        assert!(
+            fixture
+                .kura
+                .get_block_without_merge_sidecar(carrier_height)
+                .is_none()
+        );
+        assert_eq!(
+            fixture
+                .kura
+                .durable_block_payload_len_by_hash(canonical_body.hash())
+                .expect("eviction preserves authenticated canonical wire length"),
+            Some((2, payload_len))
+        );
+        // Startup quarantine is minted by replaying durable ownership into a
+        // fresh Queue; the live Queue used to create this crash image is open.
+        assert_eq!(Arc::strong_count(&queue), 1);
+        drop(queue);
+        let (events_sender, _replayed_events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("replay exact pruned-carrier QueuePlan payloads");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("replay exact pruned-carrier reservation ownership");
+        queue
+            .replay_plan_journal(fixture.state.as_ref())
+            .expect("replay exact pruned-carrier durable QueuePlan claims");
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
         let before = queue
             .lane_reservation_reconciliation_snapshot()
             .expect("capture pruned-carrier ownership snapshot");
@@ -2377,7 +3118,7 @@ v2_apply_test!(
             fixture.state.as_ref(),
             queue.as_ref(),
             fixture.kura.as_ref(),
-            &verified_context_for_fixture(&fixture, &fixture.context),
+            &verified_context_for_fixture(&fixture, &successor.context),
             None,
         )
         .expect("hash-only finality produces an authenticated recovery plan");
@@ -2388,10 +3129,10 @@ v2_apply_test!(
         let need = needs[0];
         let finality = fixture
             .kura
-            .v2_finality_artifact(1)
+            .v2_finality_artifact(2)
             .expect("read pruned-carrier finality")
             .expect("pruned carrier retains finality");
-        assert_eq!(need.height, 1);
+        assert_eq!(need.height, 2);
         assert_eq!(need.block_hash, canonical_body.hash());
         assert_eq!(need.finality_artifact_hash, HashOf::new(&finality));
         assert_eq!(
@@ -2406,7 +3147,7 @@ v2_apply_test!(
         );
         let mut collected = BTreeMap::new();
         let mut later = need;
-        later.height = 2;
+        later.height = 3;
         later.block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"later canonical executed-block need"));
         collect_canonical_executed_block_need(&mut collected, later)
@@ -2417,14 +3158,14 @@ v2_apply_test!(
             .expect("deduplicate byte-identical recovery need");
         assert_eq!(
             collected.keys().copied().collect::<Vec<_>>(),
-            vec![1, 2],
+            vec![2, 3],
             "recovery needs are unique and ordered by canonical height"
         );
         let mut conflicting = need;
         conflicting.executed_block_wire_hash = Hash::new(b"conflicting same-height wire");
         assert!(matches!(
             collect_canonical_executed_block_need(&mut collected, conflicting),
-            Err(V2ReservationLifecycleError::CanonicalContextMismatch { height: 1 })
+            Err(V2ReservationLifecycleError::CanonicalContextMismatch { height: 2 })
         ));
         assert_eq!(
             queue
@@ -2456,12 +3197,45 @@ v2_apply_test!(
             fixture.state.as_ref(),
             queue.as_ref(),
             fixture.kura.as_ref(),
-            &verified_context_for_fixture(&fixture, &fixture.context),
+            &verified_context_for_fixture(&fixture, &successor.context),
             None,
         )
         .expect("replan after exact body recovery");
-        let LaneReservationReconciliationPlanning::Ready(plan) = replanned else {
-            panic!("exact recovered body must make the mutation plan ready");
+        let LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(installs) =
+            replanned
+        else {
+            panic!(
+                "body recovery must expose the exact historical installation before Queue mutation"
+            );
+        };
+        assert_eq!(installs.len(), 1);
+        assert_eq!(installs[0].canonical_body, need);
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("snapshot after body recovery and historical planning"),
+            before,
+            "body recovery cannot publish or consume Queue ownership",
+        );
+        assert_eq!(
+            install_historical_autonomous_lane_recovery(
+                fixture.state.as_ref(),
+                fixture.kura.as_ref(),
+                &installs[0],
+            )
+            .expect("durably install the exact recovered autonomous carrier"),
+            HistoricalAutonomousLaneRecoveryInstallOutcome::Installed,
+        );
+        let ready = plan_lane_reservation_ownership(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            &verified_context_for_fixture(&fixture, &successor.context),
+            None,
+        )
+        .expect("replan after the complete historical installation");
+        let LaneReservationReconciliationPlanning::Ready(plan) = ready else {
+            panic!("durable body and historical installation must make Queue reconciliation ready");
         };
         assert!(queue.lane_reservation_startup_reconciliation_pending());
         apply_lane_reservation_reconciliation_plan(

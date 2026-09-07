@@ -61,7 +61,7 @@
             coordinator_proposal_hash: Hash::new(b"native-amx-v2-coordinator-proposal"),
         };
         body.participant_settlement_commitment = body
-            .computed_grouped_participant_settlement_commitment(&[body.source_id])
+            .computed_grouped_participant_settlement_commitment(None, &[body.source_id])
             .expect("single-source test fixture settlement is valid");
         body
     }
@@ -218,7 +218,9 @@
     }
     #[cfg(unix)]
     fn record_body(guard: &NativeAmxSigningGuard, body: &NativeAmxAttestationBodyV2) {
-        guard.record_body_for_test(body).expect("record fixture body");
+        guard
+            .record_body_for_test(body)
+            .expect("record fixture body");
     }
     #[test]
     fn participant_leg_cap_reserves_one_slot_for_the_coordinator() {
@@ -359,7 +361,7 @@
             Some(Hash::new(b"certified-prefix predecessor"));
         retained.participant_proposal_hash = Hash::new(b"certified-prefix retained proposal");
         retained.participant_settlement_commitment = retained
-            .computed_grouped_participant_settlement_commitment(&[retained.source_id])
+            .computed_grouped_participant_settlement_commitment(None, &[retained.source_id])
             .expect("retained settlement is valid");
         record_body(&guard, &retained);
         let (old_path, old_record) = {
@@ -508,7 +510,7 @@
             Hash::prehashed(conflicting.source_id),
         );
         conflicting.participant_settlement_commitment = conflicting
-            .computed_grouped_participant_settlement_commitment(&[conflicting.source_id])
+            .computed_grouped_participant_settlement_commitment(None, &[conflicting.source_id])
             .expect("single-source test fixture settlement is valid");
         assert_eq!(
             guard.record_body_for_test(&conflicting),
@@ -581,7 +583,7 @@
         let mut stale = base;
         set_source(&mut stale, 0xA2);
         stale.participant_settlement_commitment = stale
-            .computed_grouped_participant_settlement_commitment(&[stale.source_id])
+            .computed_grouped_participant_settlement_commitment(None, &[stale.source_id])
             .expect("single-source stale-view settlement is valid");
         stale.round.view += 1;
         assert_eq!(
@@ -1264,10 +1266,11 @@
         participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
         body.participant_proposal_hash = participant_proposal.proposal_hash;
         let participant_settlement = body
-            .computed_grouped_participant_settlement(&[body.source_id])
+            .computed_grouped_participant_settlement(None, &[body.source_id])
             .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+            participant_settlement
+                .computed_hash()
                 .expect("fixture participant settlement hashes"),
         );
         NativeAmxAttestationRequestV2 {
@@ -1362,15 +1365,18 @@
         coordinator_participates.plan_legs = overlapping_plan.legs();
         coordinator_participates.participant_settlement = coordinator_participates
             .body
-            .computed_grouped_participant_settlement(&[coordinator_participates.body.source_id])
+            .computed_grouped_participant_settlement(
+                None,
+                &[coordinator_participates.body.source_id],
+            )
             .expect("single-source test fixture settlement is valid");
         coordinator_participates
             .body
             .participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(
-                &coordinator_participates.participant_settlement,
-            )
-            .expect("overlapping participant settlement hashes"),
+            coordinator_participates
+                .participant_settlement
+                .computed_hash()
+                .expect("overlapping participant settlement hashes"),
         );
         assert_eq!(
             coordinator_participates.validate_plan_binding(),
@@ -1398,13 +1404,13 @@
             stale_same_route.participant_proposal.proposal_hash;
         stale_same_route.participant_settlement = stale_same_route
             .body
-            .computed_grouped_participant_settlement(&[stale_same_route.body.source_id])
+            .computed_grouped_participant_settlement(None, &[stale_same_route.body.source_id])
             .expect("stale same-route settlement fixture remains structurally valid");
         stale_same_route.body.participant_settlement_commitment = Hash::from(
-            iroha_data_model::nexus::compute_settlement_hash(
-                &stale_same_route.participant_settlement,
-            )
-            .expect("stale same-route settlement hashes"),
+            stale_same_route
+                .participant_settlement
+                .computed_hash()
+                .expect("stale same-route settlement hashes"),
         );
         assert_eq!(
             stale_same_route.validate_plan_binding(),

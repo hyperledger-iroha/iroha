@@ -8193,6 +8193,9 @@ pub struct Network {
     /// Maximum frame size for health monitoring traffic.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_HEALTH")]
     pub max_frame_bytes_health: NonZeroUsize,
+    /// Maximum frame size for authenticated Connect relay traffic.
+    #[config(default = "defaults::network::MAX_FRAME_BYTES_CONNECT")]
+    pub max_frame_bytes_connect: NonZeroUsize,
     /// Maximum frame size for miscellaneous topics.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_OTHER")]
     pub max_frame_bytes_other: NonZeroUsize,
@@ -8317,6 +8320,7 @@ impl Network {
             max_frame_bytes_tx_gossip,
             max_frame_bytes_peer_gossip,
             max_frame_bytes_health,
+            max_frame_bytes_connect,
             max_frame_bytes_other,
             quic_max_idle_timeout_ms,
             ..
@@ -8551,6 +8555,7 @@ impl Network {
                 max_frame_bytes_tx_gossip: max_frame_bytes_tx_gossip.get(),
                 max_frame_bytes_peer_gossip: max_frame_bytes_peer_gossip.get(),
                 max_frame_bytes_health: max_frame_bytes_health.get(),
+                max_frame_bytes_connect: max_frame_bytes_connect.get(),
                 max_frame_bytes_other: max_frame_bytes_other.get(),
                 quic_max_idle_timeout: quic_max_idle_timeout_ms
                     .map(iroha_config_base::util::DurationMs::get),
@@ -11813,6 +11818,13 @@ impl Nexus {
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
+        if let Err(error) = iroha_data_model::merge::validate_merge_lane_authority_geometry(
+            &lane_catalog,
+            &dataspace_catalog,
+        ) {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(error.to_string()));
+            return None;
+        }
         let routing_policy =
             Self::build_routing_policy(routing_policy, &lane_catalog, &dataspace_catalog, emitter)?;
         let registry = registry.parse(emitter)?;
@@ -37846,6 +37858,46 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn execution_proof_transport_overlay_preserves_ordinary_defaults() {
+        let default = load_root(base_table());
+        assert_eq!(default.network.max_frame_bytes_health, 32_768);
+        assert_eq!(default.network.max_frame_bytes_connect, 131_072);
+        assert_eq!(default.network.max_frame_bytes_tx_gossip, 262_144);
+        assert_eq!(default.torii.connect.frame_max_bytes, 64_000);
+        let overlay: Table = toml::from_str(include_str!(
+            "../../../../configs/soranexus/execution-proof-transport.toml"
+        ))
+        .expect("execution transport overlay TOML");
+        let mut table = base_table();
+        for (key, value) in overlay {
+            let fields = value.as_table().expect("overlay section");
+            let target = table
+                .entry(key)
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("runtime section");
+            for (name, value) in fields {
+                target.insert(name.clone(), value.clone());
+            }
+        }
+        let configured = load_root(table);
+        assert_eq!(configured.network.max_frame_bytes_health, 32_768);
+        assert_eq!(configured.network.max_frame_bytes_connect, 8 * 1024 * 1024);
+        assert_eq!(
+            configured.network.max_frame_bytes_tx_gossip,
+            8 * 1024 * 1024
+        );
+        assert_eq!(
+            configured.torii.connect.frame_max_bytes,
+            4 * 1024 * 1024 + 4096
+        );
+        assert_eq!(
+            configured.torii.connect.session_buffer_max_bytes,
+            8 * 1024 * 1024
+        );
+        assert_eq!(configured.torii.connect.ws_max_sessions, 16);
+    }
+    #[test]
     fn trusted_peer_full_fanout_must_fit_the_effective_network_capacity() {
         let set_connection_capacity = |table: &mut Table, capacity: usize| {
             table
@@ -39379,3 +39431,40 @@ mod kagemusha_v1_settlement_tests;
 #[cfg(test)]
 #[path = "user/settlement_router_tests.rs"]
 mod settlement_router_tests;
+
+#[cfg(test)]
+mod merge_authority_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn nexus_rejects_unmergeable_aggregate_committee_geometry() {
+        for (lane_count, allowed) in [(190_u32, true), (191_u32, false)] {
+            let mut config = Nexus::default();
+            config.lane_count = NonZeroU32::new(lane_count).unwrap();
+            config.lane_catalog = (0..lane_count)
+                .map(|index| LaneDescriptor {
+                    index: Some(index),
+                    alias: Some(format!("geometry-{index}")),
+                    ..LaneDescriptor::default()
+                })
+                .collect();
+            config.dataspace_catalog = vec![DataSpaceDescriptor {
+                id: Some(0),
+                alias: Some(defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_owned()),
+                fault_tolerance: Some(42),
+                ..DataSpaceDescriptor::default()
+            }];
+            config.staking.max_validators = NonZeroU32::new(127).unwrap();
+            let mut emitter = Emitter::new();
+            let parsed = config.parse(&mut emitter);
+            let diagnostics = emitter.into_result();
+            if allowed {
+                assert!(parsed.is_some(), "admissible geometry: {diagnostics:?}");
+                assert!(diagnostics.is_ok());
+            } else {
+                assert!(parsed.is_none());
+                assert!(format!("{diagnostics:?}").contains("merge authority geometry reserves"));
+            }
+        }
+    }
+}

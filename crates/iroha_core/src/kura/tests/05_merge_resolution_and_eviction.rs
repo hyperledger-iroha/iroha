@@ -11,6 +11,13 @@ fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
                 &RuntimeLaneConfig::default(),
             )
             .expect("open Kura");
+            // Bind the configured initial incarnation before this fixture writes
+            // durable blocks or recovery sidecars into the primary store.
+            publish_initial_configured_lane_geometry_for_test(
+                &kura,
+                &RuntimeLaneConfig::default(),
+                &BTreeMap::new(),
+            );
             let mut blocks = DummyBlocks::new();
             kura.store_block(blocks.next()).expect("store merge parent");
             let mut entry = sample_merge_entry(1);

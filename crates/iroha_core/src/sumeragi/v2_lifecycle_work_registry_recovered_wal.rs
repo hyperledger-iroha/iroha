@@ -1983,7 +1983,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
         };
         let work = ConcreteLifecycleWork {
             digest,
-            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(Box::new(
                 DurableRecoveredLifecycleSignedBroadcastWork {
                     parent: DurableRecoveredLifecycleSignParentV1::PhaseVote(parent),
                     broadcast,
@@ -1991,7 +1991,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
                     address: broadcast_address,
                     paired_next_sign: None,
                 },
-            ),
+            )),
         };
         assert!(work.validates_at(broadcast_address));
         let RecoveredWalValidateRegistryReservation {
@@ -2115,7 +2115,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
         };
         let broadcast_work = ConcreteLifecycleWork {
             digest: broadcast_digest,
-            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(Box::new(
                 DurableRecoveredLifecycleSignedBroadcastWork {
                     parent: DurableRecoveredLifecycleSignParentV1::PhaseVote(parent),
                     broadcast,
@@ -2123,7 +2123,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
                     address: broadcast_address,
                     paired_next_sign: Some((next_sign_address, next_sign_digest)),
                 },
-            ),
+            )),
         };
         let next_sign_work = ConcreteLifecycleWork {
             digest: next_sign_digest,
@@ -4653,6 +4653,7 @@ impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'regi
             child_digest,
         )?;
         Ok(BoundRecoveredLifecycleSignBroadcastSuccessor {
+            broadcast_storage: Box::new_uninit(),
             registry: self.registry,
             sign_address: self.sign_address,
             broadcast_address,
@@ -4711,6 +4712,7 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
         self,
     ) -> crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter> {
         let Self {
+            broadcast_storage,
             registry,
             sign_address,
             broadcast_address,
@@ -4741,7 +4743,8 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
         let digest = broadcast.digest();
         let replacement = ConcreteLifecycleWork {
             digest,
-            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(Box::write(
+                broadcast_storage,
                 DurableRecoveredLifecycleSignedBroadcastWork {
                     parent,
                     broadcast,
@@ -4749,7 +4752,7 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
                     address: broadcast_address,
                     paired_next_sign: None,
                 },
-            ),
+            )),
         };
         assert!(replacement.validates_at(broadcast_address));
         assert!(
@@ -4847,6 +4850,7 @@ impl<'registry, 'adapter>
             return Err(RecoveredLifecycleSignBroadcastAndSignPreparationErrorV1::ChildCollision);
         }
         Ok(BoundRecoveredLifecycleSignBroadcastAndSignSuccessor {
+            broadcast_storage: Box::new_uninit(),
             registry: self.registry,
             sign_address: self.sign_address,
             broadcast_address,
@@ -4868,6 +4872,7 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
         self,
     ) -> crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter> {
         let Self {
+            broadcast_storage,
             registry,
             sign_address,
             broadcast_address,
@@ -4903,7 +4908,8 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
         let next_sign_digest = next_sign.digest();
         let broadcast_work = ConcreteLifecycleWork {
             digest: broadcast_digest,
-            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(Box::write(
+                broadcast_storage,
                 DurableRecoveredLifecycleSignedBroadcastWork {
                     parent,
                     broadcast,
@@ -4911,7 +4917,7 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
                     address: broadcast_address,
                     paired_next_sign: Some((next_sign_address, next_sign_digest)),
                 },
-            ),
+            )),
         };
         let next_sign_work = ConcreteLifecycleWork {
             digest: next_sign_digest,

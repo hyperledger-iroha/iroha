@@ -142,32 +142,9 @@ fn seed_validator_consensus_key(
     peer: &crate::PeerId,
     status: ConsensusKeyStatus,
 ) {
-    let ident = crate::state::derive_validator_key_id(peer.public_key());
-    let mut record = ConsensusKeyRecord {
-        id: ident,
-        public_key: peer.public_key().clone(),
-        pop: None,
-        activation_height: stx.block_height(),
-        expiry_height: None,
-        replaces: None,
-        status,
-    };
-    if matches!(record.status, ConsensusKeyStatus::Disabled) {
-        record.expiry_height = Some(stx.block_height());
-    }
-    stx.world
-        .consensus_keys
-        .insert(record.id.clone(), record.clone());
-    let pk = record.public_key.to_string();
-    let mut by_pk = stx
-        .world
-        .consensus_keys_by_pk
-        .get(&pk)
-        .cloned()
-        .unwrap_or_default();
-    if !by_pk.contains(&record.id) {
-        by_pk.push(record.id.clone());
-        stx.world.consensus_keys_by_pk.insert(pk, by_pk);
+    let activation_height = stx.block_height();
+    for role in [ConsensusKeyRole::Validator, ConsensusKeyRole::Committee] {
+        seed_consensus_key_for_role_with_heights(stx, peer, role, status, activation_height, None);
     }
 }
 fn seed_validator_consensus_key_with_heights(
@@ -177,7 +154,32 @@ fn seed_validator_consensus_key_with_heights(
     activation_height: u64,
     expiry_height: Option<u64>,
 ) {
-    let ident = crate::state::derive_validator_key_id(peer.public_key());
+    for role in [ConsensusKeyRole::Validator, ConsensusKeyRole::Committee] {
+        seed_consensus_key_for_role_with_heights(
+            stx,
+            peer,
+            role,
+            status,
+            activation_height,
+            expiry_height,
+        );
+    }
+}
+fn seed_consensus_key_for_role_with_heights(
+    stx: &mut StateTransaction<'_, '_>,
+    peer: &crate::PeerId,
+    role: ConsensusKeyRole,
+    status: ConsensusKeyStatus,
+    activation_height: u64,
+    expiry_height: Option<u64>,
+) {
+    let ident = match role {
+        ConsensusKeyRole::Validator => crate::state::derive_validator_key_id(peer.public_key()),
+        ConsensusKeyRole::Committee => crate::state::derive_committee_key_id(peer.public_key()),
+        ConsensusKeyRole::Endorsement => {
+            unreachable!("staking fixtures never use endorsement keys")
+        }
+    };
     let mut record = ConsensusKeyRecord {
         id: ident,
         public_key: peer.public_key().clone(),
@@ -203,6 +205,14 @@ fn seed_validator_consensus_key_with_heights(
     if !by_pk.contains(&record.id) {
         by_pk.push(record.id.clone());
         stx.world.consensus_keys_by_pk.insert(key_label, by_pk);
+    }
+}
+fn clear_consensus_keys_for_peer(stx: &mut StateTransaction<'_, '_>, peer: &crate::PeerId) {
+    let label = peer.public_key().to_string();
+    if let Some(ids) = stx.world.consensus_keys_by_pk.remove(label.clone()) {
+        for id in ids {
+            stx.world.consensus_keys.remove(id);
+        }
     }
 }
 fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {

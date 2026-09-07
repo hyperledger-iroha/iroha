@@ -265,7 +265,7 @@ fn check_config_and_runtime_enforce_frame_cap_boundary() -> eyre::Result<()> {
         config.network.max_frame_bytes,
         iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES + 1
     );
-    let check_report = validate_config_for_check(&config, None, false)
+    let check_report = validate_config_for_check(&config, None)
         .expect_err("--check-config must reject an unrepresentable frame cap");
     assert_contains!(
         format!("{check_report:#}"),
@@ -279,26 +279,25 @@ fn check_config_and_runtime_enforce_frame_cap_boundary() -> eyre::Result<()> {
     );
     let encrypted_cap = iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get();
     let plaintext_ceiling = iroha_p2p::frame_plaintext_cap(encrypted_cap);
-    let (topic_config, _topic_dir, _topic_config_path) =
-        load_config_with_overrides(|table, _genesis_key| {
-            iroha_config::base::toml::Writer::new(table).write(
-                ["network", "max_frame_bytes_consensus"],
-                i64::try_from(plaintext_ceiling + 1).expect("first rejected topic cap fits i64"),
-            );
-        })?;
-    let check_report = validate_config_for_check(&topic_config, None, false)
-        .expect_err("--check-config must reject a topic cap above plaintext capacity");
-    let expected = format!(
-        "network.max_frame_bytes_consensus ({}) exceeds the AEAD-specific plaintext ceiling of {plaintext_ceiling} bytes derived from network.max_frame_bytes ({encrypted_cap})",
-        plaintext_ceiling + 1
-    );
-    assert_contains!(format!("{check_report:#}"), &expected);
-    let runtime_report = validate_config(&topic_config)
-        .expect_err("runtime preflight must reject the same invalid topic cap");
-    assert_contains!(
-        format!("{runtime_report:#}"),
-        "network.max_frame_bytes_consensus"
-    );
+    for topic in ["max_frame_bytes_consensus", "max_frame_bytes_connect"] {
+        let (topic_config, _topic_dir, _topic_config_path) =
+            load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table).write(
+                    ["network", topic],
+                    i64::try_from(plaintext_ceiling + 1).expect("first rejected topic cap fits i64"),
+                );
+            })?;
+        let check_report = validate_config_for_check(&topic_config, None)
+            .expect_err("--check-config must reject a topic cap above plaintext capacity");
+        let expected = format!(
+            "network.{topic} ({}) exceeds the AEAD-specific plaintext ceiling of {plaintext_ceiling} bytes derived from network.max_frame_bytes ({encrypted_cap})",
+            plaintext_ceiling + 1
+        );
+        assert_contains!(format!("{check_report:#}"), &expected);
+        let runtime_report = validate_config(&topic_config)
+            .expect_err("runtime preflight must reject the same invalid topic cap");
+        assert_contains!(format!("{runtime_report:#}"), &format!("network.{topic}"));
+    }
     Ok(())
 }
 #[test]

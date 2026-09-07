@@ -51,6 +51,45 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _provider_policy_signature(profile_id: str, position: int, commitment: str) -> str:
+    """Synthetic test issuer scalar one only; never used by release tooling.
+
+    The separate OpenSSL test verifies these bytes with an independent ECDSA
+    implementation. No actual provider or device key is accepted here.
+    """
+    message = VERIFIER.rust_provider_policy_signing_bytes(profile_id, position, commitment)
+    order = VERIFIER._P256_ORDER
+    nonce = 1 + int.from_bytes(hashlib.sha256(b"test-only-provider-nonce" + message).digest(), "big") % (order - 1)
+    point = VERIFIER._p256_multiply(nonce, VERIFIER._P256_GENERATOR)
+    r = point[0] % order
+    s = (int.from_bytes(hashlib.sha256(message).digest(), "big") + r) * pow(nonce, -1, order) % order
+    assert r and s
+    return (r.to_bytes(32, "big") + min(s, order - s).to_bytes(32, "big")).hex()
+
+
+def native_profile_fixture(protocols: dict[str, Any]) -> dict[str, Any]:
+    """Native layout shape fixture; it does not claim synthesis or qualification."""
+    result: dict[str, Any] = {}
+    for name in VERIFIER.NATIVE_PROFILE_LAYOUT_TAGS:
+        k = 12 if name.startswith("mint_hash_shard_") else 16
+        result[name] = {
+            "k": k, "num_advice_per_phase": [1], "num_fixed": 1,
+            "num_lookup_advice_per_phase": [1], "lookup_bits": k - 1,
+            "num_instance_columns": (2 if name.startswith("inner_mint_authorization_") else
+                                     3 if name.startswith("mint_hash_claim_") else 1),
+        }
+    helpers = {row["helper"]: row for row in protocols["helper_protocols"]}
+    for name in VERIFIER.NATIVE_PROFILE_DIGEST_TAGS:
+        if name == "mint_genesis_roster_id":
+            result[name] = [3] * 32
+        else:
+            helper = ("mint_hash_shard" if name.startswith("mint_hash_shard_") else
+                      "mint_hash_claim" if name.startswith("mint_hash_claim_") else "mint_credit")
+            parity = "eq" if "_eq_" in name else "ep"
+            result[name] = list(bytes.fromhex(helpers[helper][f"{parity}_protocol_digest"]))
+    return result
+
+
 def _json_line(value: object) -> bytes:
     return (
         json.dumps(
@@ -154,6 +193,7 @@ class EvidenceFixture:
         profile_inputs = [
             {
                 "hardware_profile": dict(row["hardware_profile"]),
+                "provider_policy": dict(row["provider_policy"]),
                 "suite_id": row["suite_id"],
             }
             for row in self.manifest["profiles"]
@@ -231,7 +271,7 @@ class EvidenceFixture:
                 self.resign_command(command["id"])
 
 
-def _fixture(tmp_path: Path) -> EvidenceFixture:
+def _fixture(tmp_path: Path, *, provider_commitment: str = "d1" * 32) -> EvidenceFixture:
     tmp_path.mkdir(parents=True, exist_ok=True)
     tmp_path.chmod(0o700)
     root = tmp_path / "evidence"
@@ -259,6 +299,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "sha256": trusted_verifier_sha256,
                 "report_schemas": sorted(VERIFIER.REPORT_SCHEMAS),
             },
+            *PHYSICAL_TEST._sender_parser_policy_rows(),
             {
                 "id": VERIFIER.PHYSICAL_VERIFIER_ID,
                 "sha256": _sha256(VERIFIER.PHYSICAL_VERIFIER_PATH.read_bytes()),
@@ -424,6 +465,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "iroha.kagemusha_v1.circuit_shape_report",
         {
             "k": 16,
+            "native_profile": native_profile_fixture(protocols),
             "relations": [
                 {"relation": relation, "eq_circuit_rows": 20_000, "ep_circuit_rows": 20_001}
                 for relation in VERIFIER.RELATIONS
@@ -797,6 +839,12 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "profiles": [
             {
                 "hardware_profile": hardware_profile,
+                "provider_policy": {
+                    "hardware_profile_id": profile_id,
+                    "provider_authority_commitment": provider_commitment,
+                    "provider_profile_index": 0xA531,
+                    "issuer_signature": _provider_policy_signature(profile_id, 0xA531, provider_commitment),
+                },
                 "suite_id": suite_id,
                 "qualification_report": qualification_path,
                 "physical_evidence": physical_paths,
@@ -815,6 +863,10 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
     policy = VERIFIER._load_observer_policy(observer_policy_path, fixture.observer_policy_sha256)
     builder = PHYSICAL_TEST._TranscriptBuilder(policy, {observer_authority_id: observer_seed})
     document = builder.build()
+    provider_policy = fixture.manifest["profiles"][0]["provider_policy"]
+    provider_root = VERIFIER.rust_provider_policy_root([hardware_profile], [provider_policy])
+    document["profile"]["hardware_policy_id"] = provider_root
+    document["endpoint"]["hardware_policy_id"] = provider_root
     document["profile"].update({key: hardware_profile[key] for key in (
         "hardware_profile_id", "provider_id", "qualification_report_digest", "policy_epoch", "capability_mask",
     )})
@@ -828,9 +880,12 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "run_id": run_id, "candidate_context_digest": fixture.candidate_context_digest(),
         "artifact_set_digest": artifact_set_digest,
     })
-    builder.approve(document)
+    builder.add_sender_validity(document, hardware_profile, suite_id, vk_digest)
     fixture.write(physical_paths["transcript"], VERIFIER.canonical_json_bytes(document), "physical_transcript")
     oem_body = {
+        **{key: provider_policy[key] for key in (
+            "provider_authority_commitment", "provider_profile_index",
+        )},
         **{key: hardware_profile[key] for key in (
             "hardware_profile_id", "provider_id", "policy_epoch", "capability_mask",
             "product_class_digest", "firmware_policy_digest",
@@ -891,6 +946,44 @@ def _verify_direct(fixture: EvidenceFixture) -> dict[str, Any]:
         observer_policy_path=fixture.observer_policy_path,
         expected_observer_policy_sha256=fixture.observer_policy_sha256,
     )
+
+
+def test_sender_vk_must_match_derived_candidate_despite_fresh_observer_signatures(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    paths = fixture.manifest["profiles"][0]["physical_evidence"]
+    document = json.loads(fixture.path(paths["transcript"]).read_text())
+    changed_vk = "ab" * 32
+    context = next(event["data"] for event in document["events"] if event["kind"] == "sender_validity_context")
+    context["vk_digest"] = changed_vk
+    # Deliberately corrupt and re-sign the synthetic observations. This is not
+    # a native parser output: the candidate-derived VK must still reject it.
+    for event in document["events"]:
+        if event["kind"] == "sender_historical_recovery":
+            event["data"]["native_parser_report"]["projection"]["vk_digest"] = changed_vk
+    policy = VERIFIER._load_observer_policy(fixture.observer_policy_path, fixture.observer_policy_sha256)
+    PHYSICAL_TEST._TranscriptBuilder(policy, {fixture.observer_authority_id: fixture.observer_seed}).rechain_sender(document)
+    payload = VERIFIER.canonical_json_bytes(document)
+    fixture.write(paths["transcript"], payload, "physical_transcript")
+    oem = json.loads(fixture.path(paths["oem_report"]).read_text())
+    oem["transcript"] = {"sha256": _sha256(payload), "byte_len": len(payload)}
+    fixture.write(paths["oem_report"], VERIFIER.canonical_json_bytes(oem), "report")
+    fixture.resign_all_for_candidate_context()
+    fixture.refresh_files()
+    with pytest.raises(VERIFIER.KagemushaEvidenceError, match="candidate VK set or exact enabled suite"):
+        _verify_direct(fixture)
+
+
+def test_nested_sender_parser_cannot_replace_a_required_release_report(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    command = fixture.commands[0]
+    command["report_schema"] = PHYSICAL_TEST.physical.SENDER_PARSER_SCHEMA
+    observation = json.loads(fixture.path(command["observation"]).read_text())
+    observation["subject"]["report_schema"] = command["report_schema"]
+    fixture.write(command["observation"], VERIFIER.canonical_json_bytes(observation), "observation")
+    fixture.resign_command(command["id"])
+    fixture.refresh_files()
+    with pytest.raises(VERIFIER.KagemushaEvidenceError, match="nested physical evidence only"):
+        _verify_direct(fixture)
 
 
 def test_acceptance_matrix_is_plan_complete_and_matches_rust_order() -> None:
@@ -1564,6 +1657,15 @@ def test_one_measurement_sample_cannot_alias_two_matrix_cells(tmp_path: Path) ->
     assert "measurement sample" in result.stderr and "aliased" in result.stderr
 
 
+def test_receive_fold_batch_occupancies_are_rejected(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["profiles"][0]["receive_fold_occupancies"] = []
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "candidate profile input 0 fields must be exactly" in result.stderr
+
+
 def test_counts_are_derived_from_typed_logs(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     log = fixture.path("logs/depth-1024.jsonl")
@@ -1791,7 +1893,94 @@ def test_projection_derives_full_rust_release_identities(tmp_path: Path) -> None
     assert receipt["hardware_policy_digest"] == VERIFIER.rust_hardware_policy_digest(
         [enabled]
     )
+    assert receipt["provider_policy"] == [fixture.manifest["profiles"][0]["provider_policy"]]
+    assert receipt["provider_policy_root"] == VERIFIER.rust_provider_policy_root(
+        [enabled["hardware_profile"]], receipt["provider_policy"]
+    )
+    assert receipt["provider_policy_root"] != receipt["hardware_policy_digest"]
+    shape = json.loads(fixture.path(fixture.manifest["global_reports"]["circuit_shape"]).read_text())
+    assert receipt["native_profile_digest"] == VERIFIER.rust_native_profile_digest(
+        shape["native_profile"], fixture.manifest["protocols"]
+    )
+    assert receipt["native_profile_digest"] != receipt["profile_digest"]
     assert VERIFIER._crc64_xz(b"123456789") == 0x995DC9BBDF1939FA
+
+
+def native_golden_protocols() -> dict[str, Any]:
+    return {"helper_protocols": [
+        {"helper": name, "eq_protocol_digest": eq.to_bytes(32, "little").hex(),
+         "ep_protocol_digest": ep.to_bytes(32, "little").hex()}
+        for name, eq, ep in [("mint_credit", 1, 2), ("mint_hash_shard", 4, 5),
+                             ("mint_hash_claim", 6, 7)]
+    ]}
+
+
+def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields() -> None:
+    protocols = native_golden_protocols()
+    profile = native_profile_fixture(protocols)
+    digest = VERIFIER.rust_native_profile_digest(profile, protocols)
+    assert digest == "4cafcb7a8658d0cd082f187fe33ba042930fb846c9caa7462887675bf71721cf"
+    for name in VERIFIER.NATIVE_PROFILE_LAYOUT_TAGS:
+        changed = json.loads(json.dumps(profile))
+        changed[name]["num_fixed"] += 1
+        assert VERIFIER.rust_native_profile_digest(changed, protocols) != digest
+    changed = json.loads(json.dumps(profile))
+    changed["mint_genesis_roster_id"][0] ^= 1
+    assert VERIFIER.rust_native_profile_digest(changed, protocols) != digest
+
+
+@pytest.mark.parametrize(("field", "member", "value"), [
+    ("inner_state_eq", "k", 12),
+    ("mint_hash_shard_eq", "k", 16),
+    ("inner_mint_authorization_eq", "num_instance_columns", 1),
+    ("mint_hash_claim_ep", "num_instance_columns", 2),
+    ("state_eq", "num_fixed", True),
+    ("state_eq", "num_fixed", 1 << 64),
+    ("state_eq", "num_advice_per_phase", []),
+    ("state_eq", "num_advice_per_phase", [0, 1]),
+    ("state_eq", "num_advice_per_phase", [1, 0, 0, 1]),
+    ("state_eq", "num_lookup_advice_per_phase", [0, 0, 1]),
+    ("state_eq", "lookup_bits", None),
+    ("state_eq", "unexpected", 1),
+    ("mint_eq_protocol_digest", None, [0] * 32),
+    ("mint_eq_protocol_digest", None, [255] * 32),
+    ("mint_eq_protocol_digest", None, [True] + [0] * 31),
+    ("mint_eq_protocol_digest", None, [2] + [0] * 31),
+    ("mint_genesis_roster_id", None, [0] * 32),
+    ("mint_genesis_roster_id", None, [1] * 31),
+    ("opaque_native_profile_digest", None, "aa" * 32),
+])
+def test_native_profile_rejects_malformed_layouts_and_role_substitution(
+    field: str, member: str | None, value: object
+) -> None:
+    protocols = native_golden_protocols()
+    profile = native_profile_fixture(protocols)
+    if member is None:
+        profile[field] = value
+    else:
+        profile[field][member] = value
+    with pytest.raises(VERIFIER.KagemushaEvidenceError):
+        VERIFIER.rust_native_profile_digest(profile, protocols)
+
+
+def test_observed_native_layout_change_changes_both_signed_receipt_identities(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    before = _verify_direct(fixture)["receipt_projection"]
+    path = fixture.manifest["global_reports"]["circuit_shape"]
+    report = json.loads(fixture.path(path).read_text())
+    report["native_profile"]["inner_state_eq"]["num_fixed"] += 1
+    fixture.write(path, VERIFIER.canonical_json_bytes(report), "report")
+    fixture.resign_commands_for_file(path)
+    fixture.refresh_files()
+    after = _verify_direct(fixture)["receipt_projection"]
+    assert after["native_profile_digest"] != before["native_profile_digest"]
+    assert after["profile_digest"] != before["profile_digest"]
+    report["native_profile"]["mint_eq_protocol_digest"] = report["native_profile"]["mint_ep_protocol_digest"]
+    fixture.write(path, VERIFIER.canonical_json_bytes(report), "report")
+    fixture.resign_commands_for_file(path)
+    fixture.refresh_files()
+    with pytest.raises(VERIFIER.KagemushaEvidenceError, match="compiled helper role"):
+        _verify_direct(fixture)
 
 
 @pytest.mark.parametrize(

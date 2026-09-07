@@ -3619,6 +3619,7 @@ impl KagemushaHardwareCredentialV1 {
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
             || self.network_id.as_bytes() == &[0; 32]
             || self.policy_epoch == 0
+            || self.hardware_epoch_generation == 0
             || self.issued_at_ms >= self.expires_at_ms
         {
             return Err(invalid("kagemusha.hardware_credential.header"));

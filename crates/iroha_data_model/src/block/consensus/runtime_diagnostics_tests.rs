@@ -78,7 +78,7 @@ fn sample_native_amx_qc(
     body.participant_proposal_hash =
         sample_native_amx_participant_proposal(&body, validator_set.clone()).proposal_hash;
     body.participant_settlement_commitment = body
-        .computed_grouped_participant_settlement_commitment(&[body.source_id])
+        .computed_grouped_participant_settlement_commitment(None, &[body.source_id])
         .expect("single-source test fixture settlement is valid");
     NativeAmxAttestationQcV2::try_new(
         body,
@@ -129,10 +129,6 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
             "/native_amx_receipts/0/legs/0/participant_settlement",
             "participant settlement",
         ),
-        (
-            "/native_amx_receipts/0/legs/0/participant_settlement/receipts/0",
-            "participant settlement receipt",
-        ),
         ("/native_amx_receipts/0/legs/0/prepare_qc", "attestation QC"),
         (
             "/native_amx_receipts/0/legs/0/prepare_qc/body",
@@ -161,6 +157,22 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
             "unknown {label} fields must fail exact Native AMX JSON decoding"
         );
     }
+    let mut receipt_shaped_source = receipt_group.clone();
+    let source = receipt_shaped_source
+        .pointer_mut("/native_amx_receipts/0/legs/0/participant_settlement/source_ids/0")
+        .expect("flat participant settlement contains a scalar source identifier");
+    *source = norito::json::Value::Object(
+        [
+            ("source_id".to_owned(), source.clone()),
+            ("timestamp_ms".to_owned(), norito::json::Value::from(42_u64)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    assert!(
+        norito::json::from_value::<LaneBlockCommitment>(receipt_shaped_source).is_err(),
+        "flat participant membership rejects a receipt-shaped source object"
+    );
     let hint = LaneBlockProposalPayloadHintV1 {
         proposal_height: 42,
         proposal_view: 3,

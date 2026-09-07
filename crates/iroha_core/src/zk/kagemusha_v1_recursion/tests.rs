@@ -28,13 +28,14 @@ use iroha_data_model::{
         KagemushaHardwareCredentialV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
         KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1, KagemushaPaymentOutputV1,
         KagemushaPaymentProofV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-        KagemushaRedemptionProofV1, KagemushaTrustedCommitTimeV1,
+        KagemushaRedemptionProofV1, KagemushaTrustedCommitTimeV1, kagemusha_ciphertext_digest_v1,
         kagemusha_credit_opening_canonical_len_v1, kagemusha_device_key_reference_v1,
         kagemusha_liability_pool_id_v1, kagemusha_payment_body_digest_v1,
     },
     nexus::AxtAssetIncarnationV1,
 };
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
+use sha2::{Digest as _, Sha256};
 use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};
 
 use super::*;
@@ -225,8 +226,6 @@ pub(crate) fn incoming_payment_fixture(
     let network_id = network();
     let asset = asset();
     let asset_incarnation = incarnation();
-    let mut recipient_encryption_key = recipient_one_time_key();
-    recipient_encryption_key[1] = recipient_key_seed;
     let mut credential = KagemushaHardwareCredentialV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],
@@ -252,6 +251,8 @@ pub(crate) fn incoming_payment_fixture(
             .canonical_signing_bytes()
             .expect("credential signing bytes"),
     );
+    let mut recipient_encryption_key = recipient_one_time_key();
+    recipient_encryption_key[1] = recipient_key_seed;
     let mut request = KagemushaPaymentRequestV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         release_id: digest(0x26),
@@ -348,6 +349,27 @@ pub(crate) fn incoming_payment_fixture(
         .validate_shape_against(&request)
         .expect("valid payment shape");
     IncomingPaymentFixtureV1 { request, payment }
+}
+
+fn incoming_payment_claims(fixture: &IncomingPaymentFixtureV1) -> [DigestV1; 7] {
+    let mut state_pair_hasher = Sha256::new();
+    state_pair_hasher.update(b"iroha:kagemusha:v1:incoming-sender-state-pair");
+    state_pair_hasher.update([0]);
+    state_pair_hasher.update(fixture.payment.output.sender_before_commitment);
+    state_pair_hasher.update(fixture.payment.output.sender_after_commitment);
+    [
+        fixture.request.canonical_digest().expect("request"),
+        fixture.request.hardware_credential.credential_id,
+        state_pair_hasher.finalize().into(),
+        fixture
+            .payment
+            .output
+            .canonical_digest_against(&fixture.request)
+            .expect("output"),
+        kagemusha_ciphertext_digest_v1(&fixture.payment.encrypted_credit),
+        fixture.payment.proof.candidate_envelope_digest,
+        fixture.payment.proof.commit_certificate_digest,
+    ]
 }
 
 #[test]
@@ -1405,25 +1427,7 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
     );
     let binding = kagemusha_incoming_proof_binding_digest_v1(&fixture.request, &fixture.payment)
         .expect("incoming binding");
-    let sender_state_pair = canonical_sender_state_pair_digest_v1(
-        fixture.payment.output.sender_before_commitment,
-        fixture.payment.output.sender_after_commitment,
-    );
-    let claims = [
-        fixture.request.canonical_digest().expect("request"),
-        fixture.request.hardware_credential.credential_id,
-        sender_state_pair,
-        fixture
-            .payment
-            .output
-            .canonical_digest_against(&fixture.request)
-            .expect("output"),
-        iroha_data_model::kagemusha::kagemusha_ciphertext_digest_v1(
-            &fixture.payment.encrypted_credit,
-        ),
-        fixture.payment.proof.candidate_envelope_digest,
-        fixture.payment.proof.commit_certificate_digest,
-    ];
+    let claims = incoming_payment_claims(&fixture);
     assert_eq!(
         binding,
         canonical_incoming_payment_claims_binding_v1(claims)
@@ -1515,7 +1519,7 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
         .expect("changed certificate digest");
     assert_ne!(
         binding,
-        kagemusha_incoming_proof_binding_digest_v1(&fixture.request, &different_candidate,)
+        kagemusha_incoming_proof_binding_digest_v1(&fixture.request, &different_candidate)
             .expect("candidate/certificate claims are bound")
     );
 }

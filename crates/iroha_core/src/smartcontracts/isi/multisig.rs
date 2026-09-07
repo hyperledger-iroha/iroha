@@ -457,9 +457,9 @@ fn rekey_account_id(
             .into(),
         ));
     }
-    if let Some(race) = super::race::retained_race_account(state_transaction.world(), old_account) {
+    if super::game::retained_game_account(state_transaction.world(), old_account) || crate::smartcontracts::isi::nft_custody::retained_nft_account(state_transaction.world(), old_account) {
         return Err(InstructionExecutionError::InvariantViolation(
-            format!("cannot rekey account {old_account}: it is retained by native race {race}").into(),
+            format!("cannot rekey account {old_account}: it is retained by a native game session or NFT custody").into(),
         ));
     }
     if let Some(reference) =

@@ -8,9 +8,10 @@ set -euo pipefail
 #   - Cargo must be available on PATH.
 #   - `sccache` is optional; enabled automatically when found unless disabled.
 #   - A fast linker (`mold`/`lld`/`zld`) is optional and must be requested.
+#   - Python 3 checks explicit target paths without modifying their caches.
 #
 # Safe defaults:
-#   - Falls back to system defaults when accelerators are unavailable.
+#   - Only auto linker selection may fall back when an accelerator is unavailable.
 #   - Never mutates repository files.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +25,7 @@ Usage: scripts/cargo_fast.sh [options] -- <cargo args...>
 Runs `cargo` with optional accelerators when available:
   - Enables `sccache` when found (unless --no-sccache is used)
   - Reuses Cargo targets through named, repository-local target slots
+  - Rejects explicit targets owned by an ancestor or neighbouring Cargo source tree
 
 Options:
   --target-dir DIR        Set CARGO_TARGET_DIR=DIR
@@ -37,6 +39,7 @@ Options:
   --stable-local-metadata Set VERGEN_GIT_SHA=local-fast-build
   --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
   --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
+                          Explicit modes must pass the native compiler probe
   --print-env             Print selected env/config and exit
   -h, --help              Show this help
 
@@ -250,6 +253,56 @@ if [[ -n "${target_dir}" ]]; then
 	export CARGO_TARGET_DIR="${target_dir}"
 fi
 
+# Cargo's own --target-dir takes precedence over the environment. Check its
+# effective explicit path as well as wrapper options and inherited selections.
+# Stop at the separator so a test/program argument is never interpreted here.
+target_owner_path="${CARGO_TARGET_DIR:-}"
+target_owner_manifest="${REPO_ROOT}/Cargo.toml"
+expect_cargo_target_value=false
+expect_cargo_manifest_value=false
+for cargo_arg in "${cargo_args[@]}"; do
+	if [[ "${cargo_arg}" == "--" ]]; then
+		break
+	fi
+	if [[ "${expect_cargo_target_value}" == true ]]; then
+		target_owner_path="${cargo_arg}"
+		expect_cargo_target_value=false
+		continue
+	fi
+	if [[ "${expect_cargo_manifest_value}" == true ]]; then
+		target_owner_manifest="${cargo_arg}"
+		expect_cargo_manifest_value=false
+		continue
+	fi
+	case "${cargo_arg}" in
+	--target-dir)
+		expect_cargo_target_value=true
+		;;
+	--target-dir=*)
+		target_owner_path="${cargo_arg#--target-dir=}"
+		;;
+	--manifest-path)
+		expect_cargo_manifest_value=true
+		;;
+	--manifest-path=*)
+		target_owner_manifest="${cargo_arg#--manifest-path=}"
+		;;
+	-C | -C?*)
+		echo "error: cargo-fast does not accept Cargo -C; invoke the selected source tree's wrapper" >&2
+		exit 1
+		;;
+	esac
+done
+if [[ -n "${target_owner_path}" ]]; then
+	if ! command -v python3 >/dev/null 2>&1; then
+		echo "error: python3 is required to check explicit Cargo target ownership" >&2
+		exit 1
+	fi
+	python3 "${SCRIPT_DIR}/check_cargo_target_owner.py" \
+		--source-root="${REPO_ROOT}" --target-dir="${target_owner_path}" \
+		--manifest-path="${target_owner_manifest}"
+fi
+
 if [[ "${jobs_set}" == true ]]; then
 	case "${jobs}" in
 	'' | *[!0-9]*)
@@ -294,29 +347,86 @@ if ! command -v cargo >/dev/null 2>&1; then
 	exit 1
 fi
 
-supports_fuse_ld() {
-	local candidate="$1"
-	local compiler
-	local tmpdir
+selected_linker=""
+selected_fuse_arg=""
+linker_compiler=""
+linker_probe_error=""
 
-	if command -v cc >/dev/null 2>&1; then
-		compiler="$(command -v cc)"
-	elif command -v clang >/dev/null 2>&1; then
-		compiler="$(command -v clang)"
-	elif command -v gcc >/dev/null 2>&1; then
-		compiler="$(command -v gcc)"
-	else
+# A requested accelerator is scoped to the native driver selected below. Pin that
+# exact driver in rustc's flags after probing, rather than probe cc but let Cargo
+# link with a different configured executable. Callers with explicit cross/driver
+# configuration retain full control through --linker off and their own flags.
+linker_environment_supported() {
+	local argument variable
+	if [[ -n "${CARGO_ENCODED_RUSTFLAGS+x}" ]]; then
+		linker_probe_error="CARGO_ENCODED_RUSTFLAGS would supersede this wrapper's RUSTFLAGS"
 		return 1
 	fi
-
-	tmpdir="$(mktemp -d)"
-	printf 'int main(void) { return 0; }\n' >"${tmpdir}/probe.c"
-	if "${compiler}" -fuse-ld="${candidate}" "${tmpdir}/probe.c" -o "${tmpdir}/probe" >/dev/null 2>&1; then
-		rm -rf "${tmpdir}"
-		return 0
+	case "${RUSTFLAGS:-}" in
+	*-Clinker* | *'linker='* | *-fuse-ld* | *link-args*)
+		linker_probe_error="RUSTFLAGS already selects a linker or a complete linker argument list"
+		return 1
+		;;
+	esac
+	if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
+		linker_probe_error="CARGO_BUILD_TARGET requires an explicitly managed target linker"
+		return 1
 	fi
+	for variable in ${!CARGO_TARGET_@}; do
+		if [[ "${variable}" == *_LINKER ]] && [[ -n "${!variable}" ]]; then
+			linker_probe_error="a CARGO_TARGET_*_LINKER override is already set"
+			return 1
+		fi
+	done
+	for argument in "${cargo_args[@]}"; do
+		[[ "${argument}" == "--" ]] && break
+		case "${argument}" in
+		--target | --target=* | --config | --config=*)
+			linker_probe_error="Cargo --target/--config requires an explicitly managed target linker"
+			return 1
+			;;
+		esac
+	done
+	return 0
+}
+
+supports_fuse_ld() {
+	local candidate="$1"
+	local tmpdir program named resolved
+	tmpdir="$(mktemp -d)" || return 1
+	printf 'int main(void) { return 0; }\n' >"${tmpdir}/probe.c"
+	# Clang accepts an exact path. GCC accepts only its known linker names.
+	if "${linker_compiler}" -fuse-ld="${candidate}" "${tmpdir}/probe.c" -o "${tmpdir}/probe" >"${tmpdir}/log" 2>&1; then
+		selected_fuse_arg="${candidate}"
+	else
+		linker_probe_error="$(cat "${tmpdir}/log")"
+		case "${candidate##*/}" in
+		ld.lld | lld) named="lld"; program="ld.lld" ;;
+		ld.mold | mold) named="mold"; program="ld.mold" ;;
+		*) rm -rf "${tmpdir}"; return 1 ;;
+		esac
+		# GCC/collect2 may search its toolchain before PATH. Do not replace a
+		# custom linker path with a same-named but different executable.
+		resolved="$("${linker_compiler}" -print-prog-name="${program}" 2>/dev/null)" || resolved=""
+		if [[ "${resolved}" != */* ]]; then
+			resolved="$(type -P "${resolved}" 2>/dev/null)" || resolved=""
+		fi
+		if [[ -z "${resolved}" ]] || [[ ! "${candidate}" -ef "${resolved}" ]]; then
+			linker_probe_error="${linker_probe_error}
+named fallback -fuse-ld=${named} resolves '${resolved:-nothing}', not requested '${candidate}'"
+			rm -rf "${tmpdir}"
+			return 1
+		fi
+		if ! "${linker_compiler}" -fuse-ld="${named}" "${tmpdir}/probe.c" -o "${tmpdir}/probe" >"${tmpdir}/log" 2>&1; then
+			linker_probe_error="$(cat "${tmpdir}/log")"
+			rm -rf "${tmpdir}"
+			return 1
+		fi
+		selected_fuse_arg="${named}"
+	fi
+	selected_linker="${candidate}"
 	rm -rf "${tmpdir}"
-	return 1
+	return 0
 }
 
 select_linker() {
@@ -326,11 +436,25 @@ select_linker() {
 	local detected_path
 	candidates=()
 	os="$(uname -s)"
+	linker_environment_supported || return 1
+	if linker_compiler="$(type -P cc)"; then
+		if [[ "${linker_compiler}" != /* ]]; then
+			linker_compiler="${PWD}/${linker_compiler}"
+		fi
+	else
+		linker_probe_error="native cc driver not found on PATH"
+		return 1
+	fi
+	case "${linker_compiler}" in
+	*[[:space:]]*) linker_probe_error="compiler path contains whitespace unsupported by RUSTFLAGS"; return 1 ;;
+	esac
 
 	add_if_present() {
 		local name="$1"
-		if command -v "${name}" >/dev/null 2>&1; then
-			detected_path="$(command -v "${name}")"
+		if detected_path="$(type -P "${name}")"; then
+			if [[ "${detected_path}" != /* ]]; then
+				detected_path="${PWD}/${detected_path}"
+			fi
 			candidates+=("${detected_path}")
 		fi
 	}
@@ -346,23 +470,29 @@ select_linker() {
 			add_if_present "lld"
 		elif [[ "${os}" == "Linux" ]]; then
 			add_if_present "mold"
-			add_if_present "lld"
 			add_if_present "ld.lld"
 		else
 			add_if_present "lld"
 		fi
 		;;
-		mold | lld | zld | ld.lld | ld64.lld)
+	lld)
+		if [[ "${os}" == "Darwin" ]]; then add_if_present "ld64.lld"; else add_if_present "ld.lld"; fi
+		;;
+		mold | zld | ld.lld | ld64.lld)
 			add_if_present "${mode}"
 			;;
 	*)
-		candidates+=("${mode}")
+		add_if_present "${mode}"
 		;;
 	esac
 
+	# Bash 3.2 treats an empty array expansion as unbound under set -u.
+	if [[ ${#candidates[@]} -eq 0 ]]; then return 1; fi
 	for candidate in "${candidates[@]}"; do
+		case "${candidate}" in
+		*[[:space:]]*) linker_probe_error="linker path contains whitespace unsupported by RUSTFLAGS"; continue ;;
+		esac
 		if supports_fuse_ld "${candidate}"; then
-			echo "${candidate}"
 			return 0
 		fi
 	done
@@ -401,14 +531,21 @@ if [[ "${sccache_active}" == true ]]; then
 	fi
 fi
 
-selected_linker=""
-if selected_linker="$(select_linker "${linker_mode}" 2>/dev/null)"; then
-	linker_flag="-Clink-arg=-fuse-ld=${selected_linker}"
+if [[ "${linker_mode}" != off ]] && select_linker "${linker_mode}"; then
+	linker_flag="-Clinker=${linker_compiler} -Clink-arg=-fuse-ld=${selected_fuse_arg}"
 	if [[ -n "${RUSTFLAGS:-}" ]]; then
 		export RUSTFLAGS="${RUSTFLAGS} ${linker_flag}"
 	else
 		export RUSTFLAGS="${linker_flag}"
 	fi
+elif [[ "${linker_mode}" != off ]]; then
+	if [[ "${linker_mode}" != auto ]]; then
+		echo "error: requested linker '${linker_mode}' cannot be honored by native driver '${linker_compiler:-unselected}'" >&2
+		echo "${linker_probe_error:-requested executable was not found on PATH}" >&2
+		echo "use --linker off with explicit target/compiler flags, or --linker auto to permit fallback" >&2
+		exit 1
+	fi
+	echo "[cargo-fast] auto linker unavailable; using system-default (${linker_probe_error:-no candidate executable})" >&2
 fi
 
 echo "[cargo-fast] repo=${REPO_ROOT}"
@@ -433,7 +570,7 @@ if [[ -n "${SCCACHE_DIR:-}" ]]; then
 	echo "[cargo-fast] SCCACHE_DIR=${SCCACHE_DIR}"
 fi
 if [[ -n "${selected_linker}" ]]; then
-	echo "[cargo-fast] linker=${selected_linker} (via -fuse-ld)"
+	echo "[cargo-fast] linker=${selected_linker} (driver=${linker_compiler}, -fuse-ld=${selected_fuse_arg})"
 else
 	echo "[cargo-fast] linker=system-default"
 fi
@@ -456,7 +593,6 @@ if [[ "${print_env_only}" == true ]]; then
 fi
 
 echo "[cargo-fast] running: cargo ${cargo_args[*]}"
-(
-	cd -- "${REPO_ROOT}"
-	exec cargo "${cargo_args[@]}"
-)
+# Replace this shell so it never rereads a changed script after a long build.
+cd -- "${REPO_ROOT}"
+exec cargo "${cargo_args[@]}"

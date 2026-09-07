@@ -586,7 +586,7 @@ where
         self
     }
     #[cfg(test)]
-    fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
+    pub(crate) fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
         self.output_word_xor = Some((job, word, xor));
         self
     }

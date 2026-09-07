@@ -522,13 +522,16 @@ download_curl_attempt() {
     set --
   fi
   clean_command curl --disable --proto '=https' --proto-redir '=https' \
-    --tlsv1.2 --fail --location "$@" --write-out '%{http_code}' \
+    --tlsv1.2 --fail --location \
+    --connect-timeout 30 --speed-limit 1024 --speed-time 60 --max-time 3600 \
+    "$@" --write-out '%{http_code}' \
     --output "$partial" "$url"
 }
 
 download_curl_status_is_transient() {
   case "$1" in
-    18|28|35|52|55|56) return 0 ;;
+    # Name resolution can fail transiently between partial-transfer attempts.
+    6|18|28|35|52|55|56) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -852,6 +855,16 @@ fi
 echo "[tlapm] projecting the tested build into a clean release tree"
 readonly AUTHENTICATED_DISTRIBUTION_PARENT="${tmp_dir}/authenticated-distribution"
 readonly AUTHENTICATED_DISTRIBUTION="${AUTHENTICATED_DISTRIBUTION_PARENT}/tlapm"
+# The pinned Dune release computes relocatable sites only for paths within
+# its source workspace. An absolute install prefix embeds that build path in
+# the executable even with --relocatable. Install using a relative build path,
+# then move the clean tree before checking the exported runtime.
+readonly RELATIVE_DISTRIBUTION="_build/authenticated-tlapm"
+[[ ! -e "${SOURCE_DIR}/${RELATIVE_DISTRIBUTION}" \
+  && ! -L "${SOURCE_DIR}/${RELATIVE_DISTRIBUTION}" ]] || {
+  echo "clean TLAPM projection already exists" >&2
+  exit 1
+}
 mkdir -m 0700 "$AUTHENTICATED_DISTRIBUTION_PARENT"
 opam_command exec --switch "$OPAM_SWITCH" -- \
   "$ENV_BIN" -i \
@@ -862,7 +875,8 @@ opam_command exec --switch "$OPAM_SWITCH" -- \
     CXXFLAGS="$DARWIN_CXXFLAGS" \
     CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH" \
     dune install --root "$SOURCE_DIR" --relocatable \
-      --prefix "$AUTHENTICATED_DISTRIBUTION"
+      --prefix "$RELATIVE_DISTRIBUTION"
+/bin/mv -- "${SOURCE_DIR}/${RELATIVE_DISTRIBUTION}" "$AUTHENTICATED_DISTRIBUTION"
 readonly BUILT_ISABELLE="${SOURCE_DIR}/_build/default/deps/isabelle/Isabelle"
 readonly BUILT_ISABELLE_EXEC_FILES="${SOURCE_DIR}/_build/default/deps/isabelle/Isabelle.exec-files"
 readonly PROJECTED_ISABELLE="${AUTHENTICATED_DISTRIBUTION}/lib/tlapm/backends/Isabelle"
@@ -930,6 +944,21 @@ fi
   echo "actual:   ${archived_version}" >&2
   exit 1
 }
+
+# Run the upstream positive and negative backend cases against the extracted
+# archive. Identity-only checks do not exercise relocated site discovery or
+# launch Isabelle, Zenon, and Z3. Keep proofs and their caches outside the
+# authenticated package so testing cannot change its attested closure.
+echo "[tlapm] testing all upstream basic cases against the relocated archive"
+readonly RELOCATED_TESTS="${tmp_dir}/relocated-tests"
+/bin/mkdir -m 0700 "$RELOCATED_TESTS"
+/bin/cp -R "$SOURCE_DIR/test/TOOLS" "$RELOCATED_TESTS/TOOLS"
+/bin/mkdir -m 0700 "$RELOCATED_TESTS/fast"
+/bin/cp -R "$SOURCE_DIR/test/fast/basic" "$RELOCATED_TESTS/fast/basic"
+clean_command "$ENV_BIN" \
+  USE_TLAPM="$ARCHIVED_BINARY" \
+  USE_LIB="${ARCHIVE_CHECK}/tlapm/lib/tlapm/stdlib" \
+  /bin/sh -c 'cd -- "$1" && exec ./TOOLS/do_tests fast/basic' sh "$RELOCATED_TESTS"
 
 readonly ATTESTATION="${tmp_dir}/source-build-attestation.json"
 "$LOCK_PYTHON" -I -S "$LOCK_HELPER" \

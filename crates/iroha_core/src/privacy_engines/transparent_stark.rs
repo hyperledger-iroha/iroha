@@ -11,12 +11,10 @@
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
-pub(crate) use fastpq_prover::fastpq_isi_v1::GoldilocksDigest384V1;
+pub(crate) use fastpq_isi::GoldilocksDigest384V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use fastpq_prover::fastpq_isi_v1::{
-    GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1,
-};
-use fastpq_prover::fastpq_isi_v1::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
+use fastpq_isi::{GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1};
+use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
@@ -74,26 +72,41 @@ pub(crate) struct TransparentStarkDigestContextV1 {
 impl TransparentStarkDigestContextV1 {
     /// Construct a typed context for one final protocol/profile pair.
     pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
-        Self { protocol: Some(protocol), profile }
+        Self {
+            protocol: Some(protocol),
+            profile,
+        }
     }
     /// Native execution proofs occupy a separate catalog and protocol namespace.
     pub(crate) const fn execution_v1(profile: &'static [u8]) -> Self {
-        Self { protocol: None, profile }
+        Self {
+            protocol: None,
+            profile,
+        }
     }
     /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
     pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
         if self.protocol.is_some() {
             iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
         } else {
-            32 * 1024 * 1024
+            iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
         }
     }
+    /// Whether the closed native execution catalog, rather than a privacy catalog, is selected.
+    pub(crate) const fn is_execution_v1(self) -> bool {
+        self.protocol.is_none()
+    }
     fn catalog_v1(self) -> [u8; 48] {
-        if self.protocol.is_some() { exact12_catalog_commitment_bytes_v1() }
-        else { sha2::Sha384::digest(b"iroha:execution:catalog:v1:race-v1").into() }
+        if self.protocol.is_some() {
+            exact12_catalog_commitment_bytes_v1()
+        } else {
+            sha2::Sha384::digest(b"iroha:execution:catalog:v1:race-v1").into()
+        }
     }
     fn protocol_label_v1(self) -> &'static [u8] {
-        self.protocol.map_or(b"native-execution-v1", |protocol| protocol.canonical_label().as_bytes())
+        self.protocol.map_or(b"native-execution-v1", |protocol| {
+            protocol.canonical_label().as_bytes()
+        })
     }
     pub(crate) fn validate(self) -> Result<(), TransparentStarkErrorV1> {
         if self.profile.is_empty() || u16::try_from(self.profile.len()).is_err() {

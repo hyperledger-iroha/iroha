@@ -113,7 +113,10 @@ fn native_amx_signing_guard_reopens_same_height_without_losing_claims() {
 #[test]
 fn unsafe_native_amx_signing_journal_latches_consensus_fail_stop() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let request = native_request(&adapter, &keys);
+    let mut request = native_request(&adapter, &keys);
+    // Prepare bodies remain volatile behind the durable owned-view marker.
+    // Commit owns the record whose disappearance this test corrupts.
+    request.body.phase = NativeAmxPhase::Commit;
     adapter
         .sign_native_request_once(&request, 0)
         .expect("seed one durable signing decision");
@@ -305,7 +308,10 @@ fn canonical_kura_recovery_accepts_global_view_one_with_fresh_lane_view() {
         .expect("read exact canonical lane authority")
     );
     assert!(
-        adapter.canonical_anchor_for_proposal(&proposal).is_some(),
+        adapter
+            .canonical_anchor_for_proposal(&proposal)
+            .expect("authenticate canonical fixture anchor")
+            .is_some(),
         "the exact ownership/header global view must authenticate the lane-local proposal"
     );
 }
@@ -353,19 +359,35 @@ fn canonical_kura_recovery_rejects_nonzero_planner_origin_lane_view() {
 }
 #[test]
 fn lane_work_stays_quiescent_until_the_exact_global_prepare_lock() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let later_view =
+    let (mut adapter, keys) = fixture_at_height_inner_with_kura_and_local_index(
+        wire::ConsensusMode::Permissioned,
+        9,
+        true,
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        Some(0),
+        true,
+    );
+    let rotation =
         u64::try_from(adapter.context.roster.len()).expect("fixture roster length fits u64");
+    let first_view = (0..rotation)
+        .find(|view| adapter.context.leader(*view) == 0)
+        .expect("the local lane author leads one global view per rotation");
+    let later_view = first_view + rotation;
     assert_eq!(
-        adapter.context.leader(0),
+        adapter.context.leader(first_view),
         adapter.context.leader(later_view)
     );
     let (block_zero, proposal_at_view_zero) =
-        planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        planned_lane_candidate_block_at_view(&adapter, &keys, first_view);
+    assert_eq!(
+        lane_proposal_author(&proposal_at_view_zero),
+        Some(&adapter.local_peer),
+        "the fixture's local validator owns the lane proposal being tested"
+    );
     let round_zero = wire::ConsensusRound {
         context_id: adapter.context.id(),
         height: adapter.context.height,
-        view: 0,
+        view: first_view,
     };
     adapter
         .planned_lane_proposals
@@ -609,7 +631,11 @@ fn decision_cleanup_fairly_reconstructs_completed_commit_qc_fanout() {
         V2LaneIngressOutcome::Inserted
     );
     adapter.drive_lane_sessions();
-    assert!(adapter.has_pending_committed_output_handoff());
+    assert!(
+        adapter
+            .has_pending_committed_output_handoff()
+            .expect("read pending exact output handoff")
+    );
     adapter
         .retain_merge_sidecars_for_global_view(
             locked_round.view,
@@ -645,12 +671,19 @@ fn decision_cleanup_fairly_reconstructs_completed_commit_qc_fanout() {
                 other => panic!("decision cleanup retained non-final lane output: {other:?}"),
             }
         }
-        if !adapter.has_pending_committed_output_handoff() {
+        if !adapter
+            .has_pending_committed_output_handoff()
+            .expect("read pending exact output handoff")
+        {
             break;
         }
     }
     assert_eq!(observed, expected);
-    assert!(!adapter.has_pending_committed_output_handoff());
+    assert!(
+        !adapter
+            .has_pending_committed_output_handoff()
+            .expect("read pending exact output handoff")
+    );
 }
 
 #[test]

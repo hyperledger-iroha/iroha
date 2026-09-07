@@ -42,8 +42,10 @@ mod query_batch_invariants;
 mod query_json_envelope;
 #[path = "../query_response_roundtrip.rs"]
 mod query_response_roundtrip;
-#[path = "../race_v1_codec.rs"]
-mod race_v1_codec;
+#[path = "../game_v1_codec.rs"]
+mod game_v1_codec;
+#[path = "../nft_market_v1_codec.rs"]
+mod nft_market_v1_codec;
 #[path = "../registry_decode_roundtrip.rs"]
 mod registry_decode_roundtrip;
 #[path = "../registry_excludes_signatory_quorum.rs"]

@@ -1466,7 +1466,9 @@ pub(crate) fn validate_persisted_reserve_custody_v1<'a>(
 ///
 /// # Errors
 ///
-/// Returns an error for malformed input, conflicts, scale mismatch, or checked overflow.
+/// Returns an error for malformed input, conflicts, a new certified commit outside the
+/// authenticated credential/profile lifetime, scale mismatch, or checked overflow. Exact retries
+/// retain their original receipt's certified time and can recover after later expiry.
 pub(in crate::smartcontracts::isi) fn plan_top_up_from_entries(
     verified: &VerifiedKagemushaTopUpIntentV1,
     context: KagemushaReserveCommitContextV1,
@@ -1475,16 +1477,22 @@ pub(in crate::smartcontracts::isi) fn plan_top_up_from_entries(
     verified.intent.validate()?;
     context.validate()?;
     let request = &verified.intent.request;
-    let mint_statement_digest = verified
-        .authorization
-        .mint_statement_digest(request, context.committed_at_ms)
-        .map_err(KagemushaReserveErrorV1::InvalidWire)?;
     if let Some(existing) = read_set.existing_operation {
         return match existing {
             KagemushaReserveOperationRecordV1::TopUp(existing)
                 if existing.same_request(&verified.intent) =>
             {
                 existing.validate_basic()?;
+                // Retry recovery authenticates the exact original receipt under its certified
+                // commit time. It creates no new mint and must not re-date the old effect to
+                // this later block, after the credential/profile may have expired.
+                let historical_digest = verified
+                    .authorization
+                    .mint_statement_digest(request, existing.reserve_receipt.committed_at_ms)
+                    .map_err(KagemushaReserveErrorV1::InvalidWire)?;
+                if historical_digest != existing.reserve_receipt.mint_statement_digest {
+                    return Err(state_invariant("top_up_historical_mint_statement_mismatch"));
+                }
                 if read_set.credit_operation != Some(existing.operation_id)
                     || read_set.issuance_operation != Some(existing.operation_id)
                 {
@@ -1499,6 +1507,11 @@ pub(in crate::smartcontracts::isi) fn plan_top_up_from_entries(
             }),
         };
     }
+    // Only a new effect is admitted against the incoming authoritative block time.
+    let mint_statement_digest = verified
+        .authorization
+        .mint_statement_digest(request, context.committed_at_ms)
+        .map_err(KagemushaReserveErrorV1::InvalidWire)?;
     ensure_entry_unbound(read_set.credit_operation, request.credit_id, |credit_id| {
         KagemushaReserveErrorV1::MintCreditConflict { credit_id }
     })?;
@@ -1982,6 +1995,17 @@ fn mint_statement_from_request(
     request: &KagemushaTopUpRequestV1,
     minted_at_ms: u64,
 ) -> Result<KagemushaMintCreditStatementV1, KagemushaReserveErrorV1> {
+    // This adapter rebuilds retained records without a runtime profile catalog. The exact
+    // credential is already in the request digest; profile authentication remains mandatory
+    // through VerifiedKagemushaTopUpAuthorizationV1 for both new plans and receipt retries.
+    if minted_at_ms == 0
+        || minted_at_ms < request.hardware_credential.issued_at_ms
+        || minted_at_ms >= request.hardware_credential.expires_at_ms
+    {
+        return Err(KagemushaReserveErrorV1::InvalidWire(
+            "top-up certified mint time is outside the credential lifetime".to_owned(),
+        ));
+    }
     let authorization_context_digest = request
         .mint_authorization_context()
         .canonical_digest()
@@ -2344,7 +2368,6 @@ mod tests {
 
     use crate::zk::kagemusha_v1_recursion::{
         KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaEpAccumulatorV1, KagemushaEqAccumulatorV1,
-        KagemushaMintAuthorityStepV1,
     };
 
     fn tagged_id(tag: u8, nonce: u64) -> [u8; 32] {
@@ -2907,7 +2930,9 @@ mod tests {
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
         };
-        let height = u64::from(nonce) + 100;
+        // Each nonce creates an independent first-height finality context; a later height
+        // would require an actual parent CommitQC or an authenticated snapshot anchor.
+        let height = 1_u64;
         let context = HeightContext {
             network_id: request.network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -2934,6 +2959,7 @@ mod tests {
             },
             leader_seed: [nonce; 32],
         };
+        context.validate().expect("canonical first-height context");
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new([nonce, 3])),
@@ -3394,6 +3420,156 @@ mod tests {
             },
         )
         .expect("canonical anchor re-authenticates result");
+    }
+
+    #[test]
+    fn top_up_certified_time_boundaries_reject_before_reserve_mutation() {
+        // The fixture mocks prior recursive admission; the real reserve planner, arithmetic,
+        // canonical request/profile validation, and commit paths below are production code.
+        let verified = verified_top_up(1, 1, 50);
+        let mut book = KagemushaReserveBookV1::new();
+        let empty = book.clone();
+        for time in [1, 499, 90_000, 100_000, u64::MAX] {
+            let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+                tagged_id(0x41, time),
+                time,
+            )
+            .expect("authoritative nonzero block context");
+            assert!(matches!(
+                book.plan_top_up(&verified, context),
+                Err(KagemushaReserveErrorV1::InvalidWire(_))
+            ));
+            assert!(mint_statement_from_request(&verified.intent.request, time).is_err());
+            assert_eq!(
+                book, empty,
+                "invalid certified time must not create a pool, operation, or reverse index"
+            );
+        }
+        assert!(
+            KagemushaReserveCommitContextV1::after_block_context_verification([1; 32], 0).is_err()
+        );
+        for time in [500, 89_999] {
+            let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+                tagged_id(0x41, time),
+                time,
+            )
+            .unwrap();
+            let plan = expect_plan(
+                book.plan_top_up(&verified, context)
+                    .expect("inclusive start, exclusive end"),
+            );
+            assert_eq!(book, empty, "planning is read-only");
+            let record = book.commit(plan).expect("commit time-valid top-up");
+            let KagemushaReserveCommitOutcomeV1::Committed(
+                KagemushaReserveOperationRecordV1::TopUp(record),
+            ) = record
+            else {
+                panic!("expected new top-up");
+            };
+            assert_eq!(record.reserve_receipt.committed_at_ms, time);
+            assert_eq!(
+                mint_statement_from_request(&verified.intent.request, time)
+                    .unwrap()
+                    .minted_at_ms,
+                time
+            );
+            assert_eq!(
+                book.available(network(), asset(), asset_incarnation(1))
+                    .unwrap(),
+                50
+            );
+            book = KagemushaReserveBookV1::new();
+        }
+    }
+
+    #[test]
+    fn top_up_retry_after_credential_and_profile_expiry_preserves_original_certified_receipt() {
+        let verified = verified_top_up(1, 1, 50);
+        let mut book = KagemushaReserveBookV1::new();
+        let original_context =
+            KagemushaReserveCommitContextV1::after_block_context_verification([1; 32], 500)
+                .unwrap();
+        let plan = expect_plan(book.plan_top_up(&verified, original_context).unwrap());
+        book.commit(plan.clone()).expect("original valid commit");
+        let before = book.clone();
+        let original = book.operation(&verified.operation_id()).unwrap().clone();
+        let original_bytes = norito::encode_canonical(&original).unwrap();
+        for time in [90_000, 100_000, u64::MAX] {
+            let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+                tagged_id(0x41, time),
+                time,
+            )
+            .unwrap();
+            let outcome = book
+                .plan_top_up(&verified, context)
+                .expect("recover original valid receipt after expiry");
+            assert_eq!(
+                outcome,
+                KagemushaReservePlanOutcomeV1::AlreadyCommitted(original.clone())
+            );
+            assert_eq!(book, before);
+            assert_eq!(
+                norito::encode_canonical(book.operation(&verified.operation_id()).unwrap())
+                    .unwrap(),
+                original_bytes
+            );
+        }
+        assert_eq!(
+            book.commit(plan).unwrap(),
+            KagemushaReserveCommitOutcomeV1::AlreadyCommitted(original)
+        );
+        // Recovery still checks the previously verified authority capability against this exact
+        // request. It cannot bypass request authentication merely because its ID was committed.
+        let mut substituted_authorization = verified.clone();
+        substituted_authorization.authorization.request_digest[0] ^= 1;
+        assert!(matches!(
+            book.plan_top_up(
+                &substituted_authorization,
+                KagemushaReserveCommitContextV1::after_block_context_verification(
+                    [2; 32],
+                    u64::MAX
+                )
+                .unwrap()
+            ),
+            Err(KagemushaReserveErrorV1::InvalidWire(_))
+        ));
+        assert_eq!(book, before);
+    }
+
+    #[test]
+    fn top_up_retained_record_rejects_rehashed_out_of_lifetime_certified_time() {
+        let verified = verified_top_up(1, 1, 50);
+        let mut book = KagemushaReserveBookV1::new();
+        commit_top_up(&mut book, &verified, 1);
+        let Some(KagemushaReserveOperationRecordV1::TopUp(original)) =
+            book.operation(&verified.operation_id())
+        else {
+            panic!("original top-up");
+        };
+        for time in [499, 90_000, u64::MAX] {
+            let mut corrupt = original.clone();
+            let mut forged_statement = verified
+                .mint_statement(original.reserve_receipt.committed_at_ms)
+                .unwrap();
+            forged_statement.minted_at_ms = time;
+            forged_statement
+                .validate_shape()
+                .expect("unqualified statement shape alone has no credential");
+            corrupt.reserve_receipt.committed_at_ms = time;
+            corrupt.reserve_receipt.mint_statement_digest =
+                forged_statement.canonical_digest().unwrap();
+            corrupt
+                .reserve_receipt
+                .validate()
+                .expect("structurally valid receipt with a positive time");
+            assert!(
+                matches!(
+                    corrupt.validate_basic(),
+                    Err(KagemushaReserveErrorV1::InvalidWire(_))
+                ),
+                "recomputing the statement digest must not legitimize a commit outside the credential lifetime"
+            );
+        }
     }
 
     #[test]

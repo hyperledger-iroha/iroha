@@ -2,6 +2,14 @@
 using namespace metal;
 
 #include "field.metal"
+// Keep independent sponge states in an explicit scalar-word layout. Batched
+// thread arrays of three-word Metal vectors produced divergent non-leading
+// states on Apple Metal 32023.883; scalar structures have multi-state parity coverage.
+struct PoseidonState {
+    ulong x;
+    ulong y;
+    ulong z;
+};
 struct PoseidonArgs {
     uint state_count;
     uint states_per_lane;
@@ -26,22 +34,22 @@ constant ushort PARTIAL_ROUNDS = 57;
 constant ushort TOTAL_ROUNDS = FULL_ROUNDS_HALF * 2 + PARTIAL_ROUNDS;
 constant ushort STATE_CHUNK = 4;
 
-inline ulong3 make_ulong3(ulong a, ulong b, ulong c) {
-    ulong3 value;
+inline PoseidonState make_poseidon_state(ulong a, ulong b, ulong c) {
+    PoseidonState value;
     value.x = a;
     value.y = b;
     value.z = c;
     return value;
 }
-inline ulong3 add_mod_vec(ulong3 lhs, ulong3 rhs) {
-    return make_ulong3(
+inline PoseidonState add_mod_vec(PoseidonState lhs, PoseidonState rhs) {
+    return make_poseidon_state(
         add_mod(lhs.x, rhs.x),
         add_mod(lhs.y, rhs.y),
         add_mod(lhs.z, rhs.z));
 }
 
-inline ulong3 pow7_vec(ulong3 value) {
-    return make_ulong3(
+inline PoseidonState pow7_vec(PoseidonState value) {
+    return make_poseidon_state(
         pow7(value.x),
         pow7(value.y),
         pow7(value.z));
@@ -121,24 +129,24 @@ constant ulong MDS[STATE_WIDTH][STATE_WIDTH] = {
 };
 
 inline void apply_mds(
-    thread ulong3 &state,
-    thread const ulong3 (&mds_rows)[STATE_WIDTH]
+    thread PoseidonState &state,
+    thread const PoseidonState (&mds_rows)[STATE_WIDTH]
 ) {
-    ulong3 next;
+    PoseidonState next;
 
-    ulong3 row0 = mds_rows[0];
+    PoseidonState row0 = mds_rows[0];
     ulong acc = mul_mod(row0.x, state.x);
     acc = add_mod(acc, mul_mod(row0.y, state.y));
     acc = add_mod(acc, mul_mod(row0.z, state.z));
     next.x = acc;
 
-    ulong3 row1 = mds_rows[1];
+    PoseidonState row1 = mds_rows[1];
     acc = mul_mod(row1.x, state.x);
     acc = add_mod(acc, mul_mod(row1.y, state.y));
     acc = add_mod(acc, mul_mod(row1.z, state.z));
     next.y = acc;
 
-    ulong3 row2 = mds_rows[2];
+    PoseidonState row2 = mds_rows[2];
     acc = mul_mod(row2.x, state.x);
     acc = add_mod(acc, mul_mod(row2.y, state.y));
     acc = add_mod(acc, mul_mod(row2.z, state.z));
@@ -148,13 +156,13 @@ inline void apply_mds(
 }
 
 inline void full_round_chunk(
-    thread ulong3 *chunk,
+    thread PoseidonState *chunk,
     ushort count,
-    threadgroup ulong3 (&rounds)[TOTAL_ROUNDS],
+    threadgroup PoseidonState (&rounds)[TOTAL_ROUNDS],
     uint round_idx,
-    thread const ulong3 (&mds)[STATE_WIDTH]
+    thread const PoseidonState (&mds)[STATE_WIDTH]
 ) {
-    ulong3 rc = rounds[round_idx];
+    PoseidonState rc = rounds[round_idx];
     for (ushort i = 0; i < count; ++i) {
         chunk[i] = pow7_vec(add_mod_vec(chunk[i], rc));
         apply_mds(chunk[i], mds);
@@ -162,13 +170,13 @@ inline void full_round_chunk(
 }
 
 inline void partial_round_chunk(
-    thread ulong3 *chunk,
+    thread PoseidonState *chunk,
     ushort count,
-    threadgroup ulong3 (&rounds)[TOTAL_ROUNDS],
+    threadgroup PoseidonState (&rounds)[TOTAL_ROUNDS],
     uint round_idx,
-    thread const ulong3 (&mds)[STATE_WIDTH]
+    thread const PoseidonState (&mds)[STATE_WIDTH]
 ) {
-    ulong3 rc = rounds[round_idx];
+    PoseidonState rc = rounds[round_idx];
     for (ushort i = 0; i < count; ++i) {
         chunk[i] = add_mod_vec(chunk[i], rc);
         chunk[i].x = pow7(chunk[i].x);
@@ -177,10 +185,10 @@ inline void partial_round_chunk(
 }
 
 inline void permute_chunk(
-    thread ulong3 *chunk,
+    thread PoseidonState *chunk,
     ushort count,
-    threadgroup ulong3 (&rounds)[TOTAL_ROUNDS],
-    thread const ulong3 (&mds)[STATE_WIDTH]
+    threadgroup PoseidonState (&rounds)[TOTAL_ROUNDS],
+    thread const PoseidonState (&mds)[STATE_WIDTH]
 ) {
     uint round = 0;
 #pragma clang loop unroll(full)
@@ -201,7 +209,7 @@ inline void permute_chunk(
 }
 
 inline ushort load_state_chunk(
-    thread ulong3 *chunk,
+    thread PoseidonState *chunk,
     ushort capacity,
     ulong start_state,
     uint total_states,
@@ -222,7 +230,7 @@ inline ushort load_state_chunk(
 }
 
 inline void store_state_chunk(
-    thread const ulong3 *chunk,
+    thread const PoseidonState *chunk,
     ushort count,
     ulong start_state,
     device ulong *states
@@ -235,14 +243,14 @@ inline void store_state_chunk(
     }
 }
 
-inline void zero_state_chunk(thread ulong3 *chunk, ushort count) {
+inline void zero_state_chunk(thread PoseidonState *chunk, ushort count) {
     for (ushort i = 0; i < count; ++i) {
-        chunk[i] = make_ulong3(0, 0, 0);
+        chunk[i] = make_poseidon_state(0, 0, 0);
     }
 }
 
 inline void absorb_block_chunk(
-    thread ulong3 *chunk,
+    thread PoseidonState *chunk,
     ushort count,
     ulong start_state,
     uint block,
@@ -260,12 +268,12 @@ inline void absorb_block_chunk(
 }
 
 inline void absorb_value_chunk(
-    thread ulong3 *chunk,
+    thread PoseidonState *chunk,
     ushort count,
     thread ushort &rate_index,
     thread const ulong *values,
-    threadgroup ulong3 (&rounds)[TOTAL_ROUNDS],
-    thread const ulong3 (&mds)[STATE_WIDTH]
+    threadgroup PoseidonState (&rounds)[TOTAL_ROUNDS],
+    thread const PoseidonState (&mds)[STATE_WIDTH]
 ) {
     if (rate_index == 0) {
         for (ushort i = 0; i < count; ++i) {
@@ -289,29 +297,29 @@ kernel void poseidon_permute(device ulong *states [[ buffer(0) ]],
                              uint3 tg_pos [[ thread_position_in_threadgroup ]],
                              uint3 tg_size [[ threads_per_threadgroup ]]) {
     uint lane = tg_pos.x;
-    threadgroup ulong3 shared_rounds[TOTAL_ROUNDS];
-    threadgroup ulong3 shared_mds[STATE_WIDTH];
+    threadgroup PoseidonState shared_rounds[TOTAL_ROUNDS];
+    threadgroup PoseidonState shared_mds[STATE_WIDTH];
 
     uint lane_stride = tg_size.x == 0 ? 1 : tg_size.x;
     for (uint round = lane; round < TOTAL_ROUNDS; round += lane_stride) {
-        shared_rounds[round] = make_ulong3(
+        shared_rounds[round] = make_poseidon_state(
             ROUND_CONSTANTS[round][0],
             ROUND_CONSTANTS[round][1],
             ROUND_CONSTANTS[round][2]);
     }
     for (uint row = lane; row < STATE_WIDTH; row += lane_stride) {
-        shared_mds[row] = make_ulong3(MDS[row][0], MDS[row][1], MDS[row][2]);
+        shared_mds[row] = make_poseidon_state(MDS[row][0], MDS[row][1], MDS[row][2]);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    thread ulong3 local_mds[STATE_WIDTH];
+    thread PoseidonState local_mds[STATE_WIDTH];
     for (uint row = 0; row < STATE_WIDTH; ++row) {
         local_mds[row] = shared_mds[row];
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
     ulong state_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
-    thread ulong3 chunk[STATE_CHUNK];
+    thread PoseidonState chunk[STATE_CHUNK];
     uint processed = 0;
 
     while (processed < states_per_lane) {
@@ -347,29 +355,29 @@ kernel void poseidon_hash_rows(device const ulong *columns [[ buffer(0) ]],
         return;
     }
     uint lane = tg_pos.x;
-    threadgroup ulong3 shared_rounds[TOTAL_ROUNDS];
-    threadgroup ulong3 shared_mds[STATE_WIDTH];
+    threadgroup PoseidonState shared_rounds[TOTAL_ROUNDS];
+    threadgroup PoseidonState shared_mds[STATE_WIDTH];
 
     uint lane_stride = tg_size.x == 0 ? 1 : tg_size.x;
     for (uint round = lane; round < TOTAL_ROUNDS; round += lane_stride) {
-        shared_rounds[round] = make_ulong3(
+        shared_rounds[round] = make_poseidon_state(
             ROUND_CONSTANTS[round][0],
             ROUND_CONSTANTS[round][1],
             ROUND_CONSTANTS[round][2]);
     }
     for (uint row = lane; row < STATE_WIDTH; row += lane_stride) {
-        shared_mds[row] = make_ulong3(MDS[row][0], MDS[row][1], MDS[row][2]);
+        shared_mds[row] = make_poseidon_state(MDS[row][0], MDS[row][1], MDS[row][2]);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    thread ulong3 local_mds[STATE_WIDTH];
+    thread PoseidonState local_mds[STATE_WIDTH];
     for (uint row = 0; row < STATE_WIDTH; ++row) {
         local_mds[row] = shared_mds[row];
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
     ulong batch_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
-    thread ulong3 chunk[STATE_CHUNK];
+    thread PoseidonState chunk[STATE_CHUNK];
     thread uint row_indices[STATE_CHUNK];
     thread ulong values[STATE_CHUNK];
     uint processed = 0;
@@ -394,7 +402,7 @@ kernel void poseidon_hash_rows(device const ulong *columns [[ buffer(0) ]],
             }
             uint row_index = (uint)row_index_wide;
             row_indices[loaded] = row_index;
-            chunk[loaded] = make_ulong3(0, 0, 0);
+            chunk[loaded] = make_poseidon_state(0, 0, 0);
         }
         if (loaded == 0) {
             break;
@@ -448,29 +456,29 @@ kernel void poseidon_hash_columns(device const ulong *payloads [[ buffer(0) ]],
         return;
     }
     uint lane = tg_pos.x;
-    threadgroup ulong3 shared_rounds[TOTAL_ROUNDS];
-    threadgroup ulong3 shared_mds[STATE_WIDTH];
+    threadgroup PoseidonState shared_rounds[TOTAL_ROUNDS];
+    threadgroup PoseidonState shared_mds[STATE_WIDTH];
 
     uint lane_stride = tg_size.x == 0 ? 1 : tg_size.x;
     for (uint round = lane; round < TOTAL_ROUNDS; round += lane_stride) {
-        shared_rounds[round] = make_ulong3(
+        shared_rounds[round] = make_poseidon_state(
             ROUND_CONSTANTS[round][0],
             ROUND_CONSTANTS[round][1],
             ROUND_CONSTANTS[round][2]);
     }
     for (uint row = lane; row < STATE_WIDTH; row += lane_stride) {
-        shared_mds[row] = make_ulong3(MDS[row][0], MDS[row][1], MDS[row][2]);
+        shared_mds[row] = make_poseidon_state(MDS[row][0], MDS[row][1], MDS[row][2]);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    thread ulong3 local_mds[STATE_WIDTH];
+    thread PoseidonState local_mds[STATE_WIDTH];
     for (uint row = 0; row < STATE_WIDTH; ++row) {
         local_mds[row] = shared_mds[row];
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
     ulong state_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
-    thread ulong3 chunk[STATE_CHUNK];
+    thread PoseidonState chunk[STATE_CHUNK];
     uint processed = 0;
 
     while (processed < states_per_lane) {
@@ -487,7 +495,7 @@ kernel void poseidon_hash_columns(device const ulong *payloads [[ buffer(0) ]],
             if (idx >= (ulong)args.state_count) {
                 break;
             }
-            chunk[loaded] = make_ulong3(0, 0, 0);
+            chunk[loaded] = make_poseidon_state(0, 0, 0);
         }
         if (loaded == 0) {
             break;

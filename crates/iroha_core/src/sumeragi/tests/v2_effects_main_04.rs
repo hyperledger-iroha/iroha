@@ -632,7 +632,8 @@ fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let certified_sources = certified_sources(&fixture, &prepare);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -647,7 +648,7 @@ fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
     let before = executor.body_ownership_projection();
     services.fail_on = Some("cancel-fetch");
     assert!(matches!(
-        executor.consume_effects(
+        executor.consume_admitted_fixture_effects(&fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout_at_view(&fixture, 0),
@@ -663,7 +664,8 @@ fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
     assert!(executor.status().fail_closed);
     assert_eq!(services.closed.len(), 1);
     assert!(matches!(
-        executor.consume_effects(
+        executor.consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout_at_view(&fixture, 0),
@@ -739,7 +741,8 @@ fn view_cleanup_second_cancellation_failure_commits_no_fetch_retirement() {
     second_prepare.subject = second_manifest.subject;
     let second_sources = certified_sources(&fixture, &second_prepare);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![
                 AdapterEffect::FetchBody {
                     tag: tag(0),
@@ -766,7 +769,7 @@ fn view_cleanup_second_cancellation_failure_commits_no_fetch_retirement() {
     let before = executor.body_ownership_projection();
     services.fail_on_call = Some(("cancel-fetch", 2));
     assert!(matches!(
-        executor.consume_effects(
+        executor.consume_admitted_fixture_effects(&fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout_at_view(&fixture, 0),
@@ -2638,9 +2641,9 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .certified_fetch_ready_authority_for_test()
         .expect("the refreshed physical row retains the exact certified-Fetch family");
     assert_eq!(refreshed_ordinal, first_ordinal);
-    assert_ne!(
+    assert_eq!(
         refreshed_digest, wake_physical_digest,
-        "coalesced ownership history must invalidate the stale Phase-A identity digest",
+        "coalescence refreshes the queue witness while the persisted physical identity remains immutable",
     );
     drop(refreshed);
     let (mut persisted, work_ack) = completion.into_parts();

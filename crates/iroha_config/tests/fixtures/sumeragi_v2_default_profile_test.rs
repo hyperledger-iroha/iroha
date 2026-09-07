@@ -25,17 +25,17 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-        1089 * 1024 * 1024
+        1122 * 1024 * 1024
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
-        33 * 1024 * 1024
+        34 * 1024 * 1024
     );
     assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
     assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
     assert_eq!(
         defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-        64 * 1024
+        1024 * 1024
     );
     assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
     assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
@@ -58,10 +58,10 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         2
     );
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 161);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 1089 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 1122 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
-        33 * 1024 * 1024
+        34 * 1024 * 1024
     );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);

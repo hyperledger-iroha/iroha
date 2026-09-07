@@ -1,6 +1,8 @@
 //! Integration-style tests covering SoraFS pin, fetch, restart, quota, and PoR flows.
 #[path = "cli.rs"]
 mod cli;
+#[path = "publication_roundtrip.rs"]
+mod publication_roundtrip;
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 use sorafs_node::{NodeHandle, NodeStorageError, config::StorageConfig, store::StorageError};

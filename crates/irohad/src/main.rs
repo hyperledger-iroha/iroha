@@ -177,6 +177,7 @@ use tokio::{
     sync::{Semaphore, broadcast, mpsc, oneshot},
     task,
 };
+
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
@@ -466,17 +467,29 @@ fn deterministic_test_genesis_topology() -> Vec<iroha_genesis::GenesisTopologyEn
 #[cfg(test)]
 fn complete_test_genesis_builder_for_topology(
     builder: iroha_genesis::GenesisBuilder,
-    topology: Vec<iroha_genesis::GenesisTopologyEntry>,
+    mut topology: Vec<iroha_genesis::GenesisTopologyEntry>,
 ) -> iroha_genesis::GenesisBuilder {
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
     assert!(
-        !topology.is_empty(),
-        "test genesis topology must contain validators"
+        iroha_data_model::block::consensus_v2::is_valid_committee_size(topology.len()),
+        "irohad genesis fixtures require an exact supported 3f + 1 topology"
     );
-    let mut validators = topology
+    assert!(
+        !topology.windows(2).any(|pair| pair[0].peer == pair[1].peer),
+        "irohad genesis fixture topology must not repeat validators"
+    );
+    for entry in &topology {
+        let pop = entry
+            .pop_bytes()
+            .expect("decode irohad test validator proof of possession")
+            .expect("irohad test validator must carry a proof of possession");
+        iroha_crypto::bls_normal_pop_verify(entry.peer.public_key(), &pop)
+            .expect("verify irohad test validator proof of possession");
+    }
+    let validators = topology
         .iter()
         .map(|entry| entry.peer.clone())
         .collect::<Vec<_>>();
-    validators.sort();
     let validators = validators
         .into_iter()
         .enumerate()
@@ -4418,6 +4431,7 @@ impl NetworkRelayShared {
                 | Topic::PeerGossip
                 | Topic::TrustGossip
                 | Topic::Health
+                | Topic::Connect
                 | Topic::Other
         ) || matches!(msg, iroha_core::NetworkMessage::StreamingControl(_))
     }
@@ -6419,10 +6433,7 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
-fn install_kagemusha_v1_runtime_verifier(
-    state: &mut State,
-    config: &Config,
-) -> Result<(), String> {
+fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> Result<(), String> {
     let Some(files) = config.settlement.kagemusha.proof_release.as_ref() else {
         return Ok(());
     };
@@ -13207,6 +13218,10 @@ fn validate_network_frame_runtime_limit(config: &Config) -> ReportResult<(), Con
             config.network.max_frame_bytes_health,
         ),
         (
+            "network.max_frame_bytes_connect",
+            config.network.max_frame_bytes_connect,
+        ),
+        (
             "network.max_frame_bytes_other",
             config.network.max_frame_bytes_other,
         ),
@@ -19262,6 +19277,30 @@ mod tests {
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
         use path_absolutize::Absolutize as _;
+
+        fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
+            Args {
+                config: Some(config_path),
+                genesis_manifest_json,
+                startup: StartupArgs {
+                    check_config: false,
+                    trace_config: false,
+                    config_blake3: None,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: false,
+                #[cfg(feature = "test-network-parliament-signers")]
+                test_network_parliament_beacon_signer_mode:
+                    TestNetworkParliamentBeaconSignerMode::Valid,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            }
+        }
+
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
             let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let pubkey = keypair.public_key().clone();

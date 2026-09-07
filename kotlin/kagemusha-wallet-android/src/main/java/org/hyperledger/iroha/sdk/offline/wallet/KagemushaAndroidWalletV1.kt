@@ -6,6 +6,7 @@ package org.hyperledger.iroha.sdk.offline.wallet
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareProviderV1
 import org.hyperledger.iroha.sdk.offline.KagemushaWalletV1
+import org.hyperledger.iroha.sdk.offline.KagemushaOperationIntentStoreV1
 
 /**
  * OEM boundary that binds the canonical wallet provider to an audited Android device service.
@@ -15,7 +16,7 @@ import org.hyperledger.iroha.sdk.offline.KagemushaWalletV1
  */
 fun interface KagemushaAndroidHardwareProviderFactoryV1 {
     /** Open the OEM provider backed exclusively by [bridge]. */
-    fun open(bridge: KagemushaDeviceLifecycleBridgeV1): KagemushaHardwareProviderV1
+    fun open(bridge: KagemushaDeviceLifecycleBridgeV1, intentStore: KagemushaOperationIntentStoreV1, authorizeBootstrap: () -> Unit): KagemushaHardwareProviderV1
 
     /**
      * Return the already admitted lifecycle bridge used by this provider.
@@ -31,8 +32,8 @@ fun interface KagemushaAndroidHardwareProviderFactoryV1 {
 object KagemushaAndroidWalletV1 {
     /** Open a wallet around an already provisioned, completely qualified hardware provider. */
     @JvmStatic
-    fun open(provider: KagemushaHardwareProviderV1): KagemushaWalletV1 =
-        KagemushaWalletV1.open(provider)
+    fun open(provider: KagemushaHardwareProviderV1, authorizeBootstrap: () -> Unit): KagemushaWalletV1 =
+        KagemushaWalletV1.open(provider, authorizeBootstrap)
 
     /**
      * Discover the audited native device service and bind it to an OEM provider adapter.
@@ -44,17 +45,21 @@ object KagemushaAndroidWalletV1 {
     @JvmStatic
     fun openProduction(
         factory: KagemushaAndroidHardwareProviderFactoryV1,
-    ): KagemushaWalletV1 = openBridge(factory.deviceLifecycleBridge(), factory)
+        intentStore: KagemushaOperationIntentStoreV1,
+        authorizeBootstrap: () -> Unit,
+    ): KagemushaWalletV1 = openBridge(factory.deviceLifecycleBridge(), factory, intentStore, authorizeBootstrap)
 
     internal fun openBridge(
         bridge: KagemushaDeviceLifecycleBridgeV1,
         factory: KagemushaAndroidHardwareProviderFactoryV1,
+        intentStore: KagemushaOperationIntentStoreV1,
+        authorizeBootstrap: () -> Unit,
     ): KagemushaWalletV1 {
         val bridgeCapabilities = bridge.capabilities()
             ?: throw IllegalStateException(
                 "KAGEMUSHA V1 is online-only: no qualified non-forking Android hardware service",
             )
-        val provider = factory.open(bridge)
+        val provider = factory.open(bridge, intentStore, authorizeBootstrap)
         val qualification = provider.qualification()
         qualification.requireProductionReady()
         require(
@@ -65,6 +70,6 @@ object KagemushaAndroidWalletV1 {
             qualification.profile.qualificationReportDigest()
                 .contentEquals(bridgeCapabilities.qualificationReportDigest()),
         ) { "OEM provider attestation does not match the native device service" }
-        return KagemushaWalletV1.open(provider)
+        return KagemushaWalletV1.open(provider, authorizeBootstrap)
     }
 }

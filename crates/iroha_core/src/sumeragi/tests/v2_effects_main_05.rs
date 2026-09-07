@@ -154,6 +154,9 @@ fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacit
         commit.subject,
         commit.execution_commitment,
     ));
+    executor
+        .finish_runtime_step_reconciliation(&mut services)
+        .expect("publish the actual post-step Decision to service reconciliation");
     let commit_certified_sources = certified_sources(&fixture, &commit);
     executor
         .consume_effects(
@@ -3788,6 +3791,43 @@ fn enter_view_preserves_stored_proposal_replay_for_prepare_refined_validate() {
     assert!(services.closed.is_empty());
 }
 
+fn consume_current_certified_fetch_before_store(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    services: &mut FakeServices,
+    fixture: &Fixture,
+    current_tag: EventTag,
+    certificate: &wire::QuorumCertificate,
+) {
+    assert!(executor.runtime.completions.is_empty());
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: current_tag,
+                round: certificate.proposal_round,
+                subject: certificate.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(fixture, certificate),
+                certificate: Some(certificate.clone()),
+            }],
+            services,
+        )
+        .expect("current certified Fetch adopts the retained physical body");
+    assert!(services.fetch_tasks.is_empty());
+    assert_eq!(
+        executor.runtime.completions,
+        vec![RuntimeCompletion::BodyAvailable(
+            current_tag,
+            fixture.manifest.clone(),
+        )]
+    );
+    assert_eq!(
+        executor.body_pipeline_owners[&(certificate.proposal_round, certificate.subject)].tag,
+        current_tag
+    );
+    // The modeled reducer consumes this exact completion before its Store effect.
+    executor.runtime.completions.clear();
+}
+
 #[test]
 fn enter_view_preserves_inflight_proposal_store_replay_through_late_completion() {
     let fixture = Fixture::new();
@@ -3824,6 +3864,15 @@ fn enter_view_preserves_inflight_proposal_store_replay_through_late_completion()
         Some(RemoteProposalReplayStageV1::Store { work_id, .. })
             if *work_id == store_id
     ));
+
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    consume_current_certified_fetch_before_store(
+        &mut executor,
+        &mut services,
+        &fixture,
+        next_tag,
+        &prepare,
+    );
 
     executor
         .consume_effects(
@@ -4288,6 +4337,16 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
 
 #[test]
 fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
+    // The adapter creates the affine source atomically with the Decision WAL
+    // continuation, or emits direct Apply instead. These are independent
+    // admitted cuts; a fixture must not add the source to the same Decision
+    // later without an adapter transition.
+    for has_live_wal_source in [false, true] {
+        assert_terminal_validate_admitted_decision_cut(has_live_wal_source);
+    }
+}
+
+fn assert_terminal_validate_admitted_decision_cut(has_live_wal_source: bool) {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -4417,48 +4476,9 @@ fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
     executor.runtime.decided_body = Some(decision);
     executor.runtime.durable_body_authority_certificate = Some(commit);
     executor.runtime.live_clocks_armed = true;
-    executor.runtime.exact_effect_ownership =
-        Some((current_validate.clone(), current_validate_ownership.clone()));
-
-    assert_eq!(
-        executor
-            .consume_effects(vec![current_validate.clone()], &mut services)
-            .expect("consume the released marker through exact live Decision authority"),
-        1,
-        "the Commit-owned Validate must consume its retained FIFO occurrence",
-    );
-    assert_eq!(executor.protected_decision, Some(decision));
-    assert!(executor.retained_effect_batch.is_none());
-    assert!(executor.parked_effect_batch.is_none());
-    assert!(
-        executor
-            .published_lifecycle_validate_retry_markers
-            .contains_key(&key)
-    );
-    assert!(executor.pending_released_lifecycle_validate_apply.is_some());
-    assert!(executor.pending_durable_validate_admissions.is_empty());
-    assert!(executor.durable_validate_retry_seals.is_empty());
-    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
-    assert!(executor.pending_applications.is_empty());
-    assert!(executor.live_lifecycle_decision_apply.is_none());
-    assert_eq!(executor.pending_work(), 1);
-    assert!(services.apply_tasks.is_empty());
-    assert_eq!(executor.status().pending_applications, 0);
-    assert!(!executor.status().fail_closed);
-    assert!(!executor.output_guard.restart_required());
-    assert!(services.closed.is_empty());
-
-    // Restore the exact pre-refinement terminal cut and add the affine source
-    // which only the real acknowledged Decision WAL can mint. The same Commit
-    // retry may now re-enter normal Validate admission, but it still cannot
-    // manufacture or enqueue Apply at the executor boundary.
-    assert!(
-        executor
-            .published_lifecycle_validate_retry_markers
-            .insert(key, terminal_marker.clone())
-            .is_some()
-    );
-    executor.runtime.pending_live_decision_apply = Some((current_tag, decision));
+    if has_live_wal_source {
+        executor.runtime.pending_live_decision_apply = Some((current_tag, decision));
+    }
     let malformed_store = AdapterEffect::StoreBody {
         tag: current_tag,
         round: fixture.manifest.round,
@@ -4472,48 +4492,64 @@ fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
                 vec![current_validate_ownership.clone(), malformed_later_owner],
             )
             .is_err(),
-        "a malformed later position must roll back the projected marker readmission"
+        "a malformed later position must roll back the complete marker projection"
     );
     assert_eq!(
-        executor.published_lifecycle_validate_retry_markers[&key], terminal_marker,
-        "batch preflight failure must retain the exact terminal marker"
+        executor.published_lifecycle_validate_retry_markers[&key],
+        terminal_marker
     );
     assert!(executor.retained_effect_batch.is_none());
-    assert!(executor.pending_durable_validate_admissions.is_empty());
-    assert!(executor.durable_validate_retry_seals.is_empty());
-
     executor.runtime.exact_effect_ownership =
         Some((current_validate.clone(), current_validate_ownership.clone()));
     assert_eq!(
         executor
             .consume_effects(vec![current_validate.clone()], &mut services)
-            .expect("readmit the exact terminal Validate beneath its live Decision WAL source"),
-        1,
+            .expect("consume the exact admitted Decision retry"),
+        usize::from(has_live_wal_source)
     );
+    assert_eq!(executor.protected_decision, Some(decision));
     assert!(executor.retained_effect_batch.is_none());
     assert!(executor.parked_effect_batch.is_none());
-    assert!(
-        !executor
-            .published_lifecycle_validate_retry_markers
-            .contains_key(&key)
+    assert_eq!(
+        executor.pending_released_lifecycle_validate_apply.is_some(),
+        has_live_wal_source
     );
-    assert!(
-        executor.pending_durable_validate_admissions[&key]
-            .exactly_matches_retry(&current_validate, &current_validate_ownership)
-    );
-    assert!(matches!(
-        executor.durable_validate_retry_seals.get(&key),
-        Some(DurableValidateRetrySealV1::Live {
-            lifecycle_ordinal: None,
-            ..
-        })
-    ));
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
     assert!(executor.pending_applications.is_empty());
     assert!(executor.live_lifecycle_decision_apply.is_none());
-    assert_eq!(executor.pending_work(), 1);
+    assert_eq!(executor.pending_work(), usize::from(has_live_wal_source));
+    assert!(
+        services.apply_tasks.is_empty(),
+        "only the lifecycle publication owner may mint Apply"
+    );
+    assert_eq!(
+        executor.status().pending_validations,
+        usize::from(has_live_wal_source),
+        "the released Validate-to-Apply publication remains visible until its affine handoff"
+    );
+    let marker = executor.published_lifecycle_validate_retry_markers[&key].clone();
+    assert_eq!(marker.published_effect, initial_validate);
+    assert_eq!(marker.latest_effect, current_validate);
+    assert_eq!(
+        marker.latest_statement.phase(),
+        Some(wire::GlobalPhase::Commit)
+    );
+    executor.runtime.exact_effect_ownership =
+        Some((current_validate.clone(), current_validate_ownership));
+    assert_eq!(
+        executor
+            .consume_effects(vec![current_validate], &mut services)
+            .expect("same-authority terminal retry does not create another physical owner"),
+        0
+    );
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key],
+        marker
+    );
+    assert_eq!(executor.pending_work(), usize::from(has_live_wal_source));
     assert!(services.apply_tasks.is_empty());
-    assert_eq!(executor.status().pending_validations, 1);
     assert!(!executor.status().fail_closed);
     assert!(!executor.output_guard.restart_required());
     assert!(services.closed.is_empty());
@@ -5110,7 +5146,12 @@ fn assert_published_marker_absorbs_detached_store_completion(publish_validate: b
         Some(RemoteProposalReplayStageV1::Store { work_id, .. })
             if *work_id == store_id
     ));
-    assert!(executor.body_pipeline_owners.contains_key(&key));
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(executor.pending_stores[&store_id].task.tag(), original_tag);
+    assert_eq!(
+        executor.pending_stores[&store_id].task,
+        services.store_tasks[0]
+    );
 
     assert!(
         executor
@@ -6099,6 +6140,14 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     let mut foreign_context = fixture.context.clone();
     foreign_context.network_id =
         crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
+    (
+        foreign_context.kagemusha_mint_finality_epoch_id,
+        foreign_context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        foreign_context.network_id,
+        foreign_context.epoch,
+        &foreign_context.roster,
+    );
     let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
     foreign_commit.round.context_id = foreign_context.id();
     foreign_commit.proposal_round.context_id = foreign_context.id();

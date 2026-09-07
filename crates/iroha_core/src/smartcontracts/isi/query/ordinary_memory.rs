@@ -950,6 +950,9 @@ define_singular_source_admission! {
     98 => FindDomainEndorsements: ProvenBounded,
     99 => FindDomainEndorsementPolicy: ProvenBounded,
     100 => FindDomainCommittee: ProvenBounded,
+    101 => FindGameSessionById: ProvenBounded,
+    102 => FindExecutionProofVerificationById: ProvenBounded,
+    103 => FindNftSaleOfferById: ProvenBounded,
 }
 /// Measure a singular source before a metered server lane can clone or decode it.
 ///
@@ -1041,9 +1044,19 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(model, &mut remaining)?;
             }
         }
-        SingularQueryBox::FindRaceById(query) => {
-            if let Some(race) = world.races().get(&query.race_id) {
-                charge(race, &mut remaining)?;
+        SingularQueryBox::FindGameSessionById(query) => {
+            if let Some(session) = world.game_sessions().get(&query.session_id) {
+                charge(session, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindNftSaleOfferById(query) => {
+            if let Some(offer) = world.nft_sale_offers().get(&query.offer_id) {
+                charge(offer, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindExecutionProofVerificationById(query) => {
+            if let Some(receipt) = world.execution_proof_verifications().get(&query.verification_id) {
+                charge(receipt, &mut remaining)?;
             }
         }
         SingularQueryBox::FindParameters(_) => charge(world.parameters(), &mut remaining)?,
@@ -1530,7 +1543,7 @@ mod tests {
     }
     #[test]
     fn singular_source_admission_audit_covers_all_100_variants() {
-        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 100);
+        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 101);
         for (index, (number, name, class)) in SINGULAR_SOURCE_ADMISSION_AUDIT.iter().enumerate() {
             assert_eq!(usize::from(*number), index + 1);
             assert!(!name.is_empty());

@@ -423,11 +423,34 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
             .expect("read committed carrier while poisoned"),
         Some(aborted_hash)
     );
+    let incarnations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.lane_id,
+                kura.active_lane_incarnation_marker(entry)
+                    .expect("bound fixture lane")
+                    .0,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let activations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| (entry.lane_id, 0))
+        .collect();
     drop(kura);
     let (kura, BlockCount(count)) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("restart repairs committed association");
     assert_eq!(count, 2);
+    assert!(
+        kura.lane_storage_entry(lane_id).is_err(),
+        "physical startup repair must not publish active secondary catalog membership"
+    );
+    kura.recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("restore the exact authoritative fixture geometry after physical startup repair");
     let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
     let artifact = kura
         .read_lane_block_artifact(lane_id, lane_block_height)
@@ -1020,6 +1043,36 @@ fn consensus_sidecar_enqueues_do_not_wait_for_unrelated_prune_lock_holder() {
     );
     assert_eq!(kura.pipeline_sidecar_queue.lock().len(), 1);
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
+}
+#[test]
+fn fastpq_snapshot_json_batch_is_canonical_under_every_ambient_layout() {
+    use base64::Engine as _;
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"codec-only snapshot"));
+    let mut snapshot = sample_fastpq_snapshot(1, block_hash, 8);
+    snapshot.batch.push(fastpq_prover::StateTransition::new(
+        b"metadata/key".to_vec(),
+        b"before".to_vec(),
+        b"after".to_vec(),
+        fastpq_prover::OperationKind::MetaSet,
+    ));
+    let canonical = norito::encode_canonical(&snapshot.batch).unwrap();
+    let expected_base64 = base64::engine::general_purpose::STANDARD.encode(&canonical);
+    let expected = snapshot.to_json_value();
+    for flags in
+        (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+    {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        let json = snapshot.to_json_value();
+        assert_eq!(json, expected);
+        assert_eq!(
+            json.get("batch").and_then(|value| value.as_str()),
+            Some(expected_base64.as_str())
+        );
+        assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+    }
+    assert_eq!(snapshot.proof_digest, Hash::new(&snapshot.proof));
 }
 #[test]
 fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
@@ -2860,5 +2913,217 @@ fn canonical_height_projection_and_recovery_reject_corrupt_occupied_sidecar() {
         ),
         before,
         "strict rejection must not repair or overwrite corrupt evidence"
+    );
+}
+
+#[test]
+fn raw_lane_writer_preserves_occupied_corruption_and_valid_competitors() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("lane entry");
+    let block = dummy_block_with_lane_payload_ownership(lane_id, lane.dataspace_id, 1);
+    let height =
+        NonZeroUsize::new(usize::try_from(block.header().height().get()).unwrap()).unwrap();
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    kura.store_block(Arc::clone(&block))
+        .expect("publish an initially absent raw slot");
+    finalize_chain_through_for_eviction(&kura, height);
+    let artifact = kura
+        .read_lane_block_artifact_read_only(lane_id, 1)
+        .expect("authenticate canonical raw slot")
+        .expect("occupied slot");
+    let proposal = lane_block_proposal_from_ownership(&artifact.ownership);
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let original = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
+    assert!(
+        kura.persist_recovered_lane_block_artifact(&artifact),
+        "exact valid retry"
+    );
+    let recovered = kura
+        .recover_lane_block_payload(&proposal)
+        .expect("exact input from canonical body");
+    kura.persist_lane_block_execution_input(&recovered)
+        .expect("publish genuinely absent execution input");
+    kura.persist_lane_block_execution_input(&recovered)
+        .expect("healthy exact execution-input retry");
+    let (input_data, input_index) =
+        Kura::lane_block_execution_input_paths_for_entry(lane, temp_dir.path());
+    let input_bytes = (
+        fs::read(&input_data).unwrap(),
+        fs::read(&input_index).unwrap(),
+    );
+    for corrupt_index in [false, true] {
+        fs::write(&input_data, &input_bytes.0).unwrap();
+        fs::write(&input_index, &input_bytes.1).unwrap();
+        fs::write(
+            if corrupt_index {
+                &input_index
+            } else {
+                &input_data
+            },
+            b"occupied execution-input corruption",
+        )
+        .unwrap();
+        let before = snapshot_regular_files_recursively(temp_dir.path());
+        assert!(kura.persist_lane_block_execution_input(&recovered).is_err());
+        assert_eq!(
+            snapshot_regular_files_recursively(temp_dir.path()),
+            before,
+            "input publication must not consume authority or replace occupied corruption"
+        );
+    }
+    fs::write(&input_data, &input_bytes.0).unwrap();
+    fs::write(&input_index, &input_bytes.1).unwrap();
+    let mut competing = artifact.clone();
+    competing.proposal_block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"another valid raw proposal identity"));
+    assert!(!kura.persist_recovered_lane_block_artifact(&competing));
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        original
+    );
+
+    // This is an owned crash-recovery control, not a corrupt occupied slot.
+    fs::remove_file(&data_path).unwrap();
+    fs::remove_file(&index_path).unwrap();
+    assert!(
+        kura.persist_recovered_lane_block_artifact(&artifact),
+        "genuine absence is recoverable"
+    );
+    assert_eq!(
+        kura.read_lane_block_artifact_read_only(lane_id, 1).unwrap(),
+        Some(artifact.clone())
+    );
+    assert_eq!(
+        kura.get_block(height).as_deref(),
+        Some(block.as_ref()),
+        "warm optional cache"
+    );
+    fs::write(&data_path, b"occupied raw artifact corruption").unwrap();
+    let before = snapshot_regular_files_recursively(temp_dir.path());
+    assert!(
+        kura.recover_lane_block_payload(&proposal).is_err(),
+        "historical recovery must not overwrite occupied corruption"
+    );
+    assert!(!kura.persist_recovered_lane_block_artifact(&artifact));
+    assert!(
+        kura.validate_lane_payload_ownership_artifacts_for_block(
+            &block,
+            LaneBlockArtifactConflictPolicy::PreserveCanonical
+        )
+        .is_err()
+    );
+    assert_eq!(snapshot_regular_files_recursively(temp_dir.path()), before);
+}
+
+struct PendingSecondaryAssociationFixture {
+    directory: TempDir,
+    config: KuraConfig,
+    lanes: RuntimeLaneConfig,
+    carrier: Arc<SignedBlock>,
+}
+fn pending_secondary_association_fixture() -> PendingSecondaryAssociationFixture {
+    let (directory, config, lanes) = two_lane_storage_fixture();
+    let entry = lanes.entry(LaneId::new(1)).expect("secondary lane");
+    let mut blocks = DummyBlocks::new();
+    let parent = blocks.next();
+    let carrier = dummy_block_with_lane_payload_ownership_from_generator(
+        &mut blocks,
+        entry.lane_id,
+        entry.dataspace_id,
+        1,
+    );
+    let mut merge = sample_merge_entry(1);
+    let carrier = bind_merge_entry_to_carrier(carrier, &mut merge);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lanes);
+    kura.store_block(parent).expect("store canonical parent");
+    kura.fail_next_merge_append_for_test();
+    assert!(matches!(
+        kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge),
+        Err(Error::CanonicalBlockCommittedRecoveryRequired { .. })
+    ));
+    assert_eq!(
+        Kura::read_durable_hash_at_height(&mut kura.block_store.lock(), 2)
+            .expect("exact committed marker"),
+        Some(carrier.hash())
+    );
+    assert!(kura.canonical_association_stage_path().exists());
+    drop(kura);
+    PendingSecondaryAssociationFixture {
+        directory,
+        config,
+        lanes,
+        carrier,
+    }
+}
+#[test]
+fn startup_secondary_association_recovery_rejects_corrupt_occupied_slot_without_mutation() {
+    let fixture = pending_secondary_association_fixture();
+    let entry = fixture.lanes.entry(LaneId::new(1)).expect("secondary lane");
+    let (data, _) = Kura::lane_artifact_paths_for_entry(entry, fixture.directory.path());
+    let mut corrupt = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&data)
+        .expect("open owned artifact");
+    corrupt
+        .write_all(b"INVALID!")
+        .expect("corrupt the occupied signed artifact frame");
+    corrupt
+        .sync_all()
+        .expect("retain corruption before restart");
+    drop(corrupt);
+    let before = snapshot_regular_files_recursively(fixture.directory.path());
+    assert!(
+        matches!(
+            Kura::open_test_kura_with_configured_lane_config(&fixture.config, &fixture.lanes),
+            Err(Error::IO(source, _)) if source.kind() == ErrorKind::InvalidData
+                && source.to_string().contains("lane artifact writer preflight")
+        ),
+        "an occupied corrupt slot cannot be regenerated from the canonical stage"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(fixture.directory.path()),
+        before,
+        "rejected recovery must retain the canonical stage, corrupt bytes, journal and merge log"
+    );
+}
+#[test]
+fn canonical_association_physical_target_rejects_unbound_lane_without_catalog_mutation() {
+    let fixture = pending_secondary_association_fixture();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&fixture.config, &fixture.lanes)
+            .expect("recover the actual canonical association first");
+    assert!(kura.lane_storage_entry(LaneId::new(1)).is_err());
+    assert!(!kura.canonical_association_stage_path().exists());
+    let unknown =
+        dummy_block_with_lane_payload_ownership(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
+    let ownership = unknown
+        .execution_context()
+        .expect("owned lane fixture")
+        .lane_payload_ownerships[0]
+        .clone();
+    let foreign = LaneBlockArtifact::new(unknown.hash(), ownership);
+    let before = snapshot_regular_files_recursively(fixture.directory.path());
+    let geometry_guard = kura.lane_geometry_lock.lock();
+    assert!(
+        matches!(kura.canonical_association_physical_targets_from_journal(&[foreign]),
+        Err(Error::IO(source, _)) if source.kind() == ErrorKind::InvalidData
+            && source.to_string().contains("no selected physical journal binding"))
+    );
+    drop(geometry_guard);
+    assert!(kura.lane_storage_entry(LaneId::new(2)).is_err());
+    assert_eq!(
+        snapshot_regular_files_recursively(fixture.directory.path()),
+        before
+    );
+    assert_eq!(
+        kura.get_durable_block_hash(nonzero!(2_usize)),
+        Some(fixture.carrier.hash())
     );
 }

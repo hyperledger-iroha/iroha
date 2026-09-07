@@ -23,6 +23,79 @@ pub(crate) struct LeaderWireRecoveryAuthority {
     protected_commit_statement: Option<Hash>,
 }
 
+/// Exact non-owning coordinates copied only from an authenticated envelope.
+/// The runtime binds these coordinates to that envelope's immutable occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LeaderWireConsumerPosition {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    phase: Phase,
+    view: wire::View,
+    commit_statement: Option<Hash>,
+    timeout_prepare_view: Option<wire::View>,
+}
+impl LeaderWireConsumerPosition {
+    pub(crate) fn from_payload(payload: &wire::ConsensusMessageV2Payload) -> Option<Self> {
+        use wire::ConsensusMessageV2Payload as Payload;
+        let (round, phase, commit_statement, timeout_prepare_view) = match payload {
+            Payload::Proposal(proposal) => (proposal.round, Phase::Proposal, None, None),
+            Payload::Vote(vote) => (
+                vote.round,
+                match vote.phase {
+                    wire::GlobalPhase::Prepare => Phase::PrepareVote,
+                    wire::GlobalPhase::Commit => Phase::CommitVote,
+                },
+                (vote.round == vote.proposal_round).then(|| {
+                    vote_statement_hash(
+                        vote.proposal_round,
+                        vote.subject,
+                        &vote.execution_commitment,
+                    )
+                }),
+                None,
+            ),
+            Payload::QuorumCertificate(qc) => (
+                qc.round,
+                match qc.phase {
+                    wire::GlobalPhase::Prepare => Phase::PrepareQc,
+                    wire::GlobalPhase::Commit => Phase::CommitQc,
+                },
+                None,
+                None,
+            ),
+            Payload::TimeoutVote(vote) => (vote.round, Phase::TimeoutVote, None, None),
+            Payload::TimeoutCertificate(tc) => (
+                tc.round,
+                Phase::TimeoutCertificate,
+                None,
+                tc.highest_prepare_qc().map(|qc| qc.round.view),
+            ),
+            _ => return None,
+        };
+        Some(Self {
+            context_id: round.context_id,
+            height: round.height,
+            phase,
+            view: round.view,
+            commit_statement,
+            timeout_prepare_view,
+        })
+    }
+    pub(crate) fn projection_hash(self) -> Hash {
+        Hash::new(
+            (
+                self.context_id,
+                self.height,
+                self.phase,
+                self.view,
+                self.commit_statement,
+                self.timeout_prepare_view,
+            )
+                .encode(),
+        )
+    }
+}
+
 pub(crate) fn vote_statement_hash(
     proposal_round: wire::ConsensusRound,
     subject: wire::BlockSubject,
@@ -97,6 +170,23 @@ impl LeaderWireRecoveryAuthority {
                 (Some(old), Some(new)) => old == new || new.0.view > old.0.view,
             }
     }
+    /// Bind every durable consumer fact used to classify retained ingress.
+    pub(crate) fn projection_hash(self) -> Hash {
+        let mut bytes = b"iroha:sumeragi:v2:leader-wire-consumer:v1".to_vec();
+        bytes.extend(self.context_id.encode());
+        bytes.extend(self.height.to_le_bytes());
+        bytes.extend(self.owner);
+        bytes.extend(self.consumer_tag.height().to_le_bytes());
+        bytes.extend(self.consumer_tag.view().to_le_bytes());
+        bytes.extend(self.consumer_tag.generation().get().to_le_bytes());
+        bytes.extend(self.wal_id.get().to_le_bytes());
+        bytes.push(u8::from(self.decision_durable));
+        bytes.extend(self.highest_prepare_view.encode());
+        bytes.extend(self.installed_timeout_view.encode());
+        bytes.extend(self.protected_lock.encode());
+        bytes.extend(self.protected_commit_statement.encode());
+        Hash::new(bytes)
+    }
     pub(crate) const fn consumer_tag(self) -> reducer::EventTag {
         self.consumer_tag
     }
@@ -119,7 +209,7 @@ impl LeaderWireRecoveryAuthority {
                     && self.protected_commit_statement.is_some()
             })
     }
-    fn admits(
+    fn consumer_accepts(
         self,
         phase: Phase,
         view: wire::View,
@@ -166,55 +256,99 @@ impl LeaderWireRecoveryAuthority {
             Phase::Chunk | Phase::CertifiedResponse => true,
         }
     }
+    /// Retain bounded ownership when a later monotone WAL cut can make this
+    /// wire eligible. This is intentionally broader than reducer admission:
+    /// a future view is not a permanent retirement certificate.
     pub(crate) fn admits_ingress_identity(
         self,
         identity: &FairV2IngressLeaderWireIdentity,
     ) -> bool {
-        self.admits(
+        self.retains(
             identity.phase,
             identity.view,
             self.protects_commit_vote(identity),
             identity.timeout_prepare_view,
         )
     }
+    fn retains(
+        self,
+        phase: Phase,
+        view: wire::View,
+        exact_commit: bool,
+        timeout_prepare_view: Option<wire::View>,
+    ) -> bool {
+        if phase.source_class() != FairV2IngressLeaderWireSourceClass::Control {
+            return true;
+        }
+        if self.decision_durable {
+            return false;
+        }
+        let current_view = self.consumer_tag.view();
+        match phase {
+            Phase::Proposal | Phase::PrepareVote | Phase::TimeoutVote => view >= current_view,
+            Phase::CommitVote => view >= current_view || exact_commit,
+            Phase::PrepareQc => self
+                .highest_prepare_view
+                .is_none_or(|highest| view >= highest),
+            Phase::CommitQc => true,
+            Phase::TimeoutCertificate => {
+                self.consumer_accepts(phase, view, exact_commit, timeout_prepare_view)
+            }
+            Phase::Chunk | Phase::CertifiedResponse => true,
+        }
+    }
+    fn consumer_accepts_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
+        self.consumer_accepts(
+            identity.phase,
+            identity.view,
+            self.protects_commit_vote(identity),
+            identity.timeout_prepare_view,
+        )
+    }
+    pub(crate) fn consumer_waits_for(self, position: LeaderWireConsumerPosition) -> bool {
+        let exact_commit = position.commit_statement.is_some()
+            && position.commit_statement == self.protected_commit_statement;
+        position.context_id == self.context_id
+            && position.height == self.height
+            && self.retains(
+                position.phase,
+                position.view,
+                exact_commit,
+                position.timeout_prepare_view,
+            )
+            && !self.consumer_accepts(
+                position.phase,
+                position.view,
+                exact_commit,
+                position.timeout_prepare_view,
+            )
+    }
+    fn payload_coordinates(
+        self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> Option<(Phase, wire::View, bool, Option<wire::View>)> {
+        let position = LeaderWireConsumerPosition::from_payload(payload)?;
+        Some((
+            position.phase,
+            position.view,
+            position.commit_statement.is_some()
+                && position.commit_statement == self.protected_commit_statement,
+            position.timeout_prepare_view,
+        ))
+    }
     pub(super) fn admits_payload(self, payload: &wire::ConsensusMessageV2Payload) -> bool {
-        use wire::ConsensusMessageV2Payload as Payload;
-        let (phase, view, exact_commit, timeout_prepare_view) = match payload {
-            Payload::Proposal(proposal) => (Phase::Proposal, proposal.round.view, false, None),
-            Payload::Vote(vote) => (
-                match vote.phase {
-                    wire::GlobalPhase::Prepare => Phase::PrepareVote,
-                    wire::GlobalPhase::Commit => Phase::CommitVote,
-                },
-                vote.round.view,
-                vote.round == vote.proposal_round
-                    && self.protected_commit_statement
-                        == Some(vote_statement_hash(
-                            vote.proposal_round,
-                            vote.subject,
-                            &vote.execution_commitment,
-                        )),
-                None,
-            ),
-            Payload::QuorumCertificate(qc) => (
-                match qc.phase {
-                    wire::GlobalPhase::Prepare => Phase::PrepareQc,
-                    wire::GlobalPhase::Commit => Phase::CommitQc,
-                },
-                qc.round.view,
-                false,
-                None,
-            ),
-            Payload::TimeoutVote(vote) => (Phase::TimeoutVote, vote.round.view, false, None),
-            Payload::TimeoutCertificate(tc) => (
-                Phase::TimeoutCertificate,
-                tc.round.view,
-                false,
-                tc.highest_prepare_qc().map(|qc| qc.round.view),
-            ),
-            _ => return true,
-        };
-        self.admits(phase, view, exact_commit, timeout_prepare_view)
+        self.payload_coordinates(payload).is_none_or(
+            |(phase, view, exact_commit, timeout_prepare_view)| {
+                self.consumer_accepts(phase, view, exact_commit, timeout_prepare_view)
+            },
+        )
+    }
+    pub(super) fn retains_payload(self, payload: &wire::ConsensusMessageV2Payload) -> bool {
+        self.payload_coordinates(payload).is_none_or(
+            |(phase, view, exact_commit, timeout_prepare_view)| {
+                self.retains(phase, view, exact_commit, timeout_prepare_view)
+            },
+        )
     }
     pub(crate) fn retires(self, token: &FairV2IngressLeaderWireToken) -> bool {
         token.identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control
@@ -227,7 +361,7 @@ impl LeaderWireRecoveryAuthority {
         consumed_by: reducer::EventTag,
     ) -> bool {
         self.consumer_tag.strictly_advances(consumed_by)
-            && self.admits_ingress_identity(&token.identity)
+            && self.consumer_accepts_identity(&token.identity)
             && matches!(
                 token.identity.phase,
                 Phase::Proposal | Phase::PrepareVote | Phase::CommitVote
@@ -261,13 +395,29 @@ impl LeaderWireRecoveryAuthority {
             protected_commit_statement: None,
         }
     }
+    /// Unqualified unit-fixture projection of the lock and exact Commit statement.
+    /// This does not append/authenticate a CommitIntent; production authority is
+    /// minted only by `from_adapter` from the actual replayed WAL and registry.
     #[cfg(test)]
     pub(crate) fn with_protected_lock(
         self,
         protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+        protected_commit_execution: Option<wire::ExecutionCommitment>,
     ) -> Result<Self, String> {
+        let protected_commit_statement = match (protected_lock, protected_commit_execution) {
+            (Some((round, subject)), Some(execution)) => {
+                Some(vote_statement_hash(round, subject, &execution))
+            }
+            (None, Some(_)) => {
+                return Err(
+                    "a fixture Commit statement requires its exact protected lock".to_owned(),
+                );
+            }
+            (_, None) => None,
+        };
         let next = Self {
             protected_lock,
+            protected_commit_statement,
             ..self
         };
         if protected_lock.is_some_and(|(round, _)| {
@@ -285,6 +435,7 @@ impl LeaderWireRecoveryAuthority {
         self,
         durable_view: wire::View,
         protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+        protected_commit_execution: Option<wire::ExecutionCommitment>,
     ) -> Result<Self, String> {
         let next = Self {
             consumer_tag: reducer::EventTag::new(
@@ -295,7 +446,7 @@ impl LeaderWireRecoveryAuthority {
             installed_timeout_view: durable_view.checked_sub(1),
             ..self
         }
-        .with_protected_lock(protected_lock)?;
+        .with_protected_lock(protected_lock, protected_commit_execution)?;
         if !next.monotonically_extends(self) {
             return Err("leader-wire recovery authority regressed its durable view".to_owned());
         }

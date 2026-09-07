@@ -89,7 +89,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let core = RecordingNativeCore()
     let provider = KagemushaAuthenticatedHardwareProviderV1(
       transport: transport,
-      core: core
+      core: core, intentOwner: testOperationIntentOwner()
     )
 
     XCTAssertThrowsError(try provider.qualification()) { error in
@@ -101,7 +101,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
         )
       )
     }
-    XCTAssertEqual(core.reservedOperations, [1])
+    XCTAssertEqual(core.reservedOperations, [])
     XCTAssertFalse(core.acceptedQualification)
     XCTAssertEqual(transport.operations, [1])
     XCTAssertEqual(transport.acceptedKeys, [nil])
@@ -110,8 +110,8 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
   func testSenderReservationsMatchCanonicalNativeCoreBindings() throws {
     let fixture = try reservationFixture()
     let core = RecordingNativeCore()
-    let transport = UnavailableAuthenticatedTransport()
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core)
+    let transport = try QualificationOnlyTransport()
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner())
     let operationID = Data(repeating: 7, count: 32)
     XCTAssertEqual(
       try provider.reservePaymentOperationID(
@@ -123,11 +123,11 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       canonicalPayload: fixtureBytes(fixture, "redeem_beneficiary_payload_hex"))
     XCTAssertEqual(
       try provider.reserveRedemptionOperationID(
-        operationID: operationID, amount: KagemushaUInt128V1(amount), beneficiary: beneficiary),
-      operationID)
+        operationID: Data(repeating: 6, count: 32), amount: KagemushaUInt128V1(amount), beneficiary: beneficiary),
+      Data(repeating: 6, count: 32))
     XCTAssertEqual(core.reservations.last?.2, try fixtureBytes(fixture, "redeem_binding_hex"))
     XCTAssertEqual(core.reservedOperations, [5, 5])
-    XCTAssertTrue(transport.operations.isEmpty)
+    XCTAssertEqual(transport.operations, [1])
   }
 
   func testRequestAndMintReservationsRetainCallerOwnedIdentity() throws {
@@ -136,7 +136,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       fixtureBytes(fixture, "send_request_hex"))
     let core = RecordingNativeCore()
     let provider = KagemushaAuthenticatedHardwareProviderV1(
-      transport: UnavailableAuthenticatedTransport(), core: core)
+      transport: try QualificationOnlyTransport(), core: core, intentOwner: testOperationIntentOwner())
     let operationID = Data(repeating: 8, count: 32)
     for _ in 0..<2 {
       XCTAssertEqual(
@@ -153,10 +153,11 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
           amount: request.amount, validityWindowMS: 1000)))
     XCTAssertEqual(
       try provider.reserveMintOperationID(
-        operationID: operationID, amount: request.amount,
-        payer: request.recipient, recipient: request.recipient), operationID)
+        operationID: Data(repeating: 10, count: 32), amount: request.amount,
+        payer: request.recipient, recipient: request.recipient), Data(repeating: 10, count: 32))
     XCTAssertEqual(core.reservedOperations, [22, 22, 14])
-    XCTAssertTrue(core.reservations.allSatisfy { $0.1 == operationID })
+    XCTAssertTrue(core.reservations.prefix(2).allSatisfy { $0.1 == operationID })
+    XCTAssertEqual(core.reservations.last?.1, Data(repeating: 10, count: 32))
   }
 
   func testSubstitutedReservationsFailBeforeDeviceExecution() throws {
@@ -164,10 +165,10 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(requestBytes)
     let core = RecordingNativeCore()
     core.substituteReservedID = true
-    let transport = UnavailableAuthenticatedTransport()
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core)
+    let transport = try QualificationOnlyTransport()
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner())
     let operationID = Data(repeating: 9, count: 32)
-    XCTAssertThrowsError(try provider.qualification())
+    XCTAssertNoThrow(try provider.qualification())
     XCTAssertThrowsError(
       try provider.reservePaymentOperationID(operationID: operationID, canonicalRequest: requestBytes))
     XCTAssertThrowsError(
@@ -184,7 +185,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     XCTAssertThrowsError(
       try provider.reservePaymentOperationID(
         operationID: Data(repeating: 0, count: 32), canonicalRequest: requestBytes))
-    XCTAssertTrue(transport.operations.isEmpty)
+    XCTAssertEqual(transport.operations, [1])
   }
 
   func testRequestExecutionReservesCallerIntentBeforeReachingHardware() throws {
@@ -192,8 +193,8 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       fixtureBytes(reservationFixture(), "send_request_hex"))
     let core = RecordingNativeCore()
     core.substituteReservedID = true
-    let transport = UnavailableAuthenticatedTransport()
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core)
+    let transport = try QualificationOnlyTransport()
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner())
     let operationID = Data(repeating: 12, count: 32)
     XCTAssertThrowsError(
       try provider.createPaymentRequest(
@@ -201,7 +202,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
         amount: request.amount, validityWindowMS: 1000))
     XCTAssertEqual(core.reservedOperations, [22])
     XCTAssertEqual(core.reservations.first?.1, operationID)
-    XCTAssertTrue(transport.operations.isEmpty)
+    XCTAssertEqual(transport.operations, [1])
   }
 
   private func reservationFixture() throws -> [String: String] {
@@ -268,6 +269,10 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
   var substituteReservedID = false
   var reservations: [(UInt8, Data, Data)] = []
 
+  func beginObservation(operation: UInt8, canonicalCommand: Data) throws -> Data {
+    Data((0..<32).map { _ in UInt8.random(in: 1...255) })
+  }
+
   func reserveOperationID(operation: UInt8, operationID: Data, publicBinding: Data) throws -> Data {
     reservedOperations.append(operation)
     reservations.append((operation, operationID, publicBinding))
@@ -288,7 +293,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
     canonicalReply _: Data,
     responseAuthenticator _: Data,
     qualification _: KagemushaHardwareQualificationV1
-  ) throws { throw TestFailure.unused }
+  ) throws {}
 
   func beginSenderTransition(
     operationID _: Data,
@@ -340,4 +345,32 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
   ) throws -> KagemushaNativeOutboxReleaseV1 { throw TestFailure.unused }
 
   private enum TestFailure: Error { case unused }
+}
+
+private final class QualificationOnlyTransport: KagemushaNativeAuthenticatedDeviceTransportV1 {
+  let qualification: KagemushaHardwareQualificationV1
+  var operations: [UInt8] = []
+  init() throws { qualification = try AuthenticatedProviderFixtureV1().qualification }
+  func hardwarePolicyID() throws -> Data { qualification.hardwarePolicyDigest }
+  func qualificationReportDigest() throws -> Data { qualification.profile.qualificationReportDigest }
+  func executeAndVerify(operation: UInt8, requestID: Data, canonicalCommand: Data,
+    acceptedDevicePublicKey: Data?) throws -> KagemushaAuthenticatedDeviceResponseV1 {
+    operations.append(operation)
+    guard operation == 1 else { throw NSError(domain: "unexpected hardware mutation", code: 1) }
+    let q = qualification
+    let profile = try XCTUnwrap(noritoDecodeFrame(KagemushaNoritoV1.encodeHardwareProfileShape(q.profile)))
+    let credential = try XCTUnwrap(noritoDecodeFrame(KagemushaNoritoV1.encodeHardwareCredentialShape(q.credential)))
+    var payload = Data()
+    for field in [Data([1, 0]), Data([1]), q.releaseID, q.hardwarePolicyDigest,
+      q.coreAuthorizationKeyReference, profile.payload, credential.payload] {
+      var size = field.count
+      repeat { let byte = UInt8(size & 0x7f); size >>= 7; payload.append(size == 0 ? byte : byte | 0x80) } while size != 0
+      payload.append(field)
+    }
+    let reply = noritoEncode(typeName: "iroha.kagemusha.device.v1.active-hardware-credential-reply",
+      payload: payload, flags: NoritoHeader.compactLen, payloadAlignment: 8)
+    var signature = Data(repeating: 0, count: 64); signature[31] = 1; signature[63] = 1
+    return try KagemushaAuthenticatedDeviceResponseV1(operation: 1, status: .success,
+      canonicalReply: reply, authenticator: signature)
+  }
 }

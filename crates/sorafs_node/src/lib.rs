@@ -7,6 +7,7 @@
 )]
 pub mod appeal_finance_transaction_forwarder;
 pub mod capacity;
+mod checkpoint_file_lease;
 pub mod config;
 mod durable_transaction_forwarder;
 pub mod evidence_viewer;

@@ -143,6 +143,7 @@ from .native_amx import (
 from .native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
+    parse_native_amx_participant_settlement,
     compute_native_amx_proposal_hash,
     compute_native_amx_validator_set_hash,
     validate_bls_normal_validator_set,
@@ -4367,7 +4368,7 @@ class _SumeragiV2StatusParser:
     MAX_COMMITTED_LANE_BLOCKS = 128
     MAX_LANE_BLOCK_SESSIONS = 128
     MAX_NATIVE_AMX_PARTICIPANT_LEGS = 255
-    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
+    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_SOURCES = 4096
     MAX_U32 = (1 << 32) - 1
     MAX_U64 = (1 << 64) - 1
 
@@ -5712,7 +5713,7 @@ class _SumeragiV2StatusParser:
                 cls._array(
                     record.get("native_amx_receipts"),
                     f"{context}.native_amx_receipts",
-                    maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+                    maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_SOURCES,
                 )
             )
         ]
@@ -5725,14 +5726,6 @@ class _SumeragiV2StatusParser:
         ):
             raise RuntimeError(f"{context} contains duplicate native AMX receipt sources")
         native_amx_sources = [item["source_id"] for item in native_amx_receipts]
-        if any(
-            native_amx_sources[index - 1] >= source_id
-            for index, source_id in enumerate(native_amx_sources)
-            if index > 0
-        ):
-            raise RuntimeError(
-                f"{context} native AMX receipt sources must be strictly ordered"
-            )
         if any(
             item["lane_id"] != lane_id
             or item["dataspace_id"] != dataspace_id
@@ -5749,13 +5742,11 @@ class _SumeragiV2StatusParser:
         ):
             raise RuntimeError(f"{context} native AMX receipt coordinates do not match")
         if any(
-            [
-                receipt["source_id"]
-                for receipt in leg["participant_settlement"]["receipts"]
-            ]
-            != native_amx_sources
+            leg["participant_settlement"]["source_ids"] != native_amx_sources
             for native_receipt in native_amx_receipts
             for leg in native_receipt["legs"]
+            if leg["lane_id"] == native_receipt["lane_id"]
+            and leg["dataspace_id"] == native_receipt["dataspace_id"]
         ):
             raise RuntimeError(
                 f"{context} native AMX receipts do not bind the exact ordered "
@@ -6408,21 +6399,10 @@ class _SumeragiV2StatusParser:
             record.get("participant_proposal"),
             context=f"{context}.participant_proposal",
         )
-        settlement_value = cls._mapping(
-            record.get("participant_settlement"),
-            f"{context}.participant_settlement",
-        )
-        if settlement_value.get("native_amx_receipts") != []:
-            raise RuntimeError(f"{context}.participant_settlement must be terminal")
-        if settlement_value.get("nexus_fee_receipts") != []:
-            raise RuntimeError(f"{context}.participant_settlement cannot contain fee receipts")
-        cls._array(
-            settlement_value.get("receipts"),
-            f"{context}.participant_settlement.receipts",
-            minimum=1,
-            maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-        )
-        settlement = cls._settlement(settlement_value, context=f"{context}.participant_settlement")
+        try:
+            settlement = parse_native_amx_participant_settlement(record.get("participant_settlement"))
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"{context}.participant_settlement: {error}") from error
         settlement_hash = cls._nonzero_hash(
             record.get("participant_settlement_hash"),
             f"{context}.participant_settlement_hash",
@@ -6475,17 +6455,7 @@ class _SumeragiV2StatusParser:
             or descriptor["min_quorum"] != body["participant_min_quorum"]
         ):
             raise RuntimeError(f"{context} participant proposal differs from its signed body")
-        receipts = settlement["receipts"]
-        receipt_sources = [receipt["source_id"] for receipt in receipts]
-        if any(
-            receipt_sources[index - 1] >= source_id
-            for index, source_id in enumerate(receipt_sources)
-            if index > 0
-        ):
-            raise RuntimeError(
-                f"{context}.participant_settlement.receipts must be strictly "
-                "ordered by source_id"
-            )
+        receipt_sources = settlement["source_ids"]
         matching_entrypoints = [
             index
             for index, entrypoint_hash in enumerate(
@@ -6502,8 +6472,8 @@ class _SumeragiV2StatusParser:
         if (
             not requires_mixed_role_anchor_validation
             and (
-                len(descriptor["accepted_candidate_indices"]) != len(receipts)
-                or len(descriptor["accepted_transaction_hashes"]) != len(receipts)
+                len(descriptor["accepted_candidate_indices"]) != len(receipt_sources)
+                or len(descriptor["accepted_transaction_hashes"]) != len(receipt_sources)
                 or receipt_sources[matching_entrypoints[0]] != body["source_id"]
             )
         ):
@@ -6513,28 +6483,12 @@ class _SumeragiV2StatusParser:
             )
         if (
             settlement_hash != body["participant_settlement_commitment"]
-            or settlement["block_height"] != body["participant_lane_block_height"]
+            or settlement["participant_lane_block_height"] != body["participant_lane_block_height"]
             or settlement["lane_id"] != lane_id
             or settlement["dataspace_id"] != dataspace_id
             or settlement["lane_incarnation"] != body["participant_lane_incarnation"]
-            or settlement["tx_count"] != len(receipts)
-            or settlement["total_local_amount"] != "0"
-            or settlement["total_xor_due"] != "0"
-            or settlement["total_xor_after_haircut"] != "0"
-            or settlement["total_xor_variance"] != "0"
-            or settlement["swap_metadata"] is not None
-            or len(set(receipt_sources)) != len(receipt_sources)
+            or settlement["authority_context_height"] != body["authority_context_height"]
             or receipt_sources.count(body["source_id"]) != 1
-            or any(
-                receipt["local_amount"] != "0"
-                or receipt["xor_due"] != "0"
-                or receipt["xor_after_haircut"] != "0"
-                or receipt["xor_variance"] != "0"
-                or receipt["timestamp_ms"] != body["authority_context_height"]
-                for receipt in receipts
-            )
-            or settlement["nexus_fee_receipts"]
-            or settlement["native_amx_receipts"]
         ):
             raise RuntimeError(f"{context} participant settlement differs from its signed body")
         return {

@@ -16,10 +16,12 @@ class KagemushaAndroidWalletV1Test {
         val error = assertFailsWith<IllegalStateException> {
             KagemushaAndroidWalletV1.openBridge(
                 KagemushaDeviceLifecycleBridgeV1.onlineOnly(),
-            ) {
-                factoryCalls += 1
-                error("factory must not be invoked")
-            }
+                KagemushaAndroidHardwareProviderFactoryV1 { _, _, _ ->
+                    factoryCalls += 1
+                    error("factory must not be invoked")
+                },
+                org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {},
+            )
         }
         assertEquals(0, factoryCalls)
         assertEquals(true, error.message!!.contains("online-only"))
@@ -35,13 +37,13 @@ class KagemushaAndroidWalletV1Test {
                 return KagemushaDeviceLifecycleBridgeV1.onlineOnly()
             }
 
-            override fun open(bridge: KagemushaDeviceLifecycleBridgeV1): KagemushaHardwareProviderV1 {
+            override fun open(bridge: KagemushaDeviceLifecycleBridgeV1, intentStore: org.hyperledger.iroha.sdk.offline.KagemushaOperationIntentStoreV1, authorizeBootstrap: () -> Unit): KagemushaHardwareProviderV1 {
                 providerCalls += 1
                 error("provider must not be opened for a rejected capability frame")
             }
         }
         assertFailsWith<IllegalStateException> {
-            KagemushaAndroidWalletV1.openProduction(factory)
+            KagemushaAndroidWalletV1.openProduction(factory, org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
         }
         assertEquals(1, bridgeCalls)
         assertEquals(0, providerCalls)

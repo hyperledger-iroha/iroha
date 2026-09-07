@@ -12,6 +12,8 @@ mod content;
 mod contracts;
 mod crypto;
 mod endorsement;
+mod execution;
+mod execution_finality;
 mod gov;
 mod ivm_cli;
 mod json_utils;
@@ -806,6 +808,9 @@ mod app {
         /// Governance helpers (app API convenience)
         #[command(subcommand)]
         Gov(crate::gov::Command),
+        /// Local native execution profiles, proving and verification
+        #[command(subcommand)]
+        Execution(crate::execution::Command),
         /// Zero-knowledge helpers (roots, etc.)
         #[command(subcommand)]
         Zk(crate::zk::Command),
@@ -875,6 +880,7 @@ mod app {
             use self::Command::*;
             match self {
                 Gov(variant) => Run::run(variant, context),
+                Execution(variant) => Run::run(variant, context),
                 Zk(variant) => Run::run(variant, context),
                 Confidential(variant) => Run::run(variant, context),
                 Taikai(variant) => Run::run(variant, context),
@@ -907,6 +913,7 @@ mod app {
                     | crate::commands::da::Command::RentLedger(_),
                 ) => true,
                 Self::Zk(command) => command.allows_fallback_config(),
+                Self::Execution(_) => true,
                 Self::Taikai(command) => taikai_allows_fallback_config(command),
                 Self::Sorafs(command) => sorafs_allows_fallback_config(command),
                 Self::SpaceDirectory(crate::space_directory::Command::Manifest(
@@ -1170,6 +1177,28 @@ fn run() -> ReportResult<(), MainError> {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()));
     }
+    if matches!(&args.command, Command::App(app::Command::Execution(_))) {
+        reject_irrelevant_local_tool_globals(&args, "app execution")?;
+        if let Command::App(app::Command::Execution(command)) = args.command {
+            return map_command_result(command.run_without_client_config(io::stdout()));
+        }
+        unreachable!("execution dispatch matched above");
+    }
+    if matches!(
+        &args.command,
+        Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(
+            commands::sorafs::ToolkitCommand::Pack(_)
+        )))
+    ) {
+        reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit pack")?;
+        if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(
+            commands::sorafs::ToolkitCommand::Pack(command),
+        ))) = args.command
+        {
+            return map_command_result(command.run_without_client_config(io::stdout()));
+        }
+        unreachable!("local SoraFS pack dispatch matched above");
+    }
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
         || (LoadPath::Default(PathBuf::from("client.toml")), false),
         |path| (LoadPath::Explicit(resolve_config_path(path)), true),
@@ -1268,6 +1297,18 @@ fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
         let message = format!("{:#}", report.current_context());
         report.change_context(MainError::Command(message))
     })
+}
+fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
+    if args.config.is_some() || args.operator_private_key_file.is_some() || args.verbose
+        || args.metadata.is_some() || args.input || args.output
+        || args.fee_payment.fee_payer.is_some() || args.fee_payment.fee_program.is_some()
+        || args.fee_payment.fee_program_revision.is_some()
+    {
+        return Err(Report::new(MainError::CliArgs(format!(
+            "`{command}` is credential-free local tooling and rejects config, operator-key, verbose, metadata, input/output-instruction and fee-selection globals",
+        ))));
+    }
+    Ok(())
 }
 fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainError> {
     let mut flags = Vec::new();

@@ -13,6 +13,7 @@ const ORDERING_DOMAIN: &[u8] = b"fastpq:v1:ordering";
 /// Propagates Norito serialization failures.
 pub fn ordering_hash(batch: &TransitionBatch) -> Result<Hash> {
     let canonical = batch.canonicalized();
+    let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
     let encoded = core::to_bytes(&canonical.transitions)?;
     Ok(Hash::new_from_chunks(&[ORDERING_DOMAIN, &encoded]))
 }
@@ -20,6 +21,41 @@ pub fn ordering_hash(batch: &TransitionBatch) -> Result<Hash> {
 mod tests {
     use super::*;
     use crate::{OperationKind, StateTransition};
+    #[test]
+    fn ordering_hash_ignores_and_restores_ambient_norito_layout() {
+        let mut batch = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
+        batch.push(StateTransition::new(
+            b"metadata/key".to_vec(),
+            vec![0, 1, 0],
+            vec![2, 3, 0, 0],
+            OperationKind::MetaSet,
+        ));
+        let canonical_bytes = core::to_bytes(&batch.transitions).unwrap();
+        let expected = ordering_hash(&batch).unwrap();
+        for flags in [
+            0,
+            core::header_flags::PACKED_SEQ,
+            core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
+        ] {
+            let _ambient = core::DecodeFlagsGuard::enter(flags);
+            let before = core::to_bytes(&batch.transitions).unwrap();
+            if flags == 0 {
+                assert_ne!(
+                    before, canonical_bytes,
+                    "exercise a distinct control layout"
+                );
+            }
+            assert_eq!(ordering_hash(&batch).unwrap(), expected);
+            assert_eq!(
+                core::to_bytes(&batch.transitions).unwrap(),
+                before,
+                "ordering hashing must restore the caller's layout"
+            );
+        }
+    }
     #[test]
     fn ordering_hash_stable_under_permutations() {
         let mut original = TransitionBatch::new(

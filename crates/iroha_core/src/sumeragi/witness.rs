@@ -869,7 +869,11 @@ mod tests {
             .expect("missing nft id");
         let role: RoleId = "auditor".parse().expect("role id");
         let unicode_role_raw = String::from("cafe\u{301}");
-        let unicode_role: RoleId = unicode_role_raw.parse().expect("unicode role id");
+        let unicode_role: RoleId = "café".parse().expect("canonical Unicode role id");
+        assert!(
+            unicode_role_raw.parse::<RoleId>().is_err(),
+            "non-NFC role spellings must remain invalid"
+        );
         let account_perm = "can_account_read";
         let role_perm = "can_role_read";
         let mut account_metadata = metadata_entry("color", "red");
@@ -1253,6 +1257,11 @@ mod tests {
             format!("perm.account:{}", fixture.account),
             format!("perm.role:{}", fixture.role),
             String::from("account.detail:not_an_account:color"),
+            format!("account.detail: {} :color", fixture.account),
+            format!(
+                "perm.account: {} :{}",
+                fixture.account, fixture.account_perm
+            ),
             String::from("domain.detail:not_a_domain:region"),
             String::from("asset_def.detail:not_an_asset_definition:issuer"),
             String::from("nft.detail:not_an_nft:artist"),
@@ -1260,6 +1269,15 @@ mod tests {
             String::from("role:bad role"),
             String::from("perm.account:not_an_account:can_account_read"),
             String::from("perm.role:bad role:can_role_read"),
+            format!("role:{}", fixture.unicode_role_raw),
+            format!(
+                "role.binding:{}:{}",
+                fixture.account, fixture.unicode_role_raw
+            ),
+            format!(
+                "perm.role:{}:{}",
+                fixture.unicode_role_raw, fixture.role_perm
+            ),
             String::from("asset:not_an_asset"),
             String::from("asset_def:not_an_asset_definition"),
             format!("account.detail:{}:bad key", fixture.account),
@@ -1286,14 +1304,11 @@ mod tests {
         let issuer = "issuer".parse::<Name>().expect("metadata key");
         record_read_from_access_key(
             &state_block,
-            &format!("account.detail: {} :color", fixture.account),
+            &format!("account.detail:{}:color", fixture.account),
         );
         record_read_from_access_key(
             &state_block,
-            &format!(
-                "perm.account: {} :{}",
-                fixture.account, fixture.account_perm
-            ),
+            &format!("perm.account:{}:{}", fixture.account, fixture.account_perm),
         );
         record_read_from_access_key(
             &state_block,
@@ -1309,10 +1324,7 @@ mod tests {
         );
         record_read_from_access_key(
             &state_block,
-            &format!(
-                "perm.role:{}:{}",
-                fixture.unicode_role_raw, fixture.role_perm
-            ),
+            &format!("perm.role:{}:{}", fixture.unicode_role, fixture.role_perm),
         );
         let witness = drain_exec_witness();
         drop(guard);
@@ -1375,7 +1387,7 @@ mod tests {
             &witness,
             enc_key_prefix(
                 ExecutionWitnessKeyTagV1::RolePermission,
-                &fixture.unicode_role_raw,
+                &fixture.unicode_role.to_string(),
                 fixture.role_perm,
             ),
             bool_json_bytes(true),
@@ -1384,7 +1396,7 @@ mod tests {
             &witness,
             enc_key_prefix(
                 ExecutionWitnessKeyTagV1::RolePermission,
-                &fixture.unicode_role.to_string(),
+                &fixture.unicode_role_raw,
                 fixture.role_perm,
             ),
         );

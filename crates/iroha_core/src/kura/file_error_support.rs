@@ -335,6 +335,13 @@ pub enum Error {
     },
     /// Failed reading/writing {1:?} from disk: {0}
     IO(#[source] std::io::Error, PathBuf),
+    /// QueuePlan admission expected durable height {expected_durable_height}, found {actual_durable_height}
+    QueuePlanAdmissionDurableHeightMismatch {
+        /// Exact State height which the admission attempted to linearize against.
+        expected_durable_height: u64,
+        /// Exact durable Kura height observed under the canonical-chain lock.
+        actual_durable_height: u64,
+    },
     /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
     LaneGeometryPublicationRestoreFailed {
         /// Original catalog-publication error.

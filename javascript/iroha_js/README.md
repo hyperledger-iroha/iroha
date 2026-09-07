@@ -4818,3 +4818,70 @@ const torii = new ToriiClient(config?.torii?.address ?? "http://localhost:8080",
   timeoutMs: clientConfig.timeoutMs,
 });
 ```
+
+### Native game sessions and compiled application adapters
+
+The browser `@iroha/iroha-js/game` entry point provides canonical codecs and local
+transaction instruction construction for generic `GameManifestV1` sessions:
+`buildGameInstructionV1`, `encodeGameValueV1`, `decodeGameValueV1` and
+`gameMessageHashV1`. Admission, opaque bounded inputs, jointly signed checkpoints,
+consensus recovery and proof-derived outcomes are application-independent. The
+closed browser instruction registry rejects unknown instructions; native racing
+instruction aliases are not supported.
+
+`buildJoinGameSessionV1` requires the exact terms shown for wallet approval:
+
+```js
+import { buildJoinGameSessionV1 } from "@iroha/iroha-js/game";
+
+const instruction = buildJoinGameSessionV1({
+  session_id: reviewedSession.session_id,
+  input_key: inputPublicKey,
+  application_data: applicationData,
+  invitation_signature: null,
+  expected_manifest_hash: reviewedSession.manifest_hash,
+  expected_asset_definition: reviewedSession.asset_definition,
+  expected_stake: reviewedSession.stake,
+});
+```
+
+Keep `reviewedSession` as a detached snapshot of the displayed terms. Polling
+must not silently replace its manifest, asset or amount before signing. The
+native instruction compares all three expected terms with consensus state before
+funding; zero-stake sessions explicitly sign `expected_stake: "0"`. Missing
+preconditions and the original undeployed four-field encoding are rejected.
+When a transaction also deposits an NFT, its `StakeGameItemV1` must identify the
+same session and expected manifest. The transaction's explicit wallet fee limit
+is separate from the stake and item deposit.
+
+The separate `@iroha/iroha-js/race` entry point encodes the first compiled SORA CARS
+adapter's tracks, integer state, results, public replay and native prover payload.
+It maps six control words to twelve opaque input bytes and computes the generic
+transcript and state commitment domains. These application helpers never hold a
+wallet key. Wallet signing continues through Connect with locally constructed
+Norito bytes and local signature verification.
+
+`EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1` pins the four MiB complete execution
+envelope and typed settlement payload bound. The RaceV1 inner STARK is separately
+limited to three MiB. Browser transaction construction, signable validation and
+signed hashing admit larger payloads only for one canonical
+`VerifyExecutionProofV1` or `SettleGameSessionV1`; unrelated transactions retain
+their one MiB bound, and larger mixed or executable-batch payloads are rejected.
+Transport and wallet implementations must independently support the resulting
+frame size before a network release can enable these proofs.
+
+`validateConnectTransactionTransportStatus(status, payloadLength)` from
+`@iroha/iroha-js/connect-browser` checks the endpoint-reported Connect WebSocket
+and session-buffer bounds against the complete transaction plus the current
+216-byte V1 encrypted-frame overhead. It does not authenticate the endpoint or
+the wallet. Native deployments can explicitly apply
+`configs/soranexus/execution-proof-transport.toml`; its dedicated reliable Connect
+P2P topic preserves the Health frame bound. Applications should additionally
+require `/v1/games/capabilities.execution_transport_ready === true` before accepting
+new stakes, separately from proof-profile qualification. These readiness hints
+must never become consensus admission conditions.
+
+See `test/fixtures/game-v1-codec.json` for generic wire and gameplay digest vectors,
+and `test/fixtures/race-v1-codec.json` for compiled application value vectors.
+Qualification and authenticated block finality are separate from codec round trips
+or endpoint-reported transaction status.

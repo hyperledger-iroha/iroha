@@ -34,6 +34,37 @@ fn sample_noncanonical_i105_literal(seed: u8) -> String {
     sample_canonical_i105_literal(seed).replacen("sora", "ｓｏｒａ", 1)
 }
 #[test]
+fn local_sorafs_pack_accepts_no_config_and_rejects_transaction_globals() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "--machine",
+        "app",
+        "sorafs",
+        "toolkit",
+        "pack",
+        "public-assets",
+    ])
+    .expect("parse local CAR pack");
+    assert!(matches!(
+        &args.command,
+        Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(
+            commands::sorafs::ToolkitCommand::Pack(_)
+        )))
+    ));
+    reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit pack")
+        .expect("local pack needs no client context");
+    let mut with_config = args;
+    with_config.config = Some(PathBuf::from("must-not-read.toml"));
+    assert!(
+        reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err()
+    );
+    with_config.config = None;
+    with_config.output = true;
+    assert!(
+        reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err()
+    );
+}
+#[test]
 fn bounded_cli_input_accepts_exact_limit() {
     let input = [0xA5; 32];
     let mut reader = input.as_slice();

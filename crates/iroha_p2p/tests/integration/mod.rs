@@ -162,6 +162,8 @@ fn test_network_config(
         max_frame_bytes_tx_gossip: 262_144,
         max_frame_bytes_peer_gossip: 131_072,
         max_frame_bytes_health: 65_536,
+        max_frame_bytes_connect:
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
         max_frame_bytes_other: 262_144,
         quic_max_idle_timeout: None,
     }

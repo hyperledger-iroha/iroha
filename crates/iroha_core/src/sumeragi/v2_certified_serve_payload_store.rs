@@ -5287,7 +5287,16 @@ mod tests {
                 pending.id(),
                 CertifiedServePayloadNegativeOutcome::Rejected(10),
             ),
-            Err(CertifiedServePayloadStoreError::PublicationConflict(path)) if path == terminal
+            Err(CertifiedServePayloadStoreError::InvalidFrame { path, reason })
+                if path == terminal
+                    && reason == "terminal companion does not extend the exact canonical Pending frame"
+        ));
+        drop(store);
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(temporary.path(), &context),
+            Err(CertifiedServePayloadStoreError::InvalidFrame { path, reason })
+                if path == terminal
+                    && reason == "terminal companion does not extend the exact canonical Pending frame"
         ));
         assert_eq!(
             fs::read(&destination).expect("reread untouched incumbent"),

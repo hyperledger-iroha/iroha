@@ -70,7 +70,7 @@ expected_symbols=(
   connect_norito_kagemusha_core_coordinator_invoke_v1
   connect_norito_kagemusha_device_capabilities_v1
   connect_norito_kagemusha_device_execute_v1
-  connect_norito_kagemusha_device_response_authenticator_v1_verify
+  connect_norito_kagemusha_device_command_response_v1_verify
 )
 [[ "${#expected_symbols[@]}" == "25" ]] \
   || fail "artifact checker test must pin exactly 25 KAGEMUSHA exports"

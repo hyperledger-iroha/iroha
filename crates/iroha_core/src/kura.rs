@@ -2,6 +2,7 @@
 //! logic.  [`Kura`] is the main entity which should be used to store
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
+mod kagemusha_finality_decode;
 mod lane_geometry;
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
@@ -235,15 +236,14 @@ fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
         iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1,
     )
     .expect("u32 casting-context bound fits usize");
-    // Norito accounts the decoded sequence elements separately from their
-    // compact wire representation. Reserve one bounded byte of bookkeeping
-    // headroom per protocol-permitted casting context so a valid short
-    // sidecar cannot exceed the payload-scaled estimate by a few bytes. The
-    // absolute 4 MiB allocation ceiling remains authoritative.
-    let max_allocated_bytes = wire_bytes
-        .saturating_mul(4)
-        .saturating_add(64 * 1024)
-        .saturating_add(max_sequence_elements)
+    // Norito cumulatively charges nested field lengths, sequence plans, owned
+    // containers, and alignment copies. Adding the finality hash can realign
+    // entire witness subtrees, so a small fixed multiple of the wire length
+    // does not bound the staged-to-final change. Use the codec's conservative
+    // owned-graph envelope, still constrained by this schema's absolute 4 MiB
+    // ceiling and its independent field, sequence, element, and depth limits.
+    let max_allocated_bytes = norito::canonical_decode_limits(wire_bytes)
+        .max_total_allocated_bytes()
         .min(MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES);
     norito::DecodeLimits::new(
         max_sequence_elements,
@@ -1629,13 +1629,10 @@ impl Kura {
             return;
         }
         if !block.has_results() {
-            if !entrypoints.is_empty()
-                || block.entrypoint_hashes().next().is_some()
-                || block.results().next().is_some()
-                || block.result_hashes().next().is_some()
-            {
-                index.incomplete_kaigi_signal_heights.insert(height);
-            }
+            // Resultless bodies carry no authenticated execution outcome, including
+            // empty proposals. Result accessors require an attached BlockResult;
+            // leave this height explicitly incomplete without calling them.
+            index.incomplete_kaigi_signal_heights.insert(height);
             return;
         }
         for hash in block.entrypoint_hashes() {
@@ -3201,7 +3198,7 @@ impl Kura {
             if config.init_mode == InitMode::Strict {
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
-                kura.recover_lane_block_execution_input_pairs_on_startup()?;
+                kura.recover_lane_consensus_sidecar_pairs_on_startup()?;
                 kura.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
                 kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
                 let verified_finality = kura.validate_v2_finality_inventory_on_startup(true)?;
@@ -3211,7 +3208,7 @@ impl Kura {
                     u64::try_from(block_count)?.saturating_add(1),
                 )?;
                 kura.validate_retained_block_inventory_on_startup()?;
-                kura.recover_canonical_association_stage()?;
+                kura.recover_canonical_association_stage_before_state_geometry()?;
                 kura.reconcile_merge_carriers_from_durable_blocks_with_authority(
                     None,
                     prune_intent.is_some(),
@@ -4122,6 +4119,13 @@ impl Kura {
         drop(binding_guard);
         self.record_writer_fault(context, error);
     }
+    /// Preserve a local storage read failure through the consensus guard binding handshake.
+    /// Only storage-coordinate reads belong here; candidate identity checks run afterwards.
+    pub(crate) fn consensus_storage_read<T>(&self, result: Result<T>) -> Result<T> {
+        result.inspect_err(|error| {
+            self.poison_canonical_storage("consensus storage read failed", error);
+        })
+    }
     /// Bind canonical-storage fail-stop handling to the authoritative consensus guard.
     ///
     /// Rebinding the same guard is idempotent. A different guard would create
@@ -4339,18 +4343,33 @@ impl Kura {
         Self::read_durable_hash_at_height(&mut self.block_store.lock(), height)
     }
     fn recover_canonical_association_stage(&self) -> Result<()> {
-        self.recover_canonical_association_stage_with_authority(None)
+        self.recover_canonical_association_stage_with_authority(
+            None,
+            CanonicalAssociationArtifactRecovery::ActiveGeometry,
+        )
+    }
+    /// Recover only the physical associations of the exact committed stage;
+    /// State has not authenticated its active secondary catalog yet.
+    fn recover_canonical_association_stage_before_state_geometry(&self) -> Result<()> {
+        self.recover_canonical_association_stage_with_authority(
+            None,
+            CanonicalAssociationArtifactRecovery::JournalPhysicalGeometry,
+        )
     }
     fn recover_canonical_association_stage_during_snapshot_finalization(
         &self,
         authority: &SnapshotFinalizationMutationAuthority<'_>,
     ) -> Result<()> {
         authority.validate_for(self)?;
-        self.recover_canonical_association_stage_with_authority(Some(authority))
+        self.recover_canonical_association_stage_with_authority(
+            Some(authority),
+            CanonicalAssociationArtifactRecovery::ActiveGeometry,
+        )
     }
     fn recover_canonical_association_stage_with_authority(
         &self,
         finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
+        artifact_recovery: CanonicalAssociationArtifactRecovery,
     ) -> Result<()> {
         if let Some(authority) = finalization_authority {
             authority.validate_for(self)?;
@@ -4372,7 +4391,11 @@ impl Kura {
         if self.durable_hash_ignoring_poison(stage.height)? != Some(stage.block_hash) {
             return self.remove_canonical_association_stage();
         }
-        self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
+        if artifact_recovery == CanonicalAssociationArtifactRecovery::JournalPhysicalGeometry {
+            self.recover_canonical_lane_artifacts_from_physical_geometry(&block)?;
+        } else {
+            self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
+        }
         if let Some(entry) = stage.merge_entry.as_ref() {
             let _ = self.append_committed_merge_entry_for_block_if_missing(&block, entry)?;
             if finalization_authority.is_some() {
@@ -5149,6 +5172,32 @@ impl Kura {
     /// highest half-pair while its authenticated carrier repairs the other
     /// half. Every adjacent retained successor is bound to the preceding
     /// manifest's exact descriptor identity.
+    /// Authenticate Native-only history independently of the shared lane height.
+    /// Ordinary lane blocks may intervene, but a removed interior Native control
+    /// cannot be hidden because its successor commits its exact settlement hash.
+    fn validate_native_amx_settlement_chain_links(
+        links: &BTreeMap<
+            u64,
+            (
+                HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+                Option<HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>>,
+            ),
+        >,
+    ) -> std::result::Result<(), &'static str> {
+        let mut predecessor = None;
+        for (&height, &(settlement_hash, previous_native_hash)) in links {
+            if height == 0 || (height == 1 && previous_native_hash.is_some()) {
+                return Err("Native AMX history has an invalid first-control link");
+            }
+            if predecessor.is_some_and(|previous| previous_native_hash != Some(previous)) {
+                return Err(
+                    "retained Native AMX successor does not commit the preceding Native settlement",
+                );
+            }
+            predecessor = Some(settlement_hash);
+        }
+        Ok(())
+    }
     fn validate_native_amx_retained_history_continuity(
         manifests: &BTreeMap<u64, NativeAmxParticipantApplicationManifestArtifactV1>,
         receipts: &BTreeMap<u64, NativeAmxParticipantApplicationReceiptArtifact>,
@@ -5160,15 +5209,6 @@ impl Kura {
             .union(&receipt_heights)
             .copied()
             .collect::<Vec<_>>();
-        if retained_heights.windows(2).any(|pair| {
-            pair[0]
-                .checked_add(1)
-                .is_none_or(|successor| successor != pair[1])
-        }) {
-            return Err(
-                "retained Native AMX evidence is not a contiguous participant-height suffix",
-            );
-        }
         let manifest_only = manifest_heights
             .difference(&receipt_heights)
             .copied()
@@ -5205,42 +5245,75 @@ impl Kura {
                 );
             }
         }
+        let links = retained_heights
+            .iter()
+            .map(|height| {
+                let identity = match manifests.get(height) {
+                    Some(manifest) => (
+                        manifest.leaf.settlement_hash,
+                        manifest.leaf.previous_native_settlement_hash,
+                    ),
+                    None => {
+                        let receipt = &receipts[height];
+                        (
+                            receipt.participant_settlement_hash,
+                            receipt
+                                .participant_settlement
+                                .previous_native_settlement_hash(),
+                        )
+                    }
+                };
+                (*height, identity)
+            })
+            .collect();
+        Self::validate_native_amx_settlement_chain_links(&links)?;
         for pair in retained_heights.windows(2) {
             let predecessor_height = pair[0];
             let successor_height = pair[1];
             let predecessor = manifests
                 .get(&predecessor_height)
                 .ok_or("retained Native AMX successor has no preceding manifest descriptor")?;
-            let (lane_id, dataspace_id, lane_incarnation, previous_height, previous_hash) =
-                if let Some(successor) = manifests.get(&successor_height) {
-                    (
-                        successor.leaf.lane_id,
-                        successor.leaf.dataspace_id,
-                        successor.leaf.lane_incarnation,
-                        successor.leaf.predecessor_height,
-                        successor.leaf.predecessor_descriptor_hash,
-                    )
-                } else {
-                    let successor = receipts
-                        .get(&successor_height)
-                        .ok_or("retained Native AMX successor has neither manifest nor receipt")?;
-                    let descriptor = &successor.participant_proposal.descriptor;
-                    (
-                        descriptor.lane_id,
-                        descriptor.dataspace_id,
-                        descriptor.lane_incarnation,
-                        descriptor.previous_lane_block_height,
-                        descriptor.previous_lane_block_descriptor_hash,
-                    )
-                };
+            let (
+                lane_id,
+                dataspace_id,
+                incarnation,
+                previous_height,
+                previous_hash,
+                application_height,
+            ) = if let Some(successor) = manifests.get(&successor_height) {
+                let leaf = &successor.leaf;
+                (
+                    leaf.lane_id,
+                    leaf.dataspace_id,
+                    leaf.lane_incarnation,
+                    leaf.predecessor_height,
+                    leaf.predecessor_descriptor_hash,
+                    leaf.application_block_height,
+                )
+            } else {
+                let successor = receipts
+                    .get(&successor_height)
+                    .ok_or("retained Native AMX successor has neither manifest nor receipt")?;
+                let descriptor = &successor.participant_proposal.descriptor;
+                (
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.previous_lane_block_height,
+                    descriptor.previous_lane_block_descriptor_hash,
+                    successor.application_block_height,
+                )
+            };
             if lane_id != predecessor.leaf.lane_id
                 || dataspace_id != predecessor.leaf.dataspace_id
-                || lane_incarnation != predecessor.leaf.lane_incarnation
-                || previous_height != predecessor_height
-                || previous_hash != Some(predecessor.leaf.descriptor_hash)
+                || incarnation != predecessor.leaf.lane_incarnation
+                || previous_height.checked_add(1) != Some(successor_height)
+                || application_height < predecessor.leaf.application_block_height
+                || (previous_height == predecessor_height
+                    && previous_hash != Some(predecessor.leaf.descriptor_hash))
             {
                 return Err(
-                    "retained Native AMX successor predecessor identity differs from the preceding manifest",
+                    "retained Native AMX history has a conflicting route, shared predecessor, or application order",
                 );
             }
         }
@@ -5311,6 +5384,7 @@ impl Kura {
                 receipt_artifact_hash: HashOf::from_untyped_unchecked(maximum_hash),
             },
             entries,
+            removed_settlements: Vec::new(),
         };
         let encoded_len = norito::encode_canonical(&maximum_intent)?.len();
         if encoded_len == 0 || encoded_len > shared_budget {
@@ -5319,7 +5393,10 @@ impl Kura {
                     .to_owned(),
             ));
         }
-        Ok(encoded_len)
+        // Removed canonical settlement preimages share this existing hard
+        // sidecar budget. Check actual encoded bytes before publication; never
+        // allocate a theoretical retention × maximum-source-count fixture.
+        Ok(shared_budget)
     }
     fn native_amx_evidence_prune_intent_max_bytes(&self) -> usize {
         self.native_amx_evidence_prune_intent_max_bytes
@@ -5518,7 +5595,7 @@ impl Kura {
             return Ok(());
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
-        self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -5602,7 +5679,7 @@ impl Kura {
             return Ok(());
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
-        self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -11447,7 +11524,57 @@ impl Kura {
     /// # Errors
     /// Returns an error when the certificate or pending-control store exceeds
     /// its bounds, or when durable no-clobber publication cannot complete.
-    pub fn persist_pending_queue_plan_admission_certificate(
+    pub(crate) fn persist_pending_queue_plan_admission_certificate(
+        &self,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+    /// Persist QueuePlan evidence only while the canonical block store is at one exact height.
+    ///
+    /// Holding `canonical_chain_lock` across the height check and sidecar publication makes this
+    /// operation linearizable with the first irreversible block write. The caller must derive
+    /// `expected_durable_height` from a coherent State view while excluding State publication.
+    pub(crate) fn persist_pending_queue_plan_admission_certificate_at_exact_durable_height(
+        &self,
+        expected_durable_height: u64,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
+        if actual_durable_height != expected_durable_height {
+            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            });
+        }
+        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+    /// Verify the canonical block store is at one exact height without rewriting a durable
+    /// QueuePlan certificate.
+    ///
+    /// This is the O(1) retry companion to
+    /// [`Self::persist_pending_queue_plan_admission_certificate_at_exact_durable_height`]. The
+    /// caller must already own the QueuePlan admission mutation lock, which keeps the previously
+    /// authenticated sidecar from being retired while this height check linearizes with block
+    /// publication.
+    pub(crate) fn verify_pending_queue_plan_admission_durable_height(
+        &self,
+        expected_durable_height: u64,
+    ) -> Result<()> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
+        if actual_durable_height != expected_durable_height {
+            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            });
+        }
+        Ok(())
+    }
+    fn persist_pending_queue_plan_admission_certificate_inner(
         &self,
         canonical_certificate_bytes: &[u8],
     ) -> Result<Hash> {
@@ -14210,8 +14337,8 @@ impl Kura {
         store.write_block_hash(u64::try_from(idx)?, block_hash)?;
         store.write_block_index(u64::try_from(idx)?, EVICTED_BLOCK_START, 0)?;
         store.publish_commit_marker(u64::try_from(block_count)?)?;
-        self.hard_fork_hash_only_block_count
-            .fetch_max(block_height.get(), Ordering::Relaxed);
+        // This fixture evicts exactly one body. A hard-fork prefix would also
+        // hide unrelated earlier bodies that are still durably available.
         Ok(())
     }
     pub(crate) fn hash_only_unavailable_prefix_len(&self, limit: usize) -> usize {
@@ -16177,12 +16304,8 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let mut cursor = snapshot.bytes.as_slice();
-        let sidecar = norito::with_decode_limits(
-            kagemusha_finality_decode_limits(snapshot.bytes.len()),
-            || StagedKagemushaFinalitySidecarV1::decode_all(&mut cursor),
-        )
-        .map_err(Error::NoritoFrame)?;
+        let sidecar = kagemusha_finality_decode::decode_staged(&snapshot.bytes)
+            .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -16207,12 +16330,8 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let mut cursor = snapshot.bytes.as_slice();
-        let sidecar = norito::with_decode_limits(
-            kagemusha_finality_decode_limits(snapshot.bytes.len()),
-            || KagemushaFinalitySidecarV1::decode_all(&mut cursor),
-        )
-        .map_err(Error::NoritoFrame)?;
+        let sidecar = kagemusha_finality_decode::decode_finalized(&snapshot.bytes)
+            .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -17563,6 +17682,8 @@ impl Kura {
     }
 }
 include!("kura/wsv_checkpoint_read_helpers.rs");
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod local_wsv_checkpoint_test_support;
 impl Kura {
     /// Return the latest canonical WSV checkpoint height at or below `height`.
     pub fn latest_wsv_checkpoint_height_at_or_before(&self, height: u64) -> Result<Option<u64>> {
@@ -20393,6 +20514,7 @@ impl Kura {
             || intent.protected_latest.identity.lane_incarnation != intent.lane_incarnation
             || intent.entries.is_empty()
             || intent.entries.len() > max_entries
+            || intent.removed_settlements.len() > max_entries / 2
         {
             return Err(Error::PruneIntentConflict(
                 "Native AMX evidence prune intent has a stale route, incarnation, version, or size"
@@ -20474,22 +20596,83 @@ impl Kura {
             .copied()
             .chain(removal_heights.iter().copied())
             .collect::<BTreeSet<_>>();
-        if original_heights
-            .iter()
-            .copied()
-            .collect::<Vec<_>>()
-            .windows(2)
-            .any(|pair| {
-                pair[0]
-                    .checked_add(1)
-                    .is_none_or(|successor| successor != pair[1])
-            })
+        // Stable pairs may already have been partially unlinked. Preserve the
+        // actual settlement preimages in the intent so its removed prefix can
+        // still be authenticated backwards from the retained signed leaf.
+        let mut original_links = BTreeMap::new();
+        for (height, file) in &inventory.manifests {
+            let manifest = self.decode_native_amx_manifest_file_locked(entry, namespace, file)?;
+            original_links.insert(
+                *height,
+                (
+                    manifest.leaf.settlement_hash,
+                    manifest.leaf.previous_native_settlement_hash,
+                ),
+            );
+        }
+        for (height, file) in &inventory.receipts {
+            let receipt = self.decode_native_amx_receipt_file_locked(entry, namespace, file)?;
+            let link = (
+                receipt.participant_settlement_hash,
+                receipt
+                    .participant_settlement
+                    .previous_native_settlement_hash(),
+            );
+            if original_links
+                .insert(*height, link)
+                .is_some_and(|existing| existing != link)
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX prune manifest/receipt links disagree".to_owned(),
+                ));
+            }
+        }
+        let mut previous_removed_height = None;
+        let mut preimage_heights = BTreeSet::new();
+        for settlement in &intent.removed_settlements {
+            let height = settlement.participant_lane_block_height();
+            if settlement.lane_id() != intent.lane_id
+                || settlement.dataspace_id() != intent.dataspace_id
+                || settlement.lane_incarnation() != intent.lane_incarnation
+                || !removal_heights.contains(&height)
+                || previous_removed_height.is_some_and(|previous| previous >= height)
+                || !preimage_heights.insert(height)
+            {
+                return Err(Error::PruneIntentConflict("Native AMX prune settlement preimages have conflicting route, height, or order".to_owned()));
+            }
+            previous_removed_height = Some(height);
+            let hash = settlement.computed_hash().map_err(|error| {
+                Error::PruneIntentConflict(format!(
+                    "Native AMX prune settlement preimage is invalid: {error}"
+                ))
+            })?;
+            let link = (hash, settlement.previous_native_settlement_hash());
+            if original_links
+                .insert(height, link)
+                .is_some_and(|existing| existing != link)
+            {
+                return Err(Error::PruneIntentConflict("Native AMX prune settlement preimage conflicts with present authenticated evidence".to_owned()));
+            }
+            if let Some(file) = inventory.receipts.get(&height) {
+                let receipt = self.decode_native_amx_receipt_file_locked(entry, namespace, file)?;
+                if receipt.participant_settlement != *settlement {
+                    return Err(Error::PruneIntentConflict(
+                        "Native AMX prune settlement preimage differs from present receipt bytes"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        if preimage_heights != removal_heights
+            || original_links.keys().copied().collect::<BTreeSet<_>>() != original_heights
         {
             return Err(Error::PruneIntentConflict(
-                "Native AMX evidence prune intent was derived from a punctured retained history"
+                "Native AMX prune intent lacks one exact settlement preimage for each removed pair"
                     .to_owned(),
             ));
         }
+        Self::validate_native_amx_settlement_chain_links(&original_links)
+            .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
         let highest_removal = removal_heights.last().copied().ok_or_else(|| {
             Error::PruneIntentConflict(
                 "Native AMX evidence prune intent has no complete removal pair".to_owned(),
@@ -20958,6 +21141,58 @@ impl Kura {
         }
         Ok(Some((protected_latest, removals)))
     }
+    /// Bound retained preimages before each vector allocation. Loading one
+    /// receipt remains bounded by the existing strict single-artifact budget.
+    fn collect_native_amx_prune_settlement_preimages<F>(
+        intent: &NativeAmxEvidencePruneIntentV2,
+        byte_limit: usize,
+        mut load: F,
+    ) -> Result<Vec<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>>
+    where
+        F: FnMut(u64) -> Result<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+    {
+        if !intent.removed_settlements.is_empty() {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX prune preimage collection requires an empty destination".to_owned(),
+            ));
+        }
+        let mut retained_bytes = norito::encode_canonical(intent)?.len();
+        if retained_bytes == 0 || retained_bytes > byte_limit {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX prune intent framing exceeds its preimage byte budget".to_owned(),
+            ));
+        }
+        // A standalone canonical frame bounds the nested settlement payload.
+        // Also reserve the maximum u64 varint width for its element prefix and
+        // growth of the enclosing sequence/field prefixes, independent of flags.
+        const PREFIX_HEADROOM: usize = 3 * (u64::BITS as usize).div_ceil(7);
+        let mut removed_settlements = Vec::new();
+        for removal in &intent.entries {
+            if removal.kind != NativeAmxEvidencePruneIntentV2::RECEIPT_KIND {
+                continue;
+            }
+            let settlement = load(removal.participant_height)?;
+            let settlement_bytes = norito::encode_canonical(&settlement)?.len();
+            let next_bytes = retained_bytes
+                .checked_add(settlement_bytes)
+                .and_then(|bytes| bytes.checked_add(PREFIX_HEADROOM))
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native AMX prune preimage byte accounting overflowed".to_owned(),
+                    )
+                })?;
+            if next_bytes > byte_limit {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX prune settlement preimages exceed their cumulative byte budget"
+                        .to_owned(),
+                ));
+            }
+            removed_settlements.try_reserve_exact(1)?;
+            removed_settlements.push(settlement);
+            retained_bytes = next_bytes;
+        }
+        Ok(removed_settlements)
+    }
     fn prune_native_amx_evidence_pairs_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20980,14 +21215,29 @@ impl Kura {
             return Ok(());
         }
         let (lane_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
-        let intent = NativeAmxEvidencePruneIntentV2 {
+        let mut intent = NativeAmxEvidencePruneIntentV2 {
             version: NativeAmxEvidencePruneIntentV2::VERSION,
             lane_id: entry.lane_id,
             dataspace_id: entry.dataspace_id,
             lane_incarnation,
             protected_latest,
             entries: removals,
+            removed_settlements: Vec::new(),
         };
+        intent.removed_settlements = Self::collect_native_amx_prune_settlement_preimages(
+            &intent,
+            self.native_amx_evidence_prune_intent_max_bytes(),
+            |height| {
+                let file = inventory.receipts.get(&height).ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native AMX prune preimage receipt disappeared".to_owned(),
+                    )
+                })?;
+                Ok(self
+                    .decode_native_amx_receipt_file_locked(entry, namespace, file)?
+                    .participant_settlement)
+            },
+        )?;
         self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
         let bytes = norito::encode_canonical(&intent)?;
         if bytes.is_empty() || bytes.len() > self.native_amx_evidence_prune_intent_max_bytes() {
@@ -22541,6 +22791,20 @@ struct EvictionCompactionStageV1 {
     /// Dense canonical identities of all bodies newly moved to DA storage.
     evicted: Vec<EvictionCompactionEntryV1>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CanonicalAssociationArtifactRecovery {
+    ActiveGeometry,
+    JournalPhysicalGeometry,
+}
+/// Exact physical destination for a lane artifact while geometry is locked.
+/// It grants no active catalog membership or independent consensus authority.
+struct LaneArtifactPhysicalTarget {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    incarnation: Hash,
+    activation_height: u64,
+    blocks_path: PathBuf,
+}
 /// Durable lane/merge association decision resolved only after the canonical marker is known.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -23205,6 +23469,10 @@ impl Kura {
             && descriptor.descriptor_hash == leaf.descriptor_hash
             && receipt.participant_proposal.proposal_hash == leaf.proposal_hash
             && receipt.participant_settlement_hash == leaf.settlement_hash
+            && receipt
+                .participant_settlement
+                .previous_native_settlement_hash()
+                == leaf.previous_native_settlement_hash
             && receipt.application_block_height == leaf.application_block_height
             && receipt.application_block_hash == leaf.application_block_hash
             && receipt.executed_block_wire_hash == leaf.executed_block_wire_hash
@@ -23262,41 +23530,19 @@ impl Kura {
             return Err("Native AMX participant receipt lacks global commit evidence");
         }
         let settlement = &artifact.participant_settlement;
-        let computed_settlement_hash = iroha_data_model::nexus::compute_settlement_hash(settlement)
+        let computed_settlement_hash = settlement
+            .computed_hash()
             .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
         if computed_settlement_hash != artifact.participant_settlement_hash
-            || settlement.lane_id != descriptor.lane_id
-            || settlement.dataspace_id != descriptor.dataspace_id
-            || settlement.lane_incarnation != descriptor.lane_incarnation
-            || settlement.block_height != descriptor.lane_block_height
-            || settlement.tx_count != u64::try_from(settlement.receipts.len()).unwrap_or(u64::MAX)
-            || !settlement.total_local_amount.is_zero()
-            || !settlement.total_xor_due.is_zero()
-            || !settlement.total_xor_after_haircut.is_zero()
-            || !settlement.total_xor_variance.is_zero()
-            || settlement.swap_metadata.is_some()
-            || !settlement.nexus_fee_receipts.is_empty()
-            || !settlement.native_amx_receipts.is_empty()
-            || settlement.receipts.is_empty()
-            || settlement.receipts.len()
-                > crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES
-            || settlement.receipts.iter().any(|receipt| {
-                !receipt.local_amount.is_zero()
-                    || !receipt.xor_due.is_zero()
-                    || !receipt.xor_after_haircut.is_zero()
-                    || !receipt.xor_variance.is_zero()
-                    || receipt.timestamp_ms != descriptor.proposal_height
-            })
+            || settlement.lane_id() != descriptor.lane_id
+            || settlement.dataspace_id() != descriptor.dataspace_id
+            || settlement.lane_incarnation() != descriptor.lane_incarnation
+            || settlement.participant_lane_block_height() != descriptor.lane_block_height
+            || settlement.authority_context_height() != descriptor.proposal_height
         {
-            return Err(
-                "Native AMX participant settlement is not exact zero-effect control evidence",
-            );
+            return Err("Native AMX participant settlement differs from its control context");
         }
-        let settlement_source_ids = settlement
-            .receipts
-            .iter()
-            .map(|receipt| receipt.source_id)
-            .collect::<Vec<_>>();
+        let settlement_source_ids = settlement.source_ids();
         if settlement_source_ids != artifact.source_ids
             || artifact
                 .source_ids
@@ -23952,6 +24198,65 @@ impl Kura {
         }
         Ok(())
     }
+    /// Recover an already committed canonical stage using its exact durable
+    /// physical journal bindings before State publishes the active lane map.
+    fn recover_canonical_lane_artifacts_from_physical_geometry(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<()> {
+        let Some(bundle) = block.execution_context() else {
+            return Ok(());
+        };
+        let artifacts = bundle
+            .lane_payload_ownerships
+            .iter()
+            .filter(|ownership| Self::lane_payload_ownership_is_durable(ownership))
+            .map(|ownership| LaneBlockArtifact::new(block.hash(), ownership.clone()))
+            .collect::<Vec<_>>();
+        if artifacts.is_empty() {
+            return Ok(());
+        }
+        let geometry_guard = self.lane_geometry_lock.lock();
+        let targets = self.canonical_association_physical_targets_from_journal(&artifacts)?;
+        let mut batch = LaneBlockArtifactWriteBatch::with_geometry_guard(self, geometry_guard);
+        // Authenticate every destination and occupied slot before the first repair.
+        for (artifact, target) in artifacts.iter().zip(&targets) {
+            self.validate_lane_block_artifact_write_to_target_locked(
+                artifact,
+                target,
+                LaneBlockArtifactConflictPolicy::PreserveCanonical,
+            )?;
+        }
+        for (artifact, target) in artifacts.iter().zip(&targets) {
+            match self.write_lane_block_artifact_to_target_locked(
+                artifact,
+                target,
+                LaneBlockArtifactConflictPolicy::PreserveCanonical,
+            ) {
+                Ok(Some(checkpoint)) => batch.push(checkpoint),
+                Ok(None) => {}
+                Err(error) => {
+                    batch.rollback()?;
+                    return Err(error);
+                }
+            }
+        }
+        batch.commit();
+        Ok(())
+    }
+    fn active_lane_artifact_physical_target(
+        &self,
+        entry: &LaneConfigEntry,
+    ) -> Result<LaneArtifactPhysicalTarget> {
+        let (incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
+        Ok(LaneArtifactPhysicalTarget {
+            lane_id: entry.lane_id,
+            dataspace_id: entry.dataspace_id,
+            incarnation,
+            activation_height,
+            blocks_path: entry.blocks_dir(&self.store_root),
+        })
+    }
     fn validate_lane_payload_ownership_artifacts_for_block(
         &self,
         block: &SignedBlock,
@@ -24028,16 +24333,83 @@ impl Kura {
         }
         true
     }
+    /// Read an occupied raw slot before writer recovery or replacement can mutate it.
+    /// The caller owns geometry and sidecar locks. Only genuine absence is empty;
+    /// decoding, binding and active-incarnation failures remain errors.
+    fn read_lane_block_artifact_for_write_locked(
+        &self,
+        target: &LaneArtifactPhysicalTarget,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<Option<LaneBlockArtifact>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.require_lane_artifact_physical_target_marker(target)?;
+        if self.bound_progress_sidecar_directory_is_absent(data_path, index_path)? {
+            return Ok(None);
+        }
+        let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            data_path,
+            index_path,
+            "lane artifact writer preflight",
+        )?;
+        let mut pair = self.open_bound_progress_pair(data_path, index_path)?;
+        match &mut pair {
+            BoundProgressPair::Absent(_) => Ok(None),
+            BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+                bound,
+                lane_block_height,
+                "lane artifact writer preflight",
+                |bound| {
+                    let artifact = Self::read_indexed_sidecar_from_open_files(
+                        lane_block_height,
+                        &mut bound.data,
+                        &mut bound.index,
+                        &bound.namespace.data_path,
+                        &bound.namespace.index_path,
+                        norito::decode_canonical::<LaneBlockArtifact>,
+                        "lane block artifact",
+                    )?;
+                    if artifact.ownership.lane_block_height != lane_block_height
+                        || artifact.ownership.validate_replay_material().is_err()
+                        || self
+                            .require_lane_artifact_physical_target_ownership(
+                                target,
+                                &artifact.ownership,
+                            )
+                            .is_err()
+                    {
+                        return None;
+                    }
+                    Some(artifact)
+                },
+            ),
+        }
+    }
     fn validate_lane_block_artifact_write_locked(
         &self,
         artifact: &LaneBlockArtifact,
         conflict_policy: LaneBlockArtifactConflictPolicy,
     ) -> Result<()> {
+        let entry = self.lane_storage_entry(artifact.ownership.lane_id)?;
+        self.require_active_lane_ownership_artifact(&entry, &artifact.ownership)?;
+        let target = self.active_lane_artifact_physical_target(&entry)?;
+        self.validate_lane_block_artifact_write_to_target_locked(artifact, &target, conflict_policy)
+    }
+    fn validate_lane_block_artifact_write_to_target_locked(
+        &self,
+        artifact: &LaneBlockArtifact,
+        target: &LaneArtifactPhysicalTarget,
+        conflict_policy: LaneBlockArtifactConflictPolicy,
+    ) -> Result<()> {
         let lane_id = artifact.ownership.lane_id;
         let lane_block_height = artifact.ownership.lane_block_height;
-        let entry = self.lane_storage_entry(lane_id)?;
-        self.require_active_lane_ownership_artifact(&entry, &artifact.ownership)?;
-        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        self.require_lane_artifact_physical_target_ownership(target, &artifact.ownership)?;
+        let data_path = Self::lane_artifact_dir(&target.blocks_path).join(LANE_ARTIFACTS_DATA_FILE);
+        let index_path =
+            Self::lane_artifact_dir(&target.blocks_path).join(LANE_ARTIFACTS_INDEX_FILE);
         artifact
             .ownership
             .validate_replay_material()
@@ -24059,36 +24431,18 @@ impl Kura {
                 "lane artifact block height must be non-zero",
             ));
         }
-        let _accounting_mutation = [
-            data_path.with_extension("norito.tmp"),
-            index_path.with_extension("index.tmp"),
-        ]
-        .into_iter()
-        .any(|path| path.exists())
-        .then(|| self.begin_total_disk_usage_mutation());
-        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact")
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "failed to recover lane artifact data/index pair",
-            ));
-        }
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
+        let existing = self.read_lane_block_artifact_for_write_locked(
+            target,
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_canonical::<LaneBlockArtifact>,
-            "lane block artifact",
-            false,
-        ) {
+        )?;
+        if let Some(existing) = existing {
             if existing == *artifact {
                 return Ok(());
             }
-            if self.lane_block_artifact_is_active_canonical_locked(
-                &entry,
-                lane_block_height,
-                &existing,
-            ) && !conflict_policy.allows_canonical_replacement(&existing, artifact)
+            if self.lane_block_artifact_is_canonical_locked(&existing)
+                && !conflict_policy.allows_canonical_replacement(&existing, artifact)
             {
                 return Err(Self::invalid_lane_artifact_error(
                     data_path,
@@ -24107,11 +24461,23 @@ impl Kura {
         artifact: &LaneBlockArtifact,
         conflict_policy: LaneBlockArtifactConflictPolicy,
     ) -> Result<Option<LaneBlockArtifactWriteCheckpoint>> {
+        let entry = self.lane_storage_entry(artifact.ownership.lane_id)?;
+        self.require_active_lane_ownership_artifact(&entry, &artifact.ownership)?;
+        let target = self.active_lane_artifact_physical_target(&entry)?;
+        self.write_lane_block_artifact_to_target_locked(artifact, &target, conflict_policy)
+    }
+    fn write_lane_block_artifact_to_target_locked(
+        &self,
+        artifact: &LaneBlockArtifact,
+        target: &LaneArtifactPhysicalTarget,
+        conflict_policy: LaneBlockArtifactConflictPolicy,
+    ) -> Result<Option<LaneBlockArtifactWriteCheckpoint>> {
         let lane_id = artifact.ownership.lane_id;
         let lane_block_height = artifact.ownership.lane_block_height;
-        let entry = self.lane_storage_entry(lane_id)?;
-        self.require_active_lane_ownership_artifact(&entry, &artifact.ownership)?;
-        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        self.require_lane_artifact_physical_target_ownership(target, &artifact.ownership)?;
+        let data_path = Self::lane_artifact_dir(&target.blocks_path).join(LANE_ARTIFACTS_DATA_FILE);
+        let index_path =
+            Self::lane_artifact_dir(&target.blocks_path).join(LANE_ARTIFACTS_INDEX_FILE);
         artifact
             .ownership
             .validate_replay_material()
@@ -24133,23 +24499,13 @@ impl Kura {
                 "lane artifact block height must be non-zero",
             ));
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
-        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact")
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "failed to recover lane artifact data/index pair",
-            ));
-        }
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
+        let existing = self.read_lane_block_artifact_for_write_locked(
+            target,
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_canonical::<LaneBlockArtifact>,
-            "lane block artifact",
-            false,
-        ) {
+        )?;
+        if let Some(existing) = existing {
             if existing == *artifact {
                 if !Self::sync_indexed_sidecar_barriers(
                     &data_path,
@@ -24165,11 +24521,8 @@ impl Kura {
                 }
                 return Ok(None);
             }
-            if self.lane_block_artifact_is_active_canonical_locked(
-                &entry,
-                lane_block_height,
-                &existing,
-            ) && !conflict_policy.allows_canonical_replacement(&existing, artifact)
+            if self.lane_block_artifact_is_canonical_locked(&existing)
+                && !conflict_policy.allows_canonical_replacement(&existing, artifact)
             {
                 return Err(Self::invalid_lane_artifact_error(
                     data_path,
@@ -24181,6 +24534,8 @@ impl Kura {
                 ));
             }
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
         let checkpoint = self.capture_lane_block_artifact_checkpoint_locked(
             &data_path,
             &index_path,
@@ -24247,19 +24602,6 @@ impl Kura {
         self.get_block_hash(proposal_height)
             .or_else(|| self.get_durable_block_hash(proposal_height))
             == Some(artifact.proposal_block_hash)
-    }
-    fn lane_block_artifact_is_active_canonical_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        lane_block_height: u64,
-        artifact: &LaneBlockArtifact,
-    ) -> bool {
-        artifact.ownership.lane_block_height == lane_block_height
-            && artifact.ownership.validate_replay_material().is_ok()
-            && self
-                .require_active_lane_ownership_artifact(entry, &artifact.ownership)
-                .is_ok()
-            && self.lane_block_artifact_is_canonical_locked(artifact)
     }
     fn capture_lane_block_artifact_checkpoint_locked(
         &self,
@@ -24783,12 +25125,18 @@ impl Kura {
         let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
         let mut existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
         if let BoundProgressPair::Present(existing_bound) = &mut existing_pair
-            && let Some(existing) = self
-                .read_certified_lane_block_artifact_structural_from_bound_locked(
-                    lane_id,
-                    lane_block_height,
-                    existing_bound,
-                )
+            && let Some(existing) = self.read_populated_consensus_lane_slot(
+                existing_bound,
+                lane_block_height,
+                "certified lane block frontier recovery",
+                |bound| {
+                    self.read_certified_lane_block_artifact_structural_from_bound_locked(
+                        lane_id,
+                        lane_block_height,
+                        bound,
+                    )
+                },
+            )?
         {
             if existing == *artifact {
                 if self.certified_frontier_pair_durability_is_attested(
@@ -25220,11 +25568,18 @@ impl Kura {
         let mut existing_exact = false;
         let mut existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
         if let BoundProgressPair::Present(existing_bound) = &mut existing_pair
-            && let Some(existing) = self.read_certified_lane_block_artifact_from_bound_locked(
-                lane_id,
-                lane_block_height,
+            && let Some(existing) = self.read_populated_consensus_lane_slot(
                 existing_bound,
-            )
+                lane_block_height,
+                "certified lane block publication",
+                |bound| {
+                    self.read_certified_lane_block_artifact_from_bound_locked(
+                        lane_id,
+                        lane_block_height,
+                        bound,
+                    )
+                },
+            )?
         {
             if existing == *artifact {
                 // A previous strict attempt may have left an exact payload
@@ -25523,11 +25878,18 @@ impl Kura {
             BoundProgressPair::Absent(_) => true,
             BoundProgressPair::Present(bound) => {
                 let descriptor = &artifact.proposal.descriptor;
-                match self.read_certified_lane_block_artifact_structural_from_bound_locked(
-                    lane_id,
-                    descriptor.lane_block_height,
+                match self.read_populated_consensus_lane_slot(
                     bound,
-                ) {
+                    descriptor.lane_block_height,
+                    "certified lane block frontier preflight",
+                    |bound| {
+                        self.read_certified_lane_block_artifact_structural_from_bound_locked(
+                            lane_id,
+                            descriptor.lane_block_height,
+                            bound,
+                        )
+                    },
+                )? {
                     Some(existing) if existing == *artifact => false,
                     Some(existing) => {
                         let existing_is_active = self
@@ -25726,117 +26088,211 @@ impl Kura {
         );
         (!self.prune_recovery_is_required()).then_some(frontier_read.frontier.artifact)
     }
-    /// Return the highest valid certified standalone lane block for a lane and dataspace.
-    #[must_use]
+    /// Return the latest matching certified lane block through a read-only lookup.
+    ///
+    /// Errors preserve occupied corruption, incomplete recovery, and an
+    /// exhausted bounded search; only authenticated absence is `Ok(None)`.
     pub fn latest_certified_lane_block_artifact_for_dataspace(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
-    ) -> Option<CertifiedLaneBlockArtifact> {
+    ) -> Result<Option<CertifiedLaneBlockArtifact>> {
         self.latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
             artifact.proposal.descriptor.dataspace_id == dataspace_id
         })
     }
-    /// Return the highest valid certified lane block accepted by `accept`.
+    /// Authenticate the mandatory latest frontier before selecting a certificate.
     ///
-    /// The authenticated latest frontier is tried before the bounded historical
-    /// scan. `accept` runs only after the frontier reader releases its storage
-    /// locks, so the common latest-match path avoids revalidating lane history
-    /// while holding `sidecar_lock`.
+    /// The exact frontier is independent ownership authority when its ordinary
+    /// slot is genuinely absent. Only an owned recovery operation may publish
+    /// that slot. Occupied corruption and pending protocols always fail; this
+    /// observation performs no repairs, fsyncs, or cache publication.
+    /// The predicate runs outside storage locks, followed by exact namespace,
+    /// frontier, pair, and incarnation revalidation.
     pub(crate) fn latest_certified_lane_block_artifact_matching<F>(
         &self,
         lane_id: LaneId,
         mut accept: F,
-    ) -> Option<CertifiedLaneBlockArtifact>
+    ) -> Result<Option<CertifiedLaneBlockArtifact>>
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
-        if self.emergency_fast_startup_enabled() {
-            return self
-                .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
-                    lane_id, 1, accept,
-                )
-                .pop();
-        }
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let rejected_frontier = match self.latest_certified_lane_block_frontier_inner(lane_id, None)
-        {
-            Some(artifact) => {
-                if accept(&artifact) {
-                    let confirmed = self.latest_certified_lane_block_frontier_inner(lane_id, None);
-                    return (confirmed.as_ref() == Some(&artifact)
-                        && !self.prune_recovery_is_required())
-                    .then_some(artifact);
-                }
-                Some(artifact)
-            }
-            None => None,
-        };
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
+        self.ensure_prune_recovery_not_required()?;
+        let geometry = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let marker = self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
-        let candidates = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
+        let sidecar = self.sidecar_lock.lock();
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            &data_path,
+            &index_path,
+            "certified lane frontier",
+        )?;
+        let frontier = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let Some(frontier) = frontier else {
+            if let BoundProgressPair::Present(bound) = &pair
+                && (bound
+                    .data
+                    .metadata()
+                    .map_err(|error| Error::IO(error, data_path.clone()))?
+                    .len()
+                    != 0
+                    || bound
+                        .index
+                        .metadata()
+                        .map_err(|error| Error::IO(error, index_path.clone()))?
+                        .len()
+                        != 0)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "nonempty certified lane pair has no mandatory latest frontier",
+                ));
             }
-            if !self.recover_bound_progress_sidecar_artifacts(
+            let stable_pair = match &pair {
+                BoundProgressPair::Present(bound) => self.bound_progress_sidecar_unchanged(bound),
+                BoundProgressPair::Absent(bound) => {
+                    self.bound_progress_namespace_unchanged(bound)
+                        && self
+                            .open_optional_bound_progress_file(bound, &data_path)?
+                            .is_none()
+                        && self
+                            .open_optional_bound_progress_file(bound, &index_path)?
+                            .is_none()
+                }
+            };
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
                 &data_path,
                 &index_path,
-                "certified lane block",
-            ) {
-                return None;
+                "certified lane frontier",
+            )?;
+            if !stable_pair
+                || self.active_lane_incarnation_marker(&entry)? != marker
+                || self
+                    .read_latest_certified_lane_block_frontier_locked(&entry, false)?
+                    .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    index_path,
+                    "empty certified lane namespace changed during authentication",
+                ));
             }
-            let mut pair = self
-                .open_bound_progress_pair(&data_path, &index_path)
-                .ok()?;
-            match &mut pair {
-                BoundProgressPair::Absent(namespace) => {
-                    if !self.sync_bound_progress_absence(namespace, "certified lane block") {
-                        return None;
+            self.ensure_prune_recovery_not_required()?;
+            return Ok(None);
+        };
+        let latest = &frontier.frontier.artifact;
+        let range = if let BoundProgressPair::Present(bound) = &mut pair {
+            let range =
+                self.bound_indexed_sidecar_height_range(bound, "certified lane frontier")?;
+            let occupied = self.read_populated_consensus_lane_slot(
+                bound,
+                latest.proposal.descriptor.lane_block_height,
+                "certified lane frontier",
+                |bound| {
+                    self.read_certified_lane_block_artifact_structural_from_bound_locked(
+                        lane_id,
+                        latest.proposal.descriptor.lane_block_height,
+                        bound,
+                    )
+                },
+            )?;
+            if occupied.as_ref().is_some_and(|artifact| artifact != latest) {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "occupied certified lane slot conflicts with its exact latest frontier",
+                ));
+            }
+            range
+        } else {
+            None
+        };
+        drop(sidecar);
+        drop(geometry);
+        let mut selected = accept(latest).then(|| latest.clone());
+        let mut complete_scan = true;
+        if selected.is_none() {
+            let geometry = self.lane_geometry_lock.lock();
+            let sidecar = self.sidecar_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            self.confirm_latest_certified_lane_block_frontier_read_locked(
+                &entry,
+                &frontier.snapshot,
+            )?;
+            let mut candidates = Vec::new();
+            if let (BoundProgressPair::Present(bound), Some(range)) = (&mut pair, range) {
+                complete_scan = range.end().saturating_sub(*range.start()).saturating_add(1)
+                    <= u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET).unwrap_or(u64::MAX);
+                for height in range.rev().take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET) {
+                    if height == latest.proposal.descriptor.lane_block_height {
+                        continue;
                     }
-                    Vec::new()
-                }
-                BoundProgressPair::Present(bound) => {
-                    let heights = match self
-                        .bound_indexed_sidecar_height_range(bound, "certified lane block")
-                    {
-                        Ok(heights) => heights,
-                        Err(error) => {
-                            iroha_logger::warn!(
-                                ?error,
-                                lane = %entry.lane_id.as_u32(),
-                                "failed to enumerate bound certified lane blocks"
-                            );
-                            return None;
-                        }
-                    };
-                    let candidates = heights
-                        .into_iter()
-                        .flatten()
-                        .rev()
-                        .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
-                        .filter_map(|lane_block_height| {
+                    if let Some(artifact) = self.read_populated_consensus_lane_slot(
+                        bound,
+                        height,
+                        "certified lane history",
+                        |bound| {
                             self.read_active_certified_lane_block_artifact_from_bound_locked(
-                                &entry,
-                                lane_block_height,
-                                bound,
+                                &entry, height, bound,
                             )
-                        })
-                        .collect::<Vec<_>>();
-                    if !self.sync_bound_progress_sidecar(bound, "certified lane block") {
-                        return None;
+                        },
+                    )? {
+                        candidates.push(artifact);
                     }
-                    candidates
                 }
+            }
+            drop(sidecar);
+            drop(geometry);
+            selected = candidates.into_iter().find(|artifact| accept(artifact));
+        }
+        let _geometry = self.lane_geometry_lock.lock();
+        let _sidecar = self.sidecar_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let current = self.lane_storage_entry(lane_id)?;
+        let stable_pair = match &pair {
+            BoundProgressPair::Present(bound) => self.bound_progress_sidecar_unchanged(bound),
+            BoundProgressPair::Absent(bound) => {
+                self.bound_progress_namespace_unchanged(bound)
+                    && self
+                        .open_optional_bound_progress_file(bound, &data_path)?
+                        .is_none()
+                    && self
+                        .open_optional_bound_progress_file(bound, &index_path)?
+                        .is_none()
             }
         };
-        candidates
-            .into_iter()
-            .find(|artifact| rejected_frontier.as_ref() != Some(artifact) && accept(artifact))
+        if !stable_pair
+            || current.dataspace_id != entry.dataspace_id
+            || Self::certified_lane_block_paths_for_entry(&current, &self.store_root)
+                != (data_path.clone(), index_path.clone())
+            || self.active_lane_incarnation_marker(&current)? != marker
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified lane frontier changed during selection",
+            ));
+        }
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            &data_path,
+            &index_path,
+            "certified lane frontier",
+        )?;
+        self.confirm_latest_certified_lane_block_frontier_read_locked(&entry, &frontier.snapshot)?;
+        if selected.is_none() && !complete_scan {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "bounded certified lane history scan could not prove absence",
+            ));
+        }
+        Ok(selected)
     }
     /// Return the first valid certified lane block at or above `minimum_height`
     /// accepted by `accept`.
@@ -28907,7 +29363,7 @@ impl Kura {
         let receipt_terminal = self
             .lane_block_application_receipt_available_under_prune_and_canonical_guards(
                 &authority.bootstrap.body.executable_payload.origin_proposal,
-            );
+            )?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &authority
             .bootstrap
@@ -29097,7 +29553,12 @@ impl Kura {
                 "autonomous lifecycle bootstrap completion returned a different Live cursor",
             ));
         }
-        receipt_terminal |= self.lane_block_application_receipt_available(&payload.origin_proposal);
+        receipt_terminal |= self
+            .read_lane_application_receipt(
+                payload.origin_proposal.descriptor.lane_id,
+                payload.origin_proposal.descriptor.lane_block_height,
+            )?
+            .is_some_and(|receipt| receipt.proposal == payload.origin_proposal);
         Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence);
         if receipt_terminal {
             return Ok(AutonomousLifecycleBootstrapCompletionOutcome::AlreadyTerminal);
@@ -32391,7 +32852,7 @@ impl Kura {
             ));
         }
         let already_terminal = self
-            .lane_block_application_receipt_available_under_prune_guard(&payload.origin_proposal);
+            .lane_block_application_receipt_available_under_prune_guard(&payload.origin_proposal)?;
         let ordinary_writer = match mode {
             LaneExecutablePayloadPersistenceMode::SignedBootstrap(_) => false,
             #[cfg(test)]
@@ -33224,15 +33685,20 @@ impl Kura {
         let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
         let exact_slot = match &mut pair {
             BoundProgressPair::Absent(_) => false,
-            BoundProgressPair::Present(bound) => {
-                self.bound_indexed_sidecar_height_range(bound, "certified lane block")?;
-                self.read_active_certified_lane_block_artifact_from_bound_locked(
-                    entry,
-                    lane_block_height,
+            BoundProgressPair::Present(bound) => self
+                .read_populated_consensus_lane_slot(
                     bound,
-                )
-                .is_some()
-            }
+                    lane_block_height,
+                    "autonomous certification predicate",
+                    |bound| {
+                        self.read_active_certified_lane_block_artifact_from_bound_locked(
+                            entry,
+                            lane_block_height,
+                            bound,
+                        )
+                    },
+                )?
+                .is_some(),
         };
         if let BoundProgressPair::Present(bound) = &pair
             && !self.bound_progress_sidecar_unchanged(bound)
@@ -33273,6 +33739,8 @@ impl Kura {
             lane_block_height,
         );
         let _guard = self.sidecar_lock.lock();
+        let slot_is_certified =
+            self.autonomous_lane_slot_is_certified_locked(&entry, lane_block_height)?;
         let record = self
             .read_autonomous_lane_block_record_locked(
                 &entry,
@@ -33304,7 +33772,7 @@ impl Kura {
                 "conflicting autonomous lane origin availability certificate",
             ));
         }
-        if self.autonomous_lane_slot_is_certified_locked(&entry, lane_block_height)? {
+        if slot_is_certified {
             return Err(Self::invalid_lane_artifact_error(
                 slot_path,
                 "certified autonomous lane slot cannot add availability evidence",
@@ -33412,7 +33880,7 @@ impl Kura {
         // for receipt lookup without letting a terminal NewView retry mutate
         // retained auxiliary state. The prune lock then keeps the receipt
         // boundary stable through the later write.
-        let terminal_proposal = {
+        let (terminal_proposal, slot_is_certified) = {
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entry = self.lane_storage_entry(lane_id)?;
             let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -33448,11 +33916,14 @@ impl Kura {
                 expected_epoch,
                 &slot_path,
             )?;
-            record.artifact.executable_payload.origin_proposal
+            (
+                record.artifact.executable_payload.origin_proposal,
+                self.autonomous_lane_slot_is_certified_locked(&entry, lane_block_height)?,
+            )
         };
         if self.lane_block_application_receipt_available_under_prune_and_canonical_guards(
             &terminal_proposal,
-        ) {
+        )? {
             return Ok(LaneBlockNewViewPersistenceOutcome::AlreadyTerminal);
         }
         self.durable_mutation_authorized()?;
@@ -33466,6 +33937,12 @@ impl Kura {
             lane_block_height,
         );
         let _guard = self.sidecar_lock.lock();
+        if slot_is_certified {
+            return Err(Self::invalid_lane_artifact_error(
+                slot_path,
+                "certified autonomous lane slot cannot accept later NewView evidence",
+            ));
+        }
         let record = self
             .read_autonomous_lane_block_record_locked(
                 &entry,
@@ -33485,12 +33962,6 @@ impl Kura {
             return Err(Self::invalid_lane_artifact_error(
                 record.view_state_path,
                 "durably retired autonomous lane slot cannot accept NewView evidence",
-            ));
-        }
-        if self.autonomous_lane_slot_is_certified_locked(&entry, lane_block_height)? {
-            return Err(Self::invalid_lane_artifact_error(
-                slot_path,
-                "certified autonomous lane slot cannot accept later NewView evidence",
             ));
         }
         let mut artifact = record.artifact;
@@ -35766,7 +36237,8 @@ impl Kura {
             NativeAmxParticipantApplicationPublicationMode::PreWsv,
         )
     }
-    fn native_amx_manifest_leaf_matches_frontier_marker(
+    /// Compare an authenticated manifest leaf with an exact replicated Native frontier.
+    pub(crate) fn native_amx_manifest_leaf_matches_frontier_marker(
         leaf: &iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestLeafV1,
         marker: &crate::state::AppliedNativeAmxParticipantFrontierMarker,
     ) -> bool {
@@ -36011,6 +36483,8 @@ impl Kura {
             ));
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let ordinary_predecessor =
+            self.native_amx_ordinary_predecessor_under_prune_and_canonical_guards(receipt)?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(incoming.lane_id)?;
         self.require_active_lane_artifact(&entry, &receipt.participant_proposal.descriptor)?;
@@ -36048,7 +36522,12 @@ impl Kura {
             &namespace,
         )?;
         self.validate_native_amx_prepublication_transition_locked(
-            &entry, &namespace, manifest, receipt, current,
+            &entry,
+            &namespace,
+            manifest,
+            receipt,
+            current,
+            ordinary_predecessor,
         )?;
         Ok(NativeAmxParticipantApplicationRoutePreflight { incoming, current })
     }
@@ -36240,6 +36719,87 @@ impl Kura {
         }
         Ok((manifest, receipt))
     }
+    /// Authenticate an ordinary shared-lane predecessor before acquiring the
+    /// geometry/sidecar locks used for Native pointer publication. The caller
+    /// already owns prune and canonical serialization. Missing receipt bytes
+    /// may use an exact authenticated imported raw frontier; otherwise the
+    /// caller must establish the shared predecessor from the linked Native pair.
+    fn native_amx_ordinary_predecessor_under_prune_and_canonical_guards(
+        &self,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+    ) -> Result<bool> {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        if descriptor.lane_block_height == 1 {
+            return Ok(false);
+        }
+        let ordinary = self.read_lane_application_receipt_under_guards(
+            descriptor.lane_id,
+            descriptor.previous_lane_block_height,
+            false,
+        )?;
+        if let Some(ordinary) = &ordinary {
+            let predecessor = &ordinary.proposal.descriptor;
+            if predecessor.lane_id != descriptor.lane_id
+                || predecessor.dataspace_id != descriptor.dataspace_id
+                || predecessor.lane_incarnation != descriptor.lane_incarnation
+                || predecessor.lane_block_height != descriptor.previous_lane_block_height
+                || Some(predecessor.descriptor_hash)
+                    != descriptor.previous_lane_block_descriptor_hash
+                || predecessor.proposal_height >= descriptor.proposal_height
+                || ordinary.application_block_height >= receipt.application_block_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX shared predecessor differs from its authenticated ordinary application receipt",
+                ));
+            }
+            return Ok(true);
+        }
+        let Some(artifact) = self.read_lane_block_artifact_under_prune_and_canonical_guards(
+            descriptor.lane_id,
+            descriptor.previous_lane_block_height,
+        )?
+        else {
+            return Ok(false);
+        };
+        let ownership = &artifact.ownership;
+        if ownership.lane_id != descriptor.lane_id
+            || ownership.dataspace_id != descriptor.dataspace_id
+            || ownership.lane_incarnation != descriptor.lane_incarnation
+            || ownership.lane_block_height != descriptor.previous_lane_block_height
+            || ownership.lane_block_descriptor_hash
+                != descriptor.previous_lane_block_descriptor_hash
+            || ownership.proposal_height >= descriptor.proposal_height
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX shared predecessor differs from its exact canonical raw ownership",
+            ));
+        }
+        let height = usize::try_from(ownership.proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX imported predecessor has an invalid canonical height",
+                )
+            })?;
+        if !self.is_audited_snapshot_import_height(height) {
+            return Ok(false);
+        }
+        self.ensure_snapshot_bootstrap_authenticated()?;
+        // The raw reader already checked the exact durable canonical hash. A
+        // real inline body (or damaged occupied bytes) cannot be treated as an
+        // authenticated unavailable imported prefix.
+        if self
+            .read_block_body_under_prune_and_canonical_guards(height)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
     #[allow(clippy::too_many_lines)]
     fn validate_native_amx_prepublication_transition_locked(
         &self,
@@ -36248,9 +36808,28 @@ impl Kura {
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         current: Option<NativeAmxParticipantReceiptLatestIndexV2>,
+        ordinary_predecessor: bool,
     ) -> Result<()> {
         let incoming = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt);
         let leaf = &manifest.leaf;
+        if receipt
+            .participant_settlement
+            .previous_native_settlement_hash()
+            != leaf.previous_native_settlement_hash
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX receipt/manifest disagree on their authenticated Native parent",
+            ));
+        }
+        if leaf.predecessor_height.checked_add(1) != Some(incoming.lane_block_height)
+            || (leaf.predecessor_height == 0) != leaf.predecessor_descriptor_hash.is_none()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX prepublication has an invalid shared predecessor height or descriptor",
+            ));
+        }
         if let Some(current) = current {
             if current == incoming {
                 let manifest_path = Self::native_amx_application_manifest_path_for_entry(
@@ -36304,21 +36883,25 @@ impl Kura {
                 return Ok(());
             }
             if current.lane_incarnation != incoming.lane_incarnation
-                || current.lane_block_height.checked_add(1) != Some(incoming.lane_block_height)
-                || leaf.predecessor_height != current.lane_block_height
+                || current.lane_block_height >= incoming.lane_block_height
+                || leaf.previous_native_settlement_hash != Some(current.participant_settlement_hash)
                 || leaf.predecessor_descriptor_hash.is_none()
                 || incoming.application_block_height <= current.application_block_height
             {
                 return Err(Self::invalid_lane_artifact_error(
                     namespace.data_path.clone(),
-                    "Native AMX prepublication is stale, non-contiguous, cross-incarnation, or not on a newer carrier",
+                    "Native AMX prepublication is stale, has another Native parent, crosses an incarnation, or is not on a newer carrier",
                 ));
             }
             let (predecessor_manifest, _) = self
                 .native_amx_fully_authenticated_evidence_for_latest_locked(
                     entry, namespace, current,
                 )?;
-            if leaf.predecessor_descriptor_hash != Some(predecessor_manifest.leaf.descriptor_hash) {
+            if !ordinary_predecessor
+                && (leaf.predecessor_height != current.lane_block_height
+                    || leaf.predecessor_descriptor_hash
+                        != Some(predecessor_manifest.leaf.descriptor_hash))
+            {
                 return Err(Self::invalid_lane_artifact_error(
                     namespace.data_path.clone(),
                     "Native AMX prepublication predecessor descriptor differs from durable current evidence",
@@ -36326,70 +36909,64 @@ impl Kura {
             }
             return Ok(());
         }
-        if incoming.lane_block_height == 1 {
-            if leaf.predecessor_height != 0 || leaf.predecessor_descriptor_hash.is_some() {
-                return Err(Self::invalid_lane_artifact_error(
+        // An explicit recovery owner may find the derived pointer absent.
+        // Discover the previous Native pair by its authenticated history, not
+        // by subtracting one from the shared ordinary/Native lane coordinate.
+        let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        let previous_native_height = inventory
+            .manifests
+            .keys()
+            .chain(inventory.receipts.keys())
+            .copied()
+            .filter(|height| *height < incoming.lane_block_height)
+            .max();
+        match (leaf.previous_native_settlement_hash, previous_native_height) {
+            (None, None) => {
+                if (incoming.lane_block_height == 1
+                    && leaf.predecessor_height == 0
+                    && leaf.predecessor_descriptor_hash.is_none())
+                    || (incoming.lane_block_height > 1 && ordinary_predecessor)
+                {
+                    return Ok(());
+                }
+                Err(Self::invalid_lane_artifact_error(
                     namespace.data_path.clone(),
-                    "Native AMX incarnation genesis has a non-empty predecessor",
-                ));
+                    "first Native AMX control lacks its authenticated shared-lane predecessor",
+                ))
             }
-            return Ok(());
-        }
-        let predecessor_height = incoming.lane_block_height.checked_sub(1).ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
+            (Some(expected_native), Some(height)) => {
+                let file = inventory.receipts.get(&height).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        namespace.data_path.clone(),
+                        "Native AMX pointerless recovery predecessor receipt is missing",
+                    )
+                })?;
+                let prior = self.decode_native_amx_receipt_file_locked(entry, namespace, file)?;
+                let identity = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&prior);
+                let (prior_manifest, _) = self
+                    .native_amx_fully_authenticated_evidence_for_latest_locked(
+                        entry, namespace, identity,
+                    )?;
+                if identity.participant_settlement_hash != expected_native
+                    || identity.lane_incarnation != incoming.lane_incarnation
+                    || identity.application_block_height >= incoming.application_block_height
+                    || (!ordinary_predecessor
+                        && (leaf.predecessor_height != height
+                            || leaf.predecessor_descriptor_hash
+                                != Some(prior_manifest.leaf.descriptor_hash)))
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        namespace.data_path.clone(),
+                        "Native AMX pointerless recovery conflicts with its authenticated Native or shared parent",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Err(Self::invalid_lane_artifact_error(
                 namespace.data_path.clone(),
-                "Native AMX predecessor height underflowed",
-            )
-        })?;
-        if leaf.predecessor_height != predecessor_height
-            || leaf.predecessor_descriptor_hash.is_none()
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                namespace.data_path.clone(),
-                "Native AMX pointerless prepublication has a gap or missing predecessor",
-            ));
+                "Native AMX pointerless recovery cannot skip or invent its authenticated Native parent",
+            )),
         }
-        let predecessor_receipt_path = Self::native_amx_participant_receipt_path_for_entry(
-            entry,
-            &self.store_root,
-            predecessor_height,
-        );
-        let predecessor_receipt = self
-            .read_native_amx_participant_application_receipt_from_paths_locked(
-                entry,
-                predecessor_height,
-                &predecessor_receipt_path,
-                namespace,
-            )
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    predecessor_receipt_path,
-                    "Native AMX pointerless prepublication lacks its exact predecessor receipt",
-                )
-            })?;
-        let predecessor_latest =
-            NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&predecessor_receipt);
-        if predecessor_latest.lane_incarnation != incoming.lane_incarnation
-            || incoming.application_block_height <= predecessor_latest.application_block_height
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                namespace.data_path.clone(),
-                "Native AMX pointerless predecessor has a stale incarnation or carrier height",
-            ));
-        }
-        let (predecessor_manifest, _) = self
-            .native_amx_fully_authenticated_evidence_for_latest_locked(
-                entry,
-                namespace,
-                predecessor_latest,
-            )?;
-        if leaf.predecessor_descriptor_hash != Some(predecessor_manifest.leaf.descriptor_hash) {
-            return Err(Self::invalid_lane_artifact_error(
-                namespace.data_path.clone(),
-                "Native AMX pointerless predecessor descriptor differs from authenticated evidence",
-            ));
-        }
-        Ok(())
     }
     fn read_back_native_amx_plan_manifests_under_publication_guard(
         &self,
@@ -37134,6 +37711,8 @@ impl Kura {
         }
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let ordinary_predecessor =
+            self.native_amx_ordinary_predecessor_under_prune_and_canonical_guards(artifact)?;
         let descriptor = &artifact.participant_proposal.descriptor;
         let canonical_height = usize::try_from(artifact.application_block_height)
             .ok()
@@ -37172,6 +37751,7 @@ impl Kura {
             manifest_artifact,
             artifact,
             current,
+            ordinary_predecessor,
         )?;
         let latest_temp_path = latest_index_path
             .parent()
@@ -37537,93 +38117,6 @@ impl Kura {
         }
         (read_structural()? == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-    /// Revalidate and project the exact durable evidence identity used by a
-    /// Native-derived lane drain frontier.
-    ///
-    /// The projection is available only while the active route's exact receipt,
-    /// manifest proof, finality artifact, canonical application metadata, and
-    /// bounded latest index all agree. Every returned hash is computed from the
-    /// exact canonical bytes read under the publication guards.
-    #[must_use]
-    pub(crate) fn native_amx_participant_application_drain_evidence(
-        &self,
-        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
-    ) -> Option<LaneDrainNativeFrontierEvidenceV1> {
-        if Self::validate_native_amx_participant_application_receipt_artifact(receipt).is_err() {
-            return None;
-        }
-        let descriptor = &receipt.participant_proposal.descriptor;
-        let _prune_guard = self.prune_lock.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(descriptor.lane_id).ok()?;
-        if entry.dataspace_id != descriptor.dataspace_id {
-            return None;
-        }
-        let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
-            &entry,
-            &self.store_root,
-        );
-        let _sidecar_guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let namespace = self.native_amx_evidence_namespace_for_entry(&entry).ok()?;
-        let manifest_path = Self::native_amx_application_manifest_path_for_entry(
-            &entry,
-            &self.store_root,
-            descriptor.lane_block_height,
-        );
-        let manifest = self.read_native_amx_participant_application_manifest_from_paths_locked(
-            &entry,
-            descriptor.lane_block_height,
-            &manifest_path,
-            &namespace,
-        )?;
-        let latest = self
-            .decode_bound_native_amx_participant_receipt_latest_index_locked(
-                &entry,
-                &latest_index_path,
-                &namespace,
-            )
-            .ok()
-            .flatten()?;
-        if manifest.leaf.lane_incarnation != descriptor.lane_incarnation
-            || !latest.matches_receipt(receipt)
-            || !self
-                .native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
-                    receipt,
-                    &manifest,
-                )
-        {
-            return None;
-        }
-        let source_count = u32::try_from(receipt.source_ids.len()).ok()?;
-        let receipt_bytes = norito::encode_canonical(receipt).ok()?;
-        let latest_index_bytes = norito::encode_canonical(&latest).ok()?;
-        Some(LaneDrainNativeFrontierEvidenceV1 {
-            version: 1,
-            participant_view: descriptor.lane_block_view,
-            predecessor_height: descriptor.previous_lane_block_height,
-            predecessor_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
-            participant_proposal_hash: receipt.participant_proposal.proposal_hash,
-            participant_settlement_hash: receipt.participant_settlement_hash,
-            source_count,
-            application_block_height: receipt.application_block_height,
-            application_block_hash: receipt.application_block_hash,
-            executed_block_wire_hash: receipt.executed_block_wire_hash,
-            finality_artifact_hash: receipt.finality_artifact_hash,
-            application_manifest_root: manifest.manifest_root,
-            application_manifest_leaf_count: manifest.manifest_leaf_count,
-            application_manifest_leaf_index: manifest.leaf_index,
-            manifest_artifact_hash: Hash::from(receipt.manifest_artifact_hash),
-            receipt_artifact_hash: Hash::new(receipt_bytes),
-            latest_index_artifact_hash: Hash::new(latest_index_bytes),
-        })
-    }
     pub(crate) fn latest_native_amx_participant_application_receipt_matching(
         &self,
         lane_id: LaneId,
@@ -37744,30 +38237,444 @@ impl Kura {
         };
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-    /// Checked latest Native AMX receipt lookup for consensus callers.
+    /// Observe the exact Native AMX frontier without candidate-dependent filtering.
     ///
-    /// Emergency Fast startup deliberately does not rebuild the latest-receipt index. Returning a
-    /// plain `None` in that state would misrepresent unknown durable history as an empty route.
-    pub(crate) fn checked_latest_native_amx_participant_application_receipt_matching(
+    /// Live admission requires a complete finalized pair. Owned startup repair
+    /// consumes the richer history observation to resolve a highest half-pair.
+    /// Neither reader publishes, repairs, or treats occupied evidence as absence.
+    pub(crate) fn read_latest_native_amx_participant_application_receipt(
         &self,
         lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-        accept: impl FnMut(&NativeAmxParticipantApplicationReceiptArtifact) -> bool,
-    ) -> Result<Option<NativeAmxParticipantApplicationReceiptArtifact>> {
+    ) -> Result<NativeAmxLatestReceiptObservation> {
+        let mut history = self.read_native_amx_participant_application_history(lane_id)?;
+        Ok(
+            match history
+                .entries
+                .pop_last()
+                .map(|(_, observation)| observation)
+            {
+                None => NativeAmxLatestReceiptObservation::Absent,
+                Some(NativeAmxParticipantApplicationObservation::Applied(receipt)) => {
+                    NativeAmxLatestReceiptObservation::Applied(receipt)
+                }
+                Some(NativeAmxParticipantApplicationObservation::PendingTipMetadata(receipt)) => {
+                    NativeAmxLatestReceiptObservation::PendingTipMetadata(receipt)
+                }
+                Some(NativeAmxParticipantApplicationObservation::PendingManifestRepair(_))
+                | Some(NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)) => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "Native AMX latest authority awaits owned manifest/receipt repair",
+                    ));
+                }
+            },
+        )
+    }
+
+    /// Authenticate the complete bounded Native AMX history in the active namespace.
+    ///
+    /// Only the highest retained coordinate may await a missing manifest or
+    /// receipt, as allowed by owned startup recovery. Every present file is
+    /// authenticated before any exact in-memory lookup. The reader holds prune
+    /// and canonical ownership throughout, executes no caller callbacks, and
+    /// revalidates the active marker, descriptors, bytes and metadata before return.
+    pub(crate) fn read_native_amx_participant_application_history(
+        &self,
+        lane_id: LaneId,
+    ) -> Result<NativeAmxParticipantApplicationHistory> {
         if self.auxiliary_history_deferred {
             return Err(Error::EmergencyFastAuxiliaryUnavailable {
-                subsystem: "Native AMX latest-receipt index",
+                subsystem: "Native AMX participant application history",
             });
         }
-        Ok(
-            self.latest_native_amx_participant_application_receipt_matching(
-                lane_id,
-                dataspace_id,
-                lane_incarnation,
-                accept,
-            ),
+        let _prune = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical = self.canonical_chain_lock.lock();
+        let geometry = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let marker = self.active_lane_incarnation_marker(&entry)?;
+        let manifest_anchor =
+            Self::native_amx_application_manifest_path_for_entry(&entry, &self.store_root, 1);
+        let receipt_anchor =
+            Self::native_amx_participant_receipt_path_for_entry(&entry, &self.store_root, 1);
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
+        let sidecar = self.sidecar_lock.lock();
+        if self.bound_progress_sidecar_directory_is_absent(&manifest_anchor, &receipt_anchor)? {
+            return Ok(NativeAmxParticipantApplicationHistory::default());
+        }
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+        self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
+        self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;
+        // Normal Apply publishes metadata before a separately owned cleanup.
+        // Retention+1 is consequently valid for fully Applied and pending tips.
+        // Byte and count bounds remain enforced, with no read-side pruning.
+        let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
+        if !inventory.temporaries.is_empty() {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path.clone(),
+                "Native AMX observation cannot consume publication temporaries",
+            ));
+        }
+        let latest = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+            &entry,
+            &latest_path,
+            &namespace,
+        )?;
+        let latest_pin = latest
+            .as_ref()
+            .map(|latest| {
+                self.open_bound_regular_file_with_exact_bytes_locked(
+                    &namespace,
+                    &latest_path,
+                    &norito::encode_canonical(latest)?,
+                    NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                    "Native AMX history latest authority",
+                )
+            })
+            .transpose()?;
+        let manifest_heights = inventory.manifests.keys().copied().collect::<BTreeSet<_>>();
+        let receipt_heights = inventory.receipts.keys().copied().collect::<BTreeSet<_>>();
+        let highest = manifest_heights.union(&receipt_heights).copied().max();
+        let exact_tip = u64::try_from(self.exact_durable_blocks_count()?)?;
+        let mut retained_manifests = BTreeMap::new();
+        let mut retained_receipts = BTreeMap::new();
+        let mut classifications = BTreeMap::new();
+        for (height, file) in &inventory.manifests {
+            let manifest = self.decode_native_amx_manifest_file_locked(&entry, &namespace, file)?;
+            if !self.native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(&manifest) {
+                return Err(Self::invalid_lane_artifact_error(
+                    file.path.clone(),
+                    "retained Native AMX manifest conflicts with finality",
+                ));
+            }
+            retained_manifests.insert(*height, manifest);
+        }
+        for (height, file) in &inventory.receipts {
+            let receipt = self.decode_native_amx_receipt_file_locked(&entry, &namespace, file)?;
+            let classified = self
+                .classify_native_amx_latest_receipt_evidence_under_startup_guards(
+                    &entry,
+                    &receipt,
+                    &namespace,
+                    &manifest_heights,
+                    exact_tip,
+                )?;
+            if Some(*height) != highest
+                && classified != NativeAmxParticipantReceiptStartupEvidence::DurablyApplied
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    file.path.clone(),
+                    "only the highest Native AMX coordinate may await publication recovery",
+                ));
+            }
+            classifications.insert(*height, classified);
+            retained_receipts.insert(*height, receipt);
+        }
+        Self::validate_native_amx_retained_history_continuity(
+            &retained_manifests,
+            &retained_receipts,
+            true,
         )
+        .map_err(|message| Self::invalid_lane_artifact_error(latest_path.clone(), message))?;
+        let has_partial = manifest_heights != receipt_heights;
+        if let Some(latest) = latest {
+            let receipt_backed = retained_receipts
+                .get(&latest.lane_block_height)
+                .is_some_and(|receipt| latest.matches_receipt(receipt));
+            let manifest_backed = retained_manifests
+                .get(&latest.lane_block_height)
+                .is_some_and(|manifest| latest.matches_manifest(manifest));
+            if (!receipt_backed && !manifest_backed)
+                || (!has_partial && highest != Some(latest.lane_block_height))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX latest pointer conflicts with its authenticated retained history",
+                ));
+            }
+        } else if highest.is_some() && !has_partial {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path.clone(),
+                "complete Native AMX history has no authenticated latest pointer",
+            ));
+        }
+        // A half-pair is recovery debt, never authority to bypass damaged carrier
+        // bytes or published metadata. Collect both sides, including manifest-only
+        // slots, and independently authenticate each exact application boundary.
+        let mut applications = BTreeMap::new();
+        for (height, hash) in retained_receipts
+            .values()
+            .map(|receipt| {
+                (
+                    receipt.application_block_height,
+                    receipt.application_block_hash,
+                )
+            })
+            .chain(retained_manifests.values().map(|manifest| {
+                (
+                    manifest.leaf.application_block_height,
+                    manifest.leaf.application_block_hash,
+                )
+            }))
+        {
+            if applications
+                .insert(height, hash)
+                .is_some_and(|existing| existing != hash)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX retained history conflicts on a canonical application identity",
+                ));
+            }
+        }
+        let mut metadata = BTreeMap::new();
+        for (height, hash) in &applications {
+            metadata.insert(
+                *height,
+                self.read_native_amx_history_application_metadata_under_sidecar_guard(
+                    *height, *hash, exact_tip,
+                )?,
+            );
+        }
+        let application_heights = applications
+            .keys()
+            .map(|height| {
+                NonZeroUsize::new(usize::try_from(*height)?).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        latest_path.clone(),
+                        "Native AMX application height is zero",
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(sidecar);
+        drop(geometry);
+        for height in &application_heights {
+            self.read_block_body_under_prune_and_canonical_guards(*height)?;
+        }
+        let geometry = self.lane_geometry_lock.lock();
+        let current = self.lane_storage_entry(lane_id)?;
+        let sidecar = self.sidecar_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        if Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &current,
+            &self.store_root,
+        ) != latest_path
+            || self.active_lane_incarnation_marker(&current)? != marker
+            || !Self::progress_mutation_namespace_unchanged(&namespace)
+            || u64::try_from(self.exact_durable_blocks_count()?)? != exact_tip
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path.clone(),
+                "Native AMX active boundary changed during history observation",
+            ));
+        }
+        self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
+        self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;
+        let confirmed_inventory =
+            self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
+        if !confirmed_inventory.temporaries.is_empty()
+            || confirmed_inventory
+                .receipts
+                .keys()
+                .ne(inventory.receipts.keys())
+            || confirmed_inventory
+                .manifests
+                .keys()
+                .ne(inventory.manifests.keys())
+            || self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+                &current,
+                &latest_path,
+                &namespace,
+            )? != latest
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path.clone(),
+                "Native AMX retained inventory changed during history observation",
+            ));
+        }
+        if let Some((_, metadata)) = &latest_pin {
+            let directory = latest_path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX latest pointer has no directory",
+                )
+            })?;
+            let confirmed =
+                Self::regular_sidecar_metadata_for(&self.store_root, &latest_path, directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            latest_path.clone(),
+                            "Native AMX latest pointer disappeared during history observation",
+                        )
+                    })?;
+            if !Self::stable_sidecar_metadata_unchanged(metadata, &confirmed) {
+                return Err(Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX latest pointer identity changed during history observation",
+                ));
+            }
+        }
+        for (height, file) in &inventory.manifests {
+            let confirmed =
+                self.decode_native_amx_manifest_file_locked(&current, &namespace, file)?;
+            if retained_manifests.get(height) != Some(&confirmed)
+                || !self.native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(&confirmed)
+            {
+                return Err(Self::invalid_lane_artifact_error(file.path.clone(), "retained Native manifest authority changed during observation"));
+            }
+        }
+        for (height, file) in &inventory.receipts {
+            let confirmed =
+                self.decode_native_amx_receipt_file_locked(&current, &namespace, file)?;
+            if retained_receipts.get(height) != Some(&confirmed)
+                || classifications.get(height).copied()
+                    != Some(
+                        self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
+                            &current,
+                            &confirmed,
+                            &namespace,
+                            &manifest_heights,
+                            exact_tip,
+                        )?,
+                    )
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    file.path.clone(),
+                    "retained Native receipt authority changed during observation",
+                ));
+            }
+        }
+        for (height, hash) in &applications {
+            let confirmed = self.read_native_amx_history_application_metadata_under_sidecar_guard(
+                *height, *hash, exact_tip,
+            )?;
+            if metadata.get(height) != Some(&confirmed) {
+                return Err(Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX application metadata changed during history observation",
+                ));
+            }
+        }
+        drop(sidecar);
+        drop(geometry);
+        for height in &application_heights {
+            self.read_block_body_under_prune_and_canonical_guards(*height)?;
+        }
+        let drain_evidence = match latest {
+            Some(latest)
+                if Some(latest.lane_block_height) == highest
+                    && classifications.get(&latest.lane_block_height)
+                        == Some(&NativeAmxParticipantReceiptStartupEvidence::DurablyApplied) =>
+            {
+                let receipt = retained_receipts
+                    .get(&latest.lane_block_height)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            latest_path.clone(),
+                            "applied Native drain projection lost its receipt",
+                        )
+                    })?;
+                let manifest = retained_manifests
+                    .get(&latest.lane_block_height)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            latest_path.clone(),
+                            "applied Native drain projection lost its manifest",
+                        )
+                    })?;
+                let descriptor = &receipt.participant_proposal.descriptor;
+                Some((
+                    latest.lane_block_height,
+                    LaneDrainNativeFrontierEvidenceV1 {
+                        version: 1,
+                        participant_view: descriptor.lane_block_view,
+                        predecessor_height: descriptor.previous_lane_block_height,
+                        predecessor_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+                        participant_proposal_hash: receipt.participant_proposal.proposal_hash,
+                        participant_settlement_hash: receipt.participant_settlement_hash,
+                        source_count: u32::try_from(receipt.source_ids.len())?,
+                        application_block_height: receipt.application_block_height,
+                        application_block_hash: receipt.application_block_hash,
+                        executed_block_wire_hash: receipt.executed_block_wire_hash,
+                        finality_artifact_hash: receipt.finality_artifact_hash,
+                        application_manifest_root: manifest.manifest_root,
+                        application_manifest_leaf_count: manifest.manifest_leaf_count,
+                        application_manifest_leaf_index: manifest.leaf_index,
+                        manifest_artifact_hash: Hash::from(receipt.manifest_artifact_hash),
+                        receipt_artifact_hash: Hash::new(norito::encode_canonical(receipt)?),
+                        latest_index_artifact_hash: Hash::new(norito::encode_canonical(&latest)?),
+                    },
+                ))
+            }
+            _ => None,
+        };
+        let mut entries = BTreeMap::new();
+        for (height, receipt) in retained_receipts {
+            let observation = match classifications.get(&height) {
+                Some(NativeAmxParticipantReceiptStartupEvidence::DurablyApplied) => {
+                    NativeAmxParticipantApplicationObservation::Applied(receipt)
+                }
+                Some(NativeAmxParticipantReceiptStartupEvidence::PendingTipMetadata) => {
+                    NativeAmxParticipantApplicationObservation::PendingTipMetadata(receipt)
+                }
+                Some(NativeAmxParticipantReceiptStartupEvidence::PendingManifestRepair) => {
+                    NativeAmxParticipantApplicationObservation::PendingManifestRepair(receipt)
+                }
+                None => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        latest_path.clone(),
+                        "Native AMX receipt lost its authenticated classification",
+                    ));
+                }
+            };
+            entries.insert(height, observation);
+        }
+        for (height, manifest) in retained_manifests {
+            entries.entry(height).or_insert_with(|| {
+                NativeAmxParticipantApplicationObservation::PendingReceiptRepair(manifest)
+            });
+        }
+        Ok(NativeAmxParticipantApplicationHistory {
+            entries,
+            drain_evidence,
+        })
+    }
+
+    /// Authenticate present post-apply metadata even when the highest pair is incomplete.
+    /// Called only after the carrier identity is authenticated, with sidecar ownership.
+    fn read_native_amx_history_application_metadata_under_sidecar_guard(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        exact_tip: u64,
+    ) -> Result<(Option<WsvCheckpoint>, Option<CommitManifest>)> {
+        let checkpoint = self.wsv_checkpoint_under_sidecar_guard(height)?;
+        let manifest = self.commit_manifest_under_sidecar_guard(height)?;
+        let valid = match (&checkpoint, &manifest) {
+            (Some(checkpoint), Some(manifest)) => {
+                checkpoint.block_hash == block_hash
+                    && manifest.block_hash == block_hash
+                    && checkpoint.commit_manifest_hash == Some(manifest.encoded_hash())
+            }
+            (None, None) => height == exact_tip,
+            (Some(checkpoint), None) => {
+                height == exact_tip
+                    && checkpoint.block_hash == block_hash
+                    && checkpoint.commit_manifest_hash.is_none()
+            }
+            (None, Some(_)) => false,
+        };
+        if !valid {
+            return Err(Self::invalid_lane_artifact_error(
+                self.commit_manifest_path(height),
+                "Native AMX history has conflicting or incomplete application metadata below its allowed tip boundary",
+            ));
+        }
+        Ok((checkpoint, manifest))
     }
     /// Revalidate the receipt fields available without its manifest against
     /// authenticated finality and the durable canonical block identity.
@@ -38665,7 +39572,18 @@ impl Kura {
         Self::validate_lane_block_application_receipt_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
-        if !self.lane_block_application_receipt_matches_available_evidence_under_prune_guard(
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let canonical_height = NonZeroUsize::new(usize::try_from(
+            artifact.application_block_height,
+        )?)
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "zero application receipt carrier height",
+            )
+        })?;
+        self.read_block_body_under_prune_and_canonical_guards(canonical_height)?;
+        if !self.lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
             artifact, false,
         ) {
             return Err(Self::invalid_lane_artifact_error(
@@ -38686,18 +39604,25 @@ impl Kura {
         // raw sidecar whose global block or merge carrier was pruned remains
         // replaceable, but its bytes are rechecked under the geometry lock so a
         // concurrently published valid receipt cannot be overwritten.
-        let observed_existing = self
-            .read_active_lane_block_application_receipt_for_write_observation(
-                lane_id,
-                lane_block_height,
-            );
-        let observed_existing_matches_evidence =
-            observed_existing.as_ref().is_some_and(|existing| {
-                self.lane_block_application_receipt_matches_available_evidence_under_prune_guard(
-                    existing, false,
-                )
-            });
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        // Do not spend a strict retry barrier during observation. The locked
+        // publication path below reattests it before acknowledging completion.
+        let observed_existing =
+            self.read_lane_completion_receipt_structural(lane_id, lane_block_height, false)?;
+        let observed_existing_matches_evidence = if let Some(existing) = &observed_existing {
+            let height = NonZeroUsize::new(usize::try_from(existing.application_block_height)?)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "zero occupied receipt carrier height",
+                    )
+                })?;
+            self.read_block_body_under_prune_and_canonical_guards(height)?;
+            self.lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
+                existing, false,
+            )
+        } else {
+            false
+        };
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -38713,28 +39638,42 @@ impl Kura {
         };
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
         let _guard = self.sidecar_lock.lock();
-        if !self.recover_bound_progress_sidecar_artifacts(
+        let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &mutation_namespace,
             &data_path,
             &index_path,
-            "lane block application receipt",
-        ) {
+            "lane receipt writer preflight",
+        )?;
+        let mut existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let existing = match &mut existing_pair {
+            BoundProgressPair::Absent(_) => None,
+            BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+                bound,
+                lane_block_height,
+                "lane receipt writer preflight",
+                |bound| {
+                    self.read_lane_block_application_receipt_from_bound_locked(
+                        lane_id,
+                        lane_block_height,
+                        bound,
+                    )
+                },
+            )?,
+        };
+        if existing != observed_existing {
             return Err(Self::invalid_lane_artifact_error(
                 data_path,
-                "failed to recover lane application receipt data/index pair",
+                "lane receipt changed after canonical authority validation",
             ));
         }
-        let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
-        self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
-            pending_canonical_bytes,
-            artifact,
-        )?;
-        if let Ok(mut existing_bound) = self.open_bound_progress_sidecar(&data_path, &index_path)
-            && let Some(existing) = self.read_lane_block_application_receipt_from_bound_locked(
-                lane_id,
-                lane_block_height,
-                &mut existing_bound,
-            )
-        {
+        if let Some(existing) = existing {
+            let BoundProgressPair::Present(existing_bound) = &existing_pair else {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "occupied receipt disappeared from its bound pair",
+                ));
+            };
             if existing == *artifact {
                 // Receipt visibility is not enough: an earlier attempt may
                 // have failed after making exact bytes page-cache readable.
@@ -38794,6 +39733,10 @@ impl Kura {
                 "overwriting stale lane application receipt after global evidence changed"
             );
         }
+        self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
+            pending_canonical_bytes,
+            artifact,
+        )?;
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -38997,47 +39940,6 @@ impl Kura {
                 lane = %entry.lane_id.as_u32(),
                 lane_block_height,
                 "durability-attested lane application receipt targets stale lane geometry"
-            );
-            return None;
-        }
-        Some(artifact)
-    }
-    /// Capture existing receipt bytes for the writer's optimistic concurrency check.
-    ///
-    /// This read is deliberately not a durability witness: the same writer reopens the
-    /// pair under the geometry and sidecar locks and reissues every strict barrier before
-    /// it can report success. Keeping the observation non-attesting ensures a failed
-    /// barrier cannot be consumed by a preliminary read and then hidden by the retry. In
-    /// particular, pending sidecar recovery is reserved for that locked writer because it
-    /// may itself execute the barrier sequence.
-    fn read_active_lane_block_application_receipt_for_write_observation(
-        &self,
-        lane_id: LaneId,
-        lane_block_height: u64,
-    ) -> Option<LaneBlockApplicationReceiptArtifact> {
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
-        let (data_path, index_path) =
-            Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let mut bound = self
-            .open_bound_progress_sidecar(&data_path, &index_path)
-            .ok()?;
-        let artifact = self.read_lane_block_application_receipt_from_bound_locked(
-            lane_id,
-            lane_block_height,
-            &mut bound,
-        )?;
-        if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)
-        {
-            iroha_logger::warn!(
-                ?error,
-                lane = %entry.lane_id.as_u32(),
-                lane_block_height,
-                "observed lane application receipt targets stale lane geometry"
             );
             return None;
         }

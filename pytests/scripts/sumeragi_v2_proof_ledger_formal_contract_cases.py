@@ -202,6 +202,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/transaction_guard_return_tests.rs'),
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
+        Path('queue/kagemusha_top_up_admission_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
         Path('queue/config_factory_test_support.rs'),
         Path('queue/teu_limit_and_backlog_tests.rs'),

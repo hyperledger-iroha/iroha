@@ -1388,12 +1388,32 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
     let (service, _) = fixture();
     let target = service.context.roster[1].validator.clone();
     let scope = service.exact_output_scope();
+    let request_at_epoch = |epoch| {
+        let (mut message, _) = certified_sidecar_outputs(&service.local_peer, &target);
+        let CertifiedMergeSidecarMessage::Request(request) = &mut message else {
+            unreachable!("worker sidecar fixture returns one request")
+        };
+        request.stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+            NonZeroU64::new(epoch).expect("distinct request stream epoch is non-zero"),
+        );
+        request.request_id = request.canonical_request_id();
+        let transfer = CertifiedSidecarTransferIdentity::from_request(request);
+        let request_hash = HashOf::new(request);
+        PendingExactFanout::claimed(
+            vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(message))],
+            vec![target.clone()],
+            ExactOutputRolloverClaim::CertifiedSidecarRequest {
+                scope,
+                target: target.clone(),
+                transfer,
+                request_hash,
+            },
+        )
+        .expect("canonical request with its exact rollover claim")
+        .expect("one distinct topology request")
+    };
     let cases = [
-        (
-            "request",
-            certified_sidecar_request_fanout(scope, &service.local_peer, &target),
-            certified_sidecar_request_fanout(scope, &service.local_peer, &target),
-        ),
+        ("request", request_at_epoch(1), request_at_epoch(2)),
         (
             "close",
             certified_sidecar_control_fanout(
@@ -1409,6 +1429,11 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
         ),
     ];
     for (kind, progress, later_progress) in cases {
+        assert_ne!(
+            progress.message_hashes, later_progress.message_hashes,
+            "the capacity negative must carry a distinct occurrence, not an exact retry"
+        );
+        let retained_progress_hashes = later_progress.message_hashes.clone();
         assert_eq!(
             progress.certified_sidecar_topology_progress_target(),
             Some(&target)
@@ -1526,14 +1551,18 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
                 .contains_key(&progress_reservation)
         );
         let retried_progress = match kind {
-            "request" => certified_sidecar_request_fanout(scope, &service.local_peer, &target),
+            "request" => request_at_epoch(2),
             "close" => certified_sidecar_control_fanout(
                 scope,
                 &target,
-                certified_sidecar_close(&service.local_peer, &target, 273),
+                certified_sidecar_close(&service.local_peer, &target, 272),
             ),
             _ => unreachable!("the bounded topology-progress cases are exhaustive"),
         };
+        assert_eq!(
+            retried_progress.message_hashes, retained_progress_hashes,
+            "retry reconstructs the exact source-retained occurrence"
+        );
         assert_eq!(
             pending.can_enqueue(&retried_progress),
             Ok(true),

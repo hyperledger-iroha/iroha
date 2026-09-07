@@ -4,9 +4,9 @@ use crate::sumeragi::evidence::evidence_key;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
-        ConsensusKeyGate, WorldReadOnly, peer_consensus_key_gate,
-        public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
-        public_lane_validator_record_matches_key,
+        ConsensusKeyGate, WorldReadOnly, consensus_key_roles_for_lane,
+        peer_consensus_key_gate_for_lane, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
     sumeragi::status as sumeragi_status,
     telemetry::StateTelemetry,
@@ -14,7 +14,6 @@ use crate::{
 use iroha_data_model::{
     asset::{Asset, AssetDefinitionId, AssetId},
     block::consensus::EvidencePenaltyStatus,
-    consensus::ConsensusKeyRole,
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         staking::{
@@ -2193,6 +2192,15 @@ fn ensure_validator_peer_registered(
     validator_peer: &PeerId,
     required_live_height: u64,
 ) -> Result<(), Error> {
+    // Lane zero is global Sumeragi and requires a Validator key. Participant
+    // lanes prefer Committee keys while retaining Validator-key compatibility
+    // for existing transparent lane deployments.
+    let allowed_roles = consensus_key_roles_for_lane(lane_id);
+    let role_label = if lane_id == LaneId::SINGLE {
+        "validator"
+    } else {
+        "committee or validator"
+    };
     if !state_transaction
         .world
         .peers
@@ -2214,13 +2222,18 @@ fn ensure_validator_peer_registered(
         ));
     }
     let block_height = state_transaction.block_height();
-    let gate = peer_consensus_key_gate(&state_transaction.world, validator_peer, block_height);
+    let gate = peer_consensus_key_gate_for_lane(
+        &state_transaction.world,
+        validator_peer,
+        block_height,
+        lane_id,
+    );
     if gate != ConsensusKeyGate::Live {
         let (telemetry_reason, message) = match gate {
             ConsensusKeyGate::Live => ("consensus_key_live", "unexpected live consensus key"),
             ConsensusKeyGate::Missing => (
                 "consensus_key_missing",
-                "validator peer must register a consensus key before staking",
+                "validator peer must register the required consensus key before staking",
             ),
             ConsensusKeyGate::NotYetActive => (
                 "consensus_key_pending",
@@ -2250,13 +2263,13 @@ fn ensure_validator_peer_registered(
         return Err(Error::InvariantViolation(message.into()));
     }
     let peer_public_key = validator_peer.public_key();
-    let has_unbounded_validator_key = state_transaction
+    let has_unbounded_lane_key = state_transaction
         .world
         .consensus_keys_by_pk()
         .get(&peer_public_key.to_string())
         .is_some_and(|ids| {
             ids.iter().any(|id| {
-                id.role == ConsensusKeyRole::Validator
+                allowed_roles.contains(&id.role)
                     && state_transaction
                         .world
                         .consensus_keys()
@@ -2269,7 +2282,7 @@ fn ensure_validator_peer_registered(
                         })
             })
         });
-    if !has_unbounded_validator_key {
+    if !has_unbounded_lane_key {
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
@@ -2279,15 +2292,19 @@ fn ensure_validator_peer_registered(
             validator = %validator,
             peer = %validator_peer,
             required_live_height,
-            "public-lane validator action rejected: no unbounded validator consensus key covers the scheduled activation height"
+            required_roles = role_label,
+            "public-lane validator action rejected: no unbounded required-role consensus key covers the scheduled activation height"
         );
         return Err(Error::InvariantViolation(
-            "validator peer requires an unbounded validator consensus key live at its scheduled activation height"
-                .into(),
+            format!(
+                "validator peer requires an unbounded {role_label} consensus key live at its scheduled activation height"
+            )
+            .into(),
         ));
     }
     let commit_topology: Vec<_> = state_transaction.commit_topology.iter().cloned().collect();
-    if !commit_topology.is_empty()
+    if lane_id == LaneId::SINGLE
+        && !commit_topology.is_empty()
         && commit_topology
             .iter()
             .all(|peer_in_topology| peer_in_topology != validator_peer)
@@ -2884,7 +2901,7 @@ mod tests {
                 SumeragiV2Equivocation, ValidatorPower, Vote,
             },
         },
-        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+        consensus::{ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         domain::Domain,
         isi::error::InvalidParameterError,
         nexus::{
@@ -3568,7 +3585,7 @@ mod tests {
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer);
         let result = RegisterPublicLaneValidator {
-            lane_id: LaneId::new(42),
+            lane_id: LaneId::SINGLE,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
@@ -3591,6 +3608,111 @@ mod tests {
                 .any(|peer| peer == &validator_peer),
             "validator peer should remain absent from topology in rejection path"
         );
+    }
+    #[test]
+    fn participant_lane_accepts_committee_peer_outside_global_topology() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let peer = validator_peer_id(&validator);
+        let height = stx.block_height();
+        clear_consensus_keys_for_peer(&mut stx, &peer);
+        seed_consensus_key_for_role_with_heights(
+            &mut stx,
+            &peer,
+            ConsensusKeyRole::Committee,
+            ConsensusKeyStatus::Active,
+            height,
+            None,
+        );
+        stx.commit_topology.get_mut().clear();
+        stx.commit_topology.get_mut().push(checked_peer_id());
+        let lane_id = LaneId::new(42);
+
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id: peer.clone(),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect("participant committee peer need not join the global commit topology");
+
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(lane_id, validator))
+                .is_some()
+        );
+        assert!(!stx.commit_topology.iter().any(|voter| voter == &peer));
+    }
+    #[test]
+    fn global_lane_rejects_committee_only_key_while_participant_accepts_validator_key() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        let (validator, delegator, _, _) = prepare_accounts(&mut stx);
+
+        let participant_peer = validator_peer_id(&validator);
+        let height = stx.block_height();
+        clear_consensus_keys_for_peer(&mut stx, &participant_peer);
+        seed_consensus_key_for_role_with_heights(
+            &mut stx,
+            &participant_peer,
+            ConsensusKeyRole::Validator,
+            ConsensusKeyStatus::Active,
+            height,
+            None,
+        );
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::new(43),
+            peer_id: participant_peer.clone(),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect("existing Validator-role peers remain valid participant-lane validators");
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(LaneId::new(43), validator.clone()))
+                .is_some()
+        );
+
+        let global_peer = validator_peer_id(&delegator);
+        clear_consensus_keys_for_peer(&mut stx, &global_peer);
+        seed_consensus_key_for_role_with_heights(
+            &mut stx,
+            &global_peer,
+            ConsensusKeyRole::Committee,
+            ConsensusKeyStatus::Active,
+            height,
+            None,
+        );
+        stx.commit_topology.get_mut().push(global_peer.clone());
+        let global_error = RegisterPublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            peer_id: global_peer,
+            validator: delegator.clone(),
+            stake_account: delegator.clone(),
+            initial_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+        }
+        .execute(&delegator, &mut stx)
+        .expect_err("Committee-role key cannot authorize global validation");
+        assert!(matches!(
+            global_error,
+            Error::InvariantViolation(message)
+                if message.contains("required consensus key")
+                    || message.contains("validator consensus key")
+        ));
     }
     #[test]
     fn register_accepts_distinct_validator_peer_binding() {

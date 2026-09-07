@@ -56,6 +56,109 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Linearize one Runtime step after the physical Completion prefix.
+    ///
+    /// `RetryCompletion` leaves Runtime untouched and sends the outer driver
+    /// back to Completion rank. The I/O worker and this census use the same mutex, so
+    /// an asynchronously completed Validate cannot appear between an empty
+    /// census and a timeout step while still claiming the earlier ordering.
+    /// When an ordinary completion is blocked solely by a full runtime FIFO,
+    /// the returned capacity cut instead permits one exact Completion-class
+    /// step linearized at that completion's retention time, after which the
+    /// physical Completion rank must be retried.
+    pub(in crate::sumeragi) fn prepare_completion_runtime_cut(
+        &self,
+        runtime_capacity_available: bool,
+    ) -> Result<V2CompletionRuntimeCutDecisionV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let runtime_cut = |cut_at| {
+            V2CompletionRuntimeCutDecisionV1::Runtime(V2CompletionRuntimeCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+            ))
+        };
+        let capacity_relief_cut = |cut_at, blocked_completion_lifecycle_ordinal| {
+            V2CompletionCapacityReliefCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+                blocked_completion_lifecycle_ordinal,
+            )
+            .map(V2CompletionRuntimeCutDecisionV1::CapacityRelief)
+            .ok_or_else(|| {
+                "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+            })
+        };
+
+        if let Some(completion) = self.held_io_completion.as_ref() {
+            if runtime_capacity_available
+                || completion.is_dedicated_lifecycle_completion()
+                || !completion.requires_runtime_capacity()
+            {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let Some(io) = self.io.as_ref() else {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            };
+            let V2IoCompletionRuntimeCutObservationV1::Pending(owner) =
+                io.admission.completion_runtime_cut_observation()
+            else {
+                return Err("held runtime completion lost its physical ownership record".to_owned());
+            };
+            if !owner.requires_runtime_capacity || owner.is_dedicated_lifecycle() {
+                return Err(
+                    "held runtime completion changed its physical ownership class".to_owned(),
+                );
+            }
+            let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                "held runtime completion lost its actor-global lifecycle ordinal".to_owned()
+            })?;
+            return capacity_relief_cut(owner.retained_at, blocked_ordinal);
+        }
+
+        // Local reconstruction completions have no worker-side timestamp, but
+        // they are already retained on this serialized service. A full FIFO
+        // therefore permits one relief step at the present cut; otherwise the
+        // next Completion turn can consume them directly.
+        if !self.local_completions.is_empty() {
+            if runtime_capacity_available {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let blocked_ordinal = self
+                .local_completions
+                .front()
+                .expect("non-empty local completion queue has a head")
+                .runtime_lifecycle_ordinal();
+            return capacity_relief_cut(Instant::now(), blocked_ordinal);
+        }
+
+        let Some(io) = self.io.as_ref() else {
+            return Ok(runtime_cut(Instant::now()));
+        };
+        // Worker retention samples its timestamp inside this same mutex.
+        match io.admission.completion_runtime_cut_observation() {
+            V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } => Ok(runtime_cut(cut_at)),
+            V2IoCompletionRuntimeCutObservationV1::Pending(owner)
+                if !runtime_capacity_available
+                    && owner.requires_runtime_capacity
+                    && !owner.is_dedicated_lifecycle() =>
+            {
+                let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                    "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+                })?;
+                capacity_relief_cut(owner.retained_at, blocked_ordinal)
+            }
+            V2IoCompletionRuntimeCutObservationV1::Pending(_) => {
+                Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion)
+            }
+        }
+    }
+
     /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
     #[cfg(test)]
     pub(in crate::sumeragi) fn has_reparked_certified_fetch_completion_for_test(&self) -> bool {
@@ -2375,6 +2478,9 @@ impl ProductionV2Services {
                     }
                 }
             }
+        }
+        if self.orphan_chunks.is_empty() {
+            self.orphan_lifecycle_sweep_cursor = None;
         }
         first_error.map_or(Ok(retired), Err)
     }

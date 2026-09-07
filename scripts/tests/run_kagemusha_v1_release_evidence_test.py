@@ -115,7 +115,6 @@ def _small_matrix():
         mock.patch.object(VERIFIER, "ARTIFACT_ROLES", ("params_eq",)),
         mock.patch.object(VERIFIER, "RELATIONS", ("bootstrap",)),
         mock.patch.object(VERIFIER, "HELPERS", ("mint_authorization",)),
-        mock.patch.object(VERIFIER, "RECEIVE_FOLD_BATCH_WIDTH", 16, create=True),
         mock.patch.object(VERIFIER, "ACCEPTANCE_CASES", ("receiver_inbox_pressure",)),
         mock.patch.object(
             RUNNER,
@@ -271,6 +270,12 @@ class RunnerFixture:
     def _manifest_template(self) -> dict[str, object]:
         profile = {
             "hardware_profile": self._hardware_profile(),
+            "provider_policy": {
+                "hardware_profile_id": "11" * 32,
+                "provider_authority_commitment": "33" * 32,
+                "provider_profile_index": 0,
+                "issuer_signature": "01" * 64,
+            },
             "suite_id": "22" * 32,
             "qualification_report": "reports/profile/qualification.json",
             "physical_evidence": {
@@ -285,13 +290,6 @@ class RunnerFixture:
             "helpers": [
                 {"helper": name, "report": f"reports/profile/helper-{name}.json"}
                 for name in VERIFIER.HELPERS
-            ],
-            "receive_fold_occupancies": [
-                {
-                    "occupancy": occupancy,
-                    "report": f"reports/profile/receive-fold-{occupancy}.json",
-                }
-                for occupancy in range(1, 17)
             ],
             "recursive_depths": [
                 {"depth": depth, "report": f"reports/profile/depth-{depth}.json"}
@@ -535,6 +533,35 @@ class KagemushaReleaseEvidenceRunnerTests(unittest.TestCase):
         projection = json.loads(stdout)
         self.assertEqual(projection["status"], "dry_run")
         self.assertEqual(stdout.encode(), RUNNER.canonical_json_bytes(projection))
+
+    def test_retired_receive_fold_occupancies_are_rejected_before_execution(self) -> None:
+        with _small_matrix():
+            fixture = self.fixture("retired-occupancies")
+            fixture.plan["manifest_template"]["profiles"][0]["receive_fold_occupancies"] = []
+            fixture.write_plan()
+            with fixture.execution_patch() as execution:
+                code, _, stderr = fixture.collect()
+            execution.assert_not_called()
+        self.assertEqual(code, 1)
+        self.assertIn("fields must be exactly", stderr)
+        self.assertFalse(fixture.marker.exists())
+        self.assertFalse(fixture.out_dir.exists())
+
+    def test_provider_policy_fields_and_indices_are_checked_before_execution(self) -> None:
+        for case, (field, value) in enumerate([
+            ("provider_profile_index", True), ("provider_profile_index", -1),
+            ("provider_profile_index", 65536), ("provider_authority_secret", "dd" * 32),
+        ]):
+            with self.subTest(field=field, value=value), _small_matrix():
+                fixture = self.fixture(f"invalid-provider-policy-{case}")
+                fixture.template["profiles"][0]["provider_policy"][field] = value
+                fixture.write_plan()
+                with fixture.execution_patch() as execution:
+                    code, _, stderr = fixture.collect()
+                execution.assert_not_called()
+                self.assertEqual(code, 1, stderr)
+                self.assertFalse(fixture.marker.exists())
+                self.assertFalse(fixture.out_dir.exists())
 
     def test_physical_raw_evidence_is_required_before_any_execution(self) -> None:
         with _small_matrix():

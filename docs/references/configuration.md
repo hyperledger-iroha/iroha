@@ -1,4 +1,17 @@
-# Acceleration
+# Runtime configuration
+
+## Native execution-proof transport
+
+`network.max_frame_bytes_connect` sets the dedicated reliable Connect P2P topic's
+encoded frame bound (default 128 KiB). It is independent of the Health topic bound.
+The optional `configs/soranexus/execution-proof-transport.toml` overlay configures
+8 MiB Connect and transaction-gossip frames, 4 MiB + 4,096 byte Connect WebSocket
+messages, and bounded session buffering/counts for execution-proof transport
+qualification. Merge it with a complete reviewed runtime configuration and apply
+compatible limits to participating peers, proxies and wallets. The overlay does
+not qualify proof profiles or modify consensus settlement rules.
+
+## Hardware acceleration
 
 The `[accel]` section controls optional hardware acceleration for IVM and helpers. All
 accelerated paths have deterministic CPU fallbacks; if a backend fails a golden
@@ -19,4 +32,3 @@ Notes
 - Determinism first: acceleration never changes observable outputs; backends
   run golden tests on init and fall back to scalar/SIMD when mismatches are detected.
 - Configure via `iroha_config`; avoid environment variables in production.
-

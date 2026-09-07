@@ -62,6 +62,7 @@ fn synthetic_artifacts() -> KagemushaGeneratedMintAuthorizationArtifactsV1 {
         inner_eq_circuit_params,
         inner_ep_circuit_params,
         enabled_hardware_profiles,
+        provider_policy_root: [0x42; 32],
     }
 }
 
@@ -191,14 +192,14 @@ fn mint_authorization_install_resolves_all_ten_blobs_without_replacing_existing_
 
 /// Produce a canonical *encoding* with the actual circuit's key layout, but no
 /// key generation or proof. Repeated generator commitments are not that circuit's VK.
-fn synthetic_vk_encoding<F, T>(point: &[u8]) -> Vec<u8>
+fn synthetic_vk_encoding<F, T>(point: &[u8], params: T::Params) -> Vec<u8>
 where
     F: ff::PrimeField,
-    T: Circuit<F, Params = BaseCircuitParams>,
+    T: Circuit<F>,
 {
     assert_eq!(point.len(), 32);
     let mut cs = ConstraintSystem::<F>::default();
-    T::configure_with_params(&mut cs, test_base_params());
+    T::configure_with_params(&mut cs, params);
     let fixed_count = cs
         .num_fixed_columns()
         .checked_add(cs.num_selectors())
@@ -250,8 +251,13 @@ fn malformed_vk_encodings(bytes: &[u8]) -> Vec<Vec<u8>> {
 macro_rules! check_mint_vk_readers {
     ($curve:ty, $field:ty, $inner:ty, $outer:ty, $read_inner:ident, $read_outer:ident) => {{
         let point = <$curve>::generator().to_bytes();
-        let inner_bytes = synthetic_vk_encoding::<$field, $inner>(point.as_ref());
-        let outer_bytes = synthetic_vk_encoding::<$field, $outer>(point.as_ref());
+        let inner_bytes =
+            synthetic_vk_encoding::<$field, $inner>(point.as_ref(), test_base_params());
+        let outer_params =
+            super::super::KagemushaProviderRootCircuitParamsV1::new(test_base_params(), [0x42; 32])
+                .expect("explicit non-authorizing test root");
+        let outer_bytes =
+            synthetic_vk_encoding::<$field, $outer>(point.as_ref(), outer_params.clone());
         assert_ne!(
             inner_bytes.len(),
             outer_bytes.len(),
@@ -259,7 +265,7 @@ macro_rules! check_mint_vk_readers {
         );
         let inner = $read_inner(&inner_bytes, test_base_params())
             .expect("canonical synthetic inner VK encoding");
-        let outer = $read_outer(&outer_bytes, test_base_params())
+        let outer = $read_outer(&outer_bytes, outer_params.clone())
             .expect("canonical synthetic outer VK encoding");
         assert_eq!(inner.to_bytes(SerdeFormat::Processed), inner_bytes);
         assert_eq!(outer.to_bytes(SerdeFormat::Processed), outer_bytes);
@@ -268,23 +274,29 @@ macro_rules! check_mint_vk_readers {
             "outer key cannot be decoded as the inner family"
         );
         assert!(
-            $read_outer(&inner_bytes, test_base_params()).is_err(),
+            $read_outer(&inner_bytes, outer_params.clone()).is_err(),
             "inner key cannot be decoded as the outer family"
         );
-        type VkReader = fn(
-            &[u8],
-            BaseCircuitParams,
-        )
-            -> Result<VerifyingKey<$curve>, KagemushaArtifactGenerationErrorV1>;
-        let readers: [(&[u8], VkReader); 2] = [
-            (inner_bytes.as_slice(), $read_inner),
-            (outer_bytes.as_slice(), $read_outer),
-        ];
-        for (bytes, reader) in readers {
-            for malformed in malformed_vk_encodings(bytes) {
-                let result = std::panic::catch_unwind(|| reader(&malformed, test_base_params()));
-                assert!(result.expect("malformed mint VK must not panic").is_err());
-            }
+        // Equal byte layout under another root still reconstructs a different CS identity.
+        let mut changed_root = outer_params.clone();
+        changed_root.provider_policy_root[0] ^= 1;
+        let substituted = $read_outer(&outer_bytes, changed_root).expect("same canonical encoding");
+        assert_ne!(outer.transcript_repr(), substituted.transcript_repr());
+        for malformed in malformed_vk_encodings(&inner_bytes) {
+            let result = std::panic::catch_unwind(|| $read_inner(&malformed, test_base_params()));
+            assert!(
+                result
+                    .expect("malformed inner mint VK must not panic")
+                    .is_err()
+            );
+        }
+        for malformed in malformed_vk_encodings(&outer_bytes) {
+            let result = std::panic::catch_unwind(|| $read_outer(&malformed, outer_params.clone()));
+            assert!(
+                result
+                    .expect("malformed outer mint VK must not panic")
+                    .is_err()
+            );
         }
     }};
 }
@@ -311,4 +323,19 @@ fn checked_mint_authorization_inner_outer_vk_readers_reject_malformed_ep_encodin
         read_ep_inner_mint_authorization_vk,
         read_ep_mint_authorization_vk
     );
+}
+
+#[test]
+fn mint_authorization_provider_root_rejects_missing_and_substituted_authority() {
+    let root = [0x42; 32];
+    validate_mint_authorization_provider_policy_root_v1(root, root).expect("same explicit root");
+    for (configured, actual) in [
+        ([0; 32], [0; 32]),
+        ([0; 32], root),
+        (root, [0; 32]),
+        (root, [0x43; 32]),
+    ] {
+        assert!(validate_mint_authorization_provider_policy_root_v1(configured, actual).is_err());
+    }
+    assert_eq!(synthetic_artifacts().provider_policy_root, root);
 }

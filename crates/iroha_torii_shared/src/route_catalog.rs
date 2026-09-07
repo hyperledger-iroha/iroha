@@ -1619,18 +1619,78 @@ pub mod core {
     )
     .with_feature_gate(FeatureGate::Feature("connect"))
     .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
-    /// Read native race state or verifier qualification.
-    pub const RACE_CAPABILITIES: RouteDescriptor = RouteDescriptor::new(
-        "race.capabilities",HttpMethod::Get,"/v1/races/capabilities",ApiSurface::Public,Listener::Torii,RouteEffect::ReadOnly,AdmissionPolicy::Public,
-    ).with_projections(RouteProjections::OPENAPI_AND_SDK).with_cors_options(true);
-    /// Read native race state or verifier qualification.
-    pub const RACE_LIST: RouteDescriptor = RouteDescriptor::new(
-        "race.list",HttpMethod::Get,"/v1/races",ApiSurface::Public,Listener::Torii,RouteEffect::ReadOnly,AdmissionPolicy::Public,
-    ).with_projections(RouteProjections::OPENAPI_AND_SDK).with_cors_options(true);
-    /// Read native race state or verifier qualification.
-    pub const RACE_GET: RouteDescriptor = RouteDescriptor::new(
-        "race.get",HttpMethod::Get,"/v1/races/{race_id}",ApiSurface::Public,Listener::Torii,RouteEffect::ReadOnly,AdmissionPolicy::Public,
-    ).with_projections(RouteProjections::OPENAPI_AND_SDK).with_cors_options(true);
+    /// Read exact native marketplace policy and rollout qualification.
+    pub const NFT_OFFER_CAPABILITIES: RouteDescriptor = RouteDescriptor::new(
+        "nft.offers.capabilities",
+        HttpMethod::Get,
+        "/v1/nft-offers/capabilities",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read native exact-price NFT offer state.
+    pub const NFT_OFFER_LIST: RouteDescriptor = RouteDescriptor::new(
+        "nft.offers.list",
+        HttpMethod::Get,
+        "/v1/nft-offers",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read native exact-price NFT offer state.
+    pub const NFT_OFFER_GET: RouteDescriptor = RouteDescriptor::new(
+        "nft.offers.get",
+        HttpMethod::Get,
+        "/v1/nft-offers/{offer_id}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read native game session state or verifier qualification.
+    pub const GAME_CAPABILITIES: RouteDescriptor = RouteDescriptor::new(
+        "game.capabilities",
+        HttpMethod::Get,
+        "/v1/games/capabilities",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read native game session state or verifier qualification.
+    pub const GAME_SESSION_LIST: RouteDescriptor = RouteDescriptor::new(
+        "game.sessions.list",
+        HttpMethod::Get,
+        "/v1/games/sessions",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read native game session state or verifier qualification.
+    pub const GAME_SESSION_GET: RouteDescriptor = RouteDescriptor::new(
+        "game.sessions.get",
+        HttpMethod::Get,
+        "/v1/games/sessions/{session_id}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Read the VPN client profile.
     pub const VPN_PROFILE: RouteDescriptor = RouteDescriptor::new(
         "vpn.profile",
@@ -1732,6 +1792,16 @@ pub mod core {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK);
+    /// Read one compact execution-proof verification reference.
+    pub const GAME_VERIFICATION_GET: RouteDescriptor = RouteDescriptor::new(
+        "game.verifications.get",
+        HttpMethod::Get,
+        "/v1/games/verifications/{verification_id}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    );
     /// Core information routes registered by `add_core_info_routes`.
     pub const INFO_ROUTES: &[RouteDescriptor] = &[
         API_VERSION,
@@ -1747,9 +1817,13 @@ pub mod core {
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         INTERNAL_PROXY,
-        RACE_CAPABILITIES,
-        RACE_LIST,
-        RACE_GET,
+        NFT_OFFER_CAPABILITIES,
+        NFT_OFFER_LIST,
+        NFT_OFFER_GET,
+        GAME_CAPABILITIES,
+        GAME_SESSION_LIST,
+        GAME_SESSION_GET,
+        GAME_VERIFICATION_GET,
         VPN_PROFILE,
         VPN_QUOTE_CREATE,
         VPN_SESSION_CREATE,
@@ -1878,6 +1952,7 @@ pub mod diagnostic {
     pub const OPENAPI_ROUTES: &[RouteDescriptor] = &[OPENAPI_JSON];
     /// Profiling route registered by `add_profiling_routes`.
     pub const PROFILE_ROUTES: &[RouteDescriptor] = &[PROFILE];
+
     /// Diagnostic and self-description routes registered by the builder.
     pub const ROUTES: &[RouteDescriptor] = &[
         STATUS,
@@ -3992,6 +4067,7 @@ pub mod application_api {
         EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => dataspace_get("application.explorer_accounts_by_account_id_get", "/v1/explorer/accounts/{account_id}");
         EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => dataspace_get("application.explorer_accounts_by_account_id_qr_get", "/v1/explorer/accounts/{account_id}/qr");
         EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => dataspace_get("application.explorer_domains_by_domain_id_get", "/v1/explorer/domains/{domain_id}");
+        OFFLINE_ASSET_REGISTRATION_GET => dataspace_get("application.offline_asset_registration_get", "/v1/offline/assets/{asset_definition_id}/registration");
         EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_get", "/v1/explorer/asset-definitions/{definition_id}");
         EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_econometrics_get", "/v1/explorer/asset-definitions/{definition_id}/econometrics");
         EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_snapshot_get", "/v1/explorer/asset-definitions/{definition_id}/snapshot");

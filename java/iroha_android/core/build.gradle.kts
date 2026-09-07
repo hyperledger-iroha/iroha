@@ -84,6 +84,12 @@ tasks.withType<Test>().configureEach {
             .file("fixtures/offline/kagemusha_v1.json"),
     )
     inputs.file(
+        rootProject.layout.projectDirectory.dir("..").dir("..")
+            .file("fixtures/offline/kagemusha_enrolled_open_selector_v1.json"),
+    )
+    inputs.file(rootProject.layout.projectDirectory.dir("..").dir("..")
+        .file("fixtures/offline/kagemusha_enrolled_open_challenge_v1.json"))
+    inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")

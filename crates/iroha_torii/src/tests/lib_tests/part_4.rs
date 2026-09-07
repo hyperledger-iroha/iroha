@@ -904,8 +904,10 @@ fn zk_ivm_enqueue_classifies_supervisor_state_without_leaking_capacity() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         registration.sender = Some(sender);
     }
-    zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "queued"))
-        .expect("first job fills the synthetic supervisor queue");
+    assert!(
+        zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "queued")).is_ok(),
+        "first job fills the synthetic supervisor queue"
+    );
     let full = zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "full"))
         .expect_err("a saturated supervisor queue must reject work");
     let ZkIvmProveEnqueueError::Full(full) = full else {

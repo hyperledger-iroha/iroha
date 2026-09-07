@@ -2171,6 +2171,7 @@ mod tests {
             (18, "RegisterBallotParticipant", true, 21),
             (19, "RecordBallotDropout", true, 22),
             (20, "FailPublicFindingNoResult", true, 23),
+            (21, "RegisterInitialSortition", false, 24),
         ];
         let public = fixture
             .get("public_transitions")
@@ -2232,6 +2233,7 @@ mod tests {
             ParliamentLifecycleTransitionKindV1::RegisterBallotParticipant,
             ParliamentLifecycleTransitionKindV1::RecordBallotDropout,
             ParliamentLifecycleTransitionKindV1::FailPublicFindingNoResult,
+            ParliamentLifecycleTransitionKindV1::RegisterInitialSortition,
         ];
         for (index, kind) in kinds.into_iter().enumerate() {
             assert_eq!(

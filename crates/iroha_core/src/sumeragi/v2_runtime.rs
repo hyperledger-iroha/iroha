@@ -55,6 +55,7 @@ use super::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
         DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredEventKind,
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
+        LeaderWireConsumerPosition, LeaderWireRecoveryAuthority,
         LifecycleDecisionApplyAdapterCompletionAuthorityV1, LiveProposalIntentWalSignHandoffV1,
         LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
         PreparedLifecycleDecisionApplyAdapterCompletionV1, ProducerContinuationHandoffEvidence,
@@ -936,6 +937,13 @@ mod exact_runtime_command_identity_sealed {
 pub(crate) trait ExactRuntimeCommandIdentity:
     exact_runtime_command_identity_sealed::Sealed
 {
+    /// Project current-consumer coordinates only for an authenticated command.
+    #[cfg(not(test))]
+    fn leader_wire_consumer_position(&self) -> Option<LeaderWireConsumerPosition>;
+    #[cfg(test)]
+    fn leader_wire_consumer_position(&self) -> Option<LeaderWireConsumerPosition> {
+        None
+    }
     /// Project every command field which can distinguish reducer behavior.
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity;
     /// Return whether this exact command is an authenticated certificate which
@@ -946,6 +954,9 @@ pub(crate) trait ExactRuntimeCommandIdentity:
 }
 impl exact_runtime_command_identity_sealed::Sealed for AuthenticatedConsensusMessage {}
 impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
+    fn leader_wire_consumer_position(&self) -> Option<LeaderWireConsumerPosition> {
+        LeaderWireConsumerPosition::from_payload(self.payload())
+    }
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let canonical_bytes = self.canonical_wire_bytes();
         let canonical_hash = iroha_crypto::Hash::new(&canonical_bytes);
@@ -1149,6 +1160,11 @@ fn runtime_candidate_causal_origin_lifecycle_key(
     iroha_crypto::Hash::new(projection)
 }
 impl RuntimeCandidateCausalOrigin {
+    /// Return the scheduler ordinal frozen on the causal root, when admitted.
+    pub(crate) const fn root_lifecycle_ordinal(&self) -> Option<u128> {
+        self.root_lifecycle_ordinal
+    }
+
     fn mint<C: ExactRuntimeCommandIdentity>(
         tag: EventTag,
         class: CommandClass,
@@ -4303,6 +4319,9 @@ pub(crate) struct RuntimeFifoCandidateOwnership {
     pub(crate) lifecycle_ordinal: u128,
     /// Immutable first-admission root retained across causal successors.
     pub(crate) causal_origin: RuntimeCandidateCausalOrigin,
+    /// Exact qualification sealed from local queue admission or the guarded
+    /// Validate result strictly before the current round deadline.
+    local_proposal_ready_before_deadline: bool,
     /// Complete deeply validated fair-ingress carrier. Local trusted
     /// completions never own one; retaining the bounded process-local object
     /// prevents a same-shape projection hash from replacing authenticated
@@ -4312,7 +4331,9 @@ pub(crate) struct RuntimeFifoCandidateOwnership {
     pub(crate) fifo_position: u64,
     /// Eligible class skips accumulated before selection.
     pub(crate) eligible_skips_before: u64,
-    /// Selection retires the candidate's service debt.
+    /// Service debt retained after selection. Ordinary, fence, and pacemaker
+    /// service retire it to zero; exceptional full-FIFO Completion relief
+    /// preserves it so a retry cannot rewrite class-fairness history.
     pub(crate) eligible_skips_after: u64,
     /// Derived integrity hash over every candidate projection field.
     pub(crate) projection_hash: iroha_crypto::Hash,
@@ -4328,14 +4349,21 @@ pub(crate) struct RuntimeFifoCandidateOwnership {
 struct RuntimeQueueOccurrenceOwner {
     source_identity: Arc<()>,
     admission_ordinal: u128,
+    class: u8,
+    consumer_position: Option<LeaderWireConsumerPosition>,
     identity: RuntimeCommandIdentityDigest,
+    local_proposal_ready_before_deadline: bool,
     projection_hash: iroha_crypto::Hash,
 }
 impl PartialEq for RuntimeQueueOccurrenceOwner {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_identity, &other.source_identity)
             && self.admission_ordinal == other.admission_ordinal
+            && self.class == other.class
+            && self.consumer_position == other.consumer_position
             && self.identity == other.identity
+            && self.local_proposal_ready_before_deadline
+                == other.local_proposal_ready_before_deadline
             && self.projection_hash == other.projection_hash
     }
 }
@@ -4344,13 +4372,22 @@ fn runtime_queue_occurrence_owner_projection_hash(
     owner: &RuntimeQueueOccurrenceOwner,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-occurrence-owner:v1");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-occurrence-owner:v2");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&owner.source_identity) as usize).to_le_bytes(),
     );
     append_runtime_identity_field(&mut projection, &owner.admission_ordinal.to_le_bytes());
+    projection.push(owner.class);
     append_runtime_identity_field(&mut projection, owner.identity.projection_hash.as_ref());
+    projection.push(u8::from(owner.local_proposal_ready_before_deadline));
+    match owner.consumer_position {
+        None => projection.push(0),
+        Some(position) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, position.projection_hash().as_ref());
+        }
+    }
     iroha_crypto::Hash::new(projection)
 }
 impl RuntimeQueueOccurrenceOwner {
@@ -4364,7 +4401,10 @@ impl RuntimeQueueOccurrenceOwner {
         let mut owner = Self {
             source_identity: Arc::clone(source_identity),
             admission_ordinal: queued.admission_ordinal?,
+            class: queued.class.service_code(),
+            consumer_position: queued.command.leader_wire_consumer_position(),
             identity: queued.identity,
+            local_proposal_ready_before_deadline: queued.local_proposal_ready_before_deadline,
             projection_hash: iroha_crypto::Hash::new([]),
         };
         owner.projection_hash = runtime_queue_occurrence_owner_projection_hash(&owner);
@@ -4374,7 +4414,10 @@ impl RuntimeQueueOccurrenceOwner {
         let mut owner = Self {
             source_identity: Arc::clone(&candidate.selection_seal.source_identity),
             admission_ordinal: candidate.admission_ordinal,
+            class: candidate.class,
+            consumer_position: candidate.selection_seal.selected_consumer_position,
             identity: candidate.identity,
+            local_proposal_ready_before_deadline: candidate.local_proposal_ready_before_deadline,
             projection_hash: iroha_crypto::Hash::new([]),
         };
         owner.projection_hash = runtime_queue_occurrence_owner_projection_hash(&owner);
@@ -4382,7 +4425,12 @@ impl RuntimeQueueOccurrenceOwner {
     }
     fn validate_exact(&self) -> bool {
         self.admission_ordinal != 0
+            && CommandClass::from_service_code(self.class).is_some()
+            && (self.consumer_position.is_none()
+                || self.identity.kind == RuntimeCommandKind::Authenticated)
             && self.identity.validate_exact()
+            && (!self.local_proposal_ready_before_deadline
+                || self.identity.kind == RuntimeCommandKind::LocalProposalReady)
             && self.projection_hash == runtime_queue_occurrence_owner_projection_hash(self)
     }
     fn matches_queued<C: ExactRuntimeCommandIdentity>(
@@ -4391,93 +4439,9 @@ impl RuntimeQueueOccurrenceOwner {
         queued: &TaggedCommand<C>,
     ) -> bool {
         Arc::ptr_eq(&self.source_identity, source_identity)
+            && self.local_proposal_ready_before_deadline
+                == queued.local_proposal_ready_before_deadline
             && queued.cached_queue_occurrence_owner(source_identity) == Some(self)
-    }
-}
-/// Exact retained Progress occurrence which authorizes one ordinary FIFO
-/// pacemaker escape while a future-view PrepareQC owns the class minimum.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RuntimeViewBlockedProgressAuthorization {
-    blocker: RuntimeQueueOccurrenceOwner,
-    blocker_lifecycle_ordinal: u128,
-    blocker_fifo_position: u64,
-    target_view: u64,
-    projection_hash: iroha_crypto::Hash,
-}
-fn runtime_view_blocked_progress_authorization_projection_hash(
-    authorization: &RuntimeViewBlockedProgressAuthorization,
-) -> iroha_crypto::Hash {
-    let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:view-blocked-progress-authorization:v1");
-    append_runtime_identity_field(
-        &mut projection,
-        authorization.blocker.projection_hash.as_ref(),
-    );
-    append_runtime_identity_field(
-        &mut projection,
-        &authorization.blocker_lifecycle_ordinal.to_le_bytes(),
-    );
-    append_runtime_identity_u64(&mut projection, authorization.blocker_fifo_position);
-    append_runtime_identity_u64(&mut projection, authorization.target_view);
-    iroha_crypto::Hash::new(projection)
-}
-impl RuntimeViewBlockedProgressAuthorization {
-    fn new(
-        blocker: RuntimeQueueOccurrenceOwner,
-        blocker_lifecycle_ordinal: u128,
-        blocker_fifo_position: u64,
-        target_view: u64,
-    ) -> Option<Self> {
-        let mut authorization = Self {
-            blocker,
-            blocker_lifecycle_ordinal,
-            blocker_fifo_position,
-            target_view,
-            projection_hash: iroha_crypto::Hash::new([]),
-        };
-        authorization.projection_hash =
-            runtime_view_blocked_progress_authorization_projection_hash(&authorization);
-        (authorization.blocker.validate_exact()
-            && authorization.blocker.identity.kind == RuntimeCommandKind::Authenticated
-            && authorization.blocker_lifecycle_ordinal != 0)
-            .then_some(authorization)
-    }
-    fn validates_retained_blocker(
-        &self,
-        round_tag: EventTag,
-        before: &RuntimeQueueOwnershipSnapshot,
-        after: &RuntimeQueueOwnershipSnapshot,
-    ) -> bool {
-        let position = usize::try_from(self.blocker_fifo_position).ok();
-        let blocker_is_exact_minimum = position
-            .and_then(|position| before.occurrence_owners.get(position))
-            == Some(&self.blocker)
-            && before.progress_minimum_lifecycle_ordinal == Some(self.blocker_lifecycle_ordinal);
-        let blocker_remains_owned = before
-            .occurrence_index
-            .get(&self.blocker.admission_ordinal)
-            .and_then(|position| before.occurrence_owners.get(*position))
-            == Some(&self.blocker)
-            && after
-                .occurrence_index
-                .get(&self.blocker.admission_ordinal)
-                .and_then(|position| after.occurrence_owners.get(*position))
-                == Some(&self.blocker);
-        let readiness = before.class_readiness();
-        let ordinary = select_bounded_service_class(
-            before.projection.service_cursor,
-            readiness.0,
-            readiness.1,
-            readiness.2,
-        );
-        self.projection_hash == runtime_view_blocked_progress_authorization_projection_hash(self)
-            && self.blocker.validate_exact()
-            && self.blocker.identity.kind == RuntimeCommandKind::Authenticated
-            && self.blocker_lifecycle_ordinal != 0
-            && self.target_view > round_tag.view()
-            && ordinary.selected == SERVICE_CLASS_PROGRESS
-            && blocker_is_exact_minimum
-            && blocker_remains_owned
     }
 }
 /// Queue rank observed immediately before or after one scheduler decision.
@@ -4503,8 +4467,15 @@ struct RuntimeQueueOwnershipSnapshot {
     projection: RuntimeQueueOwnershipProjection,
     occurrence_scan_complete: bool,
     occurrence_owners: Vec<RuntimeQueueOccurrenceOwner>,
+    occurrence_lifecycle_ordinals: Vec<u128>,
     occurrence_index: BTreeMap<u128, usize>,
+    /// Actual durable consumer used for this entire immutable queue observation.
+    consumer_authority: Option<LeaderWireRecoveryAuthority>,
+    /// Physically retained authenticated occurrences waiting for that consumer.
+    consumer_pending_count: u64,
     minimum_lifecycle_ordinal: Option<u128>,
+    maximum_lifecycle_ordinal: Option<u128>,
+    /// Class counts/minima cover runnable and terminally obsolete work; pending owners remain in the physical list.
     completion_minimum_lifecycle_ordinal: Option<u128>,
     progress_minimum_lifecycle_ordinal: Option<u128>,
     normal_minimum_lifecycle_ordinal: Option<u128>,
@@ -4519,8 +4490,12 @@ impl PartialEq for RuntimeQueueOwnershipSnapshot {
             && self.projection == other.projection
             && self.occurrence_scan_complete == other.occurrence_scan_complete
             && self.occurrence_owners == other.occurrence_owners
+            && self.occurrence_lifecycle_ordinals == other.occurrence_lifecycle_ordinals
             && self.occurrence_index == other.occurrence_index
+            && self.consumer_authority == other.consumer_authority
+            && self.consumer_pending_count == other.consumer_pending_count
             && self.minimum_lifecycle_ordinal == other.minimum_lifecycle_ordinal
+            && self.maximum_lifecycle_ordinal == other.maximum_lifecycle_ordinal
             && self.completion_minimum_lifecycle_ordinal
                 == other.completion_minimum_lifecycle_ordinal
             && self.progress_minimum_lifecycle_ordinal == other.progress_minimum_lifecycle_ordinal
@@ -4535,23 +4510,27 @@ impl Eq for RuntimeQueueOwnershipSnapshot {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeQueueSelectionKind {
     Ordinary,
-    OrdinaryViewProgress,
+    LifecycleApplyPredecessor,
     FenceCompletion,
     FencePredecessor,
     PacemakerProgress,
     PacemakerCertifiedProgress,
     PreTimeoutLockedPrepareQc,
+    PreTimeoutLocalProposalReady,
+    CompletionCapacityRelief,
 }
 impl RuntimeQueueSelectionKind {
     const fn code(self) -> u8 {
         match self {
             Self::Ordinary => 1,
-            Self::OrdinaryViewProgress => 7,
+            Self::LifecycleApplyPredecessor => 10,
             Self::FenceCompletion => 2,
             Self::PacemakerProgress => 3,
             Self::PacemakerCertifiedProgress => 4,
             Self::FencePredecessor => 5,
             Self::PreTimeoutLockedPrepareQc => 6,
+            Self::PreTimeoutLocalProposalReady => 8,
+            Self::CompletionCapacityRelief => 9,
         }
     }
 }
@@ -4569,21 +4548,28 @@ struct RuntimeQueueSelectionSeal {
     queue_before: RuntimeQueueOwnershipProjection,
     queue_before_snapshot_hash: iroha_crypto::Hash,
     oldest_lifecycle_ordinal: u128,
+    lifecycle_upper_bound: Option<u128>,
     completion_minimum_lifecycle_ordinal: Option<u128>,
     progress_minimum_lifecycle_ordinal: Option<u128>,
     normal_minimum_lifecycle_ordinal: Option<u128>,
     completion_count: u64,
     progress_count: u64,
     normal_count: u64,
+    consumer_pending_count: u64,
     selected_class: u8,
     selected_position: u64,
     selected_admission_ordinal: u128,
     selected_lifecycle_ordinal: u128,
     selected_eligible_skips: u64,
     selected_identity: RuntimeCommandIdentityDigest,
+    selected_consumer_position: Option<LeaderWireConsumerPosition>,
     selected_tag: EventTag,
     selected_causal_origin_hash: iroha_crypto::Hash,
+    selected_local_proposal_ready_before_deadline: bool,
     selected_ingress_ownership_hash: Option<iroha_crypto::Hash>,
+    /// Exact ordinary-admission headroom at selection. Only the typed
+    /// Completion capacity-relief branch may carry `Some(0)`.
+    ordinary_remaining_capacity_before: Option<u64>,
     cursor_after_removal: u8,
     max_debt_after_upper_bound: u64,
     projection_hash: iroha_crypto::Hash,
@@ -4599,6 +4585,7 @@ impl PartialEq for RuntimeQueueSelectionSeal {
             && self.queue_before == other.queue_before
             && self.queue_before_snapshot_hash == other.queue_before_snapshot_hash
             && self.oldest_lifecycle_ordinal == other.oldest_lifecycle_ordinal
+            && self.lifecycle_upper_bound == other.lifecycle_upper_bound
             && self.completion_minimum_lifecycle_ordinal
                 == other.completion_minimum_lifecycle_ordinal
             && self.progress_minimum_lifecycle_ordinal == other.progress_minimum_lifecycle_ordinal
@@ -4606,15 +4593,20 @@ impl PartialEq for RuntimeQueueSelectionSeal {
             && self.completion_count == other.completion_count
             && self.progress_count == other.progress_count
             && self.normal_count == other.normal_count
+            && self.consumer_pending_count == other.consumer_pending_count
             && self.selected_class == other.selected_class
             && self.selected_position == other.selected_position
             && self.selected_admission_ordinal == other.selected_admission_ordinal
             && self.selected_lifecycle_ordinal == other.selected_lifecycle_ordinal
             && self.selected_eligible_skips == other.selected_eligible_skips
             && self.selected_identity == other.selected_identity
+            && self.selected_consumer_position == other.selected_consumer_position
             && self.selected_tag == other.selected_tag
             && self.selected_causal_origin_hash == other.selected_causal_origin_hash
+            && self.selected_local_proposal_ready_before_deadline
+                == other.selected_local_proposal_ready_before_deadline
             && self.selected_ingress_ownership_hash == other.selected_ingress_ownership_hash
+            && self.ordinary_remaining_capacity_before == other.ordinary_remaining_capacity_before
             && self.cursor_after_removal == other.cursor_after_removal
             && self.max_debt_after_upper_bound == other.max_debt_after_upper_bound
             && self.projection_hash == other.projection_hash
@@ -4652,7 +4644,7 @@ fn runtime_queue_ownership_snapshot_projection_hash(
     snapshot: &RuntimeQueueOwnershipSnapshot,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v3");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v4");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&snapshot.source_identity) as usize).to_le_bytes(),
@@ -4667,7 +4659,19 @@ fn runtime_queue_ownership_snapshot_projection_hash(
     for owner in &snapshot.occurrence_owners {
         append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
     }
+    for ordinal in &snapshot.occurrence_lifecycle_ordinals {
+        append_runtime_identity_field(&mut projection, &ordinal.to_le_bytes());
+    }
+    match snapshot.consumer_authority {
+        None => projection.push(0),
+        Some(authority) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, authority.projection_hash().as_ref());
+        }
+    }
+    append_runtime_identity_u64(&mut projection, snapshot.consumer_pending_count);
     append_runtime_optional_ordinal(&mut projection, snapshot.minimum_lifecycle_ordinal);
+    append_runtime_optional_ordinal(&mut projection, snapshot.maximum_lifecycle_ordinal);
     append_runtime_optional_ordinal(
         &mut projection,
         snapshot.completion_minimum_lifecycle_ordinal,
@@ -4703,7 +4707,7 @@ impl RuntimeQueueOwnershipSnapshot {
             && u64::try_from(self.occurrence_owners.len()) == Ok(self.projection.len)
             && self.occurrence_index.len() == self.occurrence_owners.len()
             && self.occurrence_owners.iter().all(|owner| {
-                owner.admission_ordinal != 0
+                owner.validate_exact()
                     && Arc::ptr_eq(&owner.source_identity, &self.source_identity)
                     && self
                         .occurrence_index
@@ -4711,17 +4715,119 @@ impl RuntimeQueueOwnershipSnapshot {
                         .and_then(|index| self.occurrence_owners.get(*index))
                         == Some(owner)
             });
+        let eligible_stats = |class| {
+            let eligible = self
+                .occurrence_owners
+                .iter()
+                .enumerate()
+                .filter(|(index, owner)| owner.class == class && !self.consumer_waits_at(*index));
+            eligible.fold((None, 0u64), |(minimum, count), (index, _)| {
+                let ordinal = self
+                    .occurrence_lifecycle_ordinals
+                    .get(index)
+                    .copied()
+                    .unwrap_or(0);
+                (
+                    Some(minimum.map_or(ordinal, |value: u128| value.min(ordinal))),
+                    count + 1,
+                )
+            })
+        };
+        let pending_count = self
+            .occurrence_owners
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.consumer_waits_at(*index))
+            .count();
         self.projection_hash == runtime_queue_ownership_snapshot_projection_hash(self)
             && self.projection.len <= self.projection.capacity
             && CommandClass::from_service_code(self.projection.service_cursor).is_some()
             && (self.projection.len != 0 || self.projection.max_service_debt == 0)
             && class_minima_are_exact
             && occurrences_are_exact
-            && match (self.minimum_lifecycle_ordinal, total_count) {
-                (None, Some(0)) => self.projection.len == 0,
-                (Some(ordinal), Some(count)) => ordinal != 0 && count == self.projection.len,
+            && self.occurrence_lifecycle_ordinals.len() == self.occurrence_owners.len()
+            && self
+                .occurrence_lifecycle_ordinals
+                .iter()
+                .zip(&self.occurrence_owners)
+                .all(|(ordinal, owner)| *ordinal != 0 && *ordinal <= owner.admission_ordinal)
+            && self.occurrence_lifecycle_ordinals.iter().copied().min()
+                == self.minimum_lifecycle_ordinal
+            && self.occurrence_lifecycle_ordinals.iter().copied().max()
+                == self.maximum_lifecycle_ordinal
+            && u64::try_from(pending_count) == Ok(self.consumer_pending_count)
+            && eligible_stats(SERVICE_CLASS_COMPLETION)
+                == (
+                    self.completion_minimum_lifecycle_ordinal,
+                    self.completion_count,
+                )
+            && eligible_stats(SERVICE_CLASS_PROGRESS)
+                == (self.progress_minimum_lifecycle_ordinal, self.progress_count)
+            && eligible_stats(SERVICE_CLASS_NORMAL)
+                == (self.normal_minimum_lifecycle_ordinal, self.normal_count)
+            && match (
+                self.minimum_lifecycle_ordinal,
+                self.maximum_lifecycle_ordinal,
+                total_count,
+            ) {
+                (None, None, Some(0)) => self.projection.len == 0,
+                (Some(minimum), Some(maximum), Some(count)) => {
+                    minimum != 0
+                        && minimum <= maximum
+                        && count.checked_add(self.consumer_pending_count)
+                            == Some(self.projection.len)
+                }
                 _ => false,
             }
+    }
+    fn with_consumer_authority(
+        mut self,
+        authority: Option<LeaderWireRecoveryAuthority>,
+    ) -> Result<Self, EnqueueError> {
+        if !self.validate_identity() {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.consumer_authority = authority;
+        let stats = |class| {
+            self.occurrence_owners
+                .iter()
+                .enumerate()
+                .filter(|(index, owner)| owner.class == class && !self.consumer_waits_at(*index))
+                .fold((None, 0u64), |(minimum, count), (index, _)| {
+                    let ordinal = self
+                        .occurrence_lifecycle_ordinals
+                        .get(index)
+                        .copied()
+                        .unwrap_or(0);
+                    (
+                        Some(minimum.map_or(ordinal, |value: u128| value.min(ordinal))),
+                        count + 1,
+                    )
+                })
+        };
+        let completion = stats(SERVICE_CLASS_COMPLETION);
+        let progress = stats(SERVICE_CLASS_PROGRESS);
+        let normal = stats(SERVICE_CLASS_NORMAL);
+        (
+            self.completion_minimum_lifecycle_ordinal,
+            self.completion_count,
+        ) = completion;
+        (self.progress_minimum_lifecycle_ordinal, self.progress_count) = progress;
+        (self.normal_minimum_lifecycle_ordinal, self.normal_count) = normal;
+        self.consumer_pending_count =
+            self.projection.len - self.completion_count - self.progress_count - self.normal_count;
+        self.projection_hash = runtime_queue_ownership_snapshot_projection_hash(&self);
+        self.validate_identity()
+            .then_some(self)
+            .ok_or(EnqueueError::FailClosed)
+    }
+    fn consumer_waits_at(&self, index: usize) -> bool {
+        self.consumer_authority.is_some_and(|authority| {
+            self.occurrence_owners
+                .get(index)
+                .and_then(|owner| owner.consumer_position)
+                .is_some_and(|position| authority.consumer_waits_for(position))
+        })
     }
     fn class_readiness(&self) -> (bool, bool, bool) {
         (
@@ -4729,6 +4835,87 @@ impl RuntimeQueueOwnershipSnapshot {
             self.progress_count != 0,
             self.normal_count != 0,
         )
+    }
+}
+/// Move-only authority to release one ordinary runtime FIFO position by
+/// dispatching the exact oldest Completion-class occurrence frozen at zero
+/// Completion-admission headroom.
+///
+/// Preparation does not remove or dispatch the command. The outer executor may
+/// therefore acquire its independent Completion-worker cut before consuming
+/// this token. Consumption revalidates the complete queue snapshot, zero
+/// headroom, physical occurrence, class minimum, cursor, and service debt.
+#[must_use = "a prepared Completion capacity-relief owner is inert until consumed"]
+#[derive(Debug)]
+pub(in crate::sumeragi) struct PreparedCompletionCapacityReliefV1 {
+    queue_before: RuntimeQueueOwnershipSnapshot,
+    selected_owner: RuntimeQueueOccurrenceOwner,
+    selected_position: u64,
+    selected_lifecycle_ordinal: u128,
+    blocked_completion_lifecycle_ordinal: u128,
+    projection_hash: iroha_crypto::Hash,
+}
+fn prepared_completion_capacity_relief_projection_hash(
+    prepared: &PreparedCompletionCapacityReliefV1,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:completion-capacity-relief:v1");
+    append_runtime_identity_field(
+        &mut projection,
+        prepared.queue_before.projection_hash.as_ref(),
+    );
+    append_runtime_identity_field(
+        &mut projection,
+        prepared.selected_owner.projection_hash.as_ref(),
+    );
+    append_runtime_identity_u64(&mut projection, prepared.selected_position);
+    append_runtime_identity_field(
+        &mut projection,
+        &prepared.selected_lifecycle_ordinal.to_le_bytes(),
+    );
+    append_runtime_identity_field(
+        &mut projection,
+        &prepared.blocked_completion_lifecycle_ordinal.to_le_bytes(),
+    );
+    iroha_crypto::Hash::new(projection)
+}
+impl PreparedCompletionCapacityReliefV1 {
+    fn new(
+        queue_before: RuntimeQueueOwnershipSnapshot,
+        selected_owner: RuntimeQueueOccurrenceOwner,
+        selected_position: u64,
+        selected_lifecycle_ordinal: u128,
+        blocked_completion_lifecycle_ordinal: u128,
+    ) -> Option<Self> {
+        let mut prepared = Self {
+            queue_before,
+            selected_owner,
+            selected_position,
+            selected_lifecycle_ordinal,
+            blocked_completion_lifecycle_ordinal,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        prepared.projection_hash = prepared_completion_capacity_relief_projection_hash(&prepared);
+        prepared.validate_identity().then_some(prepared)
+    }
+    fn validate_identity(&self) -> bool {
+        self.projection_hash == prepared_completion_capacity_relief_projection_hash(self)
+            && self.queue_before.validate_identity()
+            && self.selected_owner.validate_exact()
+            && Arc::ptr_eq(
+                &self.queue_before.source_identity,
+                &self.selected_owner.source_identity,
+            )
+            && self.selected_position < self.queue_before.projection.len
+            && usize::try_from(self.selected_position)
+                .ok()
+                .and_then(|position| self.queue_before.occurrence_owners.get(position))
+                == Some(&self.selected_owner)
+            && self.selected_lifecycle_ordinal != 0
+            && self.blocked_completion_lifecycle_ordinal != 0
+            && self.selected_lifecycle_ordinal <= self.blocked_completion_lifecycle_ordinal
+            && self.queue_before.completion_minimum_lifecycle_ordinal
+                == Some(self.selected_lifecycle_ordinal)
     }
 }
 fn runtime_queue_occurrence_set_matches_snapshot(
@@ -4753,7 +4940,7 @@ fn runtime_queue_selection_seal_projection_hash(
     seal: &RuntimeQueueSelectionSeal,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-selection:v3");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-selection:v6");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&seal.source_identity) as usize).to_le_bytes(),
@@ -4769,12 +4956,14 @@ fn runtime_queue_selection_seal_projection_hash(
         &mut projection,
         &seal.oldest_lifecycle_ordinal.to_le_bytes(),
     );
+    append_runtime_optional_ordinal(&mut projection, seal.lifecycle_upper_bound);
     append_runtime_optional_ordinal(&mut projection, seal.completion_minimum_lifecycle_ordinal);
     append_runtime_optional_ordinal(&mut projection, seal.progress_minimum_lifecycle_ordinal);
     append_runtime_optional_ordinal(&mut projection, seal.normal_minimum_lifecycle_ordinal);
     append_runtime_identity_u64(&mut projection, seal.completion_count);
     append_runtime_identity_u64(&mut projection, seal.progress_count);
     append_runtime_identity_u64(&mut projection, seal.normal_count);
+    append_runtime_identity_u64(&mut projection, seal.consumer_pending_count);
     projection.push(seal.selected_class);
     append_runtime_identity_u64(&mut projection, seal.selected_position);
     append_runtime_identity_field(
@@ -4790,8 +4979,16 @@ fn runtime_queue_selection_seal_projection_hash(
         &mut projection,
         seal.selected_identity.projection_hash.as_ref(),
     );
+    match seal.selected_consumer_position {
+        None => projection.push(0),
+        Some(position) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, position.projection_hash().as_ref());
+        }
+    }
     append_runtime_identity_tag(&mut projection, seal.selected_tag);
     append_runtime_identity_field(&mut projection, seal.selected_causal_origin_hash.as_ref());
+    projection.push(u8::from(seal.selected_local_proposal_ready_before_deadline));
     match seal.selected_ingress_ownership_hash {
         None => projection.push(0),
         Some(hash) => {
@@ -4799,6 +4996,7 @@ fn runtime_queue_selection_seal_projection_hash(
             append_runtime_identity_field(&mut projection, hash.as_ref());
         }
     }
+    append_runtime_optional_u64(&mut projection, seal.ordinary_remaining_capacity_before);
     projection.push(seal.cursor_after_removal);
     append_runtime_identity_u64(&mut projection, seal.max_debt_after_upper_bound);
     iroha_crypto::Hash::new(projection)
@@ -4835,13 +5033,39 @@ impl RuntimeQueueSelectionSeal {
             Some(CommandClass::Normal) => self.normal_minimum_lifecycle_ordinal,
             None => None,
         };
+        let remaining_capacity_is_exact = match self.kind {
+            RuntimeQueueSelectionKind::CompletionCapacityRelief => {
+                self.ordinary_remaining_capacity_before == Some(0)
+            }
+            RuntimeQueueSelectionKind::Ordinary
+            | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+            | RuntimeQueueSelectionKind::FenceCompletion
+            | RuntimeQueueSelectionKind::FencePredecessor
+            | RuntimeQueueSelectionKind::PacemakerProgress
+            | RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+            | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+            | RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady => {
+                self.ordinary_remaining_capacity_before.is_none()
+            }
+        };
+        let lifecycle_bound_is_exact = match (self.kind, self.lifecycle_upper_bound) {
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+                upper_bound != 0
+                    && self.oldest_lifecycle_ordinal < upper_bound
+                    && self.selected_lifecycle_ordinal < upper_bound
+            }
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        };
         self.projection_hash == runtime_queue_selection_seal_projection_hash(self)
             && self.queue_before.len != 0
             && self.queue_before.len <= self.queue_before.capacity
             && CommandClass::from_service_code(self.queue_before.service_cursor).is_some()
             && self.oldest_lifecycle_ordinal != 0
             && class_minima_are_exact
-            && total_count == Some(self.queue_before.len)
+            && total_count.and_then(|count| count.checked_add(self.consumer_pending_count))
+                == Some(self.queue_before.len)
             && self.selected_class != SERVICE_CLASS_NONE
             && self.selected_position < self.queue_before.len
             && self.selected_admission_ordinal != 0
@@ -4849,19 +5073,18 @@ impl RuntimeQueueSelectionSeal {
             && self.selected_lifecycle_ordinal <= self.selected_admission_ordinal
             && self.selected_eligible_skips <= self.queue_before.max_service_debt
             && self.selected_identity.validate_exact()
+            && (self.selected_consumer_position.is_none()
+                || self.selected_identity.kind == RuntimeCommandKind::Authenticated)
+            && remaining_capacity_is_exact
+            && lifecycle_bound_is_exact
+            && (!self.selected_local_proposal_ready_before_deadline
+                || (self.selected_class == SERVICE_CLASS_COMPLETION
+                    && self.selected_identity.kind == RuntimeCommandKind::LocalProposalReady))
             && match self.kind {
-                RuntimeQueueSelectionKind::Ordinary => {
+                RuntimeQueueSelectionKind::Ordinary
+                | RuntimeQueueSelectionKind::LifecycleApplyPredecessor => {
                     selected_class_minimum == Some(self.selected_lifecycle_ordinal)
                         && selected_by_ordinary_cursor.selected == self.selected_class
-                        && selected_by_ordinary_cursor.next == self.cursor_after_removal
-                        && self.max_debt_after_upper_bound
-                            == self.queue_before.max_service_debt.saturating_add(1)
-                }
-                RuntimeQueueSelectionKind::OrdinaryViewProgress => {
-                    self.selected_class == SERVICE_CLASS_PROGRESS
-                        && self.selected_identity.kind == RuntimeCommandKind::Authenticated
-                        && self.selected_ingress_ownership_hash.is_some()
-                        && selected_by_ordinary_cursor.selected == SERVICE_CLASS_PROGRESS
                         && selected_by_ordinary_cursor.next == self.cursor_after_removal
                         && self.max_debt_after_upper_bound
                             == self.queue_before.max_service_debt.saturating_add(1)
@@ -4896,6 +5119,19 @@ impl RuntimeQueueSelectionSeal {
                         && self.cursor_after_removal == self.queue_before.service_cursor
                         && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
                 }
+                RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady => {
+                    self.selected_class == SERVICE_CLASS_COMPLETION
+                        && self.selected_identity.kind == RuntimeCommandKind::LocalProposalReady
+                        && self.selected_ingress_ownership_hash.is_none()
+                        && self.cursor_after_removal == self.queue_before.service_cursor
+                        && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
+                }
+                RuntimeQueueSelectionKind::CompletionCapacityRelief => {
+                    self.selected_class == SERVICE_CLASS_COMPLETION
+                        && selected_class_minimum == Some(self.selected_lifecycle_ordinal)
+                        && self.cursor_after_removal == self.queue_before.service_cursor
+                        && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
+                }
             }
     }
     fn claim_scheduler_handoff_once(&self) -> bool {
@@ -4924,6 +5160,15 @@ impl RuntimeQueueSelectionSeal {
             && self.queue_before == before.projection
             && self.queue_before_snapshot_hash == before.projection_hash
             && self.oldest_lifecycle_ordinal == before.minimum_lifecycle_ordinal.unwrap_or(0)
+            && match self.lifecycle_upper_bound {
+                Some(upper_bound) => {
+                    self.kind == RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+                        && before
+                            .maximum_lifecycle_ordinal
+                            .is_some_and(|maximum| maximum < upper_bound)
+                }
+                None => self.kind != RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
+            }
             && self.completion_minimum_lifecycle_ordinal
                 == before.completion_minimum_lifecycle_ordinal
             && self.progress_minimum_lifecycle_ordinal == before.progress_minimum_lifecycle_ordinal
@@ -4931,6 +5176,9 @@ impl RuntimeQueueSelectionSeal {
             && self.completion_count == before.completion_count
             && self.progress_count == before.progress_count
             && self.normal_count == before.normal_count
+            && self.consumer_pending_count == before.consumer_pending_count
+            && before.consumer_authority == after.consumer_authority
+            && !before.consumer_waits_at(self.selected_position as usize)
             && self.selected_class == candidate.class
             && self.selected_position == candidate.fifo_position
             && self.selected_admission_ordinal == candidate.admission_ordinal
@@ -4939,6 +5187,8 @@ impl RuntimeQueueSelectionSeal {
             && self.selected_identity == candidate.identity
             && self.selected_tag == candidate.tag
             && self.selected_causal_origin_hash == candidate.causal_origin.projection_hash
+            && self.selected_local_proposal_ready_before_deadline
+                == candidate.local_proposal_ready_before_deadline
             && self.selected_ingress_ownership_hash
                 == candidate
                     .ingress_ownership
@@ -4951,9 +5201,15 @@ impl RuntimeQueueSelectionSeal {
                     .ok()
                     .and_then(|position| before.occurrence_owners.get(position))
                     == Some(&selected)
+                    && usize::try_from(self.selected_position)
+                        .ok()
+                        .and_then(|position| before.occurrence_lifecycle_ordinals.get(position))
+                        == Some(&self.selected_lifecycle_ordinal)
                     && if retry_retained {
                         after.projection.len == before.projection.len
                             && after.occurrence_owners == before.occurrence_owners
+                            && after.occurrence_lifecycle_ordinals
+                                == before.occurrence_lifecycle_ordinals
                     } else {
                         after.projection.len.checked_add(1) == Some(before.projection.len)
                             && before
@@ -4965,6 +5221,15 @@ impl RuntimeQueueSelectionSeal {
                                 })
                                 .map(|(_, owner)| owner)
                                 .eq(after.occurrence_owners.iter())
+                            && before
+                                .occurrence_lifecycle_ordinals
+                                .iter()
+                                .enumerate()
+                                .filter(|(position, _)| {
+                                    u64::try_from(*position).ok() != Some(self.selected_position)
+                                })
+                                .map(|(_, ordinal)| ordinal)
+                                .eq(after.occurrence_lifecycle_ordinals.iter())
                     }
             })
     }
@@ -4978,8 +5243,8 @@ struct RuntimeSchedulerArbitrationInputs {
     completion_ready: bool,
     progress_ready: bool,
     normal_ready: bool,
-    view_blocked_progress_authorization: Option<RuntimeViewBlockedProgressAuthorization>,
     pre_timeout_locked_prepare_qc_physical_cut: Option<u128>,
+    pre_timeout_local_proposal_timeout_ordinal: Option<u128>,
     fence_completion_bypass: bool,
     fence_dependency_minimum_lifecycle_ordinal: Option<u128>,
     fence_dependency_minimum_admission_ordinal: Option<u128>,
@@ -5015,6 +5280,16 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// One exact pre-cut authenticated PrepareQC whose cloned reducer preview
     /// immediately stages `LockAndCommit` for the unchanged older lock.
     PreTimeoutLockedPrepareQc,
+    /// One current-view local proposal completion whose immutable lifecycle
+    /// root predates the timeout and whose runtime admission or exact guarded
+    /// worker completion also predates that boundary.
+    PreTimeoutLocalProposalReady,
+    /// One exact oldest Completion occurrence selected solely to release a
+    /// physically full ordinary runtime FIFO for an older worker completion.
+    CompletionCapacityRelief,
+    /// The selected Completion occurrence encountered retryable adapter
+    /// pressure and retained its exact position, cursor, and service debt.
+    CompletionCapacityReliefRetryRetained,
     /// Absolute round timeout.
     Timeout,
     /// Periodic retransmission timer.
@@ -5024,6 +5299,12 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// A FIFO command encountered retryable adapter backpressure and was
     /// restored with its immutable admission and lifecycle owner intact.
     FifoRetryRetained,
+    /// One fair FIFO command selected while an attested lifecycle Apply keeps
+    /// its post-Apply output fenced behind the complete pre-Apply queue.
+    LifecycleApplyPredecessor,
+    /// The lifecycle-Apply predecessor encountered retryable adapter pressure
+    /// and retained its immutable queue owner for the next bounded turn.
+    LifecycleApplyPredecessorRetryRetained,
     /// No serialized owner was ready.
     Idle,
 }
@@ -5087,12 +5368,12 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     pub(crate) progress_ready: bool,
     /// Whether the Normal class had an admitted owner.
     pub(crate) normal_ready: bool,
-    /// Exact retained future-PrepareQC occurrence which authorized a later
-    /// view-releasing Progress owner to use this ordinary FIFO turn.
-    view_blocked_progress_authorization: Option<RuntimeViewBlockedProgressAuthorization>,
     /// Frozen fair-ingress cut proving that this exceptional PrepareQC was
     /// physically admitted before the already-due timeout occurrence.
     pre_timeout_locked_prepare_qc_physical_cut: Option<u128>,
+    /// Frozen timeout lifecycle ordinal which bounds the exceptional local
+    /// proposal handoff to an earlier causal lifecycle root.
+    pre_timeout_local_proposal_timeout_ordinal: Option<u128>,
     /// Whether this turn used the narrow dependency edge from older
     /// unserviceable adapter debt to its exact signing completion.
     pub(crate) fence_completion_bypass: bool,
@@ -5163,6 +5444,11 @@ impl RuntimeSelectedOwnerKind {
             Self::FencePredecessor => 10,
             Self::FencePredecessorRetryRetained => 11,
             Self::PreTimeoutLockedPrepareQc => 12,
+            Self::PreTimeoutLocalProposalReady => 13,
+            Self::CompletionCapacityRelief => 14,
+            Self::CompletionCapacityReliefRetryRetained => 15,
+            Self::LifecycleApplyPredecessor => 16,
+            Self::LifecycleApplyPredecessorRetryRetained => 17,
         }
     }
 }
@@ -5180,6 +5466,7 @@ fn runtime_fifo_candidate_projection_hash(
         &mut projection,
         candidate.causal_origin.projection_hash.as_ref(),
     );
+    projection.push(u8::from(candidate.local_proposal_ready_before_deadline));
     match &candidate.ingress_ownership {
         None => projection.push(0),
         Some(ownership) => {
@@ -5309,16 +5596,13 @@ fn runtime_scheduler_projection_hash(
     projection.push(u8::from(evidence.completion_ready));
     projection.push(u8::from(evidence.progress_ready));
     projection.push(u8::from(evidence.normal_ready));
-    match &evidence.view_blocked_progress_authorization {
-        None => projection.push(0),
-        Some(authorization) => {
-            projection.push(1);
-            append_runtime_identity_field(&mut projection, authorization.projection_hash.as_ref());
-        }
-    }
     append_runtime_optional_ordinal(
         &mut projection,
         evidence.pre_timeout_locked_prepare_qc_physical_cut,
+    );
+    append_runtime_optional_ordinal(
+        &mut projection,
+        evidence.pre_timeout_local_proposal_timeout_ordinal,
     );
     projection.push(u8::from(evidence.fence_completion_bypass));
     append_runtime_optional_ordinal(
@@ -5454,16 +5738,14 @@ impl RuntimeSchedulerOwnershipEvidence {
                 }
                 None => self.selected != RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
             };
-        let view_blocked_progress_kind_is_exact = self
-            .view_blocked_progress_authorization
-            .as_ref()
-            .is_none_or(|_| {
-                matches!(
-                    self.selected,
-                    RuntimeSelectedOwnerKind::PacemakerProgress
-                        | RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
-                )
-            });
+        let pre_timeout_local_proposal_cut_is_exact =
+            match self.pre_timeout_local_proposal_timeout_ordinal {
+                Some(ordinal) => {
+                    ordinal != 0
+                        && self.selected == RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady
+                }
+                None => self.selected != RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady,
+            };
         let fence_dependency_rank_is_exact = match (
             self.fence_dependency_minimum_lifecycle_ordinal,
             self.fence_dependency_minimum_admission_ordinal,
@@ -5562,9 +5844,60 @@ impl RuntimeSchedulerOwnershipEvidence {
             || !fence_retry_transition_is_exact
             || !fence_predecessor_is_exact
             || !pre_timeout_locked_prepare_qc_cut_is_exact
-            || !view_blocked_progress_kind_is_exact
+            || !pre_timeout_local_proposal_cut_is_exact
         {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            Some(timeout_ordinal),
+        ) = (
+            &self.selected,
+            &self.candidate,
+            self.pre_timeout_local_proposal_timeout_ordinal,
+        ) {
+            let exact = self.clocks_armed
+                && self.timeout_due
+                && !self.periodic_timer_due
+                && !self.fifo_ready
+                && !self.completion_ready
+                && !self.progress_ready
+                && !self.normal_ready
+                && !self.fence_completion_bypass
+                && self.round_tag == candidate.tag
+                && candidate.identity.validate_exact()
+                && candidate.kind == RuntimeCommandKind::LocalProposalReady
+                && candidate.class == SERVICE_CLASS_COMPLETION
+                && candidate.ingress_ownership.is_none()
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal < timeout_ordinal
+                && candidate.lifecycle_ordinal < candidate.admission_ordinal
+                && candidate.local_proposal_ready_before_deadline
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_tag == self.round_tag
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                && candidate.eligible_skips_after == 0
+                && self.queue_before.service_cursor == self.queue_after.service_cursor
+                && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
+                && self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                && self.fifo_owed_before == self.fifo_owed_after
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady,
+                    false,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
         if let (
             RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
@@ -5613,6 +5946,52 @@ impl RuntimeSchedulerOwnershipEvidence {
                     &self.queue_after_snapshot,
                     RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc,
                     false,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::CompletionCapacityRelief
+            | RuntimeSelectedOwnerKind::CompletionCapacityReliefRetryRetained,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) = (&self.selected, &self.candidate)
+        {
+            let retry_retained =
+                self.selected == RuntimeSelectedOwnerKind::CompletionCapacityReliefRetryRetained;
+            let exact = self.clocks_armed
+                && !self.fence_completion_bypass
+                && candidate.identity.validate_exact()
+                && candidate.kind == candidate.identity.kind
+                && candidate.class == SERVICE_CLASS_COMPLETION
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                // This exceptional owner is outside ordinary class service;
+                // a retry must preserve its exact service debt.
+                && candidate.eligible_skips_after == candidate.eligible_skips_before
+                && self.queue_before.service_cursor == self.queue_after.service_cursor
+                && self.fifo_owed_before == self.fifo_owed_after
+                && if retry_retained {
+                    self.queue_after == self.queue_before
+                } else {
+                    self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                        && self.queue_after.max_service_debt
+                            <= self.queue_before.max_service_debt
+                }
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::CompletionCapacityRelief,
+                    retry_retained,
                 );
             return exact
                 .then_some(())
@@ -5840,74 +6219,30 @@ impl RuntimeSchedulerOwnershipEvidence {
                         && candidate.kind == RuntimeCommandKind::Authenticated
                         && candidate.ingress_ownership.is_some()
                 }
-                RuntimeQueueSelectionKind::OrdinaryViewProgress => {
-                    self.view_blocked_progress_authorization.is_some()
-                        && candidate.class == SERVICE_CLASS_PROGRESS
-                        && candidate.kind == RuntimeCommandKind::Authenticated
-                        && candidate.ingress_ownership.is_some()
-                }
                 RuntimeQueueSelectionKind::PacemakerProgress => matches!(
                     CommandClass::from_service_code(candidate.class),
                     Some(CommandClass::Completion | CommandClass::Progress)
                 ),
                 RuntimeQueueSelectionKind::Ordinary
+                | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
                 | RuntimeQueueSelectionKind::FenceCompletion
                 | RuntimeQueueSelectionKind::FencePredecessor
-                | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc => false,
+                | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+                | RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady
+                | RuntimeQueueSelectionKind::CompletionCapacityRelief => false,
             };
-            let view_blocked_escape_is_exact = match &self.view_blocked_progress_authorization {
-                None => {
-                    !self.timeout_due
-                        && !self.periodic_timer_due
-                        && !self.fifo_ready
-                        && !self.completion_ready
-                        && !self.progress_ready
-                        && !self.normal_ready
-                }
-                Some(authorization) => {
-                    let schedule_before = ScheduleState {
-                        fifo_owed: self.fifo_owed_before,
-                    };
-                    let (scheduled, schedule_after) = schedule_before.select(
-                        self.timeout_due,
-                        self.periodic_timer_due,
-                        self.fifo_ready,
-                    );
-                    authorization.validates_retained_blocker(
-                        self.round_tag,
-                        &self.queue_before_snapshot,
-                        &self.queue_after_snapshot,
-                    ) && scheduled == ScheduledWork::Fifo
-                        && self.fifo_owed_after == schedule_after.fifo_owed
-                        && !retry_retained
-                        && candidate.class == SERVICE_CLASS_PROGRESS
-                        && candidate.kind == RuntimeCommandKind::Authenticated
-                        && candidate.ingress_ownership.is_some()
-                        && RuntimeQueueOccurrenceOwner::from_candidate(candidate)
-                            .is_some_and(|selected| selected != authorization.blocker)
-                }
-            };
-            let service_debt_transition_is_exact =
-                if self.view_blocked_progress_authorization.is_some() {
-                    let readiness = self.queue_before_snapshot.class_readiness();
-                    let service = select_bounded_service_class(
-                        self.queue_before.service_cursor,
-                        readiness.0,
-                        readiness.1,
-                        readiness.2,
-                    );
-                    service.selected == SERVICE_CLASS_PROGRESS
-                        && self.queue_after.service_cursor == service.next
-                        && self.queue_after.max_service_debt
-                            <= self.queue_before.max_service_debt.saturating_add(1)
-                } else {
-                    self.queue_before.service_cursor == self.queue_after.service_cursor
-                        && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
-                        && self.fifo_owed_before == self.fifo_owed_after
-                };
+            let service_debt_transition_is_exact = self.queue_before.service_cursor
+                == self.queue_after.service_cursor
+                && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
+                && self.fifo_owed_before == self.fifo_owed_after;
             let exact = self.clocks_armed
                 && !self.fence_completion_bypass
-                && view_blocked_escape_is_exact
+                && !self.timeout_due
+                && !self.periodic_timer_due
+                && !self.fifo_ready
+                && !self.completion_ready
+                && !self.progress_ready
+                && !self.normal_ready
                 && candidate.identity.validate_exact()
                 && candidate.kind == candidate.identity.kind
                 && candidate.admission_ordinal != 0
@@ -5934,6 +6269,68 @@ impl RuntimeSchedulerOwnershipEvidence {
                     &self.queue_before_snapshot,
                     &self.queue_after_snapshot,
                     selection_kind,
+                    retry_retained,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessor
+            | RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) = (&self.selected, &self.candidate)
+        {
+            let retry_retained =
+                self.selected == RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained;
+            let service = select_bounded_service_class(
+                self.queue_before.service_cursor,
+                self.completion_ready,
+                self.progress_ready,
+                self.normal_ready,
+            );
+            let exact = self.clocks_armed
+                && !self.timeout_due
+                && self.fifo_ready
+                && !self.fence_completion_bypass
+                && candidate.identity.validate_exact()
+                && candidate.kind == candidate.identity.kind
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && candidate.class != SERVICE_CLASS_NONE
+                && service.selected == candidate.class
+                && service.next == self.queue_after.service_cursor
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                && candidate.eligible_skips_after == 0
+                && self.queue_after.max_service_debt
+                    <= self.queue_before.max_service_debt.saturating_add(1)
+                && ScheduleState {
+                    fifo_owed: self.fifo_owed_before,
+                }
+                .select(false, false, self.fifo_ready)
+                    == (
+                        ScheduledWork::Fifo,
+                        ScheduleState {
+                            fifo_owed: self.fifo_owed_after,
+                        },
+                    )
+                && if retry_retained {
+                    self.queue_after.len == self.queue_before.len
+                } else {
+                    self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                }
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
                     retry_retained,
                 );
             return exact
@@ -6023,6 +6420,27 @@ impl RuntimeSchedulerOwnershipEvidence {
         }
     }
 }
+/// Current runtime timing captured for one exact local proposal admission.
+///
+/// An unarmed clock means this admission precedes activation of the current
+/// round. An armed clock is checked inside the physical ordinal transaction;
+/// neither branch creates or changes a Timeout owner or its physical cut.
+#[derive(Clone, Copy)]
+struct LocalProposalAdmissionClock {
+    tag: EventTag,
+    started_at: Option<Instant>,
+    timeout: Duration,
+}
+impl LocalProposalAdmissionClock {
+    fn admits_before_deadline(self, admitted_at: Instant) -> bool {
+        self.started_at.is_none_or(|started_at| {
+            admitted_at
+                .checked_duration_since(started_at)
+                .is_some_and(|elapsed| elapsed < self.timeout)
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TaggedCommand<C> {
     tag: EventTag,
@@ -6041,6 +6459,11 @@ pub(crate) struct TaggedCommand<C> {
     candidate_semantic_statement: Option<RuntimeCandidateSemanticStatement>,
     restored_producer_stage: Option<u8>,
     ingress_ownership: Option<RuntimeIngressOwnershipEvidence>,
+    /// Queue-private qualification sealed at checked physical admission from
+    /// the current runtime clock or an exact guarded Validate retention time.
+    /// Worker timing is never reconstructed during recovery or accepted from
+    /// wire input; a recovered completion needs a fresh timely queue admission.
+    local_proposal_ready_before_deadline: bool,
 }
 impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
     fn new(tag: EventTag, class: CommandClass, command: C, admitted_at: Instant) -> Self {
@@ -6063,6 +6486,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             candidate_semantic_statement: None,
             restored_producer_stage: None,
             ingress_ownership: None,
+            local_proposal_ready_before_deadline: false,
         }
     }
     fn with_ingress_ownership(
@@ -6102,6 +6526,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             candidate_semantic_statement: None,
             restored_producer_stage: None,
             ingress_ownership: Some(ingress_ownership),
+            local_proposal_ready_before_deadline: false,
         }
     }
     /// Construct a causal successor while retaining the first-admission root.
@@ -6138,6 +6563,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             candidate_semantic_statement: None,
             restored_producer_stage: None,
             ingress_ownership: None,
+            local_proposal_ready_before_deadline: false,
         })
     }
     fn lifecycle_owner(&self) -> Result<RuntimeLifecycleOwner, EnqueueError> {
@@ -6164,6 +6590,9 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             Arc::ptr_eq(&owner.source_identity, source_identity)
                 && self.admission_ordinal == Some(owner.admission_ordinal)
                 && self.identity == owner.identity
+                && self.class.service_code() == owner.class
+                && self.local_proposal_ready_before_deadline
+                    == owner.local_proposal_ready_before_deadline
         })
     }
     /// Install a newly reconciled ingress carrier set before this queued
@@ -6230,6 +6659,10 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
     fn validate_cached_admission_identity(&self) -> bool {
         self.identity_deep_validated
             && self.identity.validate_exact()
+            && (!self.local_proposal_ready_before_deadline
+                || (self.identity.kind == RuntimeCommandKind::LocalProposalReady
+                    && self.class == CommandClass::Completion
+                    && self.ingress_ownership.is_none()))
             && (!self.command.is_certified_fence_escape()
                 || (self.class == CommandClass::Progress
                     && self.identity.kind == RuntimeCommandKind::Authenticated
@@ -6270,6 +6703,7 @@ struct BoundedIngress<C> {
     /// Process-local identity which authorizes queue observation and selection
     /// seals. It is never serialized or exposed as runtime configuration.
     selection_source_identity: Arc<()>,
+    consumer_authority: Option<LeaderWireRecoveryAuthority>,
     /// Restart-restored Local stages which already consume their eventual
     /// physical FIFO position. Each exact replay atomically replaces one entry.
     dormant_local_fifo_reservations: BTreeSet<RuntimeDormantLocalFifoReservation>,
@@ -6299,6 +6733,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             config,
             commands: VecDeque::with_capacity(config.capacity),
             selection_source_identity: Arc::new(()),
+            consumer_authority: None,
             dormant_local_fifo_reservations: BTreeSet::new(),
             next_class: CommandClass::Completion,
             lifecycle_ordinals,
@@ -6399,13 +6834,20 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         &mut self,
         command: TaggedCommand<C>,
     ) -> Result<(), EnqueueError> {
-        self.enqueue_classified_command_with_capacity(command)
+        self.enqueue_classified_command_with_capacity(command, None)
     }
     fn enqueue_classified_command_with_capacity(
         &mut self,
         mut command: TaggedCommand<C>,
+        local_proposal_clock: Option<LocalProposalAdmissionClock>,
     ) -> Result<(), EnqueueError> {
-        if !command.validate_admission_identity() {
+        if local_proposal_clock.is_some_and(|clock| {
+            clock.tag != command.tag
+                || command.class != CommandClass::Completion
+                || command.identity.kind != RuntimeCommandKind::LocalProposalReady
+                || command.ingress_ownership.is_some()
+        }) || !command.validate_admission_identity()
+        {
             return Err(EnqueueError::FailClosed);
         }
         if Self::restored_producer_alias_in(&command, self.commands.iter())? {
@@ -6441,7 +6883,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 {
                     return Err(EnqueueError::FailClosed);
                 }
-                command.mint_queue_occurrence_owner(&ingress.selection_source_identity)?;
                 let incoming_tag = command.tag;
                 let incoming_class = command.class.service_code();
                 let occupied_before = ingress
@@ -6499,6 +6940,16 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 let checked_transition = check_production_ingress_transition(ingress_trace)
                     .ok_or(EnqueueError::FailClosed)?;
                 let _authorized_transition = checked_transition.into_projection();
+                if let Some(clock) = local_proposal_clock {
+                    // Sample while the shared physical ordinal authority is
+                    // locked, after capacity and lineage checks. A failed
+                    // admission publishes neither this witness nor an owner.
+                    let admitted_at = Instant::now();
+                    command.admitted_at = admitted_at;
+                    command.local_proposal_ready_before_deadline |=
+                        clock.admits_before_deadline(admitted_at);
+                }
+                command.mint_queue_occurrence_owner(&ingress.selection_source_identity)?;
                 // Infallible commit tail: the source mutex remains held until the
                 // exact dormant replacement and queue publication both complete.
                 if let Some(reservation) = dormant_replacement.as_ref() {
@@ -6839,10 +7290,42 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 .unwrap_or(0),
         }
     }
+    fn consumer_waits(&self, queued: &TaggedCommand<C>) -> bool {
+        self.consumer_authority.is_some_and(|authority| {
+            queued
+                .cached_queue_occurrence_owner(&self.selection_source_identity)
+                .and_then(|owner| owner.consumer_position)
+                .is_some_and(|position| authority.consumer_waits_for(position))
+        })
+    }
+    fn refresh_consumer_authority(
+        &mut self,
+        authority: Option<LeaderWireRecoveryAuthority>,
+    ) -> Result<(), EnqueueError> {
+        let _ = self.oldest_lifecycle_ordinal()?;
+        for queued in &self.commands {
+            let owner = queued
+                .cached_queue_occurrence_owner(&self.selection_source_identity)
+                .ok_or(EnqueueError::FailClosed)?;
+            if !queued.validate_cached_admission_identity()
+                || !owner.validate_exact()
+                || owner.class != queued.class.service_code()
+                || owner.consumer_position != queued.command.leader_wire_consumer_position()
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+        }
+        self.consumer_authority = authority;
+        Ok(())
+    }
     fn class_lifecycle_stats(&self, class: CommandClass) -> (Option<u128>, u64) {
         let mut minimum = None;
         let mut count = 0u64;
-        for queued in self.commands.iter().filter(|queued| queued.class == class) {
+        for queued in self
+            .commands
+            .iter()
+            .filter(|queued| queued.class == class && !self.consumer_waits(queued))
+        {
             count = count
                 .checked_add(1)
                 .expect("bounded runtime class count is representable as u64");
@@ -6871,25 +7354,39 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .collect::<BTreeMap<_, _>>();
         let occurrence_scan_complete =
             occurrence_scan_complete && occurrence_index.len() == occurrence_owners.len();
-        let minimum_lifecycle_ordinal = self
+        let lifecycle_ordinals = self
             .commands
             .iter()
             .map(|queued| queued.lifecycle_ordinal)
-            .min()
-            .unwrap_or(None);
+            .collect::<Option<Vec<_>>>();
+        let minimum_lifecycle_ordinal = lifecycle_ordinals
+            .as_ref()
+            .and_then(|ordinals| ordinals.iter().copied().min());
+        let maximum_lifecycle_ordinal = lifecycle_ordinals
+            .as_ref()
+            .and_then(|ordinals| ordinals.iter().copied().max());
         let (completion_minimum_lifecycle_ordinal, completion_count) =
             self.class_lifecycle_stats(CommandClass::Completion);
         let (progress_minimum_lifecycle_ordinal, progress_count) =
             self.class_lifecycle_stats(CommandClass::Progress);
         let (normal_minimum_lifecycle_ordinal, normal_count) =
             self.class_lifecycle_stats(CommandClass::Normal);
+        let consumer_pending_count = self
+            .commands
+            .iter()
+            .filter(|queued| self.consumer_waits(queued))
+            .count() as u64;
         let mut snapshot = RuntimeQueueOwnershipSnapshot {
             source_identity: Arc::clone(&self.selection_source_identity),
             projection: self.ownership_projection(),
             occurrence_scan_complete,
             occurrence_owners,
+            occurrence_lifecycle_ordinals: lifecycle_ordinals.unwrap_or_default(),
             occurrence_index,
+            consumer_authority: self.consumer_authority,
+            consumer_pending_count,
             minimum_lifecycle_ordinal,
+            maximum_lifecycle_ordinal,
             completion_minimum_lifecycle_ordinal,
             progress_minimum_lifecycle_ordinal,
             normal_minimum_lifecycle_ordinal,
@@ -6905,6 +7402,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     fn mint_selection_seal(
         &self,
         kind: RuntimeQueueSelectionKind,
+        lifecycle_upper_bound: Option<u128>,
         queue_before: &RuntimeQueueOwnershipSnapshot,
         selected_class: u8,
         selected_position: u64,
@@ -6914,6 +7412,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         selected_identity: RuntimeCommandIdentityDigest,
         selected_tag: EventTag,
         selected_causal_origin_hash: iroha_crypto::Hash,
+        selected_local_proposal_ready_before_deadline: bool,
         selected_ingress_ownership_hash: Option<iroha_crypto::Hash>,
         cursor_after_removal: u8,
     ) -> Result<RuntimeQueueSelectionSeal, EnqueueError> {
@@ -6925,22 +7424,71 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         {
             return Err(EnqueueError::FailClosed);
         }
+        let lifecycle_bound_is_exact = match (kind, lifecycle_upper_bound) {
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+                upper_bound != 0
+                    && queue_before
+                        .maximum_lifecycle_ordinal
+                        .is_some_and(|maximum| maximum < upper_bound)
+                    && selected_lifecycle_ordinal < upper_bound
+            }
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        };
+        if !lifecycle_bound_is_exact {
+            return Err(EnqueueError::FailClosed);
+        }
         let oldest_lifecycle_ordinal = queue_before
             .minimum_lifecycle_ordinal
             .ok_or(EnqueueError::FailClosed)?;
         let max_debt_after_upper_bound = match kind {
             RuntimeQueueSelectionKind::Ordinary
-            | RuntimeQueueSelectionKind::OrdinaryViewProgress => {
+            | RuntimeQueueSelectionKind::LifecycleApplyPredecessor => {
                 queue_before.projection.max_service_debt.saturating_add(1)
             }
             RuntimeQueueSelectionKind::FenceCompletion
             | RuntimeQueueSelectionKind::FencePredecessor
             | RuntimeQueueSelectionKind::PacemakerProgress
             | RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-            | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc => {
+            | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+            | RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady
+            | RuntimeQueueSelectionKind::CompletionCapacityRelief => {
                 queue_before.projection.max_service_debt
             }
         };
+        let ordinary_remaining_capacity_before = match kind {
+            RuntimeQueueSelectionKind::CompletionCapacityRelief => Some(
+                u64::try_from(self.exact_remaining_capacity()?)
+                    .map_err(|_| EnqueueError::FailClosed)?,
+            ),
+            RuntimeQueueSelectionKind::Ordinary
+            | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+            | RuntimeQueueSelectionKind::FenceCompletion
+            | RuntimeQueueSelectionKind::FencePredecessor
+            | RuntimeQueueSelectionKind::PacemakerProgress
+            | RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+            | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+            | RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady => None,
+        };
+        if usize::try_from(selected_position)
+            .ok()
+            .and_then(|index| queue_before.occurrence_lifecycle_ordinals.get(index))
+            .copied()
+            != Some(selected_lifecycle_ordinal)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let selected_consumer_position = queue_before
+            .occurrence_owners
+            .get(usize::try_from(selected_position).map_err(|_| EnqueueError::FailClosed)?)
+            .filter(|owner| {
+                owner.admission_ordinal == selected_admission_ordinal
+                    && owner.identity == selected_identity
+                    && owner.class == selected_class
+            })
+            .ok_or(EnqueueError::FailClosed)?
+            .consumer_position;
         let mut seal = RuntimeQueueSelectionSeal {
             source_identity: Arc::clone(&self.selection_source_identity),
             scheduler_handoff_claimed: Arc::new(AtomicBool::new(false)),
@@ -6948,21 +7496,26 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             queue_before: queue_before.projection,
             queue_before_snapshot_hash: queue_before.projection_hash,
             oldest_lifecycle_ordinal,
+            lifecycle_upper_bound,
             completion_minimum_lifecycle_ordinal: queue_before.completion_minimum_lifecycle_ordinal,
             progress_minimum_lifecycle_ordinal: queue_before.progress_minimum_lifecycle_ordinal,
             normal_minimum_lifecycle_ordinal: queue_before.normal_minimum_lifecycle_ordinal,
             completion_count: queue_before.completion_count,
             progress_count: queue_before.progress_count,
             normal_count: queue_before.normal_count,
+            consumer_pending_count: queue_before.consumer_pending_count,
             selected_class,
             selected_position,
             selected_admission_ordinal,
             selected_lifecycle_ordinal,
             selected_eligible_skips,
             selected_identity,
+            selected_consumer_position,
             selected_tag,
             selected_causal_origin_hash,
+            selected_local_proposal_ready_before_deadline,
             selected_ingress_ownership_hash,
+            ordinary_remaining_capacity_before,
             cursor_after_removal,
             max_debt_after_upper_bound,
             projection_hash: iroha_crypto::Hash::new([]),
@@ -7070,7 +7623,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                         return Err(EnqueueError::FailClosed);
                     }
                 };
-                if post_cut_ingress {
+                if post_cut_ingress || self.consumer_waits(queued) {
                     return Ok(minimum);
                 }
                 Ok(Some(
@@ -7141,7 +7694,11 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         Ok(false)
     }
     fn class_readiness(&self) -> (bool, bool, bool) {
-        let class_ready = |class| self.commands.iter().any(|queued| queued.class == class);
+        let class_ready = |class| {
+            self.commands
+                .iter()
+                .any(|queued| queued.class == class && !self.consumer_waits(queued))
+        };
         (
             class_ready(CommandClass::Completion),
             class_ready(CommandClass::Progress),
@@ -7151,7 +7708,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     fn minimum_lifecycle_for_class(&self, class: CommandClass) -> Option<u128> {
         self.commands
             .iter()
-            .filter(|queued| queued.class == class)
+            .filter(|queued| queued.class == class && !self.consumer_waits(queued))
             .filter_map(|queued| queued.lifecycle_ordinal)
             .min()
     }
@@ -7262,6 +7819,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             } else {
                 RuntimeQueueSelectionKind::FencePredecessor
             },
+            None,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -7271,6 +7829,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             identity,
             selected.tag,
             selected.causal_origin.projection_hash,
+            selected.local_proposal_ready_before_deadline,
             selected
                 .ingress_ownership
                 .as_ref()
@@ -7285,6 +7844,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             admission_ordinal,
             lifecycle_ordinal: selected_lifecycle_ordinal,
             causal_origin: selected.causal_origin.clone(),
+            local_proposal_ready_before_deadline: selected.local_proposal_ready_before_deadline,
             ingress_ownership: selected.ingress_ownership.clone(),
             fifo_position,
             eligible_skips_before: selected.eligible_skips,
@@ -7306,84 +7866,157 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         );
         Ok(Some((command, candidate, selected_is_completion)))
     }
+    /// Remove one current-view local proposal completion whose causal root
+    /// predates the frozen timeout and whose runtime admission or guarded
+    /// Validate completion crossed the deadline boundary first.
+    ///
+    /// This is a one-command causal handoff, not Completion-class priority in
+    /// general. The class cursor and every service-debt counter remain
+    /// unchanged so the due timeout owns the immediately following scheduler
+    /// turn if the proposal pipeline does not produce a stronger typed
+    /// completion boundary.
+    fn pop_pre_timeout_local_proposal_ready_with_ownership(
+        &mut self,
+        tag: EventTag,
+        timeout_ordinal: u128,
+        mut is_runnable: impl FnMut(&TaggedCommand<C>) -> bool,
+    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
+        if timeout_ordinal == 0
+            || !self
+                .lifecycle_ordinals
+                .recognizes_minted(timeout_ordinal)
+                .map_err(|_| EnqueueError::FailClosed)?
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        // Validate the complete retained set before any exceptional selection
+        // may bypass the ordinary scheduler.
+        let _ = self.oldest_lifecycle_ordinal()?;
+        let queue_before = self.ownership_snapshot();
+        let selected = self
+            .commands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, queued)| {
+                let admission_ordinal = queued.admission_ordinal?;
+                let lifecycle_ordinal = queued.lifecycle_ordinal?;
+                (queued.tag == tag
+                    && queued.class == CommandClass::Completion
+                    && queued.identity.kind == RuntimeCommandKind::LocalProposalReady
+                    && queued.ingress_ownership.is_none()
+                    && lifecycle_ordinal < timeout_ordinal
+                    && lifecycle_ordinal < admission_ordinal
+                    && queued.local_proposal_ready_before_deadline
+                    && is_runnable(queued))
+                .then_some((index, lifecycle_ordinal, admission_ordinal))
+            })
+            .min_by_key(|(index, lifecycle_ordinal, admission_ordinal)| {
+                (*lifecycle_ordinal, *admission_ordinal, *index)
+            });
+        let Some((index, lifecycle_ordinal, admission_ordinal)) = selected else {
+            return Ok(None);
+        };
+        let selected = self
+            .commands
+            .get(index)
+            .expect("selected pre-timeout local proposal remains present");
+        let identity = selected.identity;
+        if !selected.identity_deep_validated
+            || !identity.validate_exact()
+            || identity.kind != RuntimeCommandKind::LocalProposalReady
+            || selected.class != CommandClass::Completion
+            || selected.ingress_ownership.is_some()
+            || selected.tag != tag
+            || selected.admission_ordinal != Some(admission_ordinal)
+            || selected.lifecycle_ordinal != Some(lifecycle_ordinal)
+            || !selected.causal_origin.validate_exact()
+            || selected.causal_origin.root_tag != tag
+            || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
+            || !selected.local_proposal_ready_before_deadline
+            || !is_runnable(selected)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let fifo_position =
+            u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
+        let selection_seal = self.mint_selection_seal(
+            RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady,
+            None,
+            &queue_before,
+            selected.class.service_code(),
+            fifo_position,
+            admission_ordinal,
+            lifecycle_ordinal,
+            selected.eligible_skips,
+            identity,
+            selected.tag,
+            selected.causal_origin.projection_hash,
+            selected.local_proposal_ready_before_deadline,
+            None,
+            queue_before.projection.service_cursor,
+        )?;
+        let mut candidate = RuntimeFifoCandidateOwnership {
+            kind: identity.kind,
+            identity,
+            class: selected.class.service_code(),
+            tag: selected.tag,
+            admission_ordinal,
+            lifecycle_ordinal,
+            causal_origin: selected.causal_origin.clone(),
+            local_proposal_ready_before_deadline: selected.local_proposal_ready_before_deadline,
+            ingress_ownership: None,
+            fifo_position,
+            eligible_skips_before: selected.eligible_skips,
+            eligible_skips_after: 0,
+            projection_hash: iroha_crypto::Hash::new([]),
+            selection_seal,
+        };
+        if !runtime_fifo_candidate_ingress_is_exact(&candidate) {
+            return Err(EnqueueError::FailClosed);
+        }
+        candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);
+        let command = self
+            .commands
+            .remove(index)
+            .expect("selected pre-timeout local proposal remains present");
+        debug_assert_eq!(
+            queue_before.projection.len,
+            self.ownership_projection().len + 1
+        );
+        Ok(Some((command, candidate)))
+    }
     /// Remove one exact authenticated certified fence escape first, otherwise
     /// the oldest Progress root or one of its trusted Completion descendants.
     ///
     /// This is the narrow control escape used while an older ordinary
     /// producer or effect batch is backpressured. Eligibility comes only from
     /// the deeply validated frozen causal root; raw command bytes and caller
-    /// assertions cannot promote Normal work into this path. A caller holding
-    /// exact blocked-view authorization may consume one ordinary Progress
-    /// class turn; every other caller leaves ordinary class debt unchanged.
+    /// assertions cannot promote Normal work into this path. This selector
+    /// preserves the ordinary class cursor and service debt.
     fn pop_pacemaker_progress_with_ownership(
         &mut self,
         mut is_runnable: impl FnMut(&TaggedCommand<C>) -> bool,
         mut is_certified_fence_escape: impl FnMut(&C) -> bool,
-        advance_ordinary_progress_service: bool,
         forced_selection_kind: Option<RuntimeQueueSelectionKind>,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
-        if (advance_ordinary_progress_service && forced_selection_kind.is_some())
-            || forced_selection_kind
-                .is_some_and(|kind| kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)
+        if forced_selection_kind
+            .is_some_and(|kind| kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)
         {
             return Err(EnqueueError::FailClosed);
         }
         let _ = self.oldest_lifecycle_ordinal()?;
         let queue_before = self.ownership_snapshot();
-        let ordinary_service = if advance_ordinary_progress_service {
-            let (completion_ready, progress_ready, normal_ready) = self.class_readiness();
-            let selection = select_bounded_service_class(
-                self.next_class.service_code(),
-                completion_ready,
-                progress_ready,
-                normal_ready,
-            );
-            if selection.selected != SERVICE_CLASS_PROGRESS {
-                return Err(EnqueueError::FailClosed);
-            }
-            let trace = EffectiveLockTraceProjection {
-                kind: EFFECTIVE_LOCK_TRACE_SERVICE,
-                relation_exact: select_bounded_service_class(
-                    self.next_class.service_code(),
-                    completion_ready,
-                    progress_ready,
-                    normal_ready,
-                ) == selection,
-                protected_before: 0,
-                protected_after: 0,
-                owner_before: 0,
-                owner_after: 0,
-                owner_reused: false,
-                ready_before: 0,
-                retired_retained: 0,
-                retired_ready: 0,
-                ready_after: 0,
-                store_before: 0,
-                retired_store: 0,
-                store_after: 0,
-                cursor_before: self.next_class.service_code(),
-                completion_ready,
-                progress_ready,
-                normal_ready,
-                selected: selection.selected,
-                cursor_after: selection.next,
-            };
-            let checked = check_production_body_service_effective_lock_transition(trace)
-                .ok_or(EnqueueError::FailClosed)?;
-            let _authorized_service = checked.into_projection();
-            Some(selection)
-        } else {
-            None
-        };
         let selected = self
             .commands
             .iter()
             .enumerate()
             .filter_map(|(index, queued)| {
-                let eligible = matches!(
-                    queued.class,
-                    CommandClass::Completion | CommandClass::Progress
-                ) && queued.causal_origin.root_class == SERVICE_CLASS_PROGRESS
+                let eligible = !self.consumer_waits(queued)
+                    && matches!(
+                        queued.class,
+                        CommandClass::Completion | CommandClass::Progress
+                    )
+                    && queued.causal_origin.root_class == SERVICE_CLASS_PROGRESS
                     && is_runnable(queued);
                 eligible.then(|| {
                     let certified = queued.class == CommandClass::Progress
@@ -7421,29 +8054,20 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             || !selected.causal_origin.validate_exact()
             || selected.causal_origin.root_class != SERVICE_CLASS_PROGRESS
             || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
-            || (advance_ordinary_progress_service
-                && (selected.class != CommandClass::Progress
-                    || identity.kind != RuntimeCommandKind::Authenticated
-                    || selected.ingress_ownership.is_none()))
         {
             return Err(EnqueueError::FailClosed);
         }
         let fifo_position =
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
-        let selection_kind =
-            forced_selection_kind.unwrap_or(if advance_ordinary_progress_service {
-                RuntimeQueueSelectionKind::OrdinaryViewProgress
-            } else if certified_fence_escape {
-                RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-            } else {
-                RuntimeQueueSelectionKind::PacemakerProgress
-            });
-        let cursor_after = ordinary_service
-            .map_or(queue_before.projection.service_cursor, |selection| {
-                selection.next
-            });
+        let selection_kind = forced_selection_kind.unwrap_or(if certified_fence_escape {
+            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+        } else {
+            RuntimeQueueSelectionKind::PacemakerProgress
+        });
+        let cursor_after = queue_before.projection.service_cursor;
         let selection_seal = self.mint_selection_seal(
             selection_kind,
+            None,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -7453,6 +8077,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             identity,
             selected.tag,
             selected.causal_origin.projection_hash,
+            selected.local_proposal_ready_before_deadline,
             selected
                 .ingress_ownership
                 .as_ref()
@@ -7467,6 +8092,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             admission_ordinal,
             lifecycle_ordinal,
             causal_origin: selected.causal_origin.clone(),
+            local_proposal_ready_before_deadline: selected.local_proposal_ready_before_deadline,
             ingress_ownership: selected.ingress_ownership.clone(),
             fifo_position,
             eligible_skips_before: selected.eligible_skips,
@@ -7478,34 +8104,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             return Err(EnqueueError::FailClosed);
         }
         candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);
-        if let Some(selection) = ordinary_service {
-            for skipped_class in [CommandClass::Completion, CommandClass::Normal] {
-                let skipped_minimum = self.minimum_lifecycle_for_class(skipped_class);
-                if self
-                    .commands
-                    .iter()
-                    .find(|queued| {
-                        queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum
-                    })
-                    .is_some_and(|oldest| oldest.eligible_skips.checked_add(1).is_none())
-                {
-                    return Err(EnqueueError::FailClosed);
-                }
-            }
-            self.next_class =
-                CommandClass::from_service_code(selection.next).ok_or(EnqueueError::FailClosed)?;
-            for skipped_class in [CommandClass::Completion, CommandClass::Normal] {
-                let skipped_minimum = self.minimum_lifecycle_for_class(skipped_class);
-                if let Some(oldest) = self.commands.iter_mut().find(|queued| {
-                    queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum
-                }) {
-                    oldest.eligible_skips = oldest
-                        .eligible_skips
-                        .checked_add(1)
-                        .expect("service debt overflow was preflighted");
-                }
-            }
-        }
         let command = self
             .commands
             .remove(index)
@@ -7525,7 +8123,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let _ = self.oldest_lifecycle_ordinal()?;
         self.commands
             .iter()
-            .filter(|queued| is_blocked(queued))
+            .filter(|queued| self.consumer_waits(queued) || is_blocked(queued))
             .map(|queued| {
                 queued
                     .cached_queue_occurrence_owner(&self.selection_source_identity)
@@ -7533,60 +8131,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     .ok_or(EnqueueError::FailClosed)
             })
             .collect()
-    }
-    /// Mint an exact authorization when ordinary class rotation currently
-    /// selects a future-view authenticated Progress minimum.
-    fn ordinary_view_blocked_progress_authorization(
-        &self,
-        mut blocked_target_view: impl FnMut(&TaggedCommand<C>) -> Option<u64>,
-    ) -> Result<Option<RuntimeViewBlockedProgressAuthorization>, EnqueueError> {
-        if self.oldest_lifecycle_ordinal()?.is_none() {
-            return Ok(None);
-        }
-        let (completion_ready, progress_ready, normal_ready) = self.class_readiness();
-        let selection = select_bounded_service_class(
-            self.next_class.service_code(),
-            completion_ready,
-            progress_ready,
-            normal_ready,
-        );
-        if selection.selected != SERVICE_CLASS_PROGRESS {
-            return Ok(None);
-        }
-        let oldest_progress_lifecycle_ordinal = self
-            .minimum_lifecycle_for_class(CommandClass::Progress)
-            .ok_or(EnqueueError::FailClosed)?;
-        let (fifo_position, selected) = self
-            .commands
-            .iter()
-            .enumerate()
-            .find(|(_, queued)| {
-                queued.class == CommandClass::Progress
-                    && queued.lifecycle_ordinal == Some(oldest_progress_lifecycle_ordinal)
-            })
-            .ok_or(EnqueueError::FailClosed)?;
-        if !selected.validate_admission_identity()
-            || selected.identity.kind != RuntimeCommandKind::Authenticated
-            || selected.ingress_ownership.is_none()
-        {
-            return Err(EnqueueError::FailClosed);
-        }
-        let Some(target_view) = blocked_target_view(selected) else {
-            return Ok(None);
-        };
-        let blocker = selected
-            .cached_queue_occurrence_owner(&self.selection_source_identity)
-            .cloned()
-            .ok_or(EnqueueError::FailClosed)?;
-        let fifo_position = u64::try_from(fifo_position).map_err(|_| EnqueueError::FailClosed)?;
-        RuntimeViewBlockedProgressAuthorization::new(
-            blocker,
-            oldest_progress_lifecycle_ordinal,
-            fifo_position,
-            target_view,
-        )
-        .map(Some)
-        .ok_or(EnqueueError::FailClosed)
     }
     /// Return the lifecycle owner of the exact command ordinary class
     /// rotation would select and the adapter's exact fence state for it.
@@ -7621,6 +8165,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .iter()
             .find(|queued| {
                 queued.class == class
+                    && !self.consumer_waits(queued)
                     && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)
             })
             .ok_or(EnqueueError::FailClosed)?;
@@ -7630,12 +8175,220 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let (blocked, deferred_alias) = fence_state(selected);
         Ok(Some((selected.lifecycle_owner()?, blocked, deferred_alias)))
     }
+    /// Freeze one exact Completion-class owner when ordinary Completion
+    /// admission has no remaining capacity.
+    ///
+    /// This is a read-only preparation. In particular it does not rotate the
+    /// class cursor, increment service debt, remove a FIFO occurrence, or
+    /// inspect any timer. A valid token can be consumed only against this exact
+    /// queue snapshot.
+    #[cfg(test)]
+    fn prepare_completion_capacity_relief(
+        &self,
+        blocked_completion_lifecycle_ordinal: u128,
+    ) -> Result<Option<PreparedCompletionCapacityReliefV1>, EnqueueError> {
+        self.prepare_completion_capacity_relief_at_consumer(
+            blocked_completion_lifecycle_ordinal,
+            self.consumer_authority,
+        )
+    }
+    fn prepare_completion_capacity_relief_at_consumer(
+        &self,
+        blocked_completion_lifecycle_ordinal: u128,
+        consumer_authority: Option<LeaderWireRecoveryAuthority>,
+    ) -> Result<Option<PreparedCompletionCapacityReliefV1>, EnqueueError> {
+        if blocked_completion_lifecycle_ordinal == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        if self.exact_remaining_capacity()? != 0 {
+            return Ok(None);
+        }
+        let queue_before = self
+            .ownership_snapshot()
+            .with_consumer_authority(consumer_authority)?;
+        if !queue_before.validate_identity()
+            || !Arc::ptr_eq(
+                &queue_before.source_identity,
+                &self.selection_source_identity,
+            )
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(selected_lifecycle_ordinal) = queue_before.completion_minimum_lifecycle_ordinal
+        else {
+            // A restart-dormant or unpublished body reservation may consume
+            // the last slot without exposing a runnable Completion occurrence.
+            return Ok(None);
+        };
+        if selected_lifecycle_ordinal > blocked_completion_lifecycle_ordinal {
+            return Ok(None);
+        }
+        let Some((position, selected)) = self.commands.iter().enumerate().find(|(_, queued)| {
+            queued.class == CommandClass::Completion
+                && queued.lifecycle_ordinal == Some(selected_lifecycle_ordinal)
+        }) else {
+            return Err(EnqueueError::FailClosed);
+        };
+        let ingress_exact = match selected.identity.kind {
+            RuntimeCommandKind::Authenticated => selected.ingress_ownership.is_some(),
+            _ => selected.ingress_ownership.is_none(),
+        };
+        if !selected.validate_admission_identity()
+            || !selected.identity_deep_validated
+            || !selected.identity.validate_exact()
+            || !ingress_exact
+            || !selected.causal_origin.validate_exact()
+            || selected.causal_origin.root_lifecycle_ordinal != Some(selected_lifecycle_ordinal)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let selected_owner = selected
+            .cached_queue_occurrence_owner(&self.selection_source_identity)
+            .cloned()
+            .ok_or(EnqueueError::FailClosed)?;
+        let selected_position = u64::try_from(position).map_err(|_| EnqueueError::FailClosed)?;
+        PreparedCompletionCapacityReliefV1::new(
+            queue_before,
+            selected_owner,
+            selected_position,
+            selected_lifecycle_ordinal,
+            blocked_completion_lifecycle_ordinal,
+        )
+        .map(Some)
+        .ok_or(EnqueueError::FailClosed)
+    }
+    /// Consume one frozen Completion capacity-relief owner without entering
+    /// ordinary class or clock arbitration.
+    fn pop_prepared_completion_capacity_relief_with_ownership(
+        &mut self,
+        prepared: PreparedCompletionCapacityReliefV1,
+    ) -> Result<
+        (
+            TaggedCommand<C>,
+            RuntimeFifoCandidateOwnership,
+            RuntimeQueueOwnershipSnapshot,
+        ),
+        EnqueueError,
+    > {
+        let queue_now = self.ownership_snapshot();
+        if !prepared.validate_identity()
+            || self.exact_remaining_capacity()? != 0
+            || queue_now != prepared.queue_before
+            || !Arc::ptr_eq(
+                &prepared.queue_before.source_identity,
+                &self.selection_source_identity,
+            )
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let position =
+            usize::try_from(prepared.selected_position).map_err(|_| EnqueueError::FailClosed)?;
+        let selected = self
+            .commands
+            .get(position)
+            .ok_or(EnqueueError::FailClosed)?;
+        let admission_ordinal = selected.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let lifecycle_ordinal = selected.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let identity = selected.identity;
+        let ingress_exact = match identity.kind {
+            RuntimeCommandKind::Authenticated => selected.ingress_ownership.is_some(),
+            _ => selected.ingress_ownership.is_none(),
+        };
+        if selected.class != CommandClass::Completion
+            || lifecycle_ordinal != prepared.selected_lifecycle_ordinal
+            || lifecycle_ordinal > prepared.blocked_completion_lifecycle_ordinal
+            || self.minimum_lifecycle_for_class(CommandClass::Completion) != Some(lifecycle_ordinal)
+            || !prepared
+                .selected_owner
+                .matches_queued(&self.selection_source_identity, selected)
+            || !selected.validate_admission_identity()
+            || !selected.identity_deep_validated
+            || !identity.validate_exact()
+            || !ingress_exact
+            || !selected.causal_origin.validate_exact()
+            || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let selected_tag = selected.tag;
+        let selected_causal_origin = selected.causal_origin.clone();
+        let selected_local_proposal_ready_before_deadline =
+            selected.local_proposal_ready_before_deadline;
+        let selected_ingress_ownership = selected.ingress_ownership.clone();
+        let selected_eligible_skips = selected.eligible_skips;
+        let selection_seal = self.mint_selection_seal(
+            RuntimeQueueSelectionKind::CompletionCapacityRelief,
+            None,
+            &prepared.queue_before,
+            SERVICE_CLASS_COMPLETION,
+            prepared.selected_position,
+            admission_ordinal,
+            lifecycle_ordinal,
+            selected_eligible_skips,
+            identity,
+            selected_tag,
+            selected_causal_origin.projection_hash,
+            selected_local_proposal_ready_before_deadline,
+            selected_ingress_ownership
+                .as_ref()
+                .map(|ownership| ownership.projection_hash),
+            prepared.queue_before.projection.service_cursor,
+        )?;
+        let mut candidate = RuntimeFifoCandidateOwnership {
+            kind: identity.kind,
+            identity,
+            class: SERVICE_CLASS_COMPLETION,
+            tag: selected_tag,
+            admission_ordinal,
+            lifecycle_ordinal,
+            causal_origin: selected_causal_origin,
+            local_proposal_ready_before_deadline: selected_local_proposal_ready_before_deadline,
+            ingress_ownership: selected_ingress_ownership,
+            fifo_position: prepared.selected_position,
+            eligible_skips_before: selected_eligible_skips,
+            // Exceptional capacity relief does not participate in class
+            // fairness. A retry therefore retains, rather than retires, debt.
+            eligible_skips_after: selected_eligible_skips,
+            projection_hash: iroha_crypto::Hash::new([]),
+            selection_seal,
+        };
+        if !runtime_fifo_candidate_ingress_is_exact(&candidate) {
+            return Err(EnqueueError::FailClosed);
+        }
+        candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);
+        let command = self
+            .commands
+            .remove(position)
+            .expect("frozen Completion capacity-relief owner remains present");
+        Ok((command, candidate, prepared.queue_before))
+    }
     fn pop_next_with_ownership(
         &mut self,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError>
     where
         C: ExactRuntimeCommandIdentity,
     {
+        self.pop_next_with_selection_kind(RuntimeQueueSelectionKind::Ordinary, None)
+    }
+
+    fn pop_next_with_selection_kind(
+        &mut self,
+        selection_kind: RuntimeQueueSelectionKind,
+        lifecycle_upper_bound: Option<u128>,
+    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError>
+    where
+        C: ExactRuntimeCommandIdentity,
+    {
+        let selection_bound_is_exact = match (selection_kind, lifecycle_upper_bound) {
+            (RuntimeQueueSelectionKind::Ordinary, None) => true,
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+                self.all_lifecycle_ordinals_before(upper_bound)
+            }
+            _ => false,
+        };
+        if !selection_bound_is_exact {
+            return Err(EnqueueError::FailClosed);
+        }
         let queue_before = self.ownership_snapshot();
         let cursor_before = self.next_class.service_code();
         if self.oldest_lifecycle_ordinal()?.is_none() {
@@ -7696,6 +8449,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .ok_or(EnqueueError::FailClosed)?;
         let Some(index) = self.commands.iter().position(|queued| {
             queued.class == class
+                && !self.consumer_waits(queued)
                 && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)
         }) else {
             return Err(EnqueueError::FailClosed);
@@ -7722,7 +8476,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let fifo_position =
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
         let selection_seal = self.mint_selection_seal(
-            RuntimeQueueSelectionKind::Ordinary,
+            selection_kind,
+            lifecycle_upper_bound,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -7732,6 +8487,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             identity,
             selected.tag,
             selected.causal_origin.projection_hash,
+            selected.local_proposal_ready_before_deadline,
             selected
                 .ingress_ownership
                 .as_ref()
@@ -7746,6 +8502,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             admission_ordinal,
             lifecycle_ordinal,
             causal_origin: selected.causal_origin.clone(),
+            local_proposal_ready_before_deadline: selected.local_proposal_ready_before_deadline,
             ingress_ownership: selected.ingress_ownership.clone(),
             fifo_position,
             eligible_skips_before: selected.eligible_skips,
@@ -7770,7 +8527,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 .commands
                 .iter()
                 .find(|queued| {
-                    queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum
+                    queued.class == skipped_class
+                        && queued.lifecycle_ordinal == skipped_minimum
+                        && !self.consumer_waits(queued)
                 })
                 .is_some_and(|oldest| oldest.eligible_skips.checked_add(1).is_none())
             {
@@ -7788,9 +8547,14 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 continue;
             }
             let skipped_minimum = self.minimum_lifecycle_for_class(skipped_class);
-            if let Some(oldest) = self.commands.iter_mut().find(|queued| {
-                queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum
-            }) {
+            let skipped_position = self.commands.iter().position(|queued| {
+                queued.class == skipped_class
+                    && queued.lifecycle_ordinal == skipped_minimum
+                    && !self.consumer_waits(queued)
+            });
+            if let Some(oldest) =
+                skipped_position.and_then(|position| self.commands.get_mut(position))
+            {
                 oldest.eligible_skips = oldest
                     .eligible_skips
                     .checked_add(1)
@@ -7837,6 +8601,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             || command.lifecycle_ordinal != Some(candidate.lifecycle_ordinal)
             || command.causal_origin != candidate.causal_origin
             || command.causal_origin.root_lifecycle_ordinal != Some(candidate.lifecycle_ordinal)
+            || command.local_proposal_ready_before_deadline
+                != candidate.local_proposal_ready_before_deadline
             || command.ingress_ownership != candidate.ingress_ownership
             || command.eligible_skips != candidate.eligible_skips_before
             || command.cached_queue_occurrence_owner(&self.selection_source_identity)
@@ -7854,6 +8620,51 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         self.commands.insert(position, command);
         Ok(())
     }
+    /// Restore a retryable Completion capacity-relief occurrence without
+    /// changing the frozen class cursor or any service debt.
+    fn restore_completion_capacity_relief_command(
+        &mut self,
+        command: TaggedCommand<C>,
+        candidate: &RuntimeFifoCandidateOwnership,
+    ) -> Result<(), EnqueueError> {
+        let position =
+            usize::try_from(candidate.fifo_position).map_err(|_| EnqueueError::FailClosed)?;
+        let candidate_occurrence = RuntimeQueueOccurrenceOwner::from_candidate(candidate)
+            .ok_or(EnqueueError::FailClosed)?;
+        if !command.validate_admission_identity()
+            || !candidate.identity.validate_exact()
+            || candidate.selection_seal.kind != RuntimeQueueSelectionKind::CompletionCapacityRelief
+            || !candidate.selection_seal.validate_identity()
+            || candidate.selection_seal.scheduler_handoff_is_claimed()
+            || candidate.projection_hash != runtime_fifo_candidate_projection_hash(candidate)
+            || !runtime_fifo_candidate_ingress_is_exact(candidate)
+            || command.identity != candidate.identity
+            || command.identity.kind != candidate.kind
+            || command.class != CommandClass::Completion
+            || candidate.class != SERVICE_CLASS_COMPLETION
+            || command.tag != candidate.tag
+            || command.admission_ordinal != Some(candidate.admission_ordinal)
+            || command.lifecycle_ordinal != Some(candidate.lifecycle_ordinal)
+            || command.causal_origin != candidate.causal_origin
+            || command.causal_origin.root_lifecycle_ordinal != Some(candidate.lifecycle_ordinal)
+            || command.local_proposal_ready_before_deadline
+                != candidate.local_proposal_ready_before_deadline
+            || command.ingress_ownership != candidate.ingress_ownership
+            || command.eligible_skips != candidate.eligible_skips_before
+            || candidate.eligible_skips_after != candidate.eligible_skips_before
+            || command.cached_queue_occurrence_owner(&self.selection_source_identity)
+                != Some(&candidate_occurrence)
+            || position > self.commands.len()
+            || self
+                .commands
+                .iter()
+                .any(|queued| queued.admission_ordinal == Some(candidate.admission_ordinal))
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.commands.insert(position, command);
+        Ok(())
+    }
     #[cfg(test)]
     fn pop_next(&mut self) -> Option<TaggedCommand<C>>
     where
@@ -7866,14 +8677,27 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     fn len(&self) -> usize {
         self.commands.len()
     }
-    fn remaining_capacity(&self) -> usize {
+    fn all_lifecycle_ordinals_before(&self, upper_bound: u128) -> bool {
+        upper_bound != 0
+            && !self.commands.is_empty()
+            && self.commands.iter().all(|command| {
+                command
+                    .lifecycle_ordinal
+                    .is_some_and(|ordinal| ordinal < upper_bound)
+            })
+    }
+    fn exact_remaining_capacity(&self) -> Result<usize, EnqueueError> {
         let ordinary_occupied = self
-            .occupied_with_dormant_reservations()
-            .unwrap_or(usize::MAX)
-            .saturating_sub(self.certified_fence_escape_credit());
+            .occupied_with_dormant_reservations()?
+            .checked_sub(self.certified_fence_escape_credit())
+            .ok_or(EnqueueError::FailClosed)?;
         self.config
             .ordinary_total_limit()
-            .saturating_sub(ordinary_occupied)
+            .checked_sub(ordinary_occupied)
+            .ok_or(EnqueueError::FailClosed)
+    }
+    fn remaining_capacity(&self) -> usize {
+        self.exact_remaining_capacity().unwrap_or(0)
     }
     fn lane_snapshot(&self, class: CommandClass, now: Instant) -> RuntimeQueueLaneSnapshot {
         let mut depth = 0usize;
@@ -8411,6 +9235,12 @@ fn append_validated_receipt_identity(identity: &mut Vec<u8>, receipt: &Validated
 }
 impl exact_runtime_command_identity_sealed::Sealed for AdapterCommand {}
 impl ExactRuntimeCommandIdentity for AdapterCommand {
+    fn leader_wire_consumer_position(&self) -> Option<LeaderWireConsumerPosition> {
+        match self {
+            Self::Authenticated(authenticated) => authenticated.leader_wire_consumer_position(),
+            _ => None,
+        }
+    }
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let (kind, canonical_bytes) = match self {
             Self::Authenticated(authenticated) => {
@@ -8847,7 +9677,7 @@ impl BoundedIngress<AdapterCommand> {
         if tagged.command.is_certified_fence_escape() != certified_fence_escape {
             return Err(EnqueueError::FailClosed);
         }
-        self.enqueue_classified_command_with_capacity(tagged)?;
+        self.enqueue_classified_command_with_capacity(tagged, None)?;
         Ok(tag)
     }
     #[cfg(test)]
@@ -9693,27 +10523,18 @@ pub(crate) trait RuntimeDriver {
     ) -> RuntimeCommandAdmissionPreflight {
         RuntimeCommandAdmissionPreflight::Admit
     }
-    /// Return the future view whose PrepareQC cannot run until a certified
-    /// view transition installs it.
-    ///
-    /// Synthetic drivers have no wire-level view relation, so their Progress
-    /// commands remain runnable by default. Production closes this predicate
-    /// only over an authenticated future-view PrepareQC whose exact FIFO owner
-    /// must survive until certified timeout progress reaches its view.
-    fn pacemaker_progress_blocked_target_view(&self, _command: &Self::Command) -> Option<u64> {
-        None
-    }
-    /// Return whether this exact authenticated Progress root can advance
-    /// toward, or terminally supersede, a retained future-PrepareQC target.
-    ///
-    /// The ordinary scheduler uses this only after exact blocked-owner
-    /// authorization. Synthetic drivers remain fail-closed by default.
-    fn pacemaker_progress_releases_view_block(
+    /// Return the exact current WAL authority for consumer eligibility.
+    /// Synthetic drivers may omit it only in tests; production must supply
+    /// the full authenticated consumer cut before any queue selection.
+    #[cfg(not(test))]
+    fn leader_wire_consumer_authority(
         &self,
-        _command: &Self::Command,
-        _target_view: u64,
-    ) -> bool {
-        false
+    ) -> Result<Option<LeaderWireRecoveryAuthority>, Self::Error>;
+    #[cfg(test)]
+    fn leader_wire_consumer_authority(
+        &self,
+    ) -> Result<Option<LeaderWireRecoveryAuthority>, Self::Error> {
+        Ok(None)
     }
     /// Return whether this deeply authenticated Progress root carries a TC or
     /// CommitQC which may supersede an outstanding local signature fence.
@@ -10044,38 +10865,10 @@ impl RuntimeDriver for SumeragiV2Adapter {
     ) -> RuntimeCommandAdmissionPreflight {
         self.preflight_runtime_command_admission(tag, command)
     }
-    fn pacemaker_progress_blocked_target_view(&self, command: &Self::Command) -> Option<u64> {
-        match command {
-            AdapterCommand::Authenticated(authenticated) => match authenticated.payload() {
-                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
-                    if certificate.phase == wire::GlobalPhase::Prepare
-                        && certificate.round.view > self.current_tag().view() =>
-                {
-                    Some(certificate.round.view)
-                }
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-    fn pacemaker_progress_releases_view_block(
+    fn leader_wire_consumer_authority(
         &self,
-        command: &Self::Command,
-        target_view: u64,
-    ) -> bool {
-        let current_view = self.current_tag().view();
-        if target_view <= current_view {
-            return false;
-        }
-        matches!(
-            command,
-            AdapterCommand::Authenticated(authenticated)
-                if wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block(
-                    authenticated.payload(),
-                    self.wire_context(),
-                    self.current_tag(),
-                )
-        )
+    ) -> Result<Option<LeaderWireRecoveryAuthority>, Self::Error> {
+        self.leader_wire_recovery_authority().map(Some)
     }
     fn certified_progress_bypasses_signature_fence(&self, command: &Self::Command) -> bool {
         self.signature_fence_is_active()
@@ -11917,7 +12710,22 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             // owner/cut pairing must still fail closed before publication.
             self.validate_clock_owner_physical_cuts()?;
         }
-        self.ingress.enqueue(command)
+        let local_proposal_clock = (command.tag == self.round_tag
+            && command.class == CommandClass::Completion
+            && command.identity.kind == RuntimeCommandKind::LocalProposalReady
+            && command.ingress_ownership.is_none()
+            && self.timeout_owner.is_none())
+        .then_some(LocalProposalAdmissionClock {
+            tag: self.round_tag,
+            started_at: self.clocks_armed.then_some(self.round_started_at),
+            timeout: round_timeout_for_view(self.base_round_timeout, self.round_tag.view()),
+        });
+        match local_proposal_clock {
+            Some(clock) => self
+                .ingress
+                .enqueue_classified_command_with_capacity(command, Some(clock)),
+            None => self.ingress.enqueue(command),
+        }
     }
     /// Replace the bounded set of exact owners currently held by retained
     /// executor effects or asynchronous Sign/Store/Validate/Apply tasks.
@@ -13513,7 +14321,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let first_prompt = self.retransmit_started_at == self.round_started_at;
         for queued in &self.ingress.commands {
             let queued_owner = queued.lifecycle_owner()?;
-            if !queued_owner.is_post_physical_cut(physical_cut)
+            // Retained authenticated input outside the current WAL consumer
+            // cut cannot run before this timer. Keep its exact physical owner
+            // while allowing the retry which may deliver its missing progress.
+            if !self.ingress.consumer_waits(queued)
+                && !queued_owner.is_post_physical_cut(physical_cut)
                 && queued_owner.lifecycle_ordinal() < owner_ordinal
                 && (!first_prompt
                     || (queued.class != CommandClass::Normal
@@ -13540,6 +14352,28 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     && candidate.lifecycle_ordinal() < owner_ordinal
             }))
     }
+    fn refresh_ingress_consumer_eligibility(&mut self) -> Result<(), RuntimeError<D::Error>> {
+        let authority = self
+            .driver
+            .leader_wire_consumer_authority()
+            .map_err(|error| self.close(error))?;
+        #[cfg(not(test))]
+        if authority.is_none() {
+            self.latch_fail_closed("production consumer eligibility omitted its WAL authority");
+            return Err(RuntimeError::FailClosed);
+        }
+        if authority.is_some_and(|authority| authority.consumer_tag() != self.driver.current_tag())
+        {
+            self.latch_fail_closed("consumer eligibility authority changed its runtime tag");
+            return Err(RuntimeError::FailClosed);
+        }
+        self.ingress
+            .refresh_consumer_authority(authority)
+            .map_err(|_| {
+                self.latch_fail_closed("consumer eligibility lost exact ingress ownership");
+                RuntimeError::FailClosed
+            })
+    }
     fn scheduler_arbitration_inputs(
         &self,
         now: Instant,
@@ -13552,7 +14386,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // already-authenticated certificates.
         let _ = self.minimum_active_lifecycle_ordinal()?;
         let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
-        let mut fifo_ready = fifo_minimum.is_some();
+        let classes = self.ingress.class_readiness();
+        let mut fifo_ready = fifo_minimum.is_some() && (classes.0 || classes.1 || classes.2);
         let (mut completion_ready, mut progress_ready, mut normal_ready) = if fifo_ready {
             self.ingress.class_readiness()
         } else {
@@ -13638,8 +14473,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready,
             progress_ready,
             normal_ready,
-            view_blocked_progress_authorization: None,
             pre_timeout_locked_prepare_qc_physical_cut: None,
+            pre_timeout_local_proposal_timeout_ordinal: None,
             fence_completion_bypass: false,
             fence_dependency_minimum_lifecycle_ordinal: None,
             fence_dependency_minimum_admission_ordinal: None,
@@ -13652,23 +14487,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             fence_retry_blocked_fifo_before: self.fence_retry_blocked_fifo_owners.clone(),
             fence_retry_marker_required: false,
         })
-    }
-    /// Return exact authorization when ordinary class rotation currently
-    /// selects an authenticated future-view PrepareQC which cannot run until
-    /// another Progress owner installs its view.
-    ///
-    /// The selected occurrence remains in place. This preview exists only so
-    /// an ordinary FIFO turn can use the ownership-sealed pacemaker selector
-    /// for one later runnable Progress owner instead of retrying the blocked
-    /// class minimum forever.
-    fn ordinary_view_blocked_progress_authorization(
-        &self,
-    ) -> Result<Option<RuntimeViewBlockedProgressAuthorization>, EnqueueError> {
-        let driver = &self.driver;
-        self.ingress
-            .ordinary_view_blocked_progress_authorization(|queued| {
-                driver.pacemaker_progress_blocked_target_view(&queued.command)
-            })
     }
     fn retain_scheduler_ownership(
         &mut self,
@@ -13706,9 +14524,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready: arbitration.completion_ready,
             progress_ready: arbitration.progress_ready,
             normal_ready: arbitration.normal_ready,
-            view_blocked_progress_authorization: arbitration.view_blocked_progress_authorization,
             pre_timeout_locked_prepare_qc_physical_cut: arbitration
                 .pre_timeout_locked_prepare_qc_physical_cut,
+            pre_timeout_local_proposal_timeout_ordinal: arbitration
+                .pre_timeout_local_proposal_timeout_ordinal,
             fence_completion_bypass: arbitration.fence_completion_bypass,
             fence_dependency_minimum_lifecycle_ordinal: arbitration
                 .fence_dependency_minimum_lifecycle_ordinal,
@@ -13737,18 +14556,408 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.last_scheduler_ownership = Some(evidence);
         Ok(())
     }
+    /// Freeze the exact oldest Completion-class FIFO occurrence which may
+    /// release capacity for an outer Completion worker.
+    ///
+    /// The queue must have zero ordinary Completion-admission headroom. This
+    /// preparation is otherwise inert: timers, ordinary class rotation,
+    /// scheduler FIFO debt, and every queued occurrence remain unchanged until
+    /// [`Self::step_prepared_completion_capacity_relief`] consumes the returned
+    /// move-only token.
+    pub(in crate::sumeragi) fn prepare_completion_capacity_relief(
+        &self,
+        blocked_completion_lifecycle_ordinal: u128,
+    ) -> Result<Option<PreparedCompletionCapacityReliefV1>, EnqueueError> {
+        if self.fail_closed
+            || !self.clocks_armed
+            || self.last_scheduler_ownership.is_some()
+            || self.pending_effect_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let authority = self
+            .driver
+            .leader_wire_consumer_authority()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        #[cfg(not(test))]
+        if authority.is_none() {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.ingress.prepare_completion_capacity_relief_at_consumer(
+            blocked_completion_lifecycle_ordinal,
+            authority,
+        )
+    }
+    /// Consume one frozen full-FIFO Completion owner at the supplied outer
+    /// Completion cut timestamp.
+    ///
+    /// This path never invokes clock selection or ordinary class arbitration.
+    /// It dispatches exactly the occurrence named by `prepared`, leaves
+    /// `ScheduleState` and the class cursor unchanged, and increments no
+    /// service debt. Retryable adapter pressure restores the exact occurrence,
+    /// including its original debt, and records a typed retry owner.
+    pub(in crate::sumeragi) fn step_prepared_completion_capacity_relief(
+        &mut self,
+        now: Instant,
+        prepared: PreparedCompletionCapacityReliefV1,
+    ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
+        if self.fail_closed {
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.clocks_armed {
+            return Err(RuntimeError::ClocksNotArmed);
+        }
+        if self.last_scheduler_ownership.is_some()
+            || self.pending_effect_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            self.latch_fail_closed(
+                "Completion capacity relief overtook retained runtime ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        self.refresh_ingress_consumer_eligibility()?;
+        if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
+            self.latch_fail_closed("Completion capacity relief retry ownership was invalid");
+            return Err(RuntimeError::FailClosed);
+        }
+        let selected_round_tag = self.round_tag;
+        let schedule = self.schedule;
+        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("Completion capacity relief arbitration was invalid");
+            RuntimeError::FailClosed
+        })?;
+        let (command, candidate, queue_before) = self
+            .ingress
+            .pop_prepared_completion_capacity_relief_with_ownership(prepared)
+            .map_err(|_| {
+                self.latch_fail_closed(
+                    "prepared Completion capacity relief lost exact queue ownership",
+                );
+                RuntimeError::FailClosed
+            })?;
+        if candidate.selection_seal.kind != RuntimeQueueSelectionKind::CompletionCapacityRelief
+            || candidate.class != SERVICE_CLASS_COMPLETION
+            || candidate.eligible_skips_after != candidate.eligible_skips_before
+        {
+            self.latch_fail_closed("Completion capacity relief changed after queue transfer");
+            return Err(RuntimeError::FailClosed);
+        }
+        let owner = match command.lifecycle_owner() {
+            Ok(owner)
+                if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
+                    && owner.causal_origin() == &candidate.causal_origin =>
+            {
+                owner
+            }
+            Ok(_) | Err(_) => {
+                self.latch_fail_closed(
+                    "Completion capacity relief changed its causal lifecycle owner",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let current_ingress = if command.ingress_ownership.is_some() {
+            RuntimeDispatchIngress::DirectAuthenticated
+        } else {
+            RuntimeDispatchIngress::LocalOrCausal
+        };
+        let parent_statement = command.candidate_semantic_statement;
+        let retry_command = command.clone();
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
+            .driver
+            .dispatch(command)
+        {
+            Ok(dispatch) => {
+                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
+            }
+            Err(error) => return Err(self.close(error)),
+        };
+        if retry_unadmitted {
+            if self
+                .ingress
+                .restore_completion_capacity_relief_command(retry_command, &candidate)
+                .is_err()
+            {
+                self.latch_fail_closed(
+                    "retryable Completion capacity relief could not restore its exact owner",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            let queue_after = self.ingress.ownership_snapshot();
+            self.retain_scheduler_ownership(
+                RuntimeSelectedOwnerKind::CompletionCapacityReliefRetryRetained,
+                selected_round_tag,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule,
+                schedule,
+            )?;
+            return Ok(RuntimeStep::Advanced(Vec::new()));
+        }
+        let queue_after = self.ingress.ownership_snapshot();
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::CompletionCapacityRelief,
+            selected_round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule,
+            schedule,
+        )?;
+        self.finish_dispatched_step(
+            now,
+            effects,
+            RuntimeEffectSource::Fifo,
+            owner,
+            parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )
+    }
+
+    /// Dispatch one pre-Apply FIFO predecessor while suppressing only retransmission.
+    ///
+    /// This sealed corridor never freezes a new clock owner: the caller has
+    /// already authenticated an earlier live Apply and its exact deferred
+    /// output. A previously frozen absolute timeout is an impossible ownership
+    /// conflict and fails closed, while a merely elapsed periodic deadline is
+    /// masked for this one bounded FIFO turn. This can service an authenticated
+    /// pre-Apply FIFO prefix even when ordinary arbitration did not previously
+    /// mark FIFO debt as owed; a selected predecessor still discharges the same
+    /// ordinary FIFO debt that its service satisfies.
+    pub(in crate::sumeragi) fn try_step_owed_fifo_predecessor(
+        &mut self,
+        now: Instant,
+        apply_ordinal: u128,
+    ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        if self.fail_closed {
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.last_scheduler_ownership.is_some() {
+            self.latch_fail_closed(
+                "owed-FIFO predecessor dispatch began with an unconsumed scheduler owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.pending_effect_ownership.is_some() {
+            self.latch_fail_closed(
+                "owed-FIFO predecessor dispatch overtook an unconsumed effect owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.pending_leader_wire_terminals.is_empty() {
+            self.latch_fail_closed(
+                "owed-FIFO predecessor dispatch overtook a leader-wire terminal owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.clocks_armed {
+            return Err(RuntimeError::ClocksNotArmed);
+        }
+        self.refresh_ingress_consumer_eligibility()?;
+        if self.timeout_owner.is_some() || self.timeout_owner_physical_cut.is_some() {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor encountered a previously frozen timeout owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.ingress.len() == 0 {
+            return Ok(None);
+        }
+        if !self.ingress.all_lifecycle_ordinals_before(apply_ordinal) {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor encountered ingress at or after the Apply owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.deferred_lifecycle_ownership.is_empty()
+            || !self.deferred_ingress_ownership.is_empty()
+            || !self.driver.all_deferred_admission_ordinals().is_empty()
+            || self.driver.deferred_work_is_serviceable()
+        {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor encountered active adapter-deferred ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
+            self.latch_fail_closed("owed-FIFO predecessor retry ownership was invalid");
+            return Err(RuntimeError::FailClosed);
+        }
+        let selected_round_tag = self.round_tag;
+        let schedule_before = self.schedule;
+        let queue_before = self.ingress.ownership_snapshot();
+        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("owed-FIFO predecessor arbitration was invalid");
+            RuntimeError::FailClosed
+        })?;
+        if arbitration.timeout_due {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor observed timeout due without a frozen owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !arbitration.fifo_ready {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor found its complete older queue blocked",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        let (scheduled, next_schedule) = schedule_before.select(false, false, true);
+        if scheduled != ScheduledWork::Fifo {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor could not discharge ordinary FIFO ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        self.schedule = next_schedule;
+        self.dispatch_selected_fifo(
+            now,
+            selected_round_tag,
+            schedule_before,
+            queue_before,
+            arbitration,
+            next_schedule,
+            RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessor,
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+            Some(apply_ordinal),
+        )
+        .map(Some)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_selected_fifo(
+        &mut self,
+        now: Instant,
+        selected_round_tag: EventTag,
+        schedule_before: ScheduleState,
+        queue_before: RuntimeQueueOwnershipSnapshot,
+        arbitration: RuntimeSchedulerArbitrationInputs,
+        next_schedule: ScheduleState,
+        queue_selection_kind: RuntimeQueueSelectionKind,
+        selected_kind: RuntimeSelectedOwnerKind,
+        retry_selected_kind: RuntimeSelectedOwnerKind,
+        lifecycle_upper_bound: Option<u128>,
+    ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
+        let (command, candidate) = match self
+            .ingress
+            .pop_next_with_selection_kind(queue_selection_kind, lifecycle_upper_bound)
+        {
+            Ok(Some(selected)) => selected,
+            Ok(None) | Err(_) => {
+                self.latch_fail_closed("FIFO arbitration selected no exact ingress candidate");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let owner = match command.lifecycle_owner() {
+            Ok(owner)
+                if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
+                    && owner.causal_origin() == &candidate.causal_origin =>
+            {
+                owner
+            }
+            Ok(_) | Err(_) => {
+                self.latch_fail_closed("selected FIFO lifecycle owner was inconsistent");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let current_ingress = if command.ingress_ownership.is_some() {
+            RuntimeDispatchIngress::DirectAuthenticated
+        } else {
+            RuntimeDispatchIngress::LocalOrCausal
+        };
+        let parent_statement = command.candidate_semantic_statement;
+        let retry_command = command.clone();
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
+            .driver
+            .dispatch(command)
+        {
+            Ok(dispatch) => {
+                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
+            }
+            Err(error) => return Err(self.close(error)),
+        };
+        if queue_selection_kind == RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+            && (retained_deferred_ingress
+                || !self.deferred_lifecycle_ownership.is_empty()
+                || !self.deferred_ingress_ownership.is_empty()
+                || !self.driver.all_deferred_admission_ordinals().is_empty())
+        {
+            self.latch_fail_closed("pre-Apply FIFO predecessor created adapter-deferred ownership");
+            return Err(RuntimeError::FailClosed);
+        }
+        if retry_unadmitted {
+            if self
+                .ingress
+                .restore_selected_command(retry_command, &candidate)
+                .is_err()
+            {
+                self.latch_fail_closed(
+                    "retryable FIFO backpressure could not restore its exact owner",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            let queue_after = self.ingress.ownership_snapshot();
+            self.retain_scheduler_ownership(
+                retry_selected_kind,
+                selected_round_tag,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule_before,
+                next_schedule,
+            )?;
+            return Ok(RuntimeStep::Advanced(Vec::new()));
+        }
+        let queue_after = self.ingress.ownership_snapshot();
+        self.retain_scheduler_ownership(
+            selected_kind,
+            selected_round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule_before,
+            next_schedule,
+        )?;
+        self.finish_dispatched_step(
+            now,
+            effects,
+            RuntimeEffectSource::Fifo,
+            owner,
+            parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )
+    }
+
     /// Run at most one adapter-deferred transition, timer, or admitted command.
     ///
     /// Serviceable adapter debt is filtered first by each target's immutable
     /// physical cut, then by logical lifecycle rank inside the frozen pre-cut
     /// set. Passive proposal and asynchronous-task capabilities are validated
-    /// but never treated as runnable predecessors. The absolute timeout
-    /// preempts every dependency and deferred branch once due; this is the
-    /// pacemaker escape which prevents a stalled local producer, signer, or I/O
-    /// task from pinning a view forever. Retransmission runs at most once per
-    /// call and advances from the actual service time, avoiding an unbounded
-    /// catch-up burst after a paused process. Neither clock is changed by an
-    /// arbitrary message or by any effect other than `EnterView`.
+    /// but never treated as runnable predecessors. Once due, the absolute
+    /// timeout preempts every dependency and deferred branch except one exact
+    /// current-view `LocalProposalReady` occurrence whose immutable lifecycle
+    /// root predates the timeout and whose runtime admission or exact guarded
+    /// worker completion is also pre-deadline. The physical runtime enqueue
+    /// may occur later when that worker result is drained at the deadline.
+    /// That occurrence receives one bounded handoff turn; without a stronger
+    /// typed completion, the timeout owns the immediately following turn.
+    /// This preserves the pacemaker escape for a stalled producer, signer, or
+    /// I/O task without dropping an already completed local proposal at the
+    /// async-to-runtime seam. Retransmission runs
+    /// at most once per call and advances from the actual service time,
+    /// avoiding an unbounded catch-up burst after a paused process. Neither
+    /// clock is changed by an arbitrary message or by any effect other than
+    /// `EnterView`.
     pub(crate) fn step(
         &mut self,
         now: Instant,
@@ -13773,6 +14982,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !self.clocks_armed {
             return Err(RuntimeError::ClocksNotArmed);
         }
+        self.refresh_ingress_consumer_eligibility()?;
         if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
             self.latch_fail_closed("fence-predecessor retry ownership was invalid");
             return Err(RuntimeError::FailClosed);
@@ -13782,9 +14992,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
         // A due view timeout is an absolute pacemaker boundary, not another
-        // lifecycle-ordered work item. In particular, do not give an older
-        // Busy-deferred occurrence or its completion dependency another turn
-        // before emitting the one-shot timeout.
+        // lifecycle-ordered work item. The only bounded exception is the
+        // current-view local-proposal handoff whose lifecycle root predates
+        // the timeout and whose runtime admission or exact guarded Validate
+        // completion also crossed the deadline first. This closes the async
+        // publication race without giving a newly-created or stalled signer
+        // recurring grace.
         let timeout_preempts = self
             .scheduler_arbitration_inputs(now)
             .map_err(|_| {
@@ -13792,6 +15005,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 RuntimeError::FailClosed
             })?
             .timeout_due;
+        if timeout_preempts
+            && let Some(step) = self.dispatch_one_pre_timeout_local_proposal_ready(now)?
+        {
+            return Ok(step);
+        }
         // An older timer or ingress occurrence can already belong to the
         // adapter's Busy-deferred set while a later Sign effect owns the only
         // completion which can open that reducer fence. Immutable lifecycle
@@ -13823,35 +15041,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             arbitration.periodic_timer_due,
             arbitration.fifo_ready,
         );
-        // A future-view PrepareQC is retained for re-evaluation after its view
-        // is installed, but retrying it as the Progress class minimum cannot
-        // itself install that view. Only when ordinary arbitration already
-        // owes the FIFO a turn, allow the existing ownership-sealed pacemaker
-        // selector to run one later authenticated TimeoutVote, TC, or
-        // CommitQC which can release that view dependency.
-        // A periodic timer selected by ScheduleState, or another ordinary
-        // service class, keeps its normal turn. A due periodic timer can still
-        // be deferred when existing FIFO debt makes ScheduleState select FIFO.
-        // If no view-releasing occurrence exists, fall through to the exact
-        // Busy retry without changing scheduler or class service debt.
-        if work == ScheduledWork::Fifo {
-            let authorization = self
-                .ordinary_view_blocked_progress_authorization()
-                .map_err(|_| {
-                    self.latch_fail_closed(
-                        "ordinary future-PrepareQC preview lost exact ownership",
-                    );
-                    RuntimeError::FailClosed
-                })?;
-            if let Some(authorization) = authorization
-                && let Some(step) = self.dispatch_one_pacemaker_progress(
-                    now,
-                    Some((arbitration.clone(), authorization)),
-                )?
-            {
-                return Ok(step);
-            }
-        }
         self.schedule = next_schedule;
         let (
             effects,
@@ -13989,87 +15178,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 )
             }
             ScheduledWork::Fifo => {
-                let (command, candidate) = match self.ingress.pop_next_with_ownership() {
-                    Ok(Some(selected)) => selected,
-                    Ok(None) | Err(_) => {
-                        self.latch_fail_closed(
-                            "FIFO arbitration selected no exact ingress candidate",
-                        );
-                        return Err(RuntimeError::FailClosed);
-                    }
-                };
-                let owner = match command.lifecycle_owner() {
-                    Ok(owner)
-                        if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
-                            && owner.causal_origin() == &candidate.causal_origin =>
-                    {
-                        owner
-                    }
-                    Ok(_) | Err(_) => {
-                        self.latch_fail_closed("selected FIFO lifecycle owner was inconsistent");
-                        return Err(RuntimeError::FailClosed);
-                    }
-                };
-                let current_ingress = if command.ingress_ownership.is_some() {
-                    RuntimeDispatchIngress::DirectAuthenticated
-                } else {
-                    RuntimeDispatchIngress::LocalOrCausal
-                };
-                let parent_statement = command.candidate_semantic_statement;
-                let retry_command = command.clone();
-                let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
-                    match self.driver.dispatch(command) {
-                        Ok(dispatch) => self.accept_driver_dispatch(
-                            dispatch,
-                            &owner,
-                            parent_statement,
-                            current_ingress,
-                        )?,
-                        Err(error) => return Err(self.close(error)),
-                    };
-                if retry_unadmitted {
-                    if self
-                        .ingress
-                        .restore_selected_command(retry_command, &candidate)
-                        .is_err()
-                    {
-                        self.latch_fail_closed(
-                            "retryable FIFO backpressure could not restore its exact owner",
-                        );
-                        return Err(RuntimeError::FailClosed);
-                    }
-                    let queue_after = self.ingress.ownership_snapshot();
-                    self.retain_scheduler_ownership(
-                        RuntimeSelectedOwnerKind::FifoRetryRetained,
-                        selected_round_tag,
-                        RuntimeSelectedCandidateOwnership::Exact(candidate),
-                        queue_before,
-                        queue_after,
-                        arbitration,
-                        schedule_before,
-                        next_schedule,
-                    )?;
-                    return Ok(RuntimeStep::Advanced(Vec::new()));
-                }
-                let queue_after = self.ingress.ownership_snapshot();
-                self.retain_scheduler_ownership(
-                    RuntimeSelectedOwnerKind::Fifo,
+                return self.dispatch_selected_fifo(
+                    now,
                     selected_round_tag,
-                    RuntimeSelectedCandidateOwnership::Exact(candidate),
-                    queue_before,
-                    queue_after,
-                    arbitration,
                     schedule_before,
+                    queue_before,
+                    arbitration,
                     next_schedule,
-                )?;
-                (
-                    effects,
-                    RuntimeEffectSource::Fifo,
-                    owner,
-                    parent_statement,
-                    producer_handoff,
-                    retained_deferred_ingress,
-                )
+                    RuntimeQueueSelectionKind::Ordinary,
+                    RuntimeSelectedOwnerKind::Fifo,
+                    RuntimeSelectedOwnerKind::FifoRetryRetained,
+                    None,
+                );
             }
             ScheduledWork::Idle => {
                 let queue_after = self.ingress.ownership_snapshot();
@@ -14180,6 +15300,134 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(RuntimeStep::Advanced(effects))
     }
+    /// Dispatch one exact current-view local proposal completion ahead of a
+    /// timeout owner only when runtime admission or its exact guarded worker
+    /// completion also occurred before that boundary.
+    ///
+    /// The timeout remains installed and due. This method therefore grants a
+    /// single runtime macro-step, not a deadline extension or signer lease.
+    fn dispatch_one_pre_timeout_local_proposal_ready(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("pre-timeout local proposal arbitration was invalid");
+            RuntimeError::FailClosed
+        })?;
+        if !arbitration.timeout_due {
+            return Ok(None);
+        }
+        let timeout_owner = self.timeout_owner.clone().ok_or_else(|| {
+            self.latch_fail_closed("pre-timeout local proposal lost its frozen timeout owner");
+            RuntimeError::FailClosed
+        })?;
+        if self.timeout_owner_physical_cut.is_none() {
+            self.latch_fail_closed("pre-timeout local proposal lost its timeout physical cut");
+            return Err(RuntimeError::FailClosed);
+        }
+        let timeout_ordinal = timeout_owner.lifecycle_ordinal();
+        let selected_round_tag = self.round_tag;
+        let schedule = self.schedule;
+        let queue_before = self.ingress.ownership_snapshot();
+        let selected = {
+            let driver = &self.driver;
+            self.ingress
+                .pop_pre_timeout_local_proposal_ready_with_ownership(
+                    selected_round_tag,
+                    timeout_ordinal,
+                    |queued| {
+                        !driver.command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
+                    },
+                )
+        }
+        .map_err(|_| {
+            self.latch_fail_closed("pre-timeout local proposal selection lost exact ownership");
+            RuntimeError::FailClosed
+        })?;
+        let Some((command, candidate)) = selected else {
+            return Ok(None);
+        };
+        if candidate.selection_seal.kind != RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady
+            || candidate.lifecycle_ordinal >= timeout_ordinal
+            || candidate.lifecycle_ordinal >= candidate.admission_ordinal
+            || !candidate.local_proposal_ready_before_deadline
+            || candidate.kind != RuntimeCommandKind::LocalProposalReady
+            || candidate.tag != selected_round_tag
+            || command.local_proposal_ready_before_deadline
+                != candidate.local_proposal_ready_before_deadline
+            || self
+                .driver
+                .command_is_blocked_by_deferred_fence(command.tag, &command.command)
+        {
+            self.latch_fail_closed(
+                "selected pre-timeout local proposal changed after queue transfer",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        let owner = match command.lifecycle_owner() {
+            Ok(owner)
+                if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
+                    && owner.causal_origin() == &candidate.causal_origin
+                    && owner.causal_origin().root_tag == selected_round_tag =>
+            {
+                owner
+            }
+            Ok(_) | Err(_) => {
+                self.latch_fail_closed(
+                    "pre-timeout local proposal changed its causal lifecycle owner",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let parent_statement = command.candidate_semantic_statement;
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    RuntimeDispatchIngress::LocalOrCausal,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
+        if retry_unadmitted || retained_deferred_ingress {
+            self.latch_fail_closed(
+                "pre-timeout local proposal became retryable or adapter-deferred",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.timeout_owner.as_ref() != Some(&timeout_owner) {
+            self.latch_fail_closed("pre-timeout local proposal changed the frozen timeout owner");
+            return Err(RuntimeError::FailClosed);
+        }
+        arbitration.periodic_timer_due = false;
+        arbitration.fifo_ready = false;
+        arbitration.completion_ready = false;
+        arbitration.progress_ready = false;
+        arbitration.normal_ready = false;
+        arbitration.pre_timeout_local_proposal_timeout_ordinal = Some(timeout_ordinal);
+        let queue_after = self.ingress.ownership_snapshot();
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady,
+            selected_round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule,
+            schedule,
+        )?;
+        self.finish_dispatched_step(
+            now,
+            effects,
+            RuntimeEffectSource::Fifo,
+            owner,
+            parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )
+        .map(Some)
+    }
     /// Dispatch at most one already-admitted exact unchanged-lock Prepare
     /// carrier ahead of its frozen, already-due timeout occurrence.
     ///
@@ -14206,6 +15454,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             );
             return Err(RuntimeError::FailClosed);
         }
+        self.refresh_ingress_consumer_eligibility()?;
         if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
             self.latch_fail_closed("pre-timeout PrepareQC retry ownership was invalid");
             return Err(RuntimeError::FailClosed);
@@ -14246,7 +15495,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                             .command_previews_pre_timeout_locked_prepare_qc(&queued.command, target)
                 },
                 |_| false,
-                false,
                 Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             )
             .map_err(|_| {
@@ -14356,6 +15604,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !self.clocks_armed {
             return Err(RuntimeError::ClocksNotArmed);
         }
+        self.refresh_ingress_consumer_eligibility()?;
         if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
             self.latch_fail_closed("pacemaker fence-retry ownership was invalid");
             return Err(RuntimeError::FailClosed);
@@ -14383,20 +15632,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if let Some(step) = self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))? {
             return Ok(Some(step));
         }
-        self.dispatch_one_pacemaker_progress(now, None)
+        self.dispatch_one_pacemaker_progress(now)
     }
     fn dispatch_one_pacemaker_progress(
         &mut self,
         now: Instant,
-        ordinary_view_escape: Option<(
-            RuntimeSchedulerArbitrationInputs,
-            RuntimeViewBlockedProgressAuthorization,
-        )>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.driver.pacemaker_escape_is_parked() {
             return Ok(None);
         }
-        let ordinary_view_escape_selected = ordinary_view_escape.is_some();
         let selected_round_tag = self.round_tag;
         let schedule = self.schedule;
         let queue_before = self.ingress.ownership_snapshot();
@@ -14409,35 +15653,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let active_unserviceable_fence = self.driver.signature_fence_is_active()
             && !self.driver.deferred_work_is_serviceable()
             && !self.driver.all_deferred_admission_ordinals().is_empty();
-        let view_release_target = ordinary_view_escape
-            .as_ref()
-            .map(|(_, authorization)| authorization.target_view);
         let driver = &self.driver;
         let selected = self
             .ingress
             .pop_pacemaker_progress_with_ownership(
                 |queued| {
-                    if driver
-                        .pacemaker_progress_blocked_target_view(&queued.command)
-                        .is_some()
-                    {
-                        // The exact FIFO occurrence stays owned while a later
-                        // TC remains eligible to install the missing view.
-                        // Re-evaluate it against the reducer tag after that
-                        // certified transition rather than spinning on Busy.
-                        return false;
-                    }
-                    if view_release_target.is_some_and(|target_view| {
-                        queued.class != CommandClass::Progress
-                            || queued.identity.kind != RuntimeCommandKind::Authenticated
-                            || queued.ingress_ownership.is_none()
-                            || !driver.pacemaker_progress_releases_view_block(
-                                &queued.command,
-                                target_view,
-                            )
-                    }) {
-                        return false;
-                    }
                     if queued
                         .admission_ordinal
                         .is_some_and(|ordinal| retry_blocked_admissions.contains(&ordinal))
@@ -14458,7 +15678,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                                 .command_is_blocked_by_deferred_fence(queued.tag, &queued.command))
                 },
                 |command| driver.certified_progress_bypasses_signature_fence(command),
-                ordinary_view_escape_selected,
                 None,
             )
             .map_err(|_| {
@@ -14468,35 +15687,14 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let Some((command, candidate)) = selected else {
             return Ok(None);
         };
-        let schedule_after = if let Some((arbitration, _)) = &ordinary_view_escape {
-            let (work, next_schedule) = schedule.select(
-                arbitration.timeout_due,
-                arbitration.periodic_timer_due,
-                arbitration.fifo_ready,
-            );
-            if work != ScheduledWork::Fifo {
-                self.latch_fail_closed(
-                    "ordinary future-PrepareQC escape no longer owned the FIFO turn",
-                );
-                return Err(RuntimeError::FailClosed);
-            }
-            self.schedule = next_schedule;
-            next_schedule
-        } else {
-            schedule
-        };
         let certified_fence_escape = self
             .driver
             .certified_progress_bypasses_signature_fence(&command.command);
-        let selection_kind_is_exact = if ordinary_view_escape_selected {
-            candidate.selection_seal.kind == RuntimeQueueSelectionKind::OrdinaryViewProgress
-        } else {
-            certified_fence_escape
-                == matches!(
-                    candidate.selection_seal.kind,
-                    RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-                )
-        };
+        let selection_kind_is_exact = certified_fence_escape
+            == matches!(
+                candidate.selection_seal.kind,
+                RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+            );
         if !selection_kind_is_exact {
             self.latch_fail_closed(
                 "pacemaker certified-progress selection changed after queue ownership transfer",
@@ -14532,12 +15730,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
             Err(error) => return Err(self.close(error)),
         };
-        if ordinary_view_escape_selected && (retry_unadmitted || retained_deferred_ingress) {
-            self.latch_fail_closed(
-                "ordinary future-PrepareQC escape did not terminally consume view progress",
-            );
-            return Err(RuntimeError::FailClosed);
-        }
         if certified_fence_escape && (retry_unadmitted || retained_deferred_ingress) {
             self.latch_fail_closed(
                 "certified pacemaker escape became retryable or adapter-deferred",
@@ -14550,25 +15742,16 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // reconciliation compares the stored signer identity and retires the
         // exclusions only if certified progress really consumed or replaced
         // that fence.
-        let mut arbitration = match ordinary_view_escape {
-            Some((mut arbitration, authorization)) => {
-                arbitration.view_blocked_progress_authorization = Some(authorization);
-                arbitration
-            }
-            None => {
-                let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-                    self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
-                    RuntimeError::FailClosed
-                })?;
-                arbitration.timeout_due = false;
-                arbitration.periodic_timer_due = false;
-                arbitration.fifo_ready = false;
-                arbitration.completion_ready = false;
-                arbitration.progress_ready = false;
-                arbitration.normal_ready = false;
-                arbitration
-            }
-        };
+        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
+            RuntimeError::FailClosed
+        })?;
+        arbitration.timeout_due = false;
+        arbitration.periodic_timer_due = false;
+        arbitration.fifo_ready = false;
+        arbitration.completion_ready = false;
+        arbitration.progress_ready = false;
+        arbitration.normal_ready = false;
         arbitration.fence_retry_blocked_fifo_before = fence_retry_blocked_fifo_before;
         if retry_unadmitted {
             if self
@@ -14610,7 +15793,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 queue_after,
                 arbitration,
                 schedule,
-                schedule_after,
+                schedule,
             )?;
             return Ok(Some(RuntimeStep::Advanced(Vec::new())));
         }
@@ -14623,7 +15806,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             queue_after,
             arbitration,
             schedule,
-            schedule_after,
+            schedule,
         )?;
         self.finish_dispatched_step(
             now,
@@ -15050,6 +16233,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.clocks_armed {
             return Err(RuntimeError::RecoveryAfterClocksArmed);
         }
+        self.refresh_ingress_consumer_eligibility()?;
         // Interrupted-tip recovery replays an already decided local commit;
         // it cannot legitimately await a fresh signature callback. Such a
         // fence would have no live signer after restart, so reject the
@@ -15497,6 +16681,30 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ) -> Option<RuntimeSchedulerOwnershipEvidence> {
         self.last_scheduler_ownership.take()
     }
+    /// Consume the exact pre-Apply FIFO scheduler carrier and bind its sealed
+    /// queue upper bound to the attested live Apply ordinal.
+    pub(in crate::sumeragi) fn take_lifecycle_apply_predecessor_scheduler_ownership(
+        &mut self,
+        expected_apply_ordinal: u128,
+    ) -> Result<(), RuntimeSchedulerEvidenceError> {
+        let evidence = self
+            .take_last_scheduler_ownership()
+            .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection)?;
+        evidence.validate_exact()?;
+        let bound_matches = expected_apply_ordinal != 0
+            && matches!(
+                (&evidence.selected, &evidence.candidate),
+                (
+                    RuntimeSelectedOwnerKind::LifecycleApplyPredecessor
+                        | RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+                    RuntimeSelectedCandidateOwnership::Exact(candidate),
+                ) if candidate.selection_seal.lifecycle_upper_bound
+                    == Some(expected_apply_ordinal)
+            );
+        bound_matches
+            .then_some(())
+            .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection)
+    }
     /// Advance one live scheduler turn and model the production runner taking
     /// its exact ownership carrier before another turn can enter.
     #[cfg(test)]
@@ -15912,13 +17120,40 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_recovered_decision_fetch_store(authority)
     }
-    /// Return whether a typed lifecycle Decision Apply may freeze reducer mutation.
-    pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {
+    fn lifecycle_decision_apply_runtime_gate_is_open(&self) -> bool {
         !self.fail_closed
-            && self.ingress.len() == 0
             && self.pending_effect_ownership.is_none()
             && self.last_scheduler_ownership.is_none()
             && self.pending_leader_wire_terminals.is_empty()
+    }
+
+    /// Return whether a typed lifecycle Decision Apply may freeze reducer mutation.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {
+        self.lifecycle_decision_apply_runtime_gate_is_open() && self.ingress.len() == 0
+    }
+
+    /// Return whether only queued runtime ingress prevents live Apply dispatch.
+    ///
+    /// The executor separately authenticates the exact Ready Apply and its
+    /// deferred CommitQC output before using this read-only predicate.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_runtime_predecessor_drain_available(
+        &self,
+        apply_ordinal: u128,
+    ) -> bool {
+        self.lifecycle_decision_apply_runtime_gate_is_open()
+            && self.ingress.len() != 0
+            && self.ingress.all_lifecycle_ordinals_before(apply_ordinal)
+    }
+
+    /// Return whether runtime mutation ownership and the complete queued prefix
+    /// still permit the attested live-Apply suffix.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_runtime_predecessor_remains_exact(
+        &self,
+        apply_ordinal: u128,
+    ) -> bool {
+        self.lifecycle_decision_apply_runtime_gate_is_open()
+            && (self.ingress.len() == 0
+                || self.ingress.all_lifecycle_ordinals_before(apply_ordinal))
     }
     /// Freeze the serialized shell around one registry-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(

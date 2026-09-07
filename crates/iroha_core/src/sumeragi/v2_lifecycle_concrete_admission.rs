@@ -16,7 +16,9 @@ use super::{
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError,
         DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
-        LifecycleDecisionApplyDispatchProjectionErrorV1, LifecycleOutputRegistryJoinV1,
+        LifecycleDecisionApplyDispatchProjectionErrorV1,
+        LifecycleDecisionApplyPendingOutputCensusErrorV1,
+        LifecycleDecisionApplyPendingOutputCensusV1, LifecycleOutputRegistryJoinV1,
         LiveLifecycleDecisionApplyReconciliationAuthorityV1,
         LiveReleasedValidateApplyRegistryReservation, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
@@ -1610,6 +1612,68 @@ impl ProductionLifecycleOwnerV1 {
             )
     }
 
+    /// Authenticate whether one pending CommitQC output is immediately before
+    /// or after the exact Ready live Apply.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn classify_lifecycle_decision_apply_pending_output_census<'a>(
+        &self,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Option<LifecycleDecisionApplyPendingOutputCensusV1> {
+        self.registry
+            .registry()
+            .classify_lifecycle_decision_apply_pending_output_census(
+                &self.coordinator,
+                authority,
+                pending_outputs,
+            )
+    }
+
+    /// Authenticate one pending CommitQC output and retain a structural failure category.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn try_classify_lifecycle_decision_apply_pending_output_census<'a>(
+        &self,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Result<
+        LifecycleDecisionApplyPendingOutputCensusV1,
+        LifecycleDecisionApplyPendingOutputCensusErrorV1,
+    > {
+        self.registry
+            .registry()
+            .try_classify_lifecycle_decision_apply_pending_output_census(
+                &self.coordinator,
+                authority,
+                pending_outputs,
+            )
+    }
+
+    /// Authenticate the exact Ready live Apply and its sole deferred output.
+    ///
+    /// This read-only projection is used only to let the globally earlier
+    /// runtime predecessor drain. It neither claims the Apply row nor grants
+    /// authority to service the post-Apply CommitQC Broadcast.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn attest_ready_live_decision_apply_runtime_predecessor<'a>(
+        &self,
+        ordinal: u128,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Result<
+        Option<AttestedLifecycleDecisionApplySuccessorOutputsV1>,
+        ReadyLifecycleDecisionApplyAttestationErrorV1,
+    > {
+        let Some(authority) = self
+            .registry
+            .prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)?
+        else {
+            return Ok(None);
+        };
+        if authority.dispatch_key().lifecycle_ordinal() != ordinal {
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCarrier);
+        }
+        Ok(self.attest_lifecycle_decision_apply_successor_outputs(authority, pending_outputs))
+    }
+
     /// Confirm the already-durable terminal frame, then retire only the stray
     /// process-local carrier installed at that same immutable address.
     fn settle_terminal_installed_lifecycle_output_duplicate<E>(
@@ -2708,6 +2772,13 @@ mod tests {
     }
     #[test]
     fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal",
+            owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal_fixture_body,
+        );
+    }
+
+    fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal_fixture_body() {
         let fixture = Fixture::new();
         let mut live = fixture.production_owner(64);
         let (pending, _) =
@@ -3632,6 +3703,13 @@ mod tests {
     }
     #[test]
     fn owner_settlement_durability_failure_returns_owner_and_faults_closed() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "owner_settlement_durability_failure_returns_owner_and_faults_closed",
+            owner_settlement_durability_failure_returns_owner_and_faults_closed_fixture_body,
+        );
+    }
+
+    fn owner_settlement_durability_failure_returns_owner_and_faults_closed_fixture_body() {
         let fixture = Fixture::new();
         let root = TempDir::new().expect("temporary durable Validate admission ledger");
         let mut owner = fixture.production_owner(64);
@@ -3662,6 +3740,13 @@ mod tests {
     }
     #[test]
     fn occupied_address_returns_pair_and_leaves_coordinator_unchanged() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "occupied_address_returns_pair_and_leaves_coordinator_unchanged",
+            occupied_address_returns_pair_and_leaves_coordinator_unchanged_fixture_body,
+        );
+    }
+
+    fn occupied_address_returns_pair_and_leaves_coordinator_unchanged_fixture_body() {
         let fixture = Fixture::new();
         let effect = fixture.effect(1);
         let (incumbent_effect, incumbent_pending) = fixture.pair(effect.clone(), 90);
@@ -3702,6 +3787,13 @@ mod tests {
     }
     #[test]
     fn capacity_wait_returns_the_same_pair_for_each_exact_retry() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "capacity_wait_returns_the_same_pair_for_each_exact_retry",
+            capacity_wait_returns_the_same_pair_for_each_exact_retry_fixture_body,
+        );
+    }
+
+    fn capacity_wait_returns_the_same_pair_for_each_exact_retry_fixture_body() {
         let fixture = Fixture::new();
         let mut coordinator = fixture.coordinator(1);
         let mut registry = LifecycleWorkRegistryHolder::empty();
@@ -3925,6 +4017,13 @@ mod tests {
     }
     #[test]
     fn retry_and_terminal_decisions_never_replace_incumbent_work() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "retry_and_terminal_decisions_never_replace_incumbent_work",
+            retry_and_terminal_decisions_never_replace_incumbent_work_fixture_body,
+        );
+    }
+
+    fn retry_and_terminal_decisions_never_replace_incumbent_work_fixture_body() {
         let fixture = Fixture::new();
         let original = fixture.effect(5);
         let mut coordinator = fixture.coordinator(64);
@@ -3975,6 +4074,13 @@ mod tests {
     }
     #[test]
     fn recovered_retry_installs_exact_work_without_allocating() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "recovered_retry_installs_exact_work_without_allocating",
+            recovered_retry_installs_exact_work_without_allocating_fixture_body,
+        );
+    }
+
+    fn recovered_retry_installs_exact_work_without_allocating_fixture_body() {
         let fixture = Fixture::new();
         let original = fixture.effect(8);
         let mut live = fixture.coordinator(64);
@@ -4034,6 +4140,13 @@ mod tests {
     }
     #[test]
     fn recovered_retry_publication_failure_rolls_back_work_and_ready_transition() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "recovered_retry_publication_failure_rolls_back_work_and_ready_transition",
+            recovered_retry_publication_failure_rolls_back_work_and_ready_transition_fixture_body,
+        );
+    }
+
+    fn recovered_retry_publication_failure_rolls_back_work_and_ready_transition_fixture_body() {
         let fixture = Fixture::new();
         let original = fixture.effect(9);
         let mut live = fixture.coordinator(64);

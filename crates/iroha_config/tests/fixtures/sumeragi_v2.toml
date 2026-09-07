@@ -20,8 +20,8 @@ proposal_queue_scan_multiplier = 3
 commands = 512
 authenticated_non_validator_sources = 2
 bodies = 96
-body_bytes = 71303168
-body_source_bytes = 17825792
+body_bytes = 75497472
+body_source_bytes = 18874368
 chunks = 768
 ready_bodies = 48
 

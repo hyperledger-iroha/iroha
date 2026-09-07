@@ -284,7 +284,11 @@ mod tests {
             },
         },
         domain::Domain,
-        isi::{InstructionBox, musubi::RegisterMusubiArchiveV1},
+        isi::{
+            InstructionBox,
+            kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+            musubi::RegisterMusubiArchiveV1,
+        },
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1, MusubiContentDigestV1,
             MusubiSeedIngressReceiptApprovalV1, MusubiSeedIngressReceiptBindingV1,
@@ -486,6 +490,33 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let kagemusha_mint_finality_epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 0,
+                validators: roster
+                    .iter()
+                    .enumerate()
+                    .map(|(index, validator)| {
+                        let seed = 0xC0_u8.wrapping_add(
+                            u8::try_from(index)
+                                .expect("Musubi finality validator index fits in one byte"),
+                        );
+                        iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                            &[seed; 32],
+                            0,
+                            validator.validator.clone(),
+                        )
+                        .expect("derive independent Musubi finality Pasta authority")
+                    })
+                    .collect(),
+            };
+        kagemusha_mint_finality_epoch_roster
+            .validate()
+            .expect("Musubi finality Pasta authority must be canonical");
+        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+            .finality_epoch_id()
+            .expect("derive Musubi finality Pasta authority identifier");
         let height = block.header().height().get();
         let context = HeightContext {
             network_id,
@@ -499,6 +530,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality fixture quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Musubi finality fixture Nexus context"),
             execution_policy_hash: Hash::new(b"Musubi finality fixture execution policy"),
             da_layout: DataAvailabilityLayout {

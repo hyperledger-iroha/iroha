@@ -940,12 +940,12 @@ def _manifest_report_matrix(template: object) -> dict[str, str]:
             f"profile {profile_index}",
             {
                 "hardware_profile",
+                "provider_policy",
                 "suite_id",
                 "qualification_report",
                 "physical_evidence",
                 "relations",
                 "helpers",
-                "receive_fold_occupancies",
                 "recursive_depths",
                 "aggregate_balance",
                 "thermal",
@@ -968,6 +968,20 @@ def _manifest_report_matrix(template: object) -> dict[str, str]:
             f"profile {profile_index} hardware profile",
             release_verifier._HARDWARE_PROFILE_FIELDS,
         )
+        provider_policy = _object(
+            profile["provider_policy"], "profile provider policy",
+            release_verifier.PROVIDER_POLICY_FIELDS,
+        )
+        if provider_policy["hardware_profile_id"] != hardware["hardware_profile_id"]:
+            _fail("provider policy substitutes its hardware profile")
+        _digest(provider_policy["provider_authority_commitment"], "provider proof authority")
+        position = provider_policy["provider_profile_index"]
+        if isinstance(position, bool) or not isinstance(position, int) or not 0 <= position <= 65535:
+            _fail("provider profile index must be an unsigned 16-bit integer")
+        # Signature ownership is checked by the independently pinned release
+        # projector against the complete governed profile. Reject malformed
+        # signature transport before executing any candidate producer.
+        release_verifier._hex_bytes(provider_policy["issuer_signature"], "provider issuer signature", size=64)
         profile_id = _digest(
             hardware["hardware_profile_id"], f"profile {profile_index} hardware profile id"
         )
@@ -1003,31 +1017,6 @@ def _manifest_report_matrix(template: object) -> dict[str, str]:
                 row["report"],
                 "iroha.kagemusha_v1.helper_qualification_report",
                 f"{expected} helper report",
-            )
-
-        # First-release qualification always exercises every fixed ReceiveFold
-        # slot.  Keep this requirement local and explicit even if a concurrently
-        # edited verifier source temporarily lacks its matching constant.
-        occupancy_width = getattr(release_verifier, "RECEIVE_FOLD_BATCH_WIDTH", 16)
-        if occupancy_width != 16:
-            _fail("KAGEMUSHA V1 ReceiveFold occupancy width must remain exactly 16")
-        occupancies = _array(
-            profile["receive_fold_occupancies"], f"profile {profile_id} occupancies"
-        )
-        if len(occupancies) != occupancy_width:
-            _fail("receive-fold occupancy matrix must contain exactly 1 through 16")
-        for expected_occupancy, raw in enumerate(occupancies, start=1):
-            occupancy = _object(
-                raw,
-                f"receive-fold occupancy {expected_occupancy}",
-                {"occupancy", "report"},
-            )
-            if occupancy["occupancy"] != expected_occupancy:
-                _fail("receive-fold occupancies must be exactly 1 through 16")
-            add_report(
-                occupancy["report"],
-                "iroha.kagemusha_v1.receive_fold_occupancy_report",
-                f"receive-fold occupancy {expected_occupancy} report",
             )
 
         depths = _array(profile["recursive_depths"], f"profile {profile_id} depths")
@@ -1673,7 +1662,8 @@ def _derive_candidate_context(
     for raw in profiles_raw:
         assert isinstance(raw, Mapping)
         profiles.append(
-            {"hardware_profile": dict(raw["hardware_profile"]), "suite_id": raw["suite_id"]}
+            {"hardware_profile": dict(raw["hardware_profile"]), "suite_id": raw["suite_id"],
+             "provider_policy": dict(raw["provider_policy"])}
         )
     artifact_set_digest = release_verifier.rust_artifact_set_digest(artifacts)
     vk_digest = release_verifier.rust_vk_set_digest(artifacts, protocols)

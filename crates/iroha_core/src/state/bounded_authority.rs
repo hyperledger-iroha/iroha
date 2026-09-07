@@ -1,5 +1,7 @@
 //! Allocation-bounded helpers for deterministic lane-authority selection.
-use super::{WorldReadOnly, peer_has_live_consensus_key, public_lane_validator_record_matches_key};
+use super::{
+    WorldReadOnly, peer_has_live_consensus_key_for_lane, public_lane_validator_record_matches_key,
+};
 use crate::governance::manifest::{LANE_MANIFEST_MAX_VALIDATORS_V1, ManifestValidatorBinding};
 use iroha_config::parameters::actual::LaneValidatorMode;
 use iroha_data_model::{
@@ -57,6 +59,7 @@ pub(super) fn insert_unique_by<T: Copy>(
 }
 pub(super) fn live_manifest_validator_bindings(
     world: &impl WorldReadOnly,
+    lane_id: LaneId,
     bindings: &[ManifestValidatorBinding],
     declared_validators: &[AccountId],
     block_height: u64,
@@ -80,7 +83,12 @@ pub(super) fn live_manifest_validator_bindings(
         .iter()
         .filter(|binding| {
             world.peers().iter().any(|peer| peer == &binding.peer_id)
-                && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+                && peer_has_live_consensus_key_for_lane(
+                    world,
+                    &binding.peer_id,
+                    block_height,
+                    lane_id,
+                )
         })
         .cloned()
         .collect();
@@ -93,6 +101,7 @@ pub(super) fn live_manifest_validator_bindings(
 }
 pub(super) fn live_manifest_validator_account_peers(
     world: &impl WorldReadOnly,
+    lane_id: LaneId,
     validators: &[AccountId],
     block_height: u64,
 ) -> Vec<(AccountId, PeerId)> {
@@ -109,7 +118,7 @@ pub(super) fn live_manifest_validator_account_peers(
         .filter_map(|validator| {
             let peer = PeerId::new(validator.try_signatory()?.clone());
             (world.peers().iter().any(|present| present == &peer)
-                && peer_has_live_consensus_key(world, &peer, block_height))
+                && peer_has_live_consensus_key_for_lane(world, &peer, block_height, lane_id))
             .then(|| (validator.clone(), peer))
         })
         .collect();
@@ -141,7 +150,7 @@ pub(super) fn stake_elected_validator_accounts(
             )
             .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
-            || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
+            || !peer_has_live_consensus_key_for_lane(world, &record.peer_id, block_height, lane_id)
         {
             continue;
         }
@@ -186,7 +195,7 @@ pub(super) fn stake_elected_peer_ids(
             )
             .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
-            || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
+            || !peer_has_live_consensus_key_for_lane(world, &record.peer_id, block_height, lane_id)
         {
             continue;
         }

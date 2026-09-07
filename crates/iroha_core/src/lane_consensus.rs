@@ -3263,6 +3263,23 @@ impl LaneBlockSessionCache {
         }
         requests
     }
+    /// Inspect complete sessions without consuming their pending handoff state.
+    ///
+    /// Consumers must authenticate every fallible local dependency before the
+    /// matching drain transfers these retained certificate owners.
+    pub(crate) fn pending_committed_sessions(&self) -> Vec<CommittedLaneBlockSession> {
+        self.sessions
+            .values()
+            .filter(|session| session.pending_committed_session_drain)
+            .filter_map(|session| {
+                Some(CommittedLaneBlockSession {
+                    proposal: session.proposal.clone()?,
+                    prepare_qc: session.prepare_qc.clone()?,
+                    commit_qc: session.commit_qc.clone()?,
+                })
+            })
+            .collect()
+    }
     /// Drain up to `limit` sessions whose proposal, prepare QC, and commit QC are all cached.
     ///
     /// This is intentionally separate from [`Self::drain_newly_sealed_qcs_matching`]:
@@ -7983,11 +8000,22 @@ mod tests {
             cache.drain_newly_sealed_qcs().is_empty(),
             "inbound QCs must not become transport broadcast work"
         );
+        let before_handoff = cache.clone();
+        let pending = cache.pending_committed_sessions();
+        assert_eq!(
+            cache, before_handoff,
+            "preflight must not consume a pending handoff"
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].proposal, proposal);
+        assert_eq!(pending[0].prepare_qc, prepare_qc);
+        assert_eq!(pending[0].commit_qc, commit_qc);
         let committed = cache.drain_committed_sessions();
         assert_eq!(committed.len(), 1);
         assert_eq!(committed[0].proposal, proposal);
         assert_eq!(committed[0].prepare_qc, prepare_qc);
         assert_eq!(committed[0].commit_qc, commit_qc);
+        assert!(cache.pending_committed_sessions().is_empty());
         assert!(cache.drain_committed_sessions().is_empty());
     }
     #[test]

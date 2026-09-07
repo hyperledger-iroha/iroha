@@ -185,12 +185,76 @@ future, or reconfigured lanes. Execution and snapshot histories are contiguous
 within `(lane, dataspace, incarnation)`; retire/recreate starts a fresh
 namespace and old artifacts cannot cross the activation boundary.
 
+## Historical authority catalog (current V3 layout)
+
+Every current merge entry and candidate carries `lane_authority_catalog`, a
+`MergeLaneAuthorityCatalogV1` aligned one-for-one with `active_lanes`.
+`rosters` deduplicates exact ordered validator vectors in canonical first-use
+order; `lane_roster_indices[i]` identifies the historical committee for active
+lane position `i`. Each roster declares validator-set hash version V1 and its
+canonical validator-set hash. The catalog is part of both the complete entry
+hash (`iroha:merge:ledger-entry:v3\0`) and the merge QC signature transcript
+(`iroha:merge:qc:v3\0`). Only entry version 3 is admitted; earlier development
+layouts have no decoder fallback or migration path.
+
+Structural validation rejects missing or excessive lane-index rows, empty or
+oversized rosters, non-BLS-normal identities, duplicate validators or rosters,
+noncanonical first use, unused rosters, out-of-range references, wrong hash versions or roster hashes,
+and committees outside the exact `3f+1` geometry with at least four validators.
+Roster identities must be strictly increasing in canonical `PeerId` order;
+reordered vectors are rejected even when their recomputed hash is valid. Live
+validation compares the complete expected catalog and active bindings derived
+from one immutable World/manifest/Nexus view before a candidate is signed or
+applied.
+
+Candidate construction binds its parent, authority catalog, source selection,
+scratch execution and final validation to one stable state publication
+generation. An active publication or generation change rejects the attempt;
+the caller must construct a fresh candidate. Manifest-only authority and
+privacy replacement advances the same publication generation as ledger
+updates, so it cannot silently change the authority used halfway through an
+attempt.
+
+Serving finalized historical material requires the retained canonical full
+entry to match the exact compact reference in its finalized carrier, whose
+historical finality and merge QC are verified. Only then can the QC-bound
+catalog authorize a historical participant validator. Current manifest or
+key-cache rotation, retirement, reincarnation, or a replacement global/participant
+roster neither adds historical read authority nor removes the recorded
+historical committee's eligibility. Missing historical evidence fails closed;
+current authority is never a reconstruction of past authority. This historical
+read rule does not authorize stale committees to admit new financial writes.
+
+Configuration and prospective lifecycle admission reserve the complete
+execution batch and QC before publishing lane geometry. In bytes, the bound is
+
+```text
+12 MiB + 1 MiB + 1024 + sum_over_lanes(256 + 128 * (3*f_lane + 1)) <= 16 MiB
+```
+
+The execution reservation covers the entire encoded batch, including repeated
+source material and state-dependent results. The QC reservation covers the
+generic 4,096-validator artifact ceiling with canonical BLS-normal keys,
+96-byte signatures and signer proofs, and the exact bitmap length; that
+artifact ceiling does not expand the production global committee geometry.
+Fixed per-seat and per-lane reservations cover canonical Norito framing and
+are pinned by maximal-field codec tests. Each lane is charged independently;
+committee overlap cannot create admission headroom that disappears on rotation.
+The bound permits 190 lanes with 127-member committees and rejects 191 such
+lanes, while 1,024 four-member lanes fit. These are deterministic size bounds,
+not measured network capacities.
+
+Candidate prefix selection also measures the complete unsigned entry and
+reserves the QC allowance. The final canonical 16-MiB entry limit applies after
+the exact QC is attached. No batch-only estimate can override either check.
+
 ## Exact global round and merge QC
 
 The global commit topology determines the round leader and the ordered merge
 validator set. The signed payload is the canonical Norito encoding of:
 
 ```text
+version
 network_id
 validator_set_hash_version
 validator_set_hash
@@ -200,6 +264,7 @@ carrier_height
 carrier_parent_hash
 lane_catalog_hash
 active_lanes
+lane_authority_catalog
 incarnation_root
 activation_root
 lane_snapshots
@@ -210,7 +275,7 @@ global_state_root
 
 `network_id` is the exact genesis-header-derived `NetworkId`, not a digest of
 the human-readable chain label. The encoded payload is domain separated by
-`iroha:merge:qc:v2\0`.
+`iroha:merge:qc:v3\0`.
 The resulting digest is stored in `MergeQuorumCertificate.message_digest`.
 The QC also embeds the exact historical roster, canonical LSB-first signer
 bitmap, ordered signer PoPs, and aggregate BLS-normal signature. Validation

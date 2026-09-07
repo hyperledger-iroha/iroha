@@ -5,6 +5,10 @@
 //! authentication and governed external signing remain deployment-injected
 //! boundaries: config contains only identity-pinned opaque handles and public
 //! revision/policy-digest qualifications.
+pub mod https_source;
+pub mod https_source_evidence;
+pub mod https_source_pool;
+
 use crate::sorafs_provider_ingest_finalized_query::{
     ArchivedProviderIngestFinalizedLedgerV1, PreparedProviderIngestFinalizedArchiveV1,
 };

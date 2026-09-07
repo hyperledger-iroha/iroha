@@ -1,4 +1,10 @@
 // Consensus reads distinguish a proved absence from unreadable durable evidence.
+#[derive(Clone, Copy)]
+enum CanonicalBlockReadAuthority<'a, 'k> {
+    Published,
+    Apply(&'a crate::block::VerifiedV2FinalityArtifact),
+    Startup(&'a V2StartupFinalityVerificationSession<'k>),
+}
 impl Kura {
     /// Project active lane ownership from one authenticated finalized carrier.
     ///
@@ -279,21 +285,35 @@ impl Kura {
         let _prune = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical = self.canonical_chain_lock.lock();
-        self.read_block_body_with_authority_under_guards(height, Some(authority))
+        self.read_block_body_with_authority_under_guards(
+            height,
+            CanonicalBlockReadAuthority::Apply(authority),
+        )
     }
 
     fn read_block_body_under_prune_and_canonical_guards(
         &self,
         height: NonZeroUsize,
     ) -> Result<Option<Arc<SignedBlock>>> {
-        self.read_block_body_with_authority_under_guards(height, None)
+        self.read_block_body_with_authority_under_guards(
+            height,
+            CanonicalBlockReadAuthority::Published,
+        )
     }
 
     fn read_block_body_with_authority_under_guards(
         &self,
         height: NonZeroUsize,
-        authority: Option<&crate::block::VerifiedV2FinalityArtifact>,
+        authority: CanonicalBlockReadAuthority<'_, '_>,
     ) -> Result<Option<Arc<SignedBlock>>> {
+        if let CanonicalBlockReadAuthority::Startup(startup) = authority
+            && !std::ptr::eq(self, startup.kura)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "startup canonical body authority belongs to another Kura",
+            ));
+        }
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         let height_u64 = u64::try_from(height.get())?;
@@ -324,13 +344,30 @@ impl Kura {
                 limit: STRICT_INIT_MAX_BLOCK_BYTES,
             });
         }
-        let published_wire = self.verified_v2_finality_wire_hash_for_eviction(
-            &store.path_to_blockchain,
-            height_u64,
-            hash,
-        )?;
-        let (wire_len, wire_hash) = if let Some(authority) = authority {
-            let artifact = authority.artifact();
+        let artifact = match authority {
+            CanonicalBlockReadAuthority::Published => None,
+            CanonicalBlockReadAuthority::Apply(authority) => Some(authority.artifact()),
+            CanonicalBlockReadAuthority::Startup(startup) => {
+                Some(startup.canonical_tip_finality_for_read(
+                    self,
+                    height_u64,
+                    &store.path_to_blockchain,
+                )?)
+            }
+        };
+        // A startup session has already authenticated these exact files and
+        // excludes canonical writers. Recheck its retained identities instead
+        // of decoding the same historical finality and retained record again.
+        let published_wire = if matches!(authority, CanonicalBlockReadAuthority::Startup(_)) {
+            None
+        } else {
+            self.verified_v2_finality_wire_hash_for_eviction(
+                &store.path_to_blockchain,
+                height_u64,
+                hash,
+            )?
+        };
+        let (wire_len, wire_hash) = if let Some(artifact) = artifact {
             if artifact.height != height_u64
                 || artifact.block_hash != hash
                 || artifact.subject.parent_block_hash != parent
@@ -362,6 +399,13 @@ impl Kura {
         }
         let bytes = if slot.is_evicted() {
             let Some(bytes) = store.read_optional_da_cache(height_u64)? else {
+                if let CanonicalBlockReadAuthority::Startup(startup) = authority {
+                    startup.canonical_tip_finality_for_read(
+                        self,
+                        height_u64,
+                        &store.path_to_blockchain,
+                    )?;
+                }
                 return Ok(None);
             };
             bytes
@@ -380,8 +424,8 @@ impl Kura {
         {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
-        if let Some(authority) = authority
-            && block.canonical_proposal_wire_hash()? != authority.artifact().subject.payload_hash
+        if let Some(artifact) = artifact
+            && block.canonical_proposal_wire_hash()? != artifact.subject.payload_hash
         {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
@@ -392,6 +436,9 @@ impl Kura {
             || Self::read_durable_hash_at_height(&mut store, height_u64)? != Some(hash)
         {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
+        }
+        if let CanonicalBlockReadAuthority::Startup(startup) = authority {
+            startup.canonical_tip_finality_for_read(self, height_u64, &store.path_to_blockchain)?;
         }
         Ok(Some(Arc::new(block)))
     }
@@ -433,13 +480,60 @@ impl Kura {
         self.read_lane_completion_receipt_under_guards(proposal, true)
     }
 
+    /// Authenticate the occupied application slot independently of a candidate proposal.
+    ///
+    /// A valid receipt for another proposal is ordinary competing evidence. Callers
+    /// decide whether that proposal is terminal only after this read authenticates
+    /// the exact stored receipt and canonical execution evidence.
+    pub(crate) fn read_lane_application_receipt(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Result<Option<LaneBlockApplicationReceiptArtifact>> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "lane completion durability",
+            });
+        }
+        let _prune = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical = self.canonical_chain_lock.lock();
+        self.read_lane_application_receipt_under_guards(lane_id, lane_block_height, true)
+    }
+
     fn read_lane_completion_receipt_under_guards(
         &self,
         proposal: &LaneBlockProposalV1,
         attest_durability: bool,
     ) -> Result<Option<LaneBlockApplicationReceiptArtifact>> {
-        let Some(artifact) =
-            self.read_lane_completion_receipt_structural(proposal, attest_durability)?
+        let artifact = self.read_lane_application_receipt_under_guards(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+            attest_durability,
+        )?;
+        if artifact
+            .as_ref()
+            .is_some_and(|artifact| artifact.proposal != *proposal)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "occupied lane receipt conflicts with the exact finalized proposal",
+            ));
+        }
+        Ok(artifact)
+    }
+
+    fn read_lane_application_receipt_under_guards(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        attest_durability: bool,
+    ) -> Result<Option<LaneBlockApplicationReceiptArtifact>> {
+        let Some(artifact) = self.read_lane_completion_receipt_structural(
+            lane_id,
+            lane_block_height,
+            attest_durability,
+        )?
         else {
             return Ok(None);
         };
@@ -453,7 +547,7 @@ impl Kura {
             return Err(Self::invalid_lane_artifact_error(self.store_root.clone(), "occupied lane receipt conflicts with canonical execution evidence"));
         }
         if self
-            .read_lane_completion_receipt_structural(proposal, false)?
+            .read_lane_completion_receipt_structural(lane_id, lane_block_height, false)?
             .as_ref()
             != Some(&artifact)
         {
@@ -467,12 +561,12 @@ impl Kura {
 
     fn read_lane_completion_receipt_structural(
         &self,
-        proposal: &LaneBlockProposalV1,
+        lane_id: LaneId,
+        lane_block_height: u64,
         attest_durability: bool,
     ) -> Result<Option<LaneBlockApplicationReceiptArtifact>> {
         let _geometry = self.lane_geometry_lock.lock();
-        let descriptor = &proposal.descriptor;
-        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let entry = self.lane_storage_entry(lane_id)?;
         self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
@@ -493,12 +587,12 @@ impl Kura {
             BoundProgressPair::Absent(_) => None,
             BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
                 bound,
-                descriptor.lane_block_height,
+                lane_block_height,
                 "lane receipt",
                 |bound| {
                     self.read_lane_block_application_receipt_from_bound_locked(
-                        descriptor.lane_id,
-                        descriptor.lane_block_height,
+                        lane_id,
+                        lane_block_height,
                         bound,
                     )
                 },
@@ -506,12 +600,6 @@ impl Kura {
         };
         if let Some(artifact) = &artifact {
             self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)?;
-            if artifact.proposal != *proposal {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path,
-                    "occupied lane receipt conflicts with the exact finalized proposal",
-                ));
-            }
             if attest_durability
                 && let BoundProgressPair::Present(bound) = &pair
                 && !self.sync_bound_progress_sidecar(bound, "lane receipt")
@@ -521,6 +609,120 @@ impl Kura {
                     "lane receipt durability barrier failed",
                 ));
             }
+        }
+        Ok(artifact)
+    }
+
+    /// Read the active autonomous attempt without recovering or rewriting sidecars.
+    ///
+    /// Only a genuinely missing current pointer or authenticated retirement is
+    /// absent. Occupied invalid pointers, payloads, and view state are errors.
+    pub(crate) fn read_current_autonomous_lane_block_artifact(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        network_id: iroha_data_model::NetworkId,
+        epoch: u64,
+    ) -> Result<Option<AutonomousLaneBlockArtifact>> {
+        let _prune = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical = self.canonical_chain_lock.lock();
+        self.read_current_autonomous_lane_block_artifact_under_guards(
+            lane_id,
+            lane_block_height,
+            network_id,
+            epoch,
+        )
+    }
+
+    /// Project the immutable payload and authenticated synthetic NewView cursor.
+    pub(crate) fn read_current_autonomous_lane_payload(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        network_id: iroha_data_model::NetworkId,
+        epoch: u64,
+    ) -> Result<Option<(LaneExecutablePayloadV1, LaneBlockProposalV1)>> {
+        let Some(artifact) = self.read_current_autonomous_lane_block_artifact(
+            lane_id,
+            lane_block_height,
+            network_id,
+            epoch,
+        )?
+        else {
+            return Ok(None);
+        };
+        let current = Self::validate_autonomous_lane_block_artifact(&artifact, network_id, epoch)
+            .map_err(|reason| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), reason)
+        })?;
+        Ok(Some((artifact.executable_payload, current)))
+    }
+
+    fn read_current_autonomous_lane_block_artifact_under_guards(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        network_id: iroha_data_model::NetworkId,
+        epoch: u64,
+    ) -> Result<Option<AutonomousLaneBlockArtifact>> {
+        let _geometry = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let marker = self.active_lane_incarnation_marker(&entry)?;
+        let path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            lane_block_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous current pointer has no parent directory",
+            )
+        })?;
+        let _sidecar = self.sidecar_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let bytes = self.read_regular_sidecar_bytes(
+            &path,
+            parent,
+            AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,
+        )?;
+        let artifact = if let Some(bytes) = &bytes {
+            let pointer = Self::decode_autonomous_lane_block_latest_attempt(&path, bytes)?;
+            if pointer.lane_id != lane_id
+                || pointer.dataspace_id != entry.dataspace_id
+                || pointer.lane_block_height != lane_block_height
+                || pointer.lane_incarnation != marker.0
+                || pointer.proposal_height <= marker.1
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "occupied autonomous current pointer conflicts with its active slot",
+                ));
+            }
+            let record = self
+                .read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
+                    &entry,
+                    &pointer,
+                    network_id,
+                    epoch,
+                    AutonomousLaneBlockViewStateReadMode::LatestReadOnly,
+                )?;
+            record.retirement.is_none().then_some(record.artifact)
+        } else {
+            None
+        };
+        if self.active_lane_incarnation_marker(&entry)? != marker
+            || self.read_regular_sidecar_bytes(
+                &path,
+                parent,
+                AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,
+            )? != bytes
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous current pointer or active marker changed during authentication",
+            ));
         }
         Ok(artifact)
     }
@@ -544,28 +746,22 @@ impl Kura {
         network_id: iroha_data_model::NetworkId,
         epoch: u64,
     ) -> Result<Option<AutonomousLaneBlockArtifact>> {
-        let _geometry = self.lane_geometry_lock.lock();
-        let descriptor = &proposal.descriptor;
-        let entry = self.lane_storage_entry(descriptor.lane_id)?;
-        let _sidecar = self.sidecar_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let Some(record) = self.read_autonomous_lane_block_record_read_only_latest_locked(
-            &entry,
-            descriptor.lane_id,
-            descriptor.lane_block_height,
+        let artifact = self.read_current_autonomous_lane_block_artifact_under_guards(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
             network_id,
             epoch,
-        )?
-        else {
-            return Ok(None);
-        };
-        if record.artifact.executable_payload.origin_proposal != *proposal {
+        )?;
+        if artifact
+            .as_ref()
+            .is_some_and(|artifact| artifact.executable_payload.origin_proposal != *proposal)
+        {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "occupied autonomous completion slot conflicts with the finalized proposal",
             ));
         }
-        Ok(record.retirement.is_none().then_some(record.artifact))
+        Ok(artifact)
     }
 
     /// Decode an occupied indexed slot, keeping malformed vacancy and decode
@@ -632,7 +828,25 @@ impl Kura {
         lane_id: LaneId,
         lane_block_height: u64,
     ) -> Result<Option<LaneBlockArtifact>> {
-        self.read_consensus_lane_artifact_matching(lane_id, Some(lane_block_height), |_| true)
+        let _prune = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical = self.canonical_chain_lock.lock();
+        self.read_lane_block_artifact_under_prune_and_canonical_guards(lane_id, lane_block_height)
+    }
+
+    /// The caller owns prune and canonical serialization; the shared strict
+    /// indexed reader still binds and revalidates the active namespace.
+    fn read_lane_block_artifact_under_prune_and_canonical_guards(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Result<Option<LaneBlockArtifact>> {
+        self.read_consensus_lane_artifact_matching_with_authentication(
+            lane_id,
+            Some(lane_block_height),
+            |_| true,
+            |artifact| self.validate_consensus_lane_block_artifact_canonical_under_guard(artifact),
+        )
     }
 
     /// Read a canonical active lane frontier through a bounded, read-only scan.
@@ -654,10 +868,29 @@ impl Kura {
         &self,
         lane_id: LaneId,
         requested_height: Option<u64>,
-        mut accept: F,
+        accept: F,
     ) -> Result<Option<LaneBlockArtifact>>
     where
         F: FnMut(&LaneBlockArtifact) -> bool,
+    {
+        self.read_consensus_lane_artifact_matching_with_authentication(
+            lane_id,
+            requested_height,
+            accept,
+            |artifact| self.validate_consensus_lane_block_artifact_canonical(artifact),
+        )
+    }
+
+    fn read_consensus_lane_artifact_matching_with_authentication<F, A>(
+        &self,
+        lane_id: LaneId,
+        requested_height: Option<u64>,
+        mut accept: F,
+        mut authenticate: A,
+    ) -> Result<Option<LaneBlockArtifact>>
+    where
+        F: FnMut(&LaneBlockArtifact) -> bool,
+        A: FnMut(LaneBlockArtifact) -> Result<LaneBlockArtifact>,
     {
         if requested_height == Some(0) {
             return Err(Self::invalid_lane_artifact_error(
@@ -711,7 +944,7 @@ impl Kura {
         // Canonical block locks must never be taken under sidecar_lock.
         let mut selected = None;
         for candidate in candidates {
-            let canonical = self.validate_consensus_lane_block_artifact_canonical(candidate)?;
+            let canonical = authenticate(candidate)?;
             if accept(&canonical) {
                 selected = Some(canonical);
                 break;
@@ -765,6 +998,13 @@ impl Kura {
     ) -> Result<LaneBlockArtifact> {
         self.ensure_prune_recovery_not_required()?;
         let _canonical = self.canonical_chain_lock.lock();
+        self.validate_consensus_lane_block_artifact_canonical_under_guard(artifact)
+    }
+
+    fn validate_consensus_lane_block_artifact_canonical_under_guard(
+        &self,
+        artifact: LaneBlockArtifact,
+    ) -> Result<LaneBlockArtifact> {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         let height = artifact.ownership.proposal_height;

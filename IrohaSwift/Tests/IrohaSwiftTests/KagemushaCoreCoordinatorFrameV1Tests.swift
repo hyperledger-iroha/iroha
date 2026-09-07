@@ -5,8 +5,8 @@ import XCTest
 final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
   func testAllNativeMethodsMatchSharedCurrentSchemaVectors() throws {
     let cases = try fixtures()
-    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(10)))
-    XCTAssertEqual(cases.count, 14)
+    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(11)))
+    XCTAssertEqual(cases.count, 18)
     for item in cases {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       let response = try KagemushaCoreCoordinatorFrameV1.decodeResponse(item.method, requestFrame: item.request, responseFrame: item.response)
@@ -78,6 +78,27 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
       mutation[4] = invalid
       XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: mutation))
     }
+  }
+
+  func testObservationCodecVectorsAndClosedReadInventory() throws {
+    let commands: [KagemushaDeviceControlCommandV1] = [.readActiveHardwareCredential,
+      .readTrustedTimeOrLease, .readPendingCreditWatermark(watermark: nil, target: .drainAll), .recoverWalletSnapshot]
+    var vectors: [String: String] = [:]
+    for command in commands {
+      let canonical = try KagemushaDeviceOperationCodecV1.encodeControlCommand(command)
+      vectors[String(command.operation)] = canonical.map { String(format: "%02x", $0) }.joined()
+      let fields = [KagemushaCoreCoordinatorFrameV1.u32(UInt32(command.operation)), canonical]
+      let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.beginObservation, fields: fields)
+      XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.beginObservation, frame: request), fields)
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID,
+        fields: [fields[0], Data(repeating: 1, count: 32), canonical]))
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.beginObservation,
+        requestFrame: request, fields: [Data(repeating: 0, count: 32)]))
+    }
+    try JSONSerialization.data(withJSONObject: vectors, options: [.prettyPrinted, .sortedKeys])
+      .write(to: URL(fileURLWithPath: "/tmp/swift-observation-command-vectors.json"))
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.beginObservation,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(20), Data([1])]))
   }
 
   private struct Fixture {

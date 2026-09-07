@@ -208,18 +208,38 @@ mod tests {
         0x37, 0x3f, 0x83, 0x43, 0xc8, 0x5b, 0x78, 0x67, 0x4d, 0xad, 0xfc, 0x7e, 0x14, 0x6f, 0x88,
         0x2b, 0x4f,
     ];
+    // Public RFC 7748 keys with independently reconstructed canonical Norito frames,
+    // HKDF-SHA256, and XChaCha20-Poly1305. Pin the plaintext and AAD too so a future
+    // schema/layout change fails before appearing as an unexplained ciphertext drift.
+    const OPENING_KAT_HEX: &str = concat!(
+        "4e52543000003283089e9d5f5b1495de9c20d961267b00980000000000000011",
+        "b2ecacb32f2d7a02000000000000000002010020111111111111111111111111",
+        "1111111111111111111111111111111111111111102500000000000000000000",
+        "0000000000202222222222222222222222222222222222222222222222222222",
+        "2222222222222033333333333333333333333333333333333333333333333333",
+        "3333333333333320444444444444444444444444444444444444444444444444",
+        "4444444444444444",
+    );
+    const AAD_KAT_HEX: &str = concat!(
+        "4e5254300000ccbd3324c0c9da3aff2aab04ec3f24f8007c00000000000000fa",
+        "cc47d455bc45d602000000000000000002010004010000002055555555555555",
+        "5555555555555555555555555555555555555555555555555520666666666666",
+        "6666666666666666666666666666666666666666666666666666201111111111",
+        "1111111111111111111111111111111111111111111111111111111025000000",
+        "000000000000000000000000",
+    );
     const TYPED_ENVELOPE_KAT_HEX: &str = concat!(
-        "4e525430000073550b5069c0fdb105ebe7e810b71b3f001f01000000000000c7",
-        "59e8c2f2209cf402020100208520f0098930a754748b7ddcb43ef75a0dbf3a0d",
-        "26381af4eba4a98eaa9b4e6a18a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
-        "a5a5a5a5a5a5a5e001d80000000000000020a5da85d238bff0f1abcda157",
-        "21f478de45b547b51fcc35f4b72046b940421acc8805d46c005aee52d3333e3",
-        "aa29a9bebf1016b51379248bdef107a99cd821318c57714dc32a650bd9de9884",
-        "da13dfd6c14a1afc1b76d0f0f770e5b564d58ad9f30aca3a000b2640686632",
-        "3a13f9400e4fa372552dc2245fc03d73621f8373e211ec3c18d4bcb571c784a",
-        "6c02d838fdbbd21799db09a42a469a714ee0781022529ffcf9e407896080e960",
-        "a2d9e246984fc7a09f814592008674939b2a0493ee9a88beb1d5ea71dc53c00",
-        "55b1250cb633381d32010106c2e",
+        "4e5254300000340212827b285b0cef93dc4763964909001f0100000000000075",
+        "99d14818dbee5802020100208520f0098930a754748b7ddcb43ef75a0dbf3a0d",
+        "26381af4eba4a98eaa9b4e6a18a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "a5a5a5a5a5e001d800000000000000025a6fb318d7e6d6e47362d71dd6f44c20",
+        "ef17888f1768c8ec4744031893213d63d2dd5752685bdbc8aefcf6404fdb0e9c",
+        "74538d7e01c530a002bddb5d67040b20198ed87ad442006f93ba0c96a08f79bb",
+        "8167dc4819c57cb3f3b2b49060a30e5b8c31e04976e46a84c5782de362217fc1",
+        "3fb2b589900f09685966643a4d374127f7c0fbaa4354528e679ca2feff099b02",
+        "8f18f8739eb8c1bf83e093e6ab5f47a0e0ebcee2ff9120758476acab05adaae0",
+        "3ce749038f2e4133975bf288f16002dfad12d9be359272407714d754d111a467",
+        "3d4534114440ca",
     );
 
     fn opening() -> KagemushaCreditOpeningV1 {
@@ -304,6 +324,18 @@ mod tests {
     fn injected_entropy_is_deterministic_and_roundtrips() {
         let opening = opening();
         let aad = aad();
+        assert_eq!(
+            hex::encode(
+                opening
+                    .canonical_bytes()
+                    .expect("canonical fixture opening")
+            ),
+            OPENING_KAT_HEX
+        );
+        assert_eq!(
+            hex::encode(aad.canonical_bytes().expect("canonical fixture AAD")),
+            AAD_KAT_HEX
+        );
         let envelope = seal_kagemusha_credit_v1_with_rng(
             &opening,
             &aad,

@@ -49,7 +49,6 @@ pub const POTR_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 pub const POTR_EXPORT_MAX_RECORDS_V1: usize = 1_000;
 const CHECKPOINT_LOCK_FILE_NAME: &str = "potr-receipts-state.lock";
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-static CHECKPOINT_PROCESS_LOCK: Mutex<()> = Mutex::new(());
 /// Exact finalized provider-admission policy accepted for one PoTR receipt.
 ///
 /// The binding is persisted with the final signed receipt before any ledger or repair handoff.
@@ -1093,14 +1092,11 @@ fn state_directory_identity_from_metadata(
     ))
 }
 struct CheckpointWriterGuard {
-    _process_guard: std::sync::MutexGuard<'static, ()>,
     _file: File,
+    _process_lease: crate::checkpoint_file_lease::CheckpointFileLease,
 }
 impl CheckpointWriterGuard {
     fn acquire(path: &Path) -> Result<Self, PotrTrackerError> {
-        let process_guard = CHECKPOINT_PROCESS_LOCK
-            .try_lock()
-            .map_err(|_| PotrTrackerError::CheckpointBusy)?;
         let before_open = match fs::symlink_metadata(path) {
             Ok(metadata) => {
                 validate_regular_file_metadata(path, &metadata, u64::MAX, true)?;
@@ -1146,6 +1142,11 @@ impl CheckpointWriterGuard {
                 "PoTR checkpoint writer lock path changed while opening".to_owned(),
             ));
         }
+        let process_lease = crate::checkpoint_file_lease::CheckpointFileLease::try_acquire(&file)
+            .map_err(|error| {
+                PotrTrackerError::CheckpointIo(format!("claim checkpoint file ownership: {error}"))
+            })?
+            .ok_or(PotrTrackerError::CheckpointBusy)?;
         match file.try_lock() {
             Ok(()) => {}
             Err(fs::TryLockError::WouldBlock) => {
@@ -1177,8 +1178,8 @@ impl CheckpointWriterGuard {
             ));
         }
         Ok(Self {
-            _process_guard: process_guard,
             _file: file,
+            _process_lease: process_lease,
         })
     }
 }
@@ -1814,6 +1815,41 @@ mod tests {
         thread,
     };
     use tempfile::TempDir;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn checkpoint_writer_allows_independent_roots_and_rejects_same_identity() {
+        let first_root = TempDir::new().expect("first checkpoint root");
+        let second_root = TempDir::new().expect("second checkpoint root");
+        let first_path = first_root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        let second_path = second_root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        let first = CheckpointWriterGuard::acquire(&first_path).expect("first writer");
+        let _second = CheckpointWriterGuard::acquire(&second_path)
+            .expect("an independent checkpoint root must not contend");
+        assert!(matches!(
+            CheckpointWriterGuard::acquire(&first_path),
+            Err(PotrTrackerError::CheckpointBusy)
+        ));
+        let alias = first_path
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        assert!(matches!(
+            CheckpointWriterGuard::acquire(&alias),
+            Err(PotrTrackerError::CheckpointBusy)
+        ));
+        drop(first);
+        drop(CheckpointWriterGuard::acquire(&first_path).expect("released identity is reusable"));
+    }
     const PROVIDER_ID: [u8; 32] = [0x22; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x11; 32];
     type ProofOutcome = (PotrReceiptV1, [u8; 32], [u8; 32]);

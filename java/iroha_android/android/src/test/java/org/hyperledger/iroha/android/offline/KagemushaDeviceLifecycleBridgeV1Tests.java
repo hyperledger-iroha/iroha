@@ -8,8 +8,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 
-import java.util.Arrays;
 import java.security.MessageDigest;
+import java.util.Arrays;
 import org.junit.Test;
 
 /** Java-facade checks for the fail-closed KAGEMUSHA V1 device bridge. */
@@ -82,6 +82,10 @@ public final class KagemushaDeviceLifecycleBridgeV1Tests {
           new byte[0]);
       final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Result decoded =
           codec.decodeResponse(response, kotlinOperation, requestId);
+      assertArrayEquals(response, decoded.canonicalResponseFrame());
+      final byte[] callerFrame = decoded.canonicalResponseFrame();
+      Arrays.fill(callerFrame, (byte) 0);
+      assertArrayEquals(response, decoded.canonicalResponseFrame());
       assertEquals(operation, KagemushaDeviceLifecycleBridgeV1.Operation.valueOf(
           decoded.getOperation().name()));
       assertEquals(KagemushaDeviceLifecycleBridgeV1.Status.UNAVAILABLE,

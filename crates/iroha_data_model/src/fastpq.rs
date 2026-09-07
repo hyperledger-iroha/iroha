@@ -1,4 +1,6 @@
 //! FASTPQ-specific data structures shared between the host and prover.
+
+mod public_artifact;
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
 use iroha_crypto::Hash;
 use iroha_primitives::{
@@ -6,6 +8,7 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity},
 };
 use iroha_schema::IntoSchema;
+pub use public_artifact::*;
 use std::collections::{BTreeMap, BTreeSet};
 /// Metadata key storing Norito-encoded [`TransferTranscript`] collections for FASTPQ gadgets.
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";

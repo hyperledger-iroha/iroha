@@ -750,100 +750,33 @@ fn orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes() {
 }
 #[test]
 fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
-    let (mut service, _) = fixture();
+    let (mut service, keys) = fixture_with_block_payload();
     service.max_orphan_chunks = 1;
-    service.max_orphan_chunk_bytes = 1;
-    let sender = service.context.roster[0].validator.clone();
-    let payload_chunk = chunk(manifest_hash(b"promoted buffered chunk"), 0, b"a", 0);
-    let envelope = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-        payload_chunk.clone(),
-    ));
-    let message = BlockMessage::V2(envelope.clone());
-    let hub = PeerId::new(KeyPair::random().public_key().clone());
-    let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-    let route = route_fixture.mint_via(sender.clone(), hub.clone());
-    let (_, proofless) = fair_ingress_route_owner(message, sender.clone(), hub, route);
-    let mut productive = proofless.clone();
-    let token = super::super::FairV2IngressLeaderWireToken {
-        identity: super::super::FairV2IngressLeaderWireIdentity {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-            subject_hash: Hash::new(b"promoted buffered subject"),
-            manifest_hash: Some(payload_chunk.manifest_hash.clone().into()),
-            phase: super::super::FairV2IngressLeaderWirePhase::Chunk,
-            semantic_origin: sender.clone(),
-            canonical_wire_hash: Hash::new(envelope.encode()),
-            vote_statement_hash: None,
-            timeout_prepare_view: None,
-        },
-        slot: super::super::FairV2IngressLeaderWireSlot {
-            semantic_origin: sender.clone(),
-            phase: super::super::FairV2IngressLeaderWirePhase::Chunk,
-            chunk_index: Some(payload_chunk.index),
-        },
-        admission_ordinal: 1,
-        scheduler_ordinal: 73,
-        source_class: super::super::FairV2IngressLeaderWireSourceClass::Chunk,
-    };
+    service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
     let directory = TempDir::new().expect("temporary promoted-orphan gate");
-    let owner = [0xE1; 32];
-    let capacity =
-        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-            service.context.roster.len(),
-            service.context.da_layout.max_chunk_count,
-        )
-        .expect("finite promoted-orphan lifecycle capacity");
-    let recovery_authority =
-        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            service.context.id(),
-            service.context.height,
-            owner,
-            0,
-            false,
-        );
-    let (gate, _) = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-        &directory.path().join("promoted-orphan.wal"),
-        service.context.id(),
-        service.context.height,
-        owner,
-        service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect(),
-        capacity,
-        service.context.da_layout.max_chunk_count,
-        recovery_authority,
-        &[],
-        &[],
-    )
-    .expect("open promoted-orphan lifecycle gate");
-    gate.reserve(token.clone())
-        .expect("reserve promoted-orphan token");
-    gate.mark_ingress(&token)
-        .expect("mark promoted-orphan ingress");
-    let runtime_owner = super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
-        token.identity_hash(),
-        token.scheduler_ordinal(),
-    )
-    .expect("construct promoted-orphan runtime owner");
-    let runtime = gate
-        .mark_runtime(&token, runtime_owner)
-        .expect("mark promoted-orphan runtime");
-    productive.leader_wire_token = Some(token);
-    assert!(
-        productive.install_leader_wire_runtime_receipt(runtime),
-        "productive duplicate must validate its exact runtime carrier"
-    );
+    let ingress = bind_productive_orphan_test_ingress(&mut service, &directory);
+    let (_, _, proposal, payload_chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
+    let chunk_bytes = u64::try_from(payload_chunk.bytes.len()).expect("fixture chunk fits u64");
+    let chunk_message = || {
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+            payload_chunk.clone(),
+        ))
+    };
+    let proofless = admit_productive_orphan_runtime(&ingress, chunk_message(), sender.clone());
+    assert!(proofless.leader_wire_runtime_receipt().is_none());
     assert_eq!(
         service
             .buffer_orphan_payload_chunk_owned(sender.clone(), payload_chunk.clone(), proofless,),
         PayloadChunkDisposition::Buffered
     );
+    admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
+    let productive = admit_productive_orphan_runtime(&ingress, chunk_message(), sender.clone());
+    assert!(
+        productive.leader_wire_runtime_receipt().is_some(),
+        "the signed Proposal must bind the exact retransmitted chunk to real runtime ownership"
+    );
     assert_eq!(
-        service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), productive,),
+        service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), productive),
         PayloadChunkDisposition::Duplicate
     );
     let promoted = service
@@ -858,8 +791,9 @@ fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
         "proofless eviction cannot discard the promoted runtime owner"
     );
     assert_eq!(service.orphan_chunk_count, 1);
-    assert_eq!(service.orphan_chunk_bytes, 1);
+    assert_eq!(service.orphan_chunk_bytes, chunk_bytes);
 }
+
 fn bind_productive_orphan_test_ingress(
     service: &mut ProductionV2Services,
     directory: &TempDir,
@@ -1370,8 +1304,16 @@ fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
 #[test]
 fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps() {
     let (mut service, keys) = fixture_with_block_payload();
-    let capacity = usize::try_from(service.context.da_layout.max_chunk_count)
-        .expect("fixture orphan capacity fits usize");
+    // Each retained chunk owns its actual (validator, chunk-index) slot.
+    // One complete leader rotation yields independent live slots; a second
+    // rotation cannot replace those owners merely by changing the view.
+    let capacity = service.context.roster.len();
+    assert!(capacity > MAX_ORPHAN_LIFECYCLE_VISITS_PER_REPLAY);
+    assert!(
+        capacity
+            <= usize::try_from(service.context.da_layout.max_chunk_count)
+                .expect("fixture orphan capacity fits usize")
+    );
     service.max_orphan_chunks = capacity;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
     let gate_directory = TempDir::new().expect("temporary bounded orphan-sweep gate");
@@ -1385,6 +1327,13 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
         admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
         let manifest_hash = HashOf::new(&manifest);
         let token = buffer_productive_orphan_for_replay(&mut service, &ingress, sender, chunk);
+        assert!(
+            tokens.iter().all(
+                |(_, previous): &(_, super::super::FairV2IngressLeaderWireToken)| previous.slot
+                    != token.slot
+            ),
+            "each retained owner must have a distinct live slot"
+        );
         tokens.push((manifest_hash, token));
         let durable = DurableBodyReceipt::for_test(
             service.context.id(),
@@ -1513,7 +1462,8 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
         sender.clone(),
     );
     assert!(proofless.leader_wire_runtime_receipt().is_none());
-    let mut executor = chunk_effect_executor(&service, BTreeMap::new());
+    let mut executor =
+        chunk_effect_executor_with_remote_proposal(&service, BTreeMap::new(), proposal.clone());
     assert_eq!(
         service
             .route_payload_chunk(&mut executor, sender.clone(), chunk.clone(), proofless)
@@ -1571,7 +1521,8 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
     let gate_directory = TempDir::new().expect("temporary productive-orphan gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-    let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (canonical_wire, manifest, proposal, completing_chunk, completing_sender) =
+        productive_chunk_at_view(&service, &keys, 0);
     let proposer = service.context.roster
         [usize::try_from(proposal.proposer).expect("small proposer index")]
     .validator
@@ -1581,26 +1532,11 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal.clone())),
         proposer,
     );
-    let (manifest, chunks) = payload.into_parts();
-    assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
-    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
-        .expect("validate chunk manifest once");
-    let mut completing_chunk = wire::PayloadChunk {
-        manifest_hash: validated.manifest_hash(),
-        index: 0,
-        bytes: chunks.into_iter().next().expect("one fixture chunk"),
-        sender: 0,
-        signature: Vec::new(),
-    };
-    completing_chunk.signature = Signature::new(
-        keys[0].private_key(),
-        &completing_chunk
-            .signature_payload(&validated)
-            .expect("canonical chunk signature payload")
-            .signature_preimage(),
-    )
-    .payload()
-    .to_vec();
+    assert_eq!(manifest.layout.data_shards, 1);
+    assert_eq!(manifest.layout.parity_shards, 1);
+    assert_eq!(manifest.chunk_hashes.len(), 2);
+    assert!(manifest.payload_size_bytes <= u64::from(manifest.layout.chunk_size_bytes));
+    assert_eq!(completing_chunk.index, 0);
     let sender = service.context.roster[0].validator.clone();
     let current_failure_chunk = chunk(HashOf::new(&manifest), 1, b"current terminal failure", 0);
     let tail_failure_chunk = chunk(HashOf::new(&manifest), 2, b"tail terminal failure", 0);
@@ -1617,7 +1553,7 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     let _completing_token = buffer_productive_orphan_for_replay(
         &mut service,
         &ingress,
-        sender.clone(),
+        completing_sender,
         completing_chunk,
     );
     let current_failure_token = buffer_productive_orphan_for_replay(
@@ -1651,15 +1587,8 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
             "tail fault injection removes only its in-memory terminal target"
         );
     }
-    let mut executor = V2EffectExecutor::with_runtime(
-        SaturatedCompletionRuntime::new(0, 8),
-        BTreeMap::new(),
-        service.context.clone(),
-        service.local_peer.clone(),
-        service.local_validator,
-        EffectQueueConfig::default(),
-    )
-    .expect("construct productive-orphan effect executor");
+    let mut executor =
+        chunk_effect_executor_with_remote_proposal(&service, BTreeMap::new(), proposal.clone());
     let tag = EventTag::new(
         service.context.height,
         proposal.round.view,
@@ -1727,28 +1656,13 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     allow_fixture_block_payload(&mut service.context);
     service.max_orphan_chunks = 4;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-    let (manifest, chunks) = payload.into_parts();
-    assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
-    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
-        .expect("validate chunk manifest once");
-    let mut payload_chunk = wire::PayloadChunk {
-        manifest_hash: validated.manifest_hash(),
-        index: 0,
-        bytes: chunks.into_iter().next().expect("one fixture chunk"),
-        sender: 0,
-        signature: Vec::new(),
-    };
-    payload_chunk.signature = Signature::new(
-        keys[0].private_key(),
-        &payload_chunk
-            .signature_payload(&validated)
-            .expect("canonical chunk signature payload")
-            .signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    let sender = service.context.roster[0].validator.clone();
+    let (canonical_wire, manifest, proposal, payload_chunk, sender) =
+        productive_chunk_at_view(&service, &keys, 0);
+    assert_eq!(manifest.layout.data_shards, 1);
+    assert_eq!(manifest.layout.parity_shards, 1);
+    assert_eq!(manifest.chunk_hashes.len(), 2);
+    assert!(manifest.payload_size_bytes <= u64::from(manifest.layout.chunk_size_bytes));
+    assert_eq!(payload_chunk.index, 0);
     let hub_a = PeerId::new(KeyPair::random().public_key().clone());
     let hub_b = PeerId::new(KeyPair::random().public_key().clone());
     let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
@@ -1762,15 +1676,8 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     let (_, ownership_b) =
         fair_ingress_route_owner(message, sender.clone(), hub_b, route_b.clone());
     assert!(ownership_a.advance_reply_cursors(&route_a, 3, 5));
-    let mut executor = V2EffectExecutor::with_runtime(
-        SaturatedCompletionRuntime::new(0, 8),
-        BTreeMap::new(),
-        service.context.clone(),
-        service.local_peer.clone(),
-        service.local_validator,
-        EffectQueueConfig::default(),
-    )
-    .expect("construct exact-body effect executor");
+    let mut executor =
+        chunk_effect_executor_with_remote_proposal(&service, BTreeMap::new(), proposal.clone());
     assert_eq!(
         service
             .route_payload_chunk(
@@ -1991,7 +1898,10 @@ fn orphan_chunk_cheap_checks_reject_spoofing_and_oversize_without_allocation() {
         "outer transport identity must match the claimed validator index"
     );
     assert_eq!(
-        service.buffer_orphan_payload_chunk(validator_zero.clone(), chunk(hash, 4, b"a", 0)),
+        service.buffer_orphan_payload_chunk(
+            validator_zero.clone(),
+            chunk(hash, service.context.da_layout.max_chunk_count, b"a", 0),
+        ),
         PayloadChunkDisposition::Rejected
     );
     assert_eq!(
@@ -2286,152 +2196,840 @@ fn timeout_certificate_at_view(
         groups: Vec::new(),
     }
 }
-#[test]
-fn entered_view_accepts_same_view_higher_generation_supersession() {
-    let (mut service, _) = fixture();
-    let initial = service.active_tag;
-    let view_one = EventTag::new(
-        initial.height(),
-        initial.view() + 1,
-        Generation::new(initial.generation().get() + 1),
+
+#[cfg(feature = "bls")]
+struct WorkerWalAuthorityFixture {
+    adapter: SumeragiV2Adapter,
+    ingress: Arc<FairV2Ingress>,
+    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+}
+
+#[cfg(feature = "bls")]
+fn worker_wal_authority_fixture(
+    service: &mut ProductionV2Services,
+    directory: &TempDir,
+    local_validator: Option<wire::ValidatorIndex>,
+) -> WorkerWalAuthorityFixture {
+    let context = service.context.clone();
+    let wal_path = directory.path().join("worker-authority.wal");
+    let fingerprints = AdapterFingerprints {
+        node: Hash::new(b"worker actual WAL authority"),
+        build: Hash::new(b"worker authority fixture build"),
+        config: Hash::new(b"worker authority fixture config"),
+    };
+    let (adapter, startup) = SumeragiV2Adapter::open(
+        &wal_path,
+        VerifiedHeightContext::genesis(context.clone(), service.validator_set_pops.clone())
+            .expect("authenticate worker fixture context"),
+        local_validator,
+        service.active_tag.generation(),
+        [0xE2; 32],
+        fingerprints,
+        DeferredAdmissionOrdinalSource::new(0),
+    )
+    .expect("open worker authority safety WAL");
+    assert!(startup.is_empty());
+    assert_eq!(adapter.current_tag(), service.active_tag);
+    let authority = adapter
+        .leader_wire_recovery_authority()
+        .expect("project actual initial WAL consumer");
+    let roster = context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    let (gate, restore) =
+        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
+            adapter
+                .mint_leader_wire_store_authority(&wal_path)
+                .expect("mint the worker's exact safety-WAL sibling"),
+            context.id(),
+            context.height,
+            fingerprints.node.into(),
+            roster.clone(),
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                context.da_layout.max_chunk_count,
+            )
+            .expect("derive worker lifecycle slots"),
+            context.da_layout.max_chunk_count,
+            authority,
+            &[],
+            &[],
+        )
+        .expect("open worker WAL-owned ingress gate");
+    let ingress = Arc::new(
+        FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            64,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            super::super::fair_v2_ingress_required_certified_fence_escape_bytes(roster.len()),
+            8 * 1024 * 1024,
+            super::super::fair_v2_ingress_required_transport_completion_bytes(context.da_layout)
+                .max(super::super::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES),
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        ),
     );
+    ingress
+        .configure_roster_for_context(roster, &context.network_id, context.da_layout)
+        .expect("configure worker authority ingress");
+    ingress.require_leader_wire_lifecycle_gate();
+    let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+    ingress
+        .bind_leader_wire_lifecycle_gate(
+            gate,
+            restore,
+            lifecycle_ordinals.clone(),
+            context.id(),
+            context.height,
+        )
+        .expect("bind worker authority ingress");
+    ingress.open().expect("open worker authority ingress");
+    service.leader_wire_recovery_authority = authority;
+    service.leader_wire_ingress = Arc::clone(&ingress);
+    WorkerWalAuthorityFixture {
+        adapter,
+        ingress,
+        lifecycle_ordinals,
+    }
+}
+
+#[cfg(feature = "bls")]
+fn worker_signed_timeout_certificate(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    view: u64,
+    highest_prepare_qc: Option<wire::QuorumCertificate>,
+) -> wire::TimeoutCertificate {
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view,
+    };
+    let signers = vec![0, 1, 2];
+    let shares = signers
+        .iter()
+        .map(|signer| {
+            let vote = wire::TimeoutVote {
+                round,
+                highest_prepare_qc: highest_prepare_qc.clone(),
+                signer: *signer,
+                signature: Vec::new(),
+            };
+            Signature::new(
+                keys[*signer as usize].private_key(),
+                &vote.signature_preimage(),
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    wire::TimeoutCertificate {
+        round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc,
+            signers,
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate actual timeout shares"),
+        }],
+    }
+}
+
+#[cfg(feature = "bls")]
+fn worker_signed_prepare_certificate(
+    keys: &[KeyPair],
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+) -> wire::QuorumCertificate {
+    let signers = vec![0, 1, 2];
+    let shares = signers
+        .iter()
+        .map(|signer| {
+            let vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment,
+                signer: *signer,
+                signature: Vec::new(),
+            };
+            Signature::new(
+                keys[*signer as usize].private_key(),
+                &vote.signature_preimage(),
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment,
+        signers,
+        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+            &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate actual Prepare shares"),
+    }
+}
+
+#[cfg(feature = "bls")]
+fn worker_authority_commitment() -> wire::ExecutionCommitment {
+    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+        Hash::new(b"worker authority parent state"),
+        Hash::new(b"worker authority post state"),
+        Hash::new(b"worker authority writes"),
+        1,
+        Hash::new(b"worker authority executed wire"),
+    )
+}
+
+#[cfg(feature = "bls")]
+fn persist_worker_commit_intent(
+    adapter: &mut SumeragiV2Adapter,
+    keys: &[KeyPair],
+    directory: &TempDir,
+) -> wire::Vote {
+    let prepare = prepare_worker_commit_intent(adapter, keys, directory);
+    let authenticated = adapter
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare),
+        ))
+        .expect("authenticate actual PrepareQC");
+    let effects = adapter
+        .receive_authenticated(authenticated)
+        .expect("persist actual LockAndCommit")
+        .into_effects();
+    effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            } if vote.phase == wire::GlobalPhase::Commit => Some(vote),
+            _ => None,
+        })
+        .expect("durable LockAndCommit exposes its exact Commit statement")
+}
+
+#[cfg(feature = "bls")]
+fn prepare_worker_commit_intent(
+    adapter: &mut SumeragiV2Adapter,
+    keys: &[KeyPair],
+    directory: &TempDir,
+) -> wire::QuorumCertificate {
+    let context = adapter.wire_context().clone();
+    let (bytes, payload) = proposal_body_and_payload_at_view(&context, keys, 0);
+    let mut body_store = V2BodyStore::open_with_policy(
+        directory.path().join("commit-body"),
+        context.clone(),
+        BlockSignaturePolicy::RotatingLeader,
+    )
+    .expect("open canonical Commit fixture body store");
+    let durable = body_store
+        .store(payload.manifest().clone(), bytes)
+        .expect("persist canonical local proposal body");
+    let validated = body_store
+        .validate(&durable, |_| Ok::<_, String>(worker_authority_commitment()))
+        .expect("persist exact local execution commitment");
+    let mut effects = adapter
+        .local_proposal_ready(
+            adapter.current_tag(),
+            payload.manifest().clone(),
+            &durable,
+            &validated,
+        )
+        .expect("persist local ProposalIntent")
+        .into_effects();
+    let _proposal_sign_owner = adapter
+        .take_live_proposal_intent_wal_sign(&effects)
+        .expect("consume the exact post-fsync proposal-sign sidecar")
+        .expect("a live ProposalIntent owns its exact Sign continuation");
+    for expected_phase in [None, Some(wire::GlobalPhase::Prepare)] {
+        let (tag, request) = effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                AdapterEffect::Sign { tag, request } => Some((tag, request)),
+                _ => None,
+            })
+            .expect("durable local intent emits exact Sign");
+        let signer = match &request {
+            SignRequest::Proposal(proposal) => {
+                assert_eq!(expected_phase, None);
+                proposal.proposer
+            }
+            SignRequest::Vote(vote) => {
+                assert_eq!(expected_phase, Some(vote.phase));
+                vote.signer
+            }
+            SignRequest::TimeoutVote(_) => panic!("proposal preparation cannot sign Timeout"),
+        };
+        let signature = Signature::new(
+            keys[signer as usize].private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        effects = adapter
+            .signature_completed(tag, signature)
+            .expect("complete exact local durable signature")
+            .into_effects();
+    }
+    let prepare = worker_signed_prepare_certificate(
+        keys,
+        payload.manifest().round,
+        payload.manifest().subject,
+        validated.execution_commitment(),
+    );
+    prepare
+}
+
+#[cfg(feature = "bls")]
+fn enter_worker_view_from_wal(
+    service: &mut ProductionV2Services,
+    adapter: &mut SumeragiV2Adapter,
+    certificate: wire::TimeoutCertificate,
+) -> EventTag {
+    let authenticated = adapter
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ))
+        .expect("authenticate actual view certificate");
+    let effects = adapter
+        .receive_authenticated(authenticated)
+        .expect("persist actual view transition")
+        .into_effects();
+    let (tag, certificate, protected_lock) = effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            AdapterEffect::EnterView {
+                tag,
+                certificate,
+                protected_lock,
+            } => Some((tag, certificate, protected_lock)),
+            _ => None,
+        })
+        .expect("actual WAL transition emits EnterView");
+    service
+        .finish_runtime_step_reconciliation(
+            None,
+            Some(
+                adapter
+                    .leader_wire_recovery_authority()
+                    .expect("post-WAL authority"),
+            ),
+        )
+        .expect("publish actual WAL authority before EnterView");
     service
         .entered_view(
-            view_one,
-            timeout_certificate_at_view(&service, initial.view()),
-            None,
+            tag,
+            certificate,
+            protected_lock
+                .as_ref()
+                .map(|locked| (locked.proposal_round, locked.subject)),
         )
-        .expect("install the first certified successor view");
+        .expect("consume exact published EnterView");
+    tag
+}
+#[cfg(feature = "bls")]
+fn deliver_worker_executor_wire(
+    executor: &mut V2EffectExecutor,
+    service: &mut ProductionV2Services,
+    ingress: &FairV2Ingress,
+    now: Instant,
+    payload: wire::ConsensusMessageV2Payload,
+    sender: wire::ValidatorIndex,
+) -> super::super::serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt {
+    let message = wire::ConsensusMessageV2::new(payload);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(message.clone()),
+            service.context.roster[sender as usize].validator.clone(),
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut admitted = ingress.try_recv().expect("dequeue actual worker ingress");
+    let ownership = admitted
+        .take_ingress_ownership()
+        .expect("exact worker physical owner");
+    let receipt = ownership
+        .leader_wire_runtime_receipt()
+        .expect("actual WAL-backed runtime receipt")
+        .clone();
+    executor
+        .enqueue_network_with_ingress_ownership(message, ownership)
+        .expect("authenticate exact owned worker input");
+    assert!(matches!(
+        executor
+            .step(now, service)
+            .expect("dispatch runtime effects through production services"),
+        EffectExecutorStep::Advanced { .. }
+    ));
+    assert_eq!(service.active_tag, executor.current_tag());
+    assert!(service.leader_wire_recovery_authority.consumer_tag() == executor.current_tag());
+    assert!(!service.output_guard.restart_required());
+    receipt
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn runtime_executor_publishes_actual_wal_consumer_before_same_round_enter_view_and_vote_retry() {
+    let (mut service, keys) = fixture_with_block_payload();
+    service.local_validator = None;
+    let directory = TempDir::new().expect("full runtime consumer regression");
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
+    let context = service.context.clone();
+    let mut body_store = V2BodyStore::open_with_policy(
+        directory.path().join("body"),
+        context.clone(),
+        BlockSignaturePolicy::RotatingLeader,
+    )
+    .expect("open actual executor body store");
+    let (vote_bytes, vote_payload) = proposal_body_and_payload_at_view(&context, &keys, 1);
+    let (origin_bytes, origin_payload) = proposal_body_and_payload_at_view(&context, &keys, 0);
+    assert_eq!(
+        vote_bytes, origin_bytes,
+        "a certified view change retains the exact origin-signed block body"
+    );
+    assert_eq!(
+        vote_payload.manifest().subject,
+        origin_payload.manifest().subject
+    );
+    let durable = body_store
+        .store(vote_payload.manifest().clone(), vote_bytes)
+        .expect("retain the exact signed body for the remote Prepare vote");
+    let validated = body_store
+        .validate(&durable, |_| Ok::<_, String>(worker_authority_commitment()))
+        .expect("persist its execution commitment before direct vote admission");
+    wal.adapter
+        .bind_validated_body(vote_payload.manifest(), &validated)
+        .expect("bind independently durable execution authority before constructing the runtime");
+    let started_at = Instant::now();
+    let (runtime, startup) = SerializedV2Runtime::new_with_lifecycle_ordinals(
+        wal.adapter,
+        Vec::new(),
+        started_at,
+        Duration::from_secs(10),
+        RuntimeQueueConfig::new(8, 2, 2),
+        wal.lifecycle_ordinals,
+    )
+    .expect("construct runtime with the exact gate ordinal source");
+    assert!(startup.is_empty());
+    let output_guard = ConsensusOutputGuard::isolated();
+    let (mut executor, _body_store) = V2EffectExecutor::open_with_body_store(
+        runtime, body_store,
+        super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),
+        None, context.clone(), service.local_peer.clone(), None, Arc::clone(&output_guard),
+        EffectQueueConfig::default(),
+    ).expect("open actual production executor");
+    service.output_guard = output_guard;
+    let _commands = attach_locked_candidate_io(&mut service, 8);
+    service.set_exact_output_admission_hook(|_, _| Ok(()));
+    executor.arm_live_clocks(
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+        started_at,
+    ).expect("activate actual runtime clocks");
+    deliver_worker_executor_wire(
+        &mut executor,
+        &mut service,
+        &wal.ingress,
+        started_at,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(worker_signed_timeout_certificate(
+            &context, &keys, 0, None,
+        )),
+        0,
+    );
+    let first_tag = executor.current_tag();
+    assert_eq!(first_tag.view(), 1);
+    let vote_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 1,
+    };
+    let mut vote = wire::Vote {
+        round: vote_round,
+        proposal_round: vote_round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: vote_payload.manifest().subject,
+        execution_commitment: worker_authority_commitment(),
+        signer: 0,
+        signature: Vec::new(),
+    };
+    vote.signature = Signature::new(keys[0].private_key(), &vote.signature_preimage())
+        .payload()
+        .to_vec();
+    let first_receipt = deliver_worker_executor_wire(
+        &mut executor,
+        &mut service,
+        &wal.ingress,
+        started_at,
+        wire::ConsensusMessageV2Payload::Vote(vote.clone()),
+        0,
+    );
+    let protected = worker_signed_prepare_certificate(
+        &keys,
+        wire::ConsensusRound {
+            view: 0,
+            ..vote_round
+        },
+        locked_candidate_subject(b"full runtime stronger TC lock"),
+        worker_authority_commitment(),
+    );
+    deliver_worker_executor_wire(
+        &mut executor,
+        &mut service,
+        &wal.ingress,
+        started_at,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(worker_signed_timeout_certificate(
+            &context,
+            &keys,
+            0,
+            Some(protected.clone()),
+        )),
+        0,
+    );
+    let upgraded_tag = executor.current_tag();
+    assert_eq!(upgraded_tag.view(), first_tag.view());
+    assert!(upgraded_tag.strictly_advances(first_tag));
+    assert!(service.leader_wire_recovery_authority.matches_entered_view(
+        upgraded_tag,
+        Some((protected.proposal_round, protected.subject))
+    ));
+    let retry_receipt = deliver_worker_executor_wire(
+        &mut executor,
+        &mut service,
+        &wal.ingress,
+        started_at,
+        wire::ConsensusMessageV2Payload::Vote(vote.clone()),
+        0,
+    );
+    assert_eq!(
+        retry_receipt.token(),
+        first_receipt.token(),
+        "same logical vote retains its immutable service and scheduler ordinals"
+    );
+    assert_ne!(
+        retry_receipt, first_receipt,
+        "same view does not identify the replacement volatile consumer"
+    );
+    assert!(
+        wal.ingress
+            .mark_leader_wire_volatile_terminal(&first_receipt)
+            .is_err(),
+        "a late receipt cannot retire a different consumer epoch"
+    );
+    // Reaching quorum after the retry proves the new reducer pool consumed it.
+    for signer in [1, 2] {
+        let mut sibling = vote.clone();
+        sibling.signer = signer;
+        sibling.signature = Signature::new(
+            keys[signer as usize].private_key(),
+            &sibling.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        deliver_worker_executor_wire(
+            &mut executor,
+            &mut service,
+            &wal.ingress,
+            started_at,
+            wire::ConsensusMessageV2Payload::Vote(sibling),
+            signer,
+        );
+    }
+    let expected = worker_signed_prepare_certificate(
+        &keys,
+        vote.round,
+        vote.subject,
+        vote.execution_commitment,
+    );
+    assert!(
+        executor
+            .last_runtime_step_observation_for_test()
+            .expect("observe quorum reduction")
+            .sole_broadcast_is_exact_prepare_qc(&expected)
+    );
+    assert_eq!(executor.status().pending_outputs, 1);
+    assert_eq!(
+        executor.pending_lifecycle_output_admission_census().len(),
+        1,
+        "the sole exact PrepareQC output remains owned until lifecycle admission services it"
+    );
+    assert!(!service.output_guard.restart_required());
+    detach_locked_candidate_io(&mut service);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn entered_view_accepts_same_view_higher_generation_supersession() {
+    let (mut service, keys) = fixture();
+    let directory = TempDir::new().expect("actual same-round worker WAL");
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
+    let initial = service.active_tag;
+    let thin = worker_signed_timeout_certificate(&service.context, &keys, initial.view(), None);
+    let view_one = enter_worker_view_from_wal(&mut service, &mut wal.adapter, thin.clone());
     let payload = outbound_payload_at_view(&service, view_one.view());
     service
         .register_outbound_payload(view_one, payload)
         .expect("retain work owned by the first view-one generation");
     assert!(
-        service
-            .entered_view(
-                view_one,
-                timeout_certificate_at_view(&service, view_one.view() - 1),
-                None,
-            )
-            .is_err(),
+        service.entered_view(view_one, thin, None).is_err(),
         "an equal lifecycle tag is not a supersession"
     );
-    let rebound = EventTag::new(
+    let invalid_tag = EventTag::new(
         view_one.height(),
         view_one.view(),
         Generation::new(view_one.generation().get() + 1),
     );
+    let wrong_round =
+        worker_signed_timeout_certificate(&service.context, &keys, view_one.view(), None);
     assert!(
         service
-            .entered_view(
-                rebound,
-                timeout_certificate_at_view(&service, view_one.view()),
-                None,
-            )
+            .entered_view(invalid_tag, wrong_round, None)
             .is_err(),
-        "the certificate must still identify the immediate predecessor round"
+        "the certificate must identify the immediate predecessor round"
     );
-    service
-        .entered_view(
-            rebound,
-            timeout_certificate_at_view(&service, view_one.view() - 1),
-            None,
-        )
-        .expect("a stricter same-round TC installs a new same-view generation");
-    assert_eq!(service.active_tag, rebound);
-    assert!(service.outbound_chunks.is_empty());
-    assert!(!service.output_guard.restart_required());
-}
-#[test]
-fn entered_view_advances_live_leader_wire_recovery_cut() {
-    let (mut service, keys) = fixture_with_block_payload();
-    let gate_directory = TempDir::new().expect("temporary live view-cut gate");
-    let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-    let initial = service.active_tag;
-    let next = EventTag::new(
-        initial.height(),
-        initial.view() + 1,
-        Generation::new(initial.generation().get() + 1),
-    );
-    service
-        .entered_view(
-            next,
-            timeout_certificate_at_view(&service, initial.view()),
-            None,
-        )
-        .expect("install the certified successor and its live recovery cut");
-    let (_, _, stale_proposal, _, stale_sender) =
-        productive_chunk_at_view(&service, &keys, initial.view());
-    assert!(matches!(
-        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(stale_proposal),
-            )),
-            stale_sender,
-        )),
-        Err(super::super::FairV2IngressPushError::Rejected(_))
-    ));
-    let (_, _, current_proposal, _, current_sender) =
-        productive_chunk_at_view(&service, &keys, next.view());
-    assert!(matches!(
-        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(current_proposal),
-            )),
-            current_sender,
-        )),
-        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
-    ));
-}
-#[test]
-fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
-    let (mut service, _) = fixture_with_block_payload();
-    let gate_directory = TempDir::new().expect("temporary protected-Commit gate");
-    let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-    let initial = service.active_tag;
-    let protected_round = wire::ConsensusRound {
+    let locked_round = wire::ConsensusRound {
         context_id: service.context.id(),
         height: service.context.height,
         view: initial.view(),
     };
-    let protected_subject = locked_candidate_subject(b"live protected Commit vote");
-    let next = EventTag::new(
-        initial.height(),
-        initial.view() + 1,
-        Generation::new(initial.generation().get() + 1),
+    let prepare = worker_signed_prepare_certificate(
+        &keys,
+        locked_round,
+        locked_candidate_subject(b"actual same-round promoted lock"),
+        worker_authority_commitment(),
     );
-    service
-        .entered_view(
-            next,
-            timeout_certificate_at_view(&service, initial.view()),
-            Some((protected_round, protected_subject)),
+    let stronger =
+        worker_signed_timeout_certificate(&service.context, &keys, initial.view(), Some(prepare));
+    let rebound = enter_worker_view_from_wal(&mut service, &mut wal.adapter, stronger);
+    assert_eq!(rebound.view(), view_one.view());
+    assert!(rebound.strictly_advances(view_one));
+    assert_eq!(service.active_tag, rebound);
+    assert!(service.outbound_chunks.is_empty());
+    assert!(!service.output_guard.restart_required());
+}
+#[cfg(feature = "bls")]
+#[test]
+fn entered_view_advances_live_leader_wire_recovery_cut() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let gate_directory = TempDir::new().expect("temporary live view-cut gate");
+    let mut wal = worker_wal_authority_fixture(&mut service, &gate_directory, None);
+    let ingress = Arc::clone(&wal.ingress);
+    let initial = service.active_tag;
+    let certificate =
+        worker_signed_timeout_certificate(&service.context, &keys, initial.view(), None);
+    let next = enter_worker_view_from_wal(&mut service, &mut wal.adapter, certificate.clone());
+    let (gate, before) = {
+        let state = ingress.state.lock();
+        (
+            Arc::clone(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .expect("actual WAL gate"),
+            ),
+            (
+                state.len,
+                state.bytes,
+                state.last_admission_ordinal,
+                state.leader_wire_lifecycles.len(),
+                state.pending_wire_owners.len(),
+            ),
         )
-        .expect("install the certified successor with its exact durable lock");
-    let commit = wire::Vote {
-        round: protected_round,
-        proposal_round: protected_round,
-        phase: wire::GlobalPhase::Commit,
-        subject: protected_subject,
-        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"live protected Commit parent state"),
-            Hash::new(b"live protected Commit post state"),
-            Hash::new(b"live protected Commit writes"),
-            1,
-            Hash::new(b"live protected Commit wire"),
-        ),
-        signer: 0,
-        signature: vec![0xA5; 48],
     };
-    assert!(matches!(
-        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Vote(commit),
-            )),
-            service.context.roster[0].validator.clone(),
+    let durable_before = gate
+        .restore()
+        .expect("read actual durable ownership before stale replay");
+    let (_, _, stale_proposal, _, stale_sender) =
+        productive_chunk_at_view(&service, &keys, initial.view());
+    let stale_admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(stale_proposal),
         )),
+        stale_sender,
+    ));
+    assert!(
+        matches!(
+            &stale_admission,
+            Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+        ),
+        "obsolete exact wire must coalesce without a new owner: {stale_admission:?}"
+    );
+    let after = {
+        let state = ingress.state.lock();
+        (
+            state.len,
+            state.bytes,
+            state.last_admission_ordinal,
+            state.leader_wire_lifecycles.len(),
+            state.pending_wire_owners.len(),
+        )
+    };
+    assert_eq!(
+        after, before,
+        "obsolete delivery cannot allocate queue bytes or an owner"
+    );
+    let durable_after = gate
+        .restore()
+        .expect("read durable ownership after stale replay");
+    assert_eq!(
+        durable_after.records().len(),
+        durable_before.records().len()
+    );
+    assert_eq!(
+        durable_after.last_admission_ordinal(),
+        durable_before.last_admission_ordinal()
+    );
+    assert_eq!(
+        durable_after.scheduler_ordinal_high_watermark(),
+        durable_before.scheduler_ordinal_high_watermark()
+    );
+    let (_, _, mut current_proposal, _, current_sender) =
+        productive_chunk_at_view(&service, &keys, next.view());
+    current_proposal.justification =
+        wire::ProposalJustification::Timeout(wire::TimeoutJustification {
+            timeout_certificate: certificate,
+            highest_prepare_qc: None,
+        });
+    current_proposal.signature = Signature::new(
+        keys[usize::try_from(current_proposal.proposer).expect("current proposer index")]
+            .private_key(),
+        &current_proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let current_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(current_proposal));
+    wal.adapter
+        .authenticate(current_message.clone())
+        .expect("current proposal carries the actual entered TC and exact signature");
+    let current_admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(current_message),
+        current_sender,
+    ));
+    assert!(
+        matches!(
+            &current_admission,
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ),
+        "the actual new WAL view must admit current work: {current_admission:?}"
+    );
+    assert_eq!(ingress.len(), before.0 + 1);
+}
+#[cfg(feature = "bls")]
+#[test]
+fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let directory = TempDir::new().expect("actual protected-Commit WAL");
+    let local_validator = service.context.leader(0);
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, Some(local_validator));
+    let mut commit = persist_worker_commit_intent(&mut wal.adapter, &keys, &directory);
+    commit.signature = Signature::new(
+        keys[commit.signer as usize].private_key(),
+        &commit.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let certificate = worker_signed_timeout_certificate(&service.context, &keys, 0, None);
+    let next = enter_worker_view_from_wal(&mut service, &mut wal.adapter, certificate);
+    assert!(commit.round.view < next.view());
+    assert!(
+        service
+            .leader_wire_recovery_authority
+            .matches_entered_view(next, Some((commit.proposal_round, commit.subject)))
+    );
+    let mut unrelated = commit.clone();
+    unrelated.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"unrelated parent"),
+            Hash::new(b"unrelated post"),
+            Hash::new(b"unrelated writes"),
+            1,
+            Hash::new(b"unrelated execution"),
+        );
+    unrelated.signature = Signature::new(
+        keys[unrelated.signer as usize].private_key(),
+        &unrelated.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let sender = service.context.roster[commit.signer as usize]
+        .validator
+        .clone();
+    let (gate, before) = {
+        let state = wal.ingress.state.lock();
+        (
+            Arc::clone(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .expect("actual protected-Commit lifecycle gate"),
+            ),
+            (
+                state.len,
+                state.bytes,
+                state.last_admission_ordinal,
+                state.leader_wire_lifecycles.len(),
+                state.pending_wire_owners.len(),
+            ),
+        )
+    };
+    let durable_before = gate.restore().expect("read protected-Commit ownership");
+    // A changed execution statement is permanently obsolete after this view
+    // transition. Coalescing it must not allocate an owner or consume ordinals.
+    assert!(matches!(
+        wal.ingress
+            .try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(unrelated)
+                )),
+                sender.clone()
+            )),
+        Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+    ));
+    let after = {
+        let state = wal.ingress.state.lock();
+        (
+            state.len,
+            state.bytes,
+            state.last_admission_ordinal,
+            state.leader_wire_lifecycles.len(),
+            state.pending_wire_owners.len(),
+        )
+    };
+    assert_eq!(
+        after, before,
+        "unrelated Commit cannot acquire ingress ownership"
+    );
+    assert_eq!(
+        gate.restore()
+            .expect("read ownership after unrelated Commit"),
+        durable_before,
+        "unrelated Commit cannot alter any durable lifecycle record or ordinal"
+    );
+    assert!(matches!(
+        wal.ingress
+            .try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(commit)
+                )),
+                sender
+            )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
 }
+
 #[test]
 fn durable_decision_advances_live_leader_wire_recovery_cut() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2448,7 +3046,29 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
                     .with_durable_decision(),
             ),
         )
-        .expect("publish Decision and close live leader-wire admission");
+        .expect("publish Decision and retire obsolete leader-wire identities");
+    let census = || {
+        let state = ingress.state.lock();
+        (
+            state.len,
+            state.bytes,
+            state.last_admission_ordinal,
+            state.leader_wire_lifecycles.len(),
+            state.pending_wire_owners.len(),
+            state.open,
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .expect("bound durable gate")
+                .restore()
+                .expect("read exact durable restart image"),
+        )
+    };
+    let after_decision = census();
+    assert!(
+        after_decision.5,
+        "Decision retains ingress for auxiliary service"
+    );
     for view in [service.active_tag.view(), service.active_tag.view() + 1] {
         let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
         assert!(matches!(
@@ -2458,31 +3078,45 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
                 )),
                 sender,
             )),
-            Err(super::super::FairV2IngressPushError::Rejected(_))
+            Ok(super::super::FairV2IngressPushDisposition::Coalesced)
         ));
+        assert_eq!(
+            census(),
+            after_decision,
+            "obsolete proposals must not allocate or rewrite durable ownership"
+        );
+        assert!(ingress.try_recv().is_none());
+        assert!(!service.output_guard.restart_required());
     }
     detach_locked_candidate_io(&mut service);
 }
+#[cfg(feature = "bls")]
 #[test]
 fn outbound_payload_retention_is_constant_across_many_view_changes() {
-    let (mut service, _) = fixture();
+    let (mut service, keys) = fixture();
+    let expected_payload_bytes = outbound_payload_at_view(&service, 0)
+        .into_parts()
+        .1
+        .iter()
+        .map(Vec::len)
+        .sum::<usize>();
+    assert!(expected_payload_bytes >= std::mem::size_of::<u64>());
+    let directory = TempDir::new().expect("actual bounded-retention WAL");
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
     let mut max_manifests = 0usize;
     let mut max_payload_bytes = 0usize;
     for view in 0..=1_024 {
-        let tag = EventTag::new(
-            service.context.height,
-            view,
-            Generation::new(view.saturating_add(1)),
-        );
         if view != 0 {
-            service
-                .entered_view(tag, timeout_certificate_at_view(&service, view - 1), None)
-                .expect("install monotonic certified view");
+            let certificate =
+                worker_signed_timeout_certificate(&service.context, &keys, view - 1, None);
+            enter_worker_view_from_wal(&mut service, &mut wal.adapter, certificate);
             assert!(
                 service.outbound_chunks.is_empty(),
                 "view installation must prune the prior payload before publishing ownership"
             );
         }
+        let tag = wal.adapter.current_tag();
+        assert_eq!(tag.view(), view);
         let encoded = outbound_payload_at_view(&service, view);
         service
             .register_outbound_payload(tag, encoded)
@@ -2507,32 +3141,26 @@ fn outbound_payload_retention_is_constant_across_many_view_changes() {
         max_manifests = max_manifests.max(service.outbound_chunks.len());
         max_payload_bytes = max_payload_bytes.max(payload_bytes);
         assert_eq!(service.outbound_chunks.len(), 1);
-        assert_eq!(payload_bytes, std::mem::size_of::<u64>());
+        assert_eq!(payload_bytes, expected_payload_bytes);
     }
     assert_eq!(max_manifests, 1);
-    assert_eq!(max_payload_bytes, std::mem::size_of::<u64>());
+    assert_eq!(max_payload_bytes, expected_payload_bytes);
 }
+#[cfg(feature = "bls")]
 #[test]
 fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
-    let (mut service, _) = fixture();
+    let (mut service, keys) = fixture();
+    let directory = TempDir::new().expect("actual stale-signature WAL");
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
     let old_tag = service.active_tag;
     let old_payload = outbound_payload_at_view(&service, old_tag.view());
     service
         .register_outbound_payload(old_tag, old_payload.clone())
         .expect("register old-view proposal payload");
     assert_eq!(service.outbound_chunks.len(), 1);
-    let new_tag = EventTag::new(
-        service.context.height,
-        old_tag.view() + 1,
-        Generation::new(old_tag.generation().get() + 1),
-    );
-    service
-        .entered_view(
-            new_tag,
-            timeout_certificate_at_view(&service, old_tag.view()),
-            None,
-        )
-        .expect("install next certified view");
+    let certificate =
+        worker_signed_timeout_certificate(&service.context, &keys, old_tag.view(), None);
+    let new_tag = enter_worker_view_from_wal(&mut service, &mut wal.adapter, certificate);
     assert!(service.outbound_chunks.is_empty());
     service
         .restore_outbound_payload_after_signature(CompletionDisposition::Stale, Some(old_payload))
@@ -2644,4 +3272,319 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
     // No worker owns this synthetic channel; remove it before service Drop
     // attempts the production shutdown handshake.
     drop(service.io.take());
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn current_commit_keeps_exact_owner_until_prepare_qc_publishes_local_lock() {
+    use super::super::v2_runtime::LeaderWireRuntimeTerminal;
+    let (mut service, keys) = fixture_with_block_payload();
+    let directory = TempDir::new().expect("actual current-Commit WAL");
+    let local = service.context.leader(0);
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, Some(local));
+    let prepare = prepare_worker_commit_intent(&mut wal.adapter, &keys, &directory);
+    assert!(
+        wal.adapter
+            .leader_wire_recovery_authority()
+            .expect("actual pre-QC authority")
+            .matches_entered_view(wal.adapter.current_tag(), None)
+    );
+    let signer = (0..u32::try_from(keys.len()).unwrap())
+        .find(|index| *index != local)
+        .expect("an actual distinct remote validator");
+    let sender = wal.adapter.wire_context().roster[signer as usize]
+        .validator
+        .clone();
+    let mut vote = wire::Vote {
+        round: prepare.round,
+        proposal_round: prepare.proposal_round,
+        phase: wire::GlobalPhase::Commit,
+        subject: prepare.subject,
+        execution_commitment: prepare.execution_commitment,
+        signer,
+        signature: Vec::new(),
+    };
+    vote.signature = Signature::new(
+        keys[signer as usize].private_key(),
+        &vote.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote.clone()));
+    wal.adapter
+        .authenticate(message.clone())
+        .expect("remote Commit matches actual durable execution authority before PrepareQC");
+    let exact_peer_payload = message.payload.clone();
+    let ingress = Arc::clone(&wal.ingress);
+    let now = Instant::now();
+    let (mut runtime, startup) = SerializedV2Runtime::new_with_lifecycle_ordinals(
+        wal.adapter,
+        Vec::new(),
+        now,
+        Duration::from_secs(10),
+        RuntimeQueueConfig::new(8, 2, 2),
+        wal.lifecycle_ordinals,
+    )
+    .expect("construct actual serialized consumer after local Prepare signing");
+    assert!(startup.is_empty());
+    ingress
+        .advance_leader_wire_recovery_cut(
+            runtime
+                .driver()
+                .leader_wire_recovery_authority()
+                .expect("actual prepared WAL frontier"),
+        )
+        .expect("publish exact prepared consumer");
+    let admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(message.clone()),
+        sender.clone(),
+    ));
+    assert!(
+        matches!(
+            &admission,
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ),
+        "current unlocked Commit must own one bounded carrier: {admission:?}"
+    );
+    let mut inbound = ingress
+        .try_recv()
+        .expect("dequeue exact current Commit carrier");
+    let owner = inbound
+        .take_ingress_ownership()
+        .expect("exact physical Commit owner");
+    let receipt = owner
+        .leader_wire_runtime_receipt()
+        .expect("durable runtime handoff")
+        .clone();
+    runtime
+        .enqueue_network_with_ingress_ownership(message, owner)
+        .expect("transfer exact Commit owner into the real runtime");
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm bounded runtime clocks");
+    let wal_before = runtime
+        .driver()
+        .leader_wire_recovery_authority()
+        .expect("pre-admission WAL authority");
+    let pending = runtime
+        .step(now)
+        .expect("current lock-missing Commit remains retryable");
+    assert!(
+        matches!(&pending, RuntimeStep::Idle),
+        "pending Commit does not produce side effects: {pending:?}"
+    );
+    assert_eq!(
+        runtime
+            .driver()
+            .leader_wire_recovery_authority()
+            .expect("unchanged WAL authority"),
+        wal_before
+    );
+    assert_eq!(runtime.queued_commands(), 1);
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("retained Commit scheduler owner")
+        .validate_exact()
+        .expect("exact bounded FIFO retention");
+    assert!(
+        runtime
+            .take_effect_ownership(0)
+            .expect("no pending effects")
+            .is_empty()
+    );
+    assert!(
+        runtime.take_leader_wire_runtime_terminals().is_empty(),
+        "missing local lock cannot retire the original physical owner"
+    );
+    let gate = Arc::clone(
+        ingress
+            .state
+            .lock()
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .expect("actual bounded safety-WAL gate"),
+    );
+    let before = gate.restore().expect("inspect exact retained Commit slot");
+    let mut competing = vote;
+    competing.subject.payload_hash = Hash::new(b"competing current Commit subject");
+    competing.signature = Signature::new(
+        keys[signer as usize].private_key(),
+        &competing.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let competing = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(competing));
+    assert!(
+        runtime.driver().authenticate(competing.clone()).is_err(),
+        "an incompatible candidate cannot borrow exact local execution authority"
+    );
+    let competing_admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(competing),
+        sender.clone(),
+    ));
+    assert!(
+        matches!(
+            &competing_admission,
+            Err(super::super::FairV2IngressPushError::Rejected(_))
+        ),
+        "a competing same-view statement cannot replace the retained owner: {competing_admission:?}"
+    );
+    assert_eq!(ingress.len(), 0);
+    let after = gate
+        .restore()
+        .expect("inspect bounded slot after competing delivery");
+    assert_eq!(after.records().len(), before.records().len());
+    assert_eq!(
+        after.last_admission_ordinal(),
+        before.last_admission_ordinal()
+    );
+    assert_eq!(
+        after.scheduler_ordinal_high_watermark(),
+        before.scheduler_ordinal_high_watermark()
+    );
+    let qc_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(prepare));
+    let qc_admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(qc_message.clone()),
+        sender,
+    ));
+    assert!(
+        matches!(
+            &qc_admission,
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ),
+        "exact PrepareQC remains bounded progress: {qc_admission:?}"
+    );
+    let mut qc_inbound = ingress.try_recv().expect("dequeue exact PrepareQC");
+    let qc_owner = qc_inbound
+        .take_ingress_ownership()
+        .expect("exact physical QC owner");
+    runtime
+        .enqueue_network_with_ingress_ownership(qc_message, qc_owner)
+        .expect("enqueue the dependency behind the retained Commit");
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("progress class services PrepareQC")
+    else {
+        panic!("current PrepareQC cannot idle behind a retained Commit");
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("PrepareQC scheduler owner")
+        .validate_exact()
+        .expect("exact PrepareQC turn");
+    let owners = runtime
+        .take_effect_ownership(effects.len())
+        .expect("exact post-QC effect owners");
+    let (tag, commit, sign_owner) = effects
+        .into_iter()
+        .zip(owners)
+        .find_map(|(effect, owner)| match effect {
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            } if vote.phase == wire::GlobalPhase::Commit => Some((tag, vote, owner)),
+            _ => None,
+        })
+        .expect("actual PrepareQC persists LockAndCommit and emits its owned Sign");
+    assert!(
+        runtime
+            .driver()
+            .leader_wire_recovery_authority()
+            .expect("actual post-QC authority")
+            .matches_entered_view(
+                runtime.round_tag(),
+                Some((commit.proposal_round, commit.subject))
+            )
+    );
+    assert!(
+        runtime
+            .driver()
+            .wire_ingress_may_use_progress(&exact_peer_payload),
+        "the retained exact peer statement is now eligible Commit progress"
+    );
+    ingress
+        .advance_leader_wire_recovery_cut(
+            runtime
+                .driver()
+                .leader_wire_recovery_authority()
+                .expect("actual lock authority"),
+        )
+        .expect("publish lock without replacing current owner");
+    for terminal in runtime.take_leader_wire_runtime_terminals() {
+        let LeaderWireRuntimeTerminal::Volatile(retired) = terminal else {
+            panic!("PrepareQC has one volatile terminal");
+        };
+        assert_ne!(retired, receipt, "only PrepareQC was consumed so far");
+        ingress
+            .mark_leader_wire_volatile_terminal(&retired)
+            .expect("release consumed QC");
+    }
+    let signature = Signature::new(
+        keys[commit.signer as usize].private_key(),
+        &commit.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    runtime
+        .enqueue_signature_with_owner(tag, signature, &sign_owner)
+        .expect("enqueue exact local Commit signer dependency");
+    let mut consumed = false;
+    let mut signed_local_commit = false;
+    for _ in 0..6 {
+        let step = runtime
+            .step(now)
+            .expect("bounded signing and Commit retry progress");
+        let RuntimeStep::Advanced(effects) = step else {
+            panic!("owned Commit or its signer remains runnable");
+        };
+        signed_local_commit |= effects.iter().any(|effect| {
+            matches!(effect,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(vote), ..
+            }) if vote.phase == wire::GlobalPhase::Commit && vote.signer == local)
+        });
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("signing/retry scheduler owner")
+            .validate_exact()
+            .expect("exact signing or retry turn");
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("consume exact resulting effects");
+        ingress
+            .advance_leader_wire_recovery_cut(
+                runtime
+                    .driver()
+                    .leader_wire_recovery_authority()
+                    .expect("actual consumer after signing or retry"),
+            )
+            .expect("publish resulting consumer");
+        for terminal in runtime.take_leader_wire_runtime_terminals() {
+            let LeaderWireRuntimeTerminal::Volatile(retired) = terminal else {
+                panic!("peer Commit has an ordinary terminal");
+            };
+            if retired == receipt {
+                assert!(
+                    signed_local_commit,
+                    "the exact signer dependency completes before peer Commit consumption"
+                );
+                assert!(!consumed, "the original Commit terminal is unique");
+                consumed = true;
+            }
+            ingress
+                .mark_leader_wire_volatile_terminal(&retired)
+                .expect("release consumed wire");
+        }
+        if consumed {
+            break;
+        }
+    }
+    assert!(
+        consumed,
+        "original peer Commit must retry successfully after exact lock/signature"
+    );
+    assert_eq!(runtime.queued_commands(), 0);
+    assert!(!service.output_guard.restart_required());
 }

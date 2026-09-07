@@ -14,6 +14,7 @@ fn native_amx_manifest_artifact_rejects_leaf_or_proof_tampering() {
         settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
             b"native manifest test settlement",
         )),
+        previous_native_settlement_hash: None,
         members: vec![
             iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1 {
                 entrypoint_index: 5,
@@ -240,23 +241,17 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
     let (session, _) =
         sample_committed_lane_block_session_for_kura(LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
     let proposal = session.proposal;
-    let settlement = LaneBlockCommitment {
-        block_height: 1,
-        lane_id: LaneId::SINGLE,
-        lane_incarnation: proposal.descriptor.lane_incarnation,
-        dataspace_id: DataSpaceId::UNIVERSAL,
-        tx_count: 0,
-        total_local_amount: "0".parse().expect("zero quantity"),
-        total_xor_due: "0".parse().expect("zero quantity"),
-        total_xor_after_haircut: "0".parse().expect("zero quantity"),
-        total_xor_variance: "0".parse().expect("zero quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-        .expect("hash fixture settlement");
+    let settlement = iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        proposal.descriptor.lane_incarnation,
+        1,
+        proposal.descriptor.proposal_height,
+        None,
+        vec![[0xA5; Hash::LENGTH]],
+    )
+    .expect("valid Native participant control");
+    let settlement_hash = settlement.computed_hash().expect("hash fixture settlement");
     let mut receipt = NativeAmxParticipantApplicationReceiptArtifact {
         version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
         participant_proposal: proposal.clone(),
@@ -1025,6 +1020,8 @@ fn native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps() {
 }
 #[test]
 fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index() {
+    use iroha_data_model::merge::LaneDrainFrontierV1;
+
     let fixture = || {
         let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
@@ -1035,44 +1032,175 @@ fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest
             .expect("primary lane storage entry");
         let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
         kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-            .expect("publish exact Native AMX latest index");
-        (temp_dir, kura, entry, receipt)
+            .expect("publish exact Native latest index");
+        let history = kura
+            .read_native_amx_participant_application_history(entry.lane_id)
+            .expect("authenticate complete Native history");
+        let descriptor = &receipt.participant_proposal.descriptor;
+        let evidence = *history
+            .drain_evidence(descriptor.lane_block_height)
+            .expect("complete exact Native drain evidence");
+        let mut frontier = LaneDrainFrontierV1::ordinary(
+            entry.lane_id,
+            entry.dataspace_id,
+            descriptor.lane_incarnation,
+            descriptor.lane_block_height,
+            Some(descriptor.descriptor_hash),
+        );
+        frontier.native_application = Some(evidence);
+        let guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        kura.bind_consensus_output_guard(Arc::clone(&guard))
+            .expect("bind drain guard");
+        kura.validate_certified_lane_drain_frontier(
+            entry.lane_id,
+            entry.dataspace_id,
+            descriptor.lane_incarnation,
+            &frontier,
+        )
+        .expect("healthy real drain authority");
+        (temp_dir, kura, entry, receipt, frontier, guard)
     };
-    let (_temp_dir, kura, entry, receipt) = fixture();
-    let evidence = kura
-        .native_amx_participant_application_drain_evidence(&receipt)
-        .expect("complete exact Native AMX drain evidence");
+    let (_temp_dir, kura, entry, receipt, frontier, guard) = fixture();
     let descriptor = &receipt.participant_proposal.descriptor;
+    let evidence = frontier.native_application.expect("native evidence");
     assert_eq!(evidence.participant_view, descriptor.lane_block_view);
     assert_eq!(evidence.predecessor_height, 0);
     assert_eq!(evidence.application_block_height, 1);
     assert_eq!(evidence.application_manifest_leaf_count, 1);
     assert_eq!(evidence.application_manifest_leaf_index, 0);
-    let mut tampered_receipt = receipt.clone();
-    tampered_receipt.executed_block_wire_hash =
-        Hash::new(b"tampered Native AMX drain executed wire");
-    assert_eq!(
-        kura.native_amx_participant_application_drain_evidence(&tampered_receipt),
-        None,
-        "a receipt identity not backed by exact durable bytes must fail closed"
+    let mut competing = frontier;
+    competing
+        .native_application
+        .as_mut()
+        .expect("native evidence")
+        .participant_proposal_hash = Hash::new(b"valid competing drain proposal");
+    assert!(
+        kura.validate_certified_lane_drain_frontier(
+            entry.lane_id,
+            entry.dataspace_id,
+            descriptor.lane_incarnation,
+            &competing
+        )
+        .is_err()
     );
-    let latest_path =
-        Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
-    fs::write(&latest_path, [0xA5]).expect("corrupt Native AMX latest index");
-    assert_eq!(
-        kura.native_amx_participant_application_drain_evidence(&receipt),
-        None,
-        "a malformed latest-index artifact must fail drain evidence revalidation"
+    let mut unknown = frontier;
+    unknown.lane_id = LaneId::new(912);
+    assert!(
+        kura.validate_certified_lane_drain_frontier(
+            unknown.lane_id,
+            unknown.dataspace_id,
+            unknown.lane_incarnation,
+            &unknown
+        )
+        .is_err()
     );
-    let (_temp_dir, kura, entry, receipt) = fixture();
-    let manifest_data_path =
-        Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
-    fs::remove_file(&manifest_data_path).expect("remove Native AMX manifest data");
-    assert_eq!(
-        kura.native_amx_participant_application_drain_evidence(&receipt),
-        None,
-        "a missing manifest leaf/proof artifact must fail drain evidence revalidation"
+    assert!(
+        !guard.restart_required(),
+        "candidate mismatch must not poison valid local authority"
     );
+    assert!(guard.acquire().is_some());
+    for damaged_kind in [
+        "latest",
+        "receipt",
+        "manifest",
+        "canonical wire",
+        "checkpoint",
+    ] {
+        let (_temp_dir, kura, entry, receipt, frontier, guard) = fixture();
+        let descriptor = &receipt.participant_proposal.descriptor;
+        assert!(
+            kura.get_block(nonzero!(1_usize)).is_some(),
+            "warm actual canonical cache"
+        );
+        let damaged_path = match damaged_kind {
+            "latest" => Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                &entry,
+                &kura.store_root,
+            ),
+            "receipt" => {
+                Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1)
+            }
+            "manifest" => {
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1)
+            }
+            "canonical wire" => kura
+                .block_store
+                .lock()
+                .path_to_blockchain
+                .join("blocks.data"),
+            "checkpoint" => kura.wsv_checkpoint_path(1),
+            _ => unreachable!(),
+        };
+        let mut bytes = fs::read(&damaged_path).expect("actual durable evidence");
+        bytes[0] ^= 0x80;
+        fs::write(&damaged_path, &bytes).expect("damage actual occupied drain evidence");
+        assert!(
+            kura.validate_certified_lane_drain_frontier(
+                entry.lane_id,
+                entry.dataspace_id,
+                descriptor.lane_incarnation,
+                &frontier
+            )
+            .is_err(),
+            "{damaged_kind}"
+        );
+        assert!(
+            guard.restart_required(),
+            "{damaged_kind}: local corruption must close consensus output"
+        );
+        assert!(guard.acquire().is_none());
+        assert_eq!(
+            fs::read(&damaged_path).expect("preserve forensic evidence"),
+            bytes
+        );
+    }
+    for missing_kind in ["receipt", "manifest", "tip metadata"] {
+        let (_temp_dir, kura, entry, receipt, frontier, guard) = fixture();
+        let descriptor = &receipt.participant_proposal.descriptor;
+        match missing_kind {
+            "receipt" => fs::remove_file(Kura::native_amx_participant_receipt_path_for_entry(
+                &entry,
+                &kura.store_root,
+                1,
+            ))
+            .expect("receipt publication pending"),
+            "manifest" => fs::remove_file(Kura::native_amx_application_manifest_path_for_entry(
+                &entry,
+                &kura.store_root,
+                1,
+            ))
+            .expect("manifest publication pending"),
+            "tip metadata" => {
+                kura.remove_commit_manifest_without_binding_for_tests(1)
+                    .expect("tip commit manifest pending");
+                kura.remove_wsv_checkpoint_without_binding_for_tests(1)
+                    .expect("tip checkpoint pending");
+            }
+            _ => unreachable!(),
+        }
+        let history = kura
+            .read_native_amx_participant_application_history(entry.lane_id)
+            .expect("authenticated pending recovery");
+        assert!(
+            history.drain_evidence(1).is_none(),
+            "{missing_kind} must not authorize retirement"
+        );
+        assert!(
+            kura.validate_certified_lane_drain_frontier(
+                entry.lane_id,
+                entry.dataspace_id,
+                descriptor.lane_incarnation,
+                &frontier
+            )
+            .is_err(),
+            "pending frontier unavailable for drain"
+        );
+        assert!(
+            !guard.restart_required(),
+            "{missing_kind}: legitimate recovery debt is not corruption"
+        );
+        assert!(guard.acquire().is_some());
+    }
 }
 #[test]
 fn native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation() {
@@ -1302,6 +1430,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
     let (malformed_kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&malformed_config, &lane_config)
             .expect("initialize malformed temporary Kura");
+    install_native_amx_startup_carrier_without_participant_evidence(&malformed_kura);
     let malformed_entry = malformed_kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("malformed temporary primary lane entry");
@@ -1339,6 +1468,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
         let (oversized_kura, _) =
             Kura::open_test_kura_with_configured_lane_config(&oversized_config, &lane_config)
                 .expect("initialize oversized publication temporary Kura");
+        install_native_amx_startup_carrier_without_participant_evidence(&oversized_kura);
         let oversized_entry = oversized_kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("oversized publication temporary primary lane entry");
@@ -1454,11 +1584,19 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("symlinked")
-            || error.to_string().contains("non-regular")
-            || error.to_string().contains("multi-link")
-            || error.to_string().contains("single-link regular file"),
-        "unexpected startup error: {error}"
+        matches!(&error, Error::IO(source, path)
+            if source.kind() == ErrorKind::InvalidData && path == &latest_path),
+        "startup must identify the exact non-regular Native pointer: {error}",
+    );
+    assert!(
+        fs::symlink_metadata(&latest_path)
+            .expect("retained pointer metadata")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read(&target).expect("unchanged symlink target"),
+        b"attacker-controlled"
     );
     let snapshot_regular_inventory = |directory: &Path| {
         let mut inventory = BTreeMap::new();

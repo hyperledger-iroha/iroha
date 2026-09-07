@@ -311,6 +311,13 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
     )
     let artifact = artifacts[0]
     let leaf = try XCTUnwrap(artifact["leaf"] as? [String: Any])
+    try require(leaf.keys.contains("previous_native_settlement_hash"), "required previous Native hash")
+    let previousNativeHash = leaf["previous_native_settlement_hash"]
+    if !(previousNativeHash is NSNull) {
+        let previousBytes = try fixtureCanonicalHashBytes(previousNativeHash, field: "previous Native hash")
+        try require(previousBytes != Data(repeating: 0, count: 31) + Data([1]), "nonzero previous Native hash")
+        try require(try fixtureUInt(leaf, "participant_height") > 1, "first lane block has no previous Native hash")
+    }
     let proof = try XCTUnwrap(artifact["proof"] as? [String: Any])
     let manifestCount = try fixtureUInt(
         execution,
@@ -426,6 +433,10 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
         )
         let prepare = try XCTUnwrap(leg["prepare_qc"] as? [String: Any])
         let body = try XCTUnwrap(prepare["body"] as? [String: Any])
+        let settlement = try XCTUnwrap(leg["participant_settlement"] as? [String: Any])
+        try require(settlement.keys.contains("previous_native_settlement_hash")
+            && fixtureScalarEqual(settlement["previous_native_settlement_hash"], previousNativeHash),
+            "manifest previous Native hash")
         try require(
             fixtureScalarEqual(body["source_id"], member["source_id"])
                 && fixtureScalarEqual(
@@ -471,6 +482,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         let canonical = try loadNativeAmxGroupedFixture()
         try validateApplicationEvidenceFixture(canonical)
         let controls = try XCTUnwrap(canonical["negative_controls"] as? [[String: Any]])
+        XCTAssertEqual(controls.count, 58)
         let applicationControls = controls.filter {
             $0["validator"] as? String == "application_evidence"
         }
@@ -490,6 +502,91 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 XCTAssertThrowsError(try validateApplicationEvidenceFixture(root))
             }
         }
+    }
+
+    private func flatParticipantSettlement() -> [String: Any] {
+        ["lane_id": 0, "dataspace_id": 0,
+         "lane_incarnation": "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C",
+         "participant_lane_block_height": 1, "authority_context_height": 2,
+         "previous_native_settlement_hash": NSNull(),
+         "source_ids": [String(repeating: "F0", count: 32), String(repeating: "10", count: 32)]]
+    }
+
+    private func decodeFlatParticipant(_ value: [String: Any]) throws -> ToriiNativeAmxParticipantSettlement {
+        try JSONDecoder().decode(ToriiNativeAmxParticipantSettlement.self,
+                                 from: JSONSerialization.data(withJSONObject: value))
+    }
+
+    func testParticipantSettlementUsesExactSevenFieldFifoFrame() throws {
+        var wire = flatParticipantSettlement()
+        let parsed = try decodeFlatParticipant(wire)
+        XCTAssertEqual(parsed.laneId, 0)
+        XCTAssertEqual(parsed.dataspaceId, 0)
+        XCTAssertEqual(parsed.participantLaneBlockHeight, 1)
+        XCTAssertEqual(parsed.authorityContextHeight, 2)
+        XCTAssertEqual(parsed.sourceIds.map(\.rawValue),
+                       [String(repeating: "F0", count: 32), String(repeating: "10", count: 32)])
+        XCTAssertEqual(ToriiNativeAmxWire.settlementHash(parsed),
+                       "hash:350CB3C0D8728E39820775AC522B345C84631FA81BA164F72FB70043657012CF#EB51")
+        XCTAssertNil(parsed.previousNativeSettlementHash)
+        var linked = wire
+        linked["previous_native_settlement_hash"] = wire["lane_incarnation"]
+        XCTAssertThrowsError(try decodeFlatParticipant(linked))
+        linked["participant_lane_block_height"] = 2
+        let laterLinked = try decodeFlatParticipant(linked)
+        XCTAssertEqual(laterLinked.previousNativeSettlementHash, parsed.laneIncarnation)
+        linked["previous_native_settlement_hash"] = NSNull()
+        XCTAssertNil(try decodeFlatParticipant(linked).previousNativeSettlementHash)
+        XCTAssertNotEqual(ToriiNativeAmxWire.settlementHash(laterLinked),
+                          ToriiNativeAmxWire.settlementHash(try decodeFlatParticipant(linked)))
+        wire["source_ids"] = parsed.sourceIds.reversed().map(\.rawValue)
+        XCTAssertNotEqual(ToriiNativeAmxWire.settlementHash(parsed),
+                          ToriiNativeAmxWire.settlementHash(try decodeFlatParticipant(wire)))
+    }
+
+    func testParticipantSettlementRejectsRetiredFieldsAndInvalidMembership() throws {
+        let wire = flatParticipantSettlement()
+        for missing in wire.keys {
+            var invalid = wire
+            invalid.removeValue(forKey: missing)
+            XCTAssertThrowsError(try decodeFlatParticipant(invalid))
+        }
+        for retired in ["block_height", "tx_count", "total_local_amount", "total_xor_due",
+                        "total_xor_after_haircut", "total_xor_variance", "swap_metadata",
+                        "receipts", "nexus_fee_receipts", "native_amx_receipts"] {
+            var invalid = wire
+            invalid[retired] = NSNull()
+            XCTAssertThrowsError(try decodeFlatParticipant(invalid))
+        }
+        for height in ["participant_lane_block_height", "authority_context_height"] {
+            for value in [0, -1] {
+                var invalid = wire
+                invalid[height] = value
+                XCTAssertThrowsError(try decodeFlatParticipant(invalid))
+            }
+        }
+        var invalid = wire
+        let markedZeroBody = "hash:" + String(repeating: "0", count: 63) + "1"
+        invalid["lane_incarnation"] = markedZeroBody + String(
+            format: "#%04X", Int(ToriiNativeAmxWire.crc16(Array(markedZeroBody.utf8))))
+        XCTAssertThrowsError(try decodeFlatParticipant(invalid))
+        invalid["previous_native_settlement_hash"] = invalid["lane_incarnation"]
+        invalid["lane_incarnation"] = wire["lane_incarnation"]
+        invalid["participant_lane_block_height"] = 2
+        XCTAssertThrowsError(try decodeFlatParticipant(invalid))
+        for sources in [[], [String(repeating: "00", count: 32)],
+                        [String(repeating: "F0", count: 32), String(repeating: "F0", count: 32)],
+                        [String(repeating: "f0", count: 32)]] {
+            invalid = wire
+            invalid["source_ids"] = sources
+            XCTAssertThrowsError(try decodeFlatParticipant(invalid))
+        }
+        let maximum = (1...4096).map { String(format: "%064X", $0) }
+        invalid = wire
+        invalid["source_ids"] = maximum
+        XCTAssertEqual(try decodeFlatParticipant(invalid).sourceIds.count, 4096)
+        invalid["source_ids"] = maximum + [String(format: "%064X", 4097)]
+        XCTAssertThrowsError(try decodeFlatParticipant(invalid))
     }
 
     func testRustOwnedGroupedNativeAmxV2GoldenFixture() throws {
@@ -528,14 +625,14 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         XCTAssertNil(firstLeg.participantProposal.payloadBlockHint)
         XCTAssertEqual(
             firstLeg.participantSettlementHash,
-            "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72"
+            "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813"
         )
         let remoteLeg = try XCTUnwrap(
             group.nativeAmxReceipts.first?.legs.dropFirst().first
         )
         XCTAssertEqual(
             remoteLeg.participantSettlementHash,
-            "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452"
+            "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240"
         )
         let firstValidator = try XCTUnwrap(
             firstLeg.participantProposal.descriptor.validatorSet.first
@@ -553,7 +650,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 XCTAssertTrue(leg.prepareQc.validatorSetPops.allSatisfy { $0.count == 96 })
                 XCTAssertEqual(leg.prepareQc.blsAggregateSignature.count, 96)
                 XCTAssertEqual(
-                    leg.participantSettlement.receipts.map(\.sourceId),
+                    leg.participantSettlement.sourceIds.map(\.rawValue),
                     sourceOrder
                 )
             }
@@ -777,6 +874,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         try requireNativeAmxABI23Bridge()
         let canonical = try loadNativeAmxGroupedFixture()
         let controls = try XCTUnwrap(canonical["negative_controls"] as? [[String: Any]])
+        XCTAssertEqual(controls.count, 58)
         let identifiers = Set(controls.compactMap { $0["id"] as? String })
         XCTAssertTrue(
             Set([
@@ -787,6 +885,8 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 "coherent_duplicate_validator_set",
                 "coherent_over_quorum_requirement",
                 "manifest_leaf_hash_tampering",
+                "missing_previous_native_settlement_hash",
+                "manifest_missing_previous_native_settlement_hash",
                 "non_canonical_validator_peer_id",
                 "execution_commitment_merge_carrier_wrong_version",
                 "execution_commitment_missing_merge_carrier_field",

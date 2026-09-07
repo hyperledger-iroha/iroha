@@ -83,6 +83,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 self.topic_frame_caps.peer_gossip = cap;
             }
             message::Topic::Health => self.topic_frame_caps.health = cap,
+            message::Topic::Connect => self.topic_frame_caps.connect = cap,
             message::Topic::Other => self.topic_frame_caps.other = cap,
         }
         self

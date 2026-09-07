@@ -897,3 +897,18 @@ fn source_contract_case_ids_are_unique() {
         run_source_contract(id);
     }
 }
+
+/// Run large debug-only lifecycle fixtures on their explicit bounded stack.
+/// Actual Core35 diagnostics pass all fifteen callers at this size; production
+/// worker construction and stack use remain separate qualification obligations.
+#[cfg(test)]
+pub(super) fn run_bounded_coordinator_fixture(name: &'static str, body: fn()) {
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(body)
+        .expect("spawn bounded coordinator fixture thread");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}

@@ -11,6 +11,8 @@ import java.nio.file.Paths
 import java.util.EnumSet
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Test
@@ -22,12 +24,15 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Scripted endpoints test mapping and rejection, never manufacture qualified native evidence. */
 class KagemushaNativeCoreCoordinatorAdapterV1Test {
-    @Test fun `all ten typed methods map exact fields through native transport`() {
+    @Test fun `all eleven typed methods map exact fields through native transport`() {
         val f = Fixture()
         val endpoint = Endpoint()
         val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint)
         endpoint.expect(1, listOf(u32(5), f.id, byteArrayOf(9)), listOf(f.id))
         assertContentEquals(f.id, core.reserveOperationId(5, f.id, byteArrayOf(9)))
+        val readCommand = KagemushaDeviceOperationCodecV1.encodeControlCommand(KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential)
+        endpoint.expect(11, listOf(u32(1), readCommand), listOf(f.id))
+        assertContentEquals(f.id, core.beginObservation(1, readCommand))
         endpoint.expect(2, f.qFields + listOf(f.q.hardwarePolicyDigest()), emptyList())
         core.acceptQualification(f.q, f.q.hardwarePolicyDigest())
         val authenticator = ByteArray(64).also { it[31] = 1; it[63] = 2 }
@@ -57,7 +62,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         assertContentEquals(f.id, release.operationId())
         assertContentEquals(f.envelopeDigest, release.envelopeDigest())
         assertContentEquals(byteArrayOf(12), release.hardwareReleaseAuthorization())
-        assertEquals(11, endpoint.calls)
+        assertEquals(12, endpoint.calls)
     }
 
     @Test fun `begin rejects substituted archive operation inputs release credential and Core key`() {
@@ -195,6 +200,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             override fun open(storagePath: String) = 1L
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
                 1 -> arrayOf(fields[1])
+                11 -> arrayOf(digest(97))
                 2 -> emptyArray()
                 3 -> { admitted += fields[0][0].toInt() to fields[4].copyOf(); emptyArray() }
                 else -> error("unexpected method $method")
@@ -212,12 +218,49 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                     if (operation == 1) qualificationReply else requestReply, authenticator(operation))
             }
         }
+        val store = TestOperationIntentStoreV1()
         val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
-            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint))
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint), store, {})
         assertContentEquals(f.requestBytes, provider.createPaymentRequest(f.request.requestId(),
             f.request.recipient.canonicalPayload(), f.request.amount, f.request.expiresAtMs - f.request.issuedAtMs))
         assertEquals(listOf(1, 22), admitted.map { it.first })
         admitted.forEach { assertContentEquals(authenticator(it.first), it.second) }
+        assertFalse(store.load(22, f.request.requestId())!!.acknowledged)
+        assertFailsWith<IllegalArgumentException> { provider.acknowledgeDurableResult(f.request.requestId(), f.ackBytes) }
+        assertFalse(store.load(22, f.request.requestId())!!.acknowledged)
+        provider.acknowledgeDurableResult(f.request.requestId(), f.requestBytes)
+        provider.acknowledgeDurableResult(f.request.requestId(), f.requestBytes)
+        assertTrue(store.load(22, f.request.requestId())!!.acknowledged)
+        assertEquals(listOf(1, 22), admitted.map { it.first })
+    }
+
+    @Test fun `durable receiver acknowledgement compares the exact accepted bytes before completing credit records`() {
+        val f = Fixture()
+        val acknowledgement = KagemushaNoritoV1.decodeAcknowledgementShapeExact(f.ackBytes,
+            f.request, KagemushaNoritoV1.decodePaymentShapeExact(f.paymentBytes, f.request))
+        val creditId = acknowledgement.inboxReceipt.creditId()
+        val command = KagemushaDeviceOperationCodecV1.encodeControlCommand(
+            KagemushaDeviceControlCommandV1.SignReceiveAcknowledgement(f.requestBytes, f.paymentBytes, acknowledgement.inboxReceipt))
+        val reply = testArchive("iroha.kagemusha.device.v1.receive-acknowledgement-reply",
+            testFields(byteArrayOf(1, 0), byteArrayOf(11),
+                ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(f.ackBytes.size.toLong()).array() + f.ackBytes))
+        val store = TestOperationIntentStoreV1()
+        // Storage-only model: acknowledgement neither decodes nor admits this qualification.
+        val qualification = byteArrayOf(5)
+        store.save(KagemushaOperationIntentV1(store.scope(), 11, creditId, KagemushaOperationIntentPurposeV1.CALLER,
+            command, command, qualification, reply, ByteArray(64).also { it[31] = 1; it[63] = 1 }, qualification))
+        val transport = object : KagemushaNativeAuthenticatedDeviceTransportV1 {
+            override fun hardwarePolicyId(): ByteArray = error("host acknowledgement must not open hardware")
+            override fun qualificationReportDigest(): ByteArray = error("host acknowledgement must not qualify hardware")
+            override fun executeAndVerify(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray,
+                acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 = error("host acknowledgement must not dispatch")
+        }
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", Endpoint()), store, {})
+        assertFailsWith<IllegalArgumentException> { provider.acknowledgeDurableResult(creditId, f.requestBytes) }
+        assertFalse(store.load(11, creditId)!!.acknowledged)
+        provider.acknowledgeDurableResult(creditId, f.ackBytes)
+        assertTrue(store.load(11, creditId)!!.acknowledged)
     }
 
     @Test fun `terminal and recovery envelopes reject one byte beyond the native bound`() {
@@ -253,6 +296,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             override fun open(storagePath: String) = 1L
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
                 1 -> arrayOf(fields[1])
+                11 -> arrayOf(digest(97))
                 2, 3 -> emptyArray()
                 10 -> arrayOf(f.id, f.preparationBytes, f.envelopeDigest, f.paymentBytes, byteArrayOf(12))
                 else -> error("unexpected method $method")
@@ -286,7 +330,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                     KagemushaDeviceSenderPublicInputsV1.RedeemSplit(BigInteger.ONE, f.request.recipient.canonicalPayload()),
                     f.paymentBytes, byteArrayOf(12))
         }
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core)
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
         assertFailsWith<IllegalArgumentException> {
             provider.recordAcknowledgement(f.terminal, f.requestBytes, f.paymentBytes, f.ackBytes)
         }
@@ -314,6 +358,309 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 expected.indices.forEach { assertContentEquals(expected[it], fields[it], "method $method field $it") }
             }
             return response.map { it.copyOf() }.toTypedArray()
+        }
+    }
+
+    @Test fun `unapproved bootstrap performs no reservation or hardware mutation`() {
+        val lane = InternalTransitionLane(20, initiallyInstalled = false)
+        lane.approved = false
+        assertFailsWith<IllegalStateException> { lane.provider().bootstrapState() }
+        assertEquals(emptyList(), lane.operations)
+        assertEquals(emptyList(), lane.reservations)
+        assertTrue(lane.store.pendingInternal().isEmpty())
+    }
+
+    @Test fun `MiBank revocation during reservation is checked again before bootstrap dispatch`() {
+        val lane = InternalTransitionLane(20, initiallyInstalled = false)
+        lane.revokeOnReservation = true
+        assertFailsWith<IllegalStateException> { lane.provider().bootstrapState() }
+        assertFalse(lane.operations.contains(20))
+        assertEquals(1, lane.store.pendingInternal().size)
+        assertNull(lane.aggregate)
+    }
+
+    @Test fun `lost bootstrap response resumes same intent without requiring new approval after installation`() {
+        val lane = InternalTransitionLane(20, initiallyInstalled = false)
+        lane.dropReply = true
+        assertFailsWith<IllegalStateException> { lane.provider().bootstrapState() }
+        val retained = lane.store.pendingInternal().single()
+        assertNull(retained.canonicalReply())
+        lane.approved = false
+        val recovered = lane.provider().recover()
+        assertContentEquals(lane.aggregate, recovered.aggregateState())
+        assertEquals(2, lane.operationIds.size)
+        assertContentEquals(retained.operationId(), lane.operationIds[0])
+        assertContentEquals(retained.operationId(), lane.operationIds[1])
+        assertTrue(lane.store.pendingInternal().isEmpty())
+        assertTrue(lane.observationIds.distinctBy { it.toList() }.size == lane.observationIds.size)
+    }
+
+    @Test fun `revoked pending bootstrap cannot initialize still empty hardware`() {
+        val lane = InternalTransitionLane(20, initiallyInstalled = false)
+        lane.failBeforeMutation = true
+        assertFailsWith<IllegalStateException> { lane.provider().bootstrapState() }
+        assertEquals(1, lane.store.pendingInternal().size)
+        lane.approved = false
+        assertFailsWith<IllegalStateException> { lane.provider().recover() }
+        assertNull(lane.aggregate)
+        assertEquals(1, lane.operationIds.size)
+        assertEquals(1, lane.store.pendingInternal().size)
+    }
+
+    @Test fun `fold whose Core acceptance was interrupted resumes before a new pending credit read`() {
+        val lane = InternalTransitionLane(17, initiallyInstalled = true)
+        lane.failCoreAcceptance = true
+        assertFailsWith<IllegalStateException> { lane.provider().foldPendingCredit(lane.selector) }
+        val retained = lane.store.pendingInternal().single()
+        assertNull(retained.canonicalReply())
+        val reopened = KagemushaWalletV1.open(lane.provider(), authorizeBootstrap = { error("must recover existing state") })
+        assertTrue(lane.store.pendingInternal().isEmpty())
+        assertContentEquals(retained.operationId(), lane.operationIds.last())
+        assertEquals(2, lane.operationIds.size)
+        assertFailsWith<IllegalArgumentException> { reopened.drainPendingCredits() }
+        assertEquals(18, lane.operations.last())
+        assertTrue(lane.operations.indexOfLast { it == 17 } < lane.operations.indexOfLast { it == 18 })
+    }
+
+    @Test fun `rotation lost reply verifies original epoch key while fresh reads use successor key`() {
+        val lane = InternalTransitionLane(19, initiallyInstalled = true)
+        lane.dropReply = true
+        assertFailsWith<IllegalStateException> { lane.provider().rotateHardwareEpoch() }
+        val original = lane.store.pendingInternal().single()
+        assertNull(original.canonicalReply())
+        assertFalse(lane.initial.credential.devicePublicKey == lane.active.credential.devicePublicKey)
+        val result = lane.provider().recover()
+        assertContentEquals(lane.aggregate, result.aggregateState())
+        assertContentEquals(original.operationId(), lane.operationIds.last())
+        assertEquals(2, lane.operationIds.size)
+        assertTrue(lane.store.pendingInternal().isEmpty())
+        assertEquals(1, lane.historicalRotationAdmissions)
+        assertTrue(lane.successorSnapshotReads > 0)
+    }
+
+    @Test fun `Core accepted fold with interrupted host reply sync recovers the same operation before acknowledging`() {
+        val lane = InternalTransitionLane(17, initiallyInstalled = true)
+        lane.store.failAcceptedOperation = 17
+        assertFailsWith<IllegalStateException> { lane.provider().foldPendingCredit(lane.selector) }
+        val retained = lane.store.pendingInternal().single()
+        assertNull(retained.canonicalReply())
+        assertFalse(retained.acknowledged)
+        assertEquals(1, lane.transitionAdmissions)
+        lane.provider().recover()
+        assertEquals(2, lane.transitionAdmissions)
+        assertContentEquals(retained.operationId(), lane.operationIds.last())
+        assertTrue(lane.store.load(17, retained.operationId())!!.acknowledged)
+        assertTrue(lane.store.pendingInternal().isEmpty())
+    }
+
+    @Test fun `read challenges are transient and reads never touch the operation store`() {
+        val lane = InternalTransitionLane(17, initiallyInstalled = true)
+        lane.store.failSave = true
+        lane.provider().recover()
+        lane.provider().recover()
+        assertTrue(lane.reservations.isEmpty())
+        assertTrue(lane.store.events.isEmpty())
+        assertTrue(lane.observationChallenges.map { it.toList() }.distinct().size == lane.observationChallenges.size)
+    }
+
+    @Test fun `lost observation begin is replaced with a new native challenge after recreation`() {
+        val lane = InternalTransitionLane(17, initiallyInstalled = true)
+        lane.loseNextObservationBegin = true
+        assertFailsWith<IllegalStateException> { lane.provider().recover() }
+        assertTrue(lane.operations.isEmpty())
+        val lost = lane.observationChallenges.single()
+        lane.provider().recover()
+        assertTrue(lane.observationIds.none { it.contentEquals(lost) })
+        assertTrue(lane.store.events.isEmpty())
+    }
+
+    @Test fun `native recreation rejects an old authenticated snapshot as a current read`() {
+        val lane = InternalTransitionLane(17, initiallyInstalled = true)
+        lane.provider().recover()
+        lane.replayNextSnapshot = true
+        assertFailsWith<IllegalStateException> { lane.provider().recover() }
+        lane.provider().recover()
+        assertTrue(lane.store.events.isEmpty())
+    }
+
+    @Test fun `mutation cannot acknowledge until its accepted snapshot evidence is durable`() {
+        val lane = InternalTransitionLane(17, initiallyInstalled = true)
+        lane.store.failReconciliation = true
+        assertFailsWith<IllegalStateException> { lane.provider().foldPendingCredit(lane.selector) }
+        val pending = lane.store.pendingInternal().single()
+        assertTrue(pending.canonicalReply() != null)
+        assertNull(pending.reconciliationEvidence())
+        lane.store.failAcknowledgement = true
+        assertFailsWith<IllegalStateException> { lane.provider().recover() }
+        val beforeAck = lane.store.pendingInternal().single()
+        assertTrue(beforeAck.reconciliationEvidence() != null)
+        lane.provider().recover()
+        val completed = checkNotNull(lane.store.load(17, pending.operationId()))
+        assertTrue(completed.acknowledged)
+        assertContentEquals(beforeAck.reconciliationEvidence(), completed.reconciliationEvidence())
+        assertTrue(lane.operationIds.all { it.contentEquals(pending.operationId()) })
+    }
+
+    /** Typed transport/Core doubles exercise ordering, never production hardware admission. */
+    private class InternalTransitionLane(val transition: Int, initiallyInstalled: Boolean) {
+        val fixture = Fixture()
+        val initial = fixture.q
+        var active = initial
+        val store = TestOperationIntentStoreV1()
+        val selector = KagemushaPendingCreditSelectorV1(KagemushaPendingCreditKindV1.RECEIVE, digest(91))
+        var aggregate: ByteArray? = if (initiallyInstalled) fixture.aggregateBytes else null
+        var approved = true
+        var revokeOnReservation = false
+        var dropReply = false
+        var failBeforeMutation = false
+        var failCoreAcceptance = false
+        var historicalRotationAdmissions = 0
+        var transitionAdmissions = 0
+        var successorSnapshotReads = 0
+        val operations = mutableListOf<Int>()
+        val reservations = mutableListOf<Int>()
+        val operationIds = mutableListOf<ByteArray>()
+        val observationIds = mutableListOf<ByteArray>()
+        val observationChallenges = mutableListOf<ByteArray>()
+        var loseNextObservationBegin = false
+        var replayNextSnapshot = false
+        private var previousSnapshot: KagemushaAuthenticatedDeviceResponseV1? = null
+        private var outstandingObservation: Triple<Int, ByteArray, ByteArray>? = null
+        private var terminalReply: ByteArray? = null
+        private val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
+            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+            override fun open(storagePath: String): Long { outstandingObservation = null; return 1L }
+            override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
+                1 -> {
+                    val operation = fields[0][0].toInt()
+                    reservations += operation
+                    if (operation == 20 && revokeOnReservation) approved = false
+                    arrayOf(fields[1])
+                }
+                11 -> {
+                    val operation = fields[0][0].toInt()
+                    check(operation in setOf(1, 13, 18, 21))
+                    val id = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
+                    outstandingObservation = Triple(operation, id.copyOf(), fields[1].copyOf())
+                    observationChallenges += id.copyOf()
+                    if (loseNextObservationBegin) { loseNextObservationBegin = false; error("lost native read challenge") }
+                    arrayOf(id)
+                }
+                2 -> emptyArray()
+                3 -> {
+                    val operation = fields[0][0].toInt()
+                    if (operation in setOf(1, 13, 18, 21)) {
+                        val expected = checkNotNull(outstandingObservation)
+                        outstandingObservation = null
+                        check(expected.first == operation && expected.second.contentEquals(fields[1]) &&
+                            expected.third.contentEquals(fields[2]) && observationAuthenticator(expected.second).contentEquals(fields[4])) {
+                            "historical response is not the current native observation"
+                        }
+                    }
+                    if (operation == transition && failCoreAcceptance) {
+                        failCoreAcceptance = false
+                        error("interrupted before native Core accepted the reply")
+                    }
+                    if (operation == 19) {
+                        assertContentEquals(KagemushaNoritoV1.encodeHardwareCredentialShape(initial.credential), fields[8])
+                        historicalRotationAdmissions++
+                    }
+                    if (operation == transition) transitionAdmissions++
+                    emptyArray()
+                }
+                else -> error("unexpected method $method")
+            }
+        }
+        private val transport = object : KagemushaNativeAuthenticatedDeviceTransportV1 {
+            override fun hardwarePolicyId() = active.hardwarePolicyDigest()
+            override fun qualificationReportDigest() = active.profile.qualificationReportDigest()
+            override fun executeAndVerify(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray,
+                acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 {
+                operations += operation
+                KagemushaDeviceOperationCodecV1.decodeControlCommand(operation, requestId, canonicalCommand)
+                val key = if (operation == 19) initial.credential.devicePublicKey else active.credential.devicePublicKey
+                if (operation == 1) assertNull(acceptedDevicePublicKey) else assertContentEquals(key.sec1Bytes(), acceptedDevicePublicKey)
+                if (operation in setOf(1, 13, 18, 21)) observationIds += requestId.copyOf()
+                if (operation == 21 && replayNextSnapshot) {
+                    replayNextSnapshot = false
+                    return checkNotNull(previousSnapshot)
+                }
+                val reply = when (operation) {
+                    1 -> qualificationReply(active)
+                    21 -> {
+                        if (active !== initial) successorSnapshotReads++
+                        snapshotReply(aggregate)
+                    }
+                    18 -> return KagemushaAuthenticatedDeviceResponseV1(18,
+                        KagemushaAuthenticatedDeviceStatusV1.UNAVAILABLE, byteArrayOf(), byteArrayOf())
+                    transition -> {
+                        operationIds += requestId.copyOf()
+                        val intent = checkNotNull(store.load(operation, requestId))
+                        assertContentEquals(canonicalCommand, intent.publicBinding())
+                        assertContentEquals(canonicalCommand, intent.canonicalCommand())
+                        if (failBeforeMutation) { failBeforeMutation = false; error("lost command before device mutation") }
+                        if (terminalReply == null) {
+                            if (transition == 19) active = rotatedQualification()
+                            aggregate = nextAggregate(if (transition == 17) 2 else 0)
+                            terminalReply = transitionReply(checkNotNull(aggregate))
+                        }
+                        if (dropReply) { dropReply = false; error("lost response after hardware mutation") }
+                        checkNotNull(terminalReply)
+                    }
+                    else -> error("unexpected operation $operation")
+                }
+                return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.SUCCESS,
+                    reply, if (operation in setOf(1, 13, 18, 21)) observationAuthenticator(requestId)
+                    else ByteArray(64).also { it[31] = if (operation == 19) 1 else 2; it[63] = 1 })
+                    .also { if (operation == 21) previousSnapshot = it }
+            }
+        }
+        private fun observationAuthenticator(id: ByteArray): ByteArray = ByteArray(64).also {
+            id.copyInto(it, 1, 0, 31); it[63] = 1
+        }
+        fun provider() = KagemushaAuthenticatedHardwareProviderV1(transport,
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/durable-store", endpoint), store) {
+                check(approved) { "MiBank approval required" }
+            }
+        private fun nextAggregate(sequence: Long) = KagemushaNoritoV1.encodeAggregateStateShape(
+            KagemushaAggregateStateCommitmentV1(1, active.releaseId(), fixture.request.networkId, fixture.request.asset,
+                fixture.request.assetIncarnation, fixture.request.scale, fixture.request.liabilityPoolId(),
+                active.credential.laneCommitment(), active.credential.hardwareEpochId(), active.credential.deviceKeyReference(),
+                active.hardwarePolicyDigest(), BigInteger.valueOf(sequence), digest(92)))
+        private fun rotatedQualification(): KagemushaHardwareQualificationV1 {
+            val keyPair = java.security.KeyPairGenerator.getInstance("EC").apply {
+                initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+            }.generateKeyPair()
+            val publicKey = keyPair.public as java.security.interfaces.ECPublicKey
+            fun coordinate(value: BigInteger): ByteArray = value.toByteArray().let { bytes ->
+                if (bytes.size > 32) bytes.copyOfRange(bytes.size - 32, bytes.size) else ByteArray(32 - bytes.size) + bytes
+            }
+            val key = KagemushaDevicePublicKeyV1(byteArrayOf(4) + coordinate(publicKey.w.affineX) + coordinate(publicKey.w.affineY))
+            val old = initial.credential
+            val credential = KagemushaHardwareCredentialV1(1, digest(93), old.networkId, old.hardwareProfileId(), old.suiteId(),
+                old.firmwarePolicyDigest(), old.policyEpoch, old.laneCommitment(), digest(94), old.hardwareEpochGeneration + 1,
+                key, digest(95), old.issuedAtMs, old.expiresAtMs, old.governanceSignature)
+            return KagemushaHardwareQualificationV1(1, initial.profile, credential, initial.releaseId(), initial.hardwarePolicyDigest(),
+                initial.coreAuthorizationKeyReference(), initial.capabilities())
+        }
+        private fun qualificationReply(q: KagemushaHardwareQualificationV1) =
+            testArchive("iroha.kagemusha.device.v1.active-hardware-credential-reply", testFields(byteArrayOf(1, 0), byteArrayOf(1),
+                q.releaseId(), q.hardwarePolicyDigest(), q.coreAuthorizationKeyReference(),
+                NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareProfileShape(q.profile), null).payload,
+                NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareCredentialShape(q.credential), null).payload))
+        private fun vector(bytes: ByteArray): ByteArray = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(bytes.size.toLong()).array() + bytes
+        private fun snapshotReply(aggregate: ByteArray?): ByteArray {
+            val option = if (aggregate == null) byteArrayOf(0) else byteArrayOf(1) + testFields(vector(aggregate))
+            val journal = ByteArray(16).also { if (transition == 17 && terminalReply != null) it[0] = 2 else if (aggregate != null && terminalReply == null) it[0] = 1 }
+            return testArchive("iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply",
+                testFields(byteArrayOf(1, 0), byteArrayOf(21), option, journal, ByteArray(16), ByteArray(16)), alignment = 16)
+        }
+        private fun transitionReply(aggregate: ByteArray): ByteArray {
+            val values = if (transition == 17) arrayOf(byteArrayOf(1, 0), byteArrayOf(17), u32(selector.kind.ordinal),
+                selector.creditId(), vector(aggregate)) else arrayOf(byteArrayOf(1, 0), byteArrayOf(transition.toByte()), vector(aggregate))
+            val schema = when (transition) { 17 -> "fold-receive-credit"; 19 -> "rotate-hardware-epoch"; else -> "bootstrap-aggregate-state" }
+            return testArchive("iroha.kagemusha.device.v1.$schema-reply", testFields(*values), alignment = if (transition == 17) 16 else 8)
         }
     }
 
@@ -382,11 +729,15 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             } while (size != 0)
             result + length.toByteArray() + value
         }
-        private fun testArchive(schema: String, payload: ByteArray): ByteArray = NoritoCodec.encode(payload, schema,
+        private fun testArchive(schema: String, payload: ByteArray, alignment: Int = 8): ByteArray = NoritoCodec.encode(payload, schema,
             object : TypeAdapter<ByteArray> {
                 override fun encode(encoder: NoritoEncoder, value: ByteArray) = encoder.writeBytes(value)
                 override fun decode(decoder: NoritoDecoder) = decoder.readBytes(decoder.remaining())
-            }) // These control schemas align to eight; the 40-byte header needs no padding.
+            }).let { archive ->
+                val padding = (alignment - NoritoHeader.HEADER_LENGTH % alignment) % alignment
+                archive.copyOfRange(0, NoritoHeader.HEADER_LENGTH) + ByteArray(padding) +
+                    archive.copyOfRange(NoritoHeader.HEADER_LENGTH, archive.size)
+            }
         private fun fixture(section: String): ByteArray {
             var directory = Paths.get("").toAbsolutePath().normalize()
             while (directory != null) {

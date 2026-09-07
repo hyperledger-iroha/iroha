@@ -122,12 +122,9 @@ private fun validateTypedCanonicalPayload(
         IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->
             "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
     }
-    val requiredPadding = when (kind) {
-        IrohaPeerPayloadKind.REQUEST,
-        IrohaPeerPayloadKind.PAYMENT,
-        -> 8
-        IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> 0
-    }
+    val alignment = KagemushaNoritoV1.canonicalAlignment(schema)
+    val requiredPadding =
+        (alignment - NoritoHeader.HEADER_LENGTH % alignment) % alignment
     try {
         val decoded = NoritoHeader.decode(bytes, SchemaHash.hash16(schema))
         val header = decoded.header

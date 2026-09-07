@@ -1180,6 +1180,35 @@ where
     Ok(recovered.is_exact().then_some(recovered))
 }
 impl CertifiedStoreReplayEvidenceV1 {
+    /// Compare one schedulable Store carrier with the state-independent row shape.
+    ///
+    /// The lifecycle registry authenticates Ready or exact reducer-fence-woken
+    /// state before calling this seam.  Cold recovery must continue to use
+    /// [`Self::exactly_matches_recovered_record`], which remains Ready-only.
+    pub(super) fn exactly_matches_schedulable_record_shape(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        body_stage_matches_record_shape(
+            &self.family.source,
+            self.family.body_frame,
+            active_context,
+            record,
+            metadata,
+            installed_digest,
+            effect,
+            receipt,
+            pending,
+            LifecycleWorkClass::Store,
+            LifecycleStageKind::StoreBody,
+        )
+    }
     /// Compare one installed Store carrier with its complete reconstructed row.
     pub(super) fn exactly_matches_recovered_record(
         &self,
@@ -2019,6 +2048,35 @@ fn body_stage_matches_recovered_record(
     work_class: LifecycleWorkClass,
     stage_kind: LifecycleStageKind,
 ) -> bool {
+    record.state == super::LifecycleState::Ready
+        && body_stage_matches_record_shape(
+            source,
+            body_frame,
+            active_context,
+            record,
+            metadata,
+            installed_digest,
+            effect,
+            receipt,
+            pending,
+            work_class,
+            stage_kind,
+        )
+}
+#[allow(clippy::too_many_arguments)]
+fn body_stage_matches_record_shape(
+    source: &BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+    active_context: LifecycleContext,
+    record: &LifecycleRecord,
+    metadata: &DurableRecordMetadata,
+    installed_digest: LifecycleDigest,
+    effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+    pending: &PendingRuntimeEffectBinding,
+    work_class: LifecycleWorkClass,
+    stage_kind: LifecycleStageKind,
+) -> bool {
     let (tag, round, subject) = match effect {
         AdapterEffect::StoreBody {
             tag,
@@ -2051,6 +2109,9 @@ fn body_stage_matches_recovered_record(
         ReplayPayloadBindingV1::BodyFrame(body_frame),
     );
     let slot = PhysicalSlotId::for_capacity(work_class.capacity_class(), 0);
+    // `project` applies origin-aware ordering above. Commit-owned body work may
+    // retain a reducer tag from before the certified view, but the tag itself
+    // must still be the exact one sealed into this replay family.
     pending.exactly_binds_adapter_effect(effect)
         && statement.context_id() == round.context_id
         && statement.round().context_id == round.context_id
@@ -2067,12 +2128,12 @@ fn body_stage_matches_recovered_record(
         && shape.key.execution_commitment()
             == statement.execution_commitment().map(execution_commitment)
         && tag.height() == active_context.height()
-        && tag.view() >= statement.round().view
+        && source.tag
+            == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
         && digest_from_hash(pending.causal_lifecycle_key()) == record.owner.causal_root().digest()
         && record.key == shape.key
         && record.work_class == work_class
         && record.stage == LifecycleStage::new(stage_kind, PredecessorScope::Independent)
-        && record.state == super::LifecycleState::Ready
         && record.physical_slots == std::collections::BTreeMap::from([(slot, installed_digest)])
         && record.episode.slot_universe == std::collections::BTreeSet::from([slot])
         && record.episode.consumed_slots == record.episode.slot_universe

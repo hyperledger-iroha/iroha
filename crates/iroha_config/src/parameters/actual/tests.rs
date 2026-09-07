@@ -889,8 +889,8 @@ mod tests {
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
         assert_eq!(shared.limits.authenticated_non_validator_source_capacity, 2);
-        assert_eq!(shared.limits.body_bytes, 1089 * 1024 * 1024);
-        assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
+        assert_eq!(shared.limits.body_bytes, 1122 * 1024 * 1024);
+        assert_eq!(shared.limits.body_source_bytes, 34 * 1024 * 1024);
         shared
             .validate_ingress_roster_capacity(
                 usize::try_from(
@@ -1288,11 +1288,11 @@ mod tests {
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {
                 actual: 16 * 1024 * 1024,
-                minimum: 2 * 16 * 1024 * 1024 + 295_944,
+                minimum: 2 * 16 * 1024 * 1024 + 1_278_984,
                 max_payload_bytes: 16 * 1024 * 1024,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
-                certified_fence_escape_reserve: 64 * 1024,
+                certified_fence_escape_reserve: 1024 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -1300,7 +1300,7 @@ mod tests {
         );
         let mut config = default_v2_sumeragi();
         config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
-        let lane_minimum: usize = 5 * 1024 * 1024 + 2 * 64 * 1024;
+        let lane_minimum: usize = 6 * 1024 * 1024 + 64 * 1024;
         config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
         assert_error(
             &config,
@@ -1310,7 +1310,7 @@ mod tests {
                 max_payload_bytes: 1,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
-                certified_fence_escape_reserve: 64 * 1024,
+                certified_fence_escape_reserve: 1024 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -1335,13 +1335,13 @@ mod tests {
             ),
         );
         let mut config = default_v2_sumeragi();
-        config.queues.body_bytes = NonZeroUsize::new(99 * 1024 * 1024 - 1).expect("non-zero");
+        config.queues.body_bytes = NonZeroUsize::new(102 * 1024 * 1024 - 1).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyBytesTooSmall {
-                actual: 99 * 1024 * 1024 - 1,
-                minimum: 99 * 1024 * 1024,
-                body_source_bytes: 33 * 1024 * 1024,
+                actual: 102 * 1024 * 1024 - 1,
+                minimum: 102 * 1024 * 1024,
+                body_source_bytes: 34 * 1024 * 1024,
                 minimum_sources: 3,
             },
         );

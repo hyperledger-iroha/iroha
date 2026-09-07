@@ -12,6 +12,8 @@ import {
   ConnectApprovalRejectedError,
   ConnectSessionClosedError,
   ConnectSignRequestError,
+  CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1,
+  validateConnectTransactionTransportStatus,
   NetworkId,
   TORII_CANONICAL_REQUEST_DOMAIN_TAG,
   buildConnectTokenProtocol,
@@ -892,6 +894,42 @@ test("createConnectAppSession handles approval and sign success", async () => {
   socket.receive(encodeSignResultOk(preview, keys, signRequest.seq, signature));
   const detached = await signPromise;
   assert.deepEqual(Buffer.from(detached), signature);
+});
+
+test("Connect encrypts a complete execution payload as one bounded-size wire message", async () => {
+  RecordingWebSocket.instances.length = 0;
+  const preview = makePreview(), account = makeAccount(), relayToken = "relay-token";
+  const walletPrivateKey = new Uint8Array(32).fill(0x55);
+  const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
+  const keys = deriveKeys(preview, walletPrivateKey);
+  const session = createConnectAppSession({
+    baseUrl: "https://taira.sora.org", preview,
+    session: { sid: preview.sidBase64Url, token_app: "token-app", token_relay: relayToken },
+    webSocketImpl: RecordingWebSocket,
+  });
+  const socket = RecordingWebSocket.instances[0]; socket.open();
+  socket.receive(encodeControlFrame({ sidBytes: preview.sidBytes, dir: 1, seq: 1,
+    control: encodeApproveControl(preview, walletPublicKey, account.accountId, account.privateKey, relayToken) }));
+  await session.waitForApproval();
+  // Transport geometry fixture, not a proof or a native wallet interoperability claim.
+  const payload = Buffer.alloc(4 * 1024 * 1024, 0xab);
+  const pending = session.signTransaction(payload); await Promise.resolve();
+  assert.equal(socket.sent.length, 2, "current protocol sends one complete ciphertext, with no chunk negotiation");
+  assert.equal(socket.sent[1].length, payload.length + CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1);
+  const decoded = decodeAppSignRequest(preview, keys, socket.sent[1]);
+  assert.deepEqual(Buffer.from(decoded.txBytes), payload);
+  const signature = Buffer.alloc(64, 0x77);
+  socket.receive(encodeSignResultOk(preview, keys, decoded.seq, signature));
+  assert.deepEqual(Buffer.from(await pending), signature);
+  session.close();
+});
+
+test("Connect capacity preflight rejects default or contradictory large-transaction transport reports", () => {
+  const length = 4 * 1024 * 1024;
+  const status = { enabled: true, policy: { frame_max_bytes: length + 4096, session_buffer_max_bytes: 8 * 1024 * 1024 } };
+  assert.equal(validateConnectTransactionTransportStatus(status, length).frameBytes, length + 216);
+  for (const value of [null, { ...status, enabled: false }, { enabled: true, policy: { frame_max_bytes: 64_000, session_buffer_max_bytes: 262_144 } }, { ...status, policy: { ...status.policy, session_buffer_max_bytes: 1 } }]) assert.throws(() => validateConnectTransactionTransportStatus(value, length), /execution-qualified/);
+  assert.throws(() => validateConnectTransactionTransportStatus(status, Number.MAX_SAFE_INTEGER), /length/);
 });
 
 test("createConnectAppSession rejects a mixed-torsion approval signature", async () => {

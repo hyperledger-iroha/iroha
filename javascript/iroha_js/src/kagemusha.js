@@ -427,7 +427,7 @@ const KagemushaMintCreditV1 = defineModel(
   (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) throw new TypeError("mint credit version mismatch"); },
 );
 
-// Operation 21 exposes only public canonical archives; native hardware keeps reservations,
+// Operation 16 exposes only public canonical archives; native hardware keeps reservations,
 // openings, journal snapshots, and complete Guard certificates private.
 const KagemushaDeviceMintStageCommandV1 = defineModel(
   "KagemushaDeviceMintStageCommandV1",

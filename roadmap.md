@@ -21,8 +21,148 @@ signing. The optional KAGEMUSHA monetary device service is deliberately
 separate: offline spending requires a governed, qualified non-forking hardware
 profile and never permits software fallback.
 
+## Generic native game qualification
+
+- Carry the passing 54 focused normal Core checks, 14 model/admission checks and
+  40 native-origin admission/equipment fixture rows into final frozen-source
+  validation. The normal Core development build recorded source drift; the four
+  repaired admission tests use the exact source against a retained native model.
+  Preserve one canonical join layout, roster domain and compiled profile identity.
+- Carry the completed full-duration CPU-pool parity evidence into release
+  qualification: 1, 2 and 16 workers produce byte-identical eight-car, 5,400-tick
+  proofs, each independently verified. Retain exact source, dependency, resource
+  and wire evidence; validate the selected worker host within its 30-minute bound.
+- Integrate Touring S1 into product flows under reviewed immutable class parameters
+  and exact equipment entitlement. Carry the complete native full proof and fresh
+  process verification, 36 native codec fixtures, native-generated browser parity
+  and actual Chromium qualification-harness checks into that integration. The
+  public module compiles as a normal Cargo Core dependency; it is not activated.
+- Carry the passing current CLI finality continuation verifier into actual four-validator
+  proof settlement with partitions, withholding, restart and exact-height complete
+  local WSV convergence. Single-process or synthetic browser results cannot replace
+  these gates. Actual complete CLI33 passes all 13 regular tests and genuine proof
+  inclusion through the first-release tagged file and hashed index. Resolve the
+  retained genesis refinement and configuration GET decoder failures before
+  rerunning the native four-validator game scenario.
+- Complete independent cryptographic review, cross-platform/accelerated parity,
+  bounded validator costs and deployed wallet interoperability before funded games.
+  Verify advancing Taira finality, native runtime support, actual SoraFS provider
+  availability and finalized publication before publishing the frontend CID.
+
 ## KAGEMUSHA product coordinator and durable recovery
 
+- Complete the sole enrolled-open ABI24 cutover and delete path/accountless open
+  surfaces across C, JNI, Swift, Kotlin, Java and both apps. Carry the passing
+  exact selector/challenge fixtures into actual native-type and new-artifact
+  tests. Preserve MiBank approval for onboarding and fresh monetary admission.
+- Enforce the original native entry generation and continuous deadline before
+  input copying/decoding, across enrollment/possession phases and after fallible
+  output preparation. Preserve exact-resource cleanup and the original owner;
+  stale cancellation must leave a newer session intact. The current registry
+  fixes pass 135 actual bridge checks and 43 component tests on each platform,
+  but public lifecycle wiring and physical hardware qualification remain open.
+- Carry the passing exact Base packing and transport-capacity regressions into
+  final current-source validation, preserving boundary duplicates, usable fixed
+  rows and original key limits. Carry the ten passing Terminal claim integration
+  checks and completed reciprocal-tail mutation matrix into final current-source
+  validation; complete genuine key/proof/resource checks after source replacement.
+- Reduce the actual typed-SHA claim convergence graph without omitting verifier,
+  carrier or history constraints. Carry the applied shared Poseidon equality
+  column, native protocol identity, GLV and loaded-artifact privacy batch into
+  final current-source validation. Its isolated snapshot passes 57 focused tests,
+  including four genuine small proofs, plus 24 actual Core doctests; external
+  compilation verifies all 162 authenticated fields remain private. The subsequent
+  current native bridge build passes 137 tests with all seven source hashes stable.
+  Measure the corrected isolated native fold-transcript graph before application;
+  its 81 unique actual Core focused tests pass, including eight small real IPA
+  cases and the historical-failure regressions, but do not establish the full
+  monetary proof. Its optimized State diagnostic exposes a test-only row count
+  that omitted the two new native folds. The narrow correction passes two
+  extracted actual geometry tests and all 64 focused checks in the corrected
+  full Core build. The corrected State diagnostic times out after 2,700 seconds
+  with matching 858-source graphs but no final key or proof; its owned cleanup
+  completes correctly. Validate the staged dense-MSM counter inversion reuse and
+  optimize the actual linked `pasta_curves` diagnostic artifact before the next
+  State attempt. The preceding full State diagnostic times out after 2,700
+  seconds, reaching matching 866-source graphs in both fields but no final key or
+  proof. Complete the guarded full convergence graph with the original memory,
+  key and proof limits.
+  The minimum legal Claim PK estimate remains 98,583,446 bytes, above the 64 MiB
+  release cap. The minimum legal Claim also configures 116 advice columns: one
+  k16 scalar advice vector holds 232 MiB before other process allocations. The
+  consuming prover already transfers owned values and removes eager duplicate
+  placeholders, but retains the final scalar advice vector. Reduce the circuit and prover
+  working set, then measure the unchanged 128 MiB whole-process device gate;
+  reducing serialized key bytes alone cannot establish that gate. This source
+  allocation count is not a physical-device RSS measurement.
+  Early graph reductions do not establish a converged key or State
+  proof. Replace Terminal's oversized direct SHA work only after the
+  complete original message queue is bound to authenticated claim proofs and
+  merged histories, then measure all final keys and mobile resources.
+- Validate the staged ordinary-proof rotation inventory correction against
+  the pinned BGH19 reader and full Core. The existing predictor collapses domain
+  aliases that the parser treats as distinct signed rotations. Three extracted
+  checks now pass against the actual reader in both curves; full Core validation
+  and application remain pending. The four extracted dense counter checks also
+  pass, including complete row/terminal-point equivalence in both curves and
+  accumulator handoff across split lanes. Both candidates are installed in the
+  phase19 private snapshot, whose full Core build and all 71 focused checks now
+  pass with actual Pasta/Core/wrapper O3 artifacts and checks retained. Its fixed
+  State diagnostic times out after 2,700.076 seconds at 6,654,443,520 bytes peak
+  owned RSS, with all 5,249 inputs unchanged and correct child cleanup. Typed-SHA
+  generation completes, but each actual Claim proving key is 799,022,510 bytes;
+  reducing its serialized circuit inventory to the unchanged 64 MiB cap remains
+  a separate required change from transient allocation savings.
+- Validate the ordinary-proof squeeze schedule against the pinned full PLONK
+  reader, then assess replacing the remaining Base transcript inside the
+  existing native Poseidon capacity. Preserve complete challenges, proof bytes,
+  reciprocal equations and all accepted protocol inventories. The isolated
+  schedule, complete native adapter, parser factories and Claim call sites are
+  prepared privately but uncompiled. Both original parser bodies pass static
+  comparison; complete both-field challenge, stream, equation and mutation
+  tests, genuine proof verification and final key convergence remain required.
+  No native ordinary transcript replacement or resource improvement is
+  verified. Separately, the observed
+  credential prerequisite uses the borrowed-key prover, whose eager advice
+  buffers remain distinct from the already improved consuming-key path. An
+  isolated candidate reuses the existing advice storage while preserving cached
+  keys and references across phases. Its original-prover reference and 64
+  both-curve proof cases are prepared but uncompiled; actual RSS savings and
+  all proof equivalence checks remain outstanding.
+- Fix the Core51 production stack overflow exposed by the genuine recovered
+  nonzero-view Proposal restart test. The fixture compiles, but BTree insertion
+  of oversized inline registry carriers aborts on the normal stack. Review and
+  validate the private carrier-storage correction, including its size bound and
+  pre-fsync allocation custody. Require the complete signed Proposal, Set A chunk
+  delivery and next-Prepare assertions to pass without a larger test stack.
+- Validate the separate IPA accumulator ownership patch against its original
+  full prover reference in both curves, preserving complete proof bytes and
+  rejection behavior. It avoids a repeated k16 polynomial clone but leaves the
+  retained advice-vector memory floor unresolved; measure its effect separately.
+- Close the actual State/TerminalAuthorization/CommitWrapper key graph, then
+  regenerate Bootstrap, MintFold and SendSplit proofs under the final wrapper
+  identities. Require genuine payment and ReceiveFold verification with the
+  unchanged proof/exchange limits; diagnostic key or structural checks alone
+  cannot qualify the monetary path.
+- Complete dependency remediation and rerun advisory policy against the actual
+  mobile graphs before rebuilding the final SDK artifacts. Carry the now-passing
+  canonical 1,000-binding finality/restart and hostile decoder regressions into
+  final current-source release validation, preserving the 4 MiB allocation cap.
+- Bind the credential circuit to the exact governed provider-policy registry.
+  Preserve separate enabled-profile and Merkle-root identities; make registry
+  derivation independent of the final release identity. Monetary State/terminal
+  verification must remain unavailable until actual proofs enforce the admitted
+  root, including when submitted directly without the local wallet coordinator.
+- Validate the exact Guard44 credential outputs through aggregate and terminal
+  verification, including canonical sender credential/profile expiry openings,
+  entire lease bounds and actual recursive context transfer. Regenerate all
+  affected keys and release artifacts; preserve delayed valid delivery and
+  receipt recovery without admitting a new effect after credential expiry.
+- Implement and physically qualify atomic sender lifetime admission inside the
+  authorized op7 provider before it consumes the predecessor or advances any
+  counter/state/outbox. Reject expired credentials/profiles and whole leases
+  crossing either validity boundary. Exact committed recovery and op12 release
+  must continue to authenticate historical evidence after expiry.
 - Connect the concrete authenticated-history disk store and hardware-bound restore
   constructor to the product coordinator's private state/snapshot lifecycle.
   Reconcile retained speculative operations against current authenticated hardware
@@ -48,12 +188,11 @@ profile and never permits software fallback.
   execution. Debug device builds can now explicitly include the sealed native
   bridge with `irohaDebugNativeBridge=true`; JVM-only checks cannot establish
   native linkage or hardware Offline qualification.
-- Complete canonical device payload/response schemas outside the now-integrated
-  receiver operations 4--8, then bind the dispatcher to a service that actually
+- Bind the canonical device dispatcher for operations 1--22 to a service that
   owns authenticated Core release/proof state, trusted time, receiver keys and
   the full non-forking journal/outbox contract. Provision the authorized Android
   secure-element applet/OEM service and Apple secure-element credential, rebuild
-  the exact ABI-23 mobile artifacts, and pass physical power-loss, airplane-mode,
+  the matching sole ABI24 mobile artifacts after source cutover, and pass physical power-loss, airplane-mode,
   rollback, restore, rollover and byte-identical recovery qualification before
   enabling Offline monetary actions. The current strict frame/receiver codecs
   and Java Card journal tests are prerequisites, not device qualification.
@@ -61,7 +200,8 @@ profile and never permits software fallback.
   qualified native service, then rebuild mobile artifacts from the settled
   source. Caller-persisted operation identities and canonical reservation bindings
   and actual Rust canonical Core archives now have focused SDK coverage. Finish
-  authenticated lookup after a lost native return, real native coordinator integration and
+  authenticated lookup after a lost native return, Core archive integration with
+  the native coordinator, and
   revision-consistent outbox discovery before complete customer flows can ship.
 - Qualify the requested iPhone, Samsung, Huawei, Google and Meizu device families
   by exact model/OS/firmware/provider profile. Establish an authorized service
@@ -69,6 +209,13 @@ profile and never permits software fallback.
   insufficient. Huawei HarmonyOS requires explicit runtime/native integration
   qualification independent of Android. Track evidence and remaining acceptance
   gates in [the readiness record](specs/kagemusha_v1_production_readiness.md).
+
+- Before publishing the revised KAGEMUSHA public guides, refresh the generated
+  CLI reference from its exact provenance-pinned current binaries and resolve
+  the remaining repository-wide translation gate. The complete site build,
+  links, 21 locale roots, typecheck and 188 tooling tests pass; all 105 KAGEMUSHA
+  pages pass focused translation checks. The full i18n check still reports 60
+  unrelated SORA Nexus translation errors. No publication has occurred.
 
 ## Additive SNS dataspace bootstrap qualification
 
@@ -172,6 +319,10 @@ profile and never permits software fallback.
 
 ## SORA Parliament release qualification
 
+- Update grouped Core governance tests to the current ballot, lock, and
+  referendum model. They still reference removed public types and fields and
+  block the broad Core test check; do not reintroduce those APIs to make the
+  fixtures compile.
 - From one settled fresh-genesis candidate, run the focused Parliament model,
   reducer, restore, configuration, and Torii route suites followed by strict
   all-target Clippy and the workspace test gate. Exercise the atomic
@@ -238,6 +389,65 @@ profile and never permits software fallback.
   the release-qualified candidate.
 
 ## Atomic private settlement release qualification
+
+- Finish post-transfer Core feature compilation after the two duplicate-field
+  corrections. Run retained native fixture preflights, Orchard canonical
+  genesis, PQ verifier independence, complete PQ wire/statement tests and the
+  profile tuple regression. Preserve the observed full-proof failure and
+  rebuild its alternate-network negative so valid statement, binding and outer
+  authorization checks precede the required inner-STARK rejection. Re-run the
+  complete proof from the corrected current profile; no shallow preflight
+  error can substitute for that cryptographic check.
+
+- Reconcile and validate the first-release merge V3 changes only in
+  `/Users/takemiyamakoto/dev/iroha` on `optimizations`, then sign the settled
+  source. Preserve the existing staged work and repeat the
+  focused historical authority, generation-fencing, whole-entry prefix,
+  capacity, recovery and replay checks. Finish the still-running native proof
+  regression and repeat clean-source qualification from that exact commit.
+  Then execute the expanded N=3 smoke with all-process financial state, pinned
+  global finality identity, and bounded rolling restarts. Ten fresh successes
+  are required before benchmarks. Historical finalized read authority remains
+  QC/carrier-bound and distinct from live financial write admission; no
+  current-manifest fallback or previous-layout decoding is supported.
+
+- Execute the serial ten-run signed-source smoke orchestrator from the signed
+  candidate. Its synthetic validator/driver suite passes 27 checks. Intrinsic skip
+  rejection, bound requests, all-peer retained evidence and the corrected
+  continuous observer pass 28 Rust module checks. The mandatory release-runner
+  prerequisite passes its 34-test Python suite; neither result is a real
+  network gate. Persistent failure/raw-evidence/denominator retention and
+  atomic final-fragment publication pass 14 focused checks. Carry these into
+  qualification before starting the wider matrix. The older complete evidence
+  suite passed 171 tests while four source files changed; it is not a frozen
+  current-source pass. The subsequent suite passes 192/192 with all 44 captured
+  sources unchanged. Revalidate the transferred tools on `optimizations` and
+  carry their complete evidence into signed-source qualification.
+
+- Finish the already-running proof gates, preserving their exact earlier
+  binary and profile identities. Requalify the now-passing larger BFV artifact
+  binding test on the current arithmetic and reconciled source. Carry the
+  corrected proof-managed profile checks
+  (15 passed) and separate trace/entropy negative (passed), plus the passing
+  aggregate/transparent STARK, hybrid-encryption and affected short BFV checks
+  into clean-source qualification. Preserve current role-bound Goldilocks384
+  payloads and canonical network/genesis, recipient commitment and auditor
+  opening validation; no retired SHA helpers or compatibility formats return.
+
+- Carry the bounded Goldilocks reduction, exact qROM numerator-overflow
+  rejection and canonical CRC implementation into the next complete-source
+  proof and release builds. FastPQ passes 34 tests and focused strict Clippy;
+  smoke/runner pass 64 tests together. ARM64/x86-64 code generation removes
+  division helpers, but existing long Core/crypto proof jobs retain the prior
+  implementation. Their terminal evidence must stay bound to their old images;
+  no end-to-end speedup or current-source proof result is established yet.
+
+- Build and test the reconciled source in the authorized `optimizations`
+  checkout with `privacy-release-evidence` enabled. Validate the canonical
+  native-genesis fixtures and corrected v1 PQ-MASP wire known answers, then
+  qualify the changed governed profile commitments with complete proofs.
+  Earlier proof jobs retain their original executable/source identities.
+  Run all new Iroha builds and tests only in this checkout.
 
 - Release-candidate-qualify the implemented prepared-leg, request-aware audit,
   coordination, restart-certificate recovery, carrier, status, and receipt
@@ -938,25 +1148,94 @@ profile and never permits software fallback.
 
 - Complete FASTPQ succinct verification under the selected
   [production goals and acceptance contract](specs/fastpq_production_readiness.md).
-  Constrain all transfer semantics, full-width SMT hash/root relations, canonical
-  integer/byte encodings, ordering and authenticated public boundaries; add
-  quotient/zerofier relations and fix FRI terminal degree rounding before removing
-  deterministic full replay. Benchmark bounded verification and end-to-end proof
-  generation from execution-captured workloads.
+  Keep exact public account/amount/balance/ordering/key checks and leaf hashing
+  in bounded public-input processing. Extend the validated one-delta compact
+  protocol and typed PublicIO/claim adapter into the authenticated public API,
+  AXT and recovery boundaries using a distinct canonical wire identity. The
+  optimized ordinary and full AXT raw facades verify after all private traces
+  are dropped; establish authenticated source context and persistence/recovery
+  integration. The tested hash/SMT
+  ledgers bind private directions, shared siblings, updates and full root
+  boundaries in 923 slots. One transfer's 128 internal-node hashes fill exactly
+  65,536 rows through 512-row padded invocations. Preserve canonical occurrence
+  roles, including zero debits, and complete sparse public boundary binding.
+  Ordered two-delta ordinary and AXT bundles now pass with explicit inter-delta roots,
+  whole-statement binding, cumulative decode/work limits and all-or-nothing
+  child verification after private witnesses are discarded. Public model codecs
+  and rejection-only production dispatch are implemented; finish their
+  producer, verifier and persistence integration under the
+  [public artifact contract](specs/fastpq_public_artifacts.md). The six Core
+  producer and two canonical encoding regressions pass in a retained development
+  harness, and the two lane lifecycle fixes pass the complete rebuilt 64-test
+  FASTPQ filter without exclusions. Canonical Torii recovery and all six peer/alias/
+  account-route follow-up regressions pass in the rebuilt Torii5 harness. Complete
+  the final source-authentication and persistence integration; the Core38 peer
+  collector module now passes all 13 tests. Larger single-AIR
+  capacity still needs the reviewed
+  inter-delta schedule and padding rules implemented in its final geometry.
+  Row/transition quotients, Fp4 aggregation, joint trace/quotient degree checking
+  and four-point FRI termination are implemented; qualify their proximity and
+  transcript soundness before removing deterministic full replay. Validate the
+  new compact/phased/public-table/occurrence modules, measure actual bounded
+  verification and end-to-end proof resource use, and qualify the resulting
+  capacity instead of widening limits without evidence.
+  Use the [complete canonical proof sizing and profile comparison](specs/fastpq_compact_profile_analysis.md)
+  and measured shared-wire proofs to select a practical final wire envelope;
+  canonical shared frontier admission and bounded raw decoding are implemented.
+  Discharge the exact [primary-source soundness obligations](specs/fastpq_compact_soundness_sources.md),
+  including external review of the conditional common-row/current-next/joint
+  recovery reduction, its concrete AIR degree and semantic premises, and
+  round-by-round Fiat-Shamir compilation. The exact conditional interactive
+  arithmetic reaches `2^-128` at 237 queries. The new conditional
+  [typed compiler and profile calculation](specs/fastpq_compact_typed_profile.md)
+  needs 375 positions under its conservative query model. The test-only
+  [full-context SHAKE prefix/body framing](specs/fastpq_compact_shake_framing.md)
+  and common Merkle/joint-challenge adapter seams pass 43 focused checks and
+  the complete 948-test prover unit suite. The staged common engine separately
+  passes 960 unit tests and a complete 375-query transfer proof with measured
+  bytes/work/charges, independent context vectors and maximum-shape codec checks.
+  The reviewed engine patch is applied. The public facade/bundle and
+  model-artifact adapters now pass 971 unit tests, four complete proof cases and
+  two complete model-artifact verification cases with cumulative decode limits.
+  Both reviewed patches are applied after the shared source capture, with
+  their passing workspace gate recorded. Verified-identity output now passes
+  974 unit tests and both artifact cases in isolation and its rebuilt workspace
+  harness. Validate and integrate the staged strict finalized-transcript public
+  producer before deriving a validator source-statement manifest; its six
+  isolated regression groups pass. Review the private ordinary manifest and
+  fixed-write inclusion candidate, reserve its witness-key namespace, and derive
+  exact leaves during validator execution before authenticating remote callers.
+  Eleven prototype groups pass, including bounded canonical opening decoding;
+  production ingress and finality integration remain unfinished. Finish persistence/recovery mapping. Torii recovery, peer/alias
+  caller regressions and the full Core38 collector module pass. Unsigned-preimage
+  mint, checkpoint ownership and canonical UAID output pass module/API regressions.
+  The unchanged-release CPU control passes 842 unit tests and both artifact cases;
+  qualify end-to-end proving and hardware performance under controlled load.
+  Establish final shared-verifier expansion
+  equivalence and qualify concrete assumptions and
+  measured resource limits; neither count is an admitted production parameter.
 - Migrate FASTPQ parameters, profile identity, fixtures and verifier limits
   together after the succinct design is fixed. The corrected diagnostic model
-  accounts for quadratic composition and terminal rounding; the current 136-query
-  profile fails its 128-bit arithmetic target. The same model selects 400 for
-  the current schedule or 200 with a four-evaluation terminal, neither of which
-  supplies the missing protocol-specific soundness argument or digest review.
+  accounts for conservative exclusive quotient degree `2 * N_trace`, at most 17
+  binary reductions and a four-evaluation terminal; the current 136-query profile
+  has diagnostic sampling term `54 * 2^-72` and fails its 128-bit arithmetic target.
+  The same model selects 200 (192 fail), which supplies neither the missing
+  protocol-specific soundness argument nor the final-artifact digest review.
 - Keep FASTPQ ledger qualification blocked until independent review covers the
   complete protocol adversary, canonical field output space, 32-byte external
-  commitments and final-artifact multi-target accounting. Independent constants
-  and vector reproduction is regression evidence, not that security review.
+  commitments (including the fixed Iroha hash marker), Fp4 aggregation and joint
+  FRI, and final-artifact multi-target accounting. Independent constants
+  and vector reproduction and the passing period-12 matrix screens are bounded
+  evidence, not that security review. Close the exact
+  [combiner and transcript obligations](specs/fastpq_compact_digest_security.md)
+  before selecting or admitting the final compact profile.
 - Qualify actual CPU/Metal/CUDA parity, native compilation, failure quarantine,
   latency, memory and proof sizes on release-class hardware. Require authenticated
   manifests from independently trusted release keys and actual measured captures.
   Feature builds and skipped hardware tests cannot qualify accelerator execution.
+  The M4 Max native shader-ABI smoke matrix now passes 423 dispatch comparisons
+  after correcting the multi-state shader representation; it does not replace
+  Rust end-to-end, 20k-row, release-fleet or CUDA evidence.
 - Complete authoritative finalized/QC source roots and transaction-set anchoring
   plus exact intent/proof/effective-amount issuer authentication before enabling
   handle-backed remote spending. CoreHost and block validation now reject this
@@ -24339,8 +24618,8 @@ feature-independent 8,258-byte raw public-key ceiling covers non-roster
 observers and rotated responders. Configure and open both fail closed when any
 count, byte partition, topic frame, global encrypted frame, or queue owner is
 undersized. Shipping defaults are 17 MiB for global/consensus/block-sync,
-2 MiB for control, `H=2`, 161 ingress entries, a 33 MiB source partition, and
-231 MiB aggregate body ownership. Kagami localnet scales aggregate body bytes
+2 MiB for control, `H=2`, 161 ingress entries, a 34 MiB source partition, and
+1,122 MiB maximum-roster aggregate body ownership. Kagami localnet scales aggregate body bytes
 by `N + H` and rejects validator rosters above the protocol maximum of 31. The
 independent P2P wire-prefix boundary is also closed: the
 wire body has the inclusive `u32::MAX` ceiling, while runtime configuration is
@@ -25049,3 +25328,9 @@ advanced by each responsive validator.
 **Next checkpoints:** monthly X Spaces cadence, clearer contributor onboarding,
 public follow-up notes for LFDT governance review items, and timed-OVN/
 threshold-release hardening for SORA Parliament policy juries.
+
+## Generic execution-game release qualification
+
+- Complete focused native game/proof/codec and finalized-settlement verification tests after the shared Cargo lane and concurrent source edits stabilize.
+- Qualify native execution proving, verifier memory/time, exact typed proof transaction sizes and fees with actual eight-participant maximum-duration executions.
+- Exercise large signed proof transactions through wallet Connect, Torii ingress, transaction gossip and four-validator inclusion. Ordinary defaults (Connect WS 64,000 bytes, buffered session 256 KiB, separate Connect P2P topic 128 KiB and transaction gossip 256 KiB) are below the native execution envelope allowance. Qualify the explicit execution transport overlay, retaining the separate Health topic's 32 KiB limit; keep profiles unqualified until the complete corridor passes.

@@ -84,6 +84,7 @@ impl PrivateJournal {
                     | OFlags::CREATE
                     | OFlags::EXCL
                     | OFlags::NOFOLLOW
+                    | OFlags::NONBLOCK
                     | OFlags::CLOEXEC,
                 Mode::from_raw_mode(0o600),
             )
@@ -110,18 +111,37 @@ impl PrivateJournal {
         format: PrivateJournalFormat,
     ) -> Result<Self, PrivateJournalError> {
         validate_format(format)?;
+        let parent = open_directory(path.parent().ok_or(PrivateJournalError::Corrupt)?)?;
+        validate_directory(&parent.metadata().map_err(storage_error)?, false)?;
         let directory = open_directory(path)?;
         validate_directory(&directory.metadata().map_err(storage_error)?, true)?;
         let journal = File::from(
             rustix::fs::openat(
                 &directory,
                 format.filename,
-                OFlags::RDWR | OFlags::APPEND | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                OFlags::RDWR
+                    | OFlags::APPEND
+                    | OFlags::NOFOLLOW
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .map_err(|_| PrivateJournalError::StorageUnavailable)?,
         );
-        Self::locked(path, directory, journal, format)
+        let store = Self::locked(path, directory, journal, format)?;
+        // Adopt surviving complete frames durably before replay may expose a recovery prefix.
+        // A previous writer may have exited after a write but before its fsync acknowledgement.
+        if store
+            .journal
+            .sync_all()
+            .and_then(|()| store.directory.sync_all())
+            .and_then(|()| parent.sync_all())
+            .is_err()
+        {
+            return Err(PrivateJournalError::Uncertain);
+        }
+        store.check_owned()?;
+        Ok(store)
     }
 
     fn locked(
@@ -227,6 +247,20 @@ impl PrivateJournal {
     pub(crate) fn observed_version(&self) -> JournalFileVersion {
         self.observed_version
     }
+    pub(crate) fn recovery_prefix(
+        &self,
+    ) -> Result<super::KagemushaRecoveryJournalPrefixV1, PrivateJournalError> {
+        self.check_owned()?;
+        if self.read_bytes != self.acknowledged_bytes || self.next_sequence == 0 {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        Ok(super::KagemushaRecoveryJournalPrefixV1 {
+            sequence: self.next_sequence,
+            head: self.previous_frame_hash,
+            byte_len: self.acknowledged_bytes,
+        })
+    }
+
     pub(crate) fn check_owned(&self) -> Result<(), PrivateJournalError> {
         if self.poisoned.get() {
             return Err(PrivateJournalError::Uncertain);
@@ -255,7 +289,7 @@ impl PrivateJournal {
             rustix::fs::openat(
                 &self.directory,
                 self.format.filename,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .map_err(|_| PrivateJournalError::Corrupt)?,
@@ -400,7 +434,10 @@ fn identity(metadata: &Metadata) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
 }
 
-fn validate_directory(metadata: &Metadata, private: bool) -> Result<(), PrivateJournalError> {
+pub(super) fn validate_directory(
+    metadata: &Metadata,
+    private: bool,
+) -> Result<(), PrivateJournalError> {
     if !metadata.is_dir()
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || (if private {
@@ -425,7 +462,7 @@ fn validate_journal(metadata: &Metadata) -> Result<(), PrivateJournalError> {
     Ok(())
 }
 
-fn open_directory(path: &Path) -> Result<File, PrivateJournalError> {
+pub(super) fn open_directory(path: &Path) -> Result<File, PrivateJournalError> {
     if !path.is_absolute() {
         return Err(PrivateJournalError::Corrupt);
     }
@@ -465,4 +502,96 @@ pub(crate) enum TestPersistenceFailure {
     AfterSync,
     ReplaceAfterSync,
     TruncateAfterSync,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
+        filename: "test.wal",
+        magic: b"IKGTEST1",
+        hash_domain: b"test-only:private-journal\0",
+        maximum_payload_bytes: 1024,
+    };
+
+    #[test]
+    fn fifo_replacement_cannot_block_owned_inspection_or_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("journal");
+        let mut journal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        journal.append(b"initialize").unwrap();
+        std::fs::remove_file(path.join(FORMAT.filename)).unwrap();
+        // Spawning a utility can transiently inherit a parallel test's flock before
+        // close-on-exec, making that journal appear open after its owner has dropped.
+        #[cfg(target_vendor = "apple")]
+        #[allow(unsafe_code)] // rustix does not expose mkfifoat on Apple; this test owns the path.
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            unsafe extern "C" {
+                // Apple's SDK declares mode_t as __darwin_mode_t (u16).
+                fn mkfifo(path: *const std::ffi::c_char, mode: u16) -> std::ffi::c_int;
+            }
+            let fifo =
+                std::ffi::CString::new(path.join(FORMAT.filename).as_os_str().as_bytes()).unwrap();
+            // SAFETY: the NUL-terminated path lives through the call; the exact Apple
+            // POSIX signature creates only this task-owned test FIFO, without a child.
+            assert_eq!(unsafe { mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        rustix::fs::mkfifoat(
+            &journal.directory,
+            FORMAT.filename,
+            Mode::from_raw_mode(0o600),
+        )
+        .expect("create an actual FIFO without inheriting other journals");
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            assert!(journal.check_owned().is_err());
+            drop(journal);
+            assert!(PrivateJournal::open_existing(&path, FORMAT).is_err());
+            send.send(()).unwrap();
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("FIFO without a writer must be rejected without waiting for bytes");
+    }
+
+    #[test]
+    fn reopen_adopts_complete_unacknowledged_frame_and_retains_exact_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("journal");
+        let mut journal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        journal.append(b"initialize").unwrap();
+        let initial = journal.recovery_prefix().unwrap();
+        journal
+            .failure
+            .set(Some(TestPersistenceFailure::BeforeSync));
+        assert_eq!(
+            journal.append(b"retained complete frame"),
+            Err(PrivateJournalError::Uncertain)
+        );
+        assert_eq!(
+            journal.recovery_prefix(),
+            Err(PrivateJournalError::Uncertain)
+        );
+        drop(journal);
+        let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        assert_eq!(
+            reopened.replay_next().unwrap(),
+            Some((0, b"initialize".to_vec()))
+        );
+        assert_eq!(
+            reopened.replay_next().unwrap(),
+            Some((1, b"retained complete frame".to_vec()))
+        );
+        assert_eq!(reopened.replay_next().unwrap(), None);
+        let adopted = reopened.recovery_prefix().unwrap();
+        assert_eq!(adopted.sequence, initial.sequence + 1);
+        assert!(adopted.byte_len > initial.byte_len);
+        assert_ne!(adopted.head, initial.head);
+        drop(reopened);
+        let mut again = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        while again.replay_next().unwrap().is_some() {}
+        assert_eq!(again.recovery_prefix().unwrap(), adopted);
+    }
 }

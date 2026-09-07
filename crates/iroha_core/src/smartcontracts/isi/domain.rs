@@ -1295,9 +1295,9 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(race) = crate::smartcontracts::isi::race::retained_race_account(state_transaction.world(), &account_id) {
+            if crate::smartcontracts::isi::game::retained_game_account(state_transaction.world(), &account_id) || crate::smartcontracts::isi::nft_custody::retained_nft_account(state_transaction.world(), &account_id) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("cannot unregister account {account_id}: it is retained by native race {race}").into(),
+                    format!("cannot unregister account {account_id}: it is retained by a native game session or NFT custody").into(),
                 ).into());
             }
             if let Some(reference) =
@@ -2587,9 +2587,9 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(race) = crate::smartcontracts::isi::race::retained_race_asset(state_transaction.world(), &asset_definition_id) {
+            if crate::smartcontracts::isi::game::retained_game_asset(state_transaction.world(), &asset_definition_id) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("cannot unregister asset definition {asset_definition_id}: it secures native race {race}").into(),
+                    format!("cannot unregister asset definition {asset_definition_id}: it secures an outstanding native game stake").into(),
                 ).into());
             }
             if asset_definition_id == state_transaction.oracle.economics.reward_asset {

@@ -1066,6 +1066,13 @@ fn populate_prune_recovery_fixture(
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
+    // Authenticate the initial primary incarnation while its storage is still
+    // empty, before blocks or pipeline sidecars make the fixture recoverable.
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let mut generator = DummyBlocks::new();
     let mut blocks = Vec::new();
     let mut merge_entries = Vec::new();
@@ -1707,8 +1714,20 @@ fn prune_intent_tampering_fails_closed() {
         symlink(&symlink_target, &intent_path).expect("create intent symlink");
         assert!(matches!(
             Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
-            Err(Error::PruneIntentConflict(message)) if message.contains("regular no-follow")
+            Err(Error::IO(source, path)) if source.kind() == ErrorKind::InvalidData
+                && source.to_string().contains("configured Kura tree contains a symbolic link")
+                && path == intent_path
         ));
+        assert!(
+            std::fs::symlink_metadata(&intent_path)
+                .expect("retain rejected intent symlink")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(&symlink_target).expect("retain symlink target bytes"),
+            norito::to_bytes(&valid_intent).expect("encode unchanged symlink target intent")
+        );
         std::fs::remove_file(&intent_path).expect("remove intent symlink");
         std::fs::remove_file(&symlink_target).expect("remove symlink target");
     }

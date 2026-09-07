@@ -5,10 +5,11 @@ use std::collections::BTreeSet;
 use super::*;
 use crate::kagemusha::{
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
-    KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
+    KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use p256::ecdsa::SigningKey;
+use p256::ecdsa::{SigningKey, signature::Signer as _};
+use sha2::{Digest as _, Sha256};
 
 const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
 const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];
@@ -356,6 +357,9 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
         .collect();
     let hardware_policy_digest =
         kagemusha_hardware_policy_digest_v1(&enabled_profiles).expect("hardware policy digest");
+    let provider_policy = provider_policy(&enabled_profiles);
+    let provider_policy_root =
+        kagemusha_provider_policy_root_v1(&enabled_profiles, &provider_policy).unwrap();
     let circuit_shape_report = evidence(5);
     let profile_digest = kagemusha_release_profile_digest_v1(
         circuit_shape_report,
@@ -369,10 +373,13 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
         source_tree_digest: [1; 32],
         cargo_lock_digest: [2; 32],
         profile_digest,
+        native_profile_digest: [0xB1; 32],
         eq_protocol_digest: STATE_EQ_PROTOCOL_DIGEST,
         ep_protocol_digest: STATE_EP_PROTOCOL_DIGEST,
         artifact_set_digest,
         hardware_policy_digest,
+        provider_policy_root,
+        provider_policy,
         evidence_closure: KagemushaEvidenceClosureV1 {
             evidence_manifest: evidence(0xE1),
             observer_policy: evidence(0xE2),
@@ -408,6 +415,41 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
     }
 }
 
+fn provider_policy(profiles: &[KagemushaEnabledProfileV1]) -> Vec<KagemushaProviderPolicyEntryV1> {
+    profiles
+        .iter()
+        .enumerate()
+        .map(|(index, profile)| {
+            let seed = profile.hardware_profile.provider_id[0].wrapping_add(5);
+            let key = SigningKey::from_bytes((&[seed; 32]).into()).unwrap();
+            authorized_provider_entry(profile, u16::try_from(index).unwrap(), [0xD1; 32], &key)
+        })
+        .collect()
+}
+
+fn authorized_provider_entry(
+    profile: &KagemushaEnabledProfileV1,
+    position: u16,
+    commitment: [u8; 32],
+    key: &SigningKey,
+) -> KagemushaProviderPolicyEntryV1 {
+    let message = kagemusha_provider_policy_signing_bytes_v1(
+        profile.hardware_profile_id,
+        position,
+        commitment,
+    )
+    .unwrap();
+    let signature: p256::ecdsa::Signature = key.sign(&message);
+    let signature = signature.normalize_s().unwrap_or(signature);
+    KagemushaProviderPolicyEntryV1 {
+        hardware_profile_id: profile.hardware_profile_id,
+        provider_authority_commitment: commitment,
+        provider_profile_index: position,
+        issuer_signature: KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes())
+            .unwrap(),
+    }
+}
+
 fn receipt_with_profile_count(
     artifacts: &[KagemushaArtifactBindingV1],
     profile_count: usize,
@@ -437,6 +479,9 @@ fn receipt_with_profile_count(
         .collect();
     receipt.hardware_policy_digest =
         kagemusha_hardware_policy_digest_v1(&enabled_profiles).expect("bounded hardware policy");
+    receipt.provider_policy = provider_policy(&enabled_profiles);
+    receipt.provider_policy_root =
+        kagemusha_provider_policy_root_v1(&enabled_profiles, &receipt.provider_policy).unwrap();
     receipt
 }
 
@@ -452,6 +497,8 @@ fn reseal_profile_qualification(receipt: &mut KagemushaInternalValidationReceipt
         .collect();
     receipt.hardware_policy_digest =
         kagemusha_hardware_policy_digest_v1(&enabled_profiles).expect("reseal hardware policy");
+    receipt.provider_policy_root =
+        kagemusha_provider_policy_root_v1(&enabled_profiles, &receipt.provider_policy).unwrap();
 }
 
 fn manifest(
@@ -553,6 +600,14 @@ fn authenticates_complete_typed_evidence_release() {
         .authenticate(&decoded_receipt, &policy, &attestation)
         .expect("authenticate");
     assert_eq!(authenticated.release_id(), decoded_manifest.release_id);
+    assert_eq!(
+        authenticated.native_profile_digest(),
+        receipt.native_profile_digest
+    );
+    assert_ne!(
+        authenticated.native_profile_digest(),
+        authenticated.profile_digest()
+    );
     assert_eq!(authenticated.approved_signers().len(), 2);
     assert_eq!(authenticated.enabled_profiles().len(), 2);
     let first_profile = authenticated.enabled_profiles()[0];
@@ -590,6 +645,287 @@ fn authenticates_complete_typed_evidence_release() {
             .role,
         KagemushaArtifactRoleV1::InnerStateVkEp
     );
+}
+
+#[test]
+fn provider_policy_signing_bytes_match_python_golden_and_bind_every_field() {
+    let message =
+        kagemusha_provider_policy_signing_bytes_v1([0x41; 32], 0xA531, [0xD1; 32]).unwrap();
+    assert_eq!(message.len(), 169);
+    assert_eq!(
+        message
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        concat!(
+            "4e5254300000779107008bd31fb01e66d644a082ad5e0081000000000000003f5f967f6566f08a02",
+            "38300000000000000069726f68613a6b6167656d757368613a76313a70726f76696465722d706f6c6963792d617574686f72697a6174696f6e",
+            "020100204141414141414141414141414141414141414141414141414141414141414141",
+            "0231a520d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+        )
+    );
+    for (profile, position, commitment) in [
+        ([0x42; 32], 0xA531, [0xD1; 32]),
+        ([0x41; 32], 0xA530, [0xD1; 32]),
+        ([0x41; 32], 0xA531, [0xD2; 32]),
+    ] {
+        assert_ne!(
+            message,
+            kagemusha_provider_policy_signing_bytes_v1(profile, position, commitment).unwrap()
+        );
+    }
+    assert!(kagemusha_provider_policy_signing_bytes_v1([0; 32], 0, [0xD1; 32]).is_err());
+    assert!(kagemusha_provider_policy_signing_bytes_v1([0x41; 32], 0, [0; 32]).is_err());
+}
+
+#[test]
+fn provider_policy_requires_exact_governed_issuer_and_fresh_profile_authorization() {
+    let mut profile = enabled_profile(0x41, [0x21; 32]);
+    profile.qualification_digest = [0x22; 32];
+    let valid = provider_policy(&[profile]);
+    let original_root = kagemusha_provider_policy_root_v1(&[profile], &valid).unwrap();
+    let other_key = SigningKey::from_bytes((&[0x72; 32]).into()).unwrap();
+    let unauthorized = authorized_provider_entry(&profile, 0, [0xD1; 32], &other_key);
+    assert!(kagemusha_provider_policy_root_v1(&[profile], &[unauthorized]).is_err());
+    profile.hardware_profile.governance_credential_public_key = device_public_key(0x72);
+    profile.hardware_profile = profile.hardware_profile.seal_hardware_profile_id().unwrap();
+    profile.hardware_profile_id = profile.hardware_profile.hardware_profile_id;
+    let mut stale = valid[0];
+    stale.hardware_profile_id = profile.hardware_profile_id;
+    assert!(kagemusha_provider_policy_root_v1(&[profile], &[stale]).is_err());
+    let fresh = authorized_provider_entry(&profile, 0, [0xD1; 32], &other_key);
+    assert_ne!(
+        kagemusha_provider_policy_root_v1(&[profile], &[fresh]).unwrap(),
+        original_root
+    );
+    let encoded = norito::encode_canonical(&fresh).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<KagemushaProviderPolicyEntryV1>(&encoded).unwrap(),
+        fresh
+    );
+}
+
+#[test]
+fn provider_policy_root_matches_python_golden_and_excludes_later_release_inputs() {
+    let mut profile = enabled_profile(0x41, [0x21; 32]);
+    let mut scalar = [0_u8; 32];
+    scalar[31] = 1;
+    let signing_key = SigningKey::from_bytes((&scalar).into()).unwrap();
+    profile.hardware_profile.governance_credential_public_key =
+        KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        )
+        .unwrap();
+    profile.hardware_profile = profile.hardware_profile.seal_hardware_profile_id().unwrap();
+    profile.hardware_profile_id = profile.hardware_profile.hardware_profile_id;
+    profile.qualification_digest = [0x22; 32];
+    let entries = [authorized_provider_entry(
+        &profile,
+        0xA531,
+        [0xD1; 32],
+        &signing_key,
+    )];
+    let root = kagemusha_provider_policy_root_v1(&[profile], &entries).unwrap();
+    let path = kagemusha_provider_policy_path_v1(&[profile], &entries, profile.hardware_profile_id)
+        .unwrap();
+    let mut leaf = Sha256::new();
+    leaf.update(b"iroha:kagemusha:v1:hardware-policy-leaf\0");
+    leaf.update(profile.hardware_profile_id);
+    leaf.update([2, 255, 255]);
+    leaf.update(entries[0].provider_authority_commitment);
+    let mut recovered: [u8; 32] = leaf.finalize().into();
+    for (depth, sibling) in path.into_iter().enumerate() {
+        recovered = if entries[0].provider_profile_index & (1 << depth) == 0 {
+            provider_policy_node(recovered, sibling)
+        } else {
+            provider_policy_node(sibling, recovered)
+        };
+    }
+    assert_eq!(recovered, root);
+    assert!(kagemusha_provider_policy_path_v1(&[profile], &entries, [0xEF; 32]).is_err());
+    assert_eq!(
+        root.iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        "01e5b53f36db41dcd2f9db725171d6405005ca6ad5374b23b3cbce6e1efdc100"
+    );
+    profile.vk_digest = [0x32; 32];
+    profile.qualification_digest = [0x33; 32];
+    assert_eq!(
+        kagemusha_provider_policy_root_v1(&[profile], &entries).unwrap(),
+        root
+    );
+    let encoded = norito::encode_canonical(&entries[0]).unwrap();
+    let decoded: KagemushaProviderPolicyEntryV1 = norito::decode_canonical(&encoded).unwrap();
+    assert_eq!(decoded, entries[0]);
+}
+
+#[test]
+fn provider_policy_requires_complete_ordered_distinct_registry_positions() {
+    let receipt = receipt(&artifacts());
+    let profiles: Vec<_> = receipt
+        .profile_qualifications
+        .iter()
+        .map(|row| row.profile)
+        .collect();
+    let mut invalid = vec![Vec::new(), receipt.provider_policy[..1].to_vec()];
+    let mut reversed = receipt.provider_policy.clone();
+    reversed.reverse();
+    invalid.push(reversed);
+    let mut duplicate = receipt.provider_policy.clone();
+    duplicate[1].provider_profile_index = duplicate[0].provider_profile_index;
+    invalid.push(duplicate);
+    let mut zero = receipt.provider_policy.clone();
+    zero[0].provider_authority_commitment = [0; 32];
+    invalid.push(zero);
+    let mut substituted = receipt.provider_policy.clone();
+    substituted[0].hardware_profile_id = [0xEF; 32];
+    invalid.push(substituted);
+    for entries in invalid {
+        assert!(kagemusha_provider_policy_root_v1(&profiles, &entries).is_err());
+    }
+    let mut boundary = receipt.provider_policy.clone();
+    boundary[1].provider_profile_index = u16::MAX;
+    assert!(kagemusha_provider_policy_root_v1(&profiles, &boundary).is_err());
+    let seed = profiles[1].hardware_profile.provider_id[0].wrapping_add(5);
+    boundary[1] = authorized_provider_entry(
+        &profiles[1],
+        u16::MAX,
+        boundary[1].provider_authority_commitment,
+        &SigningKey::from_bytes((&[seed; 32]).into()).unwrap(),
+    );
+    assert_ne!(
+        kagemusha_provider_policy_root_v1(&profiles, &boundary).unwrap(),
+        receipt.provider_policy_root
+    );
+    let mut changed = receipt.clone();
+    changed.provider_policy_root = changed.hardware_policy_digest;
+    assert!(changed.validate().is_err());
+}
+
+#[test]
+fn provider_policy_admits_all_four_governed_platform_classes() {
+    for class in [
+        KagemushaHardwarePlatformClassV1::AndroidOemService,
+        KagemushaHardwarePlatformClassV1::AppleOemService,
+        KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+        KagemushaHardwarePlatformClassV1::OtherQualified,
+    ] {
+        let mut profile = enabled_profile(0x41, [0x21; 32]);
+        profile.hardware_profile.platform_class = class;
+        profile.hardware_profile = profile.hardware_profile.seal_hardware_profile_id().unwrap();
+        profile.hardware_profile_id = profile.hardware_profile.hardware_profile_id;
+        profile.qualification_digest = [0x22; 32];
+        assert!(
+            kagemusha_provider_policy_root_v1(&[profile], &provider_policy(&[profile])).is_ok()
+        );
+    }
+}
+
+#[test]
+fn provider_policy_requires_a_new_complete_release_approval() {
+    let inventory = artifacts();
+    let original = receipt(&inventory);
+    let original_manifest = manifest(inventory.clone(), &original);
+    let keys = authority_keys();
+    let policy = authority_policy(&keys, 2);
+    let approval = release_attestation(&original_manifest, &original, &policy, &keys[..2]);
+    let mut changed = original.clone();
+    changed.provider_policy[0].provider_authority_commitment[0] ^= 1;
+    assert!(changed.validate().is_err());
+    let profiles: Vec<_> = changed
+        .profile_qualifications
+        .iter()
+        .map(|row| row.profile)
+        .collect();
+    // Fresh observer/release approvals cannot authorize a provider commitment
+    // without a new signature from the exact governed profile issuer.
+    assert!(kagemusha_provider_policy_root_v1(&profiles, &changed.provider_policy).is_err());
+    let seed = profiles[0].hardware_profile.provider_id[0].wrapping_add(5);
+    changed.provider_policy[0] = authorized_provider_entry(
+        &profiles[0],
+        changed.provider_policy[0].provider_profile_index,
+        changed.provider_policy[0].provider_authority_commitment,
+        &SigningKey::from_bytes((&[seed; 32]).into()).unwrap(),
+    );
+    changed.provider_policy_root =
+        kagemusha_provider_policy_root_v1(&profiles, &changed.provider_policy).unwrap();
+    changed.validate().unwrap();
+    assert!(
+        original_manifest
+            .authenticate(&changed, &policy, &approval)
+            .is_err()
+    );
+    let changed_manifest = manifest(inventory, &changed);
+    assert_ne!(changed_manifest.release_id, original_manifest.release_id);
+    assert!(
+        changed_manifest
+            .authenticate(&changed, &policy, &approval)
+            .is_err()
+    );
+    let approved = release_attestation(&changed_manifest, &changed, &policy, &keys[..2]);
+    let authenticated = changed_manifest
+        .authenticate(&changed, &policy, &approved)
+        .unwrap();
+    assert_eq!(
+        authenticated.provider_policy_root(),
+        changed.provider_policy_root
+    );
+    assert_eq!(authenticated.provider_policy(), changed.provider_policy);
+    assert_eq!(
+        authenticated.hardware_policy_digest(),
+        original.hardware_policy_digest
+    );
+}
+
+#[test]
+fn native_layout_identity_requires_a_new_complete_release_approval() {
+    let inventory = artifacts();
+    let original = receipt(&inventory);
+    let original_manifest = manifest(inventory.clone(), &original);
+    let keys = authority_keys();
+    let policy = authority_policy(&keys, 2);
+    let approval = release_attestation(&original_manifest, &original, &policy, &keys[..2]);
+    let mut changed = original.clone();
+    changed.native_profile_digest[0] ^= 1;
+    assert_ne!(
+        changed.canonical_digest().unwrap(),
+        original.canonical_digest().unwrap()
+    );
+    assert!(
+        original_manifest
+            .authenticate(&changed, &policy, &approval)
+            .is_err()
+    );
+    let changed_manifest = manifest(inventory, &changed);
+    assert_ne!(changed_manifest.release_id, original_manifest.release_id);
+    assert!(
+        changed_manifest
+            .authenticate(&changed, &policy, &approval)
+            .is_err()
+    );
+    let changed_approval = release_attestation(&changed_manifest, &changed, &policy, &keys[..2]);
+    let authenticated = changed_manifest
+        .authenticate(&changed, &policy, &changed_approval)
+        .unwrap();
+    assert_eq!(
+        authenticated.native_profile_digest(),
+        changed.native_profile_digest
+    );
+    for invalid in [[0; 32], original.profile_digest] {
+        let mut invalid_receipt = original.clone();
+        invalid_receipt.native_profile_digest = invalid;
+        assert!(invalid_receipt.validate().is_err());
+    }
+    let mut swapped = original;
+    core::mem::swap(
+        &mut swapped.profile_digest,
+        &mut swapped.native_profile_digest,
+    );
+    assert!(swapped.validate().is_err());
 }
 
 #[test]

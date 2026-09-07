@@ -113,10 +113,10 @@ pub(crate) const MINT_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize = 50;
 pub(crate) const MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1: usize =
     MINT_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1 + 34;
 /// Small semantic column of the internal authorization proof. The first 84
-/// cells retain the transport ABI; the final four bind both proof-carrier
-/// commitments across the paired parities.
+/// cells retain the transport ABI; four bind both proof-carrier commitments,
+/// then two carry the SHA-bound provider-policy root to the authenticated outer gate.
 pub(super) const MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1: usize =
-    MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 + 4;
+    MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 + 6;
 
 /// Public-instance offsets shared by both mint-authorization parities.
 pub(crate) mod public_instance {
@@ -151,6 +151,8 @@ pub(crate) mod public_instance {
     pub(super) const EQ_CARRIER_COMMITMENT_LO: usize =
         super::MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1;
     pub(super) const EP_CARRIER_COMMITMENT_LO: usize = EQ_CARRIER_COMMITMENT_LO + 2;
+    pub(in crate::zk::kagemusha_v1_recursion) const PROVIDER_POLICY_ROOT_LO: usize =
+        EP_CARRIER_COMMITMENT_LO + 2;
 }
 
 /// Exact private recipient material consumed by both authorization parities.
@@ -517,9 +519,13 @@ fn append_inner_carrier_commitments_v1<F: KagemushaPoseidonFieldV1>(
     semantic: &mut Vec<F>,
     eq_commitment: EqAffine,
     ep_commitment: EpAffine,
+    provider_policy_root: DigestV1,
 ) -> Result<(), String> {
     if semantic.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 {
         return Err("mint-authorization semantic prefix has the wrong shape".to_owned());
+    }
+    if provider_policy_root == [0; 32] {
+        return Err("mint-authorization provider-policy root is absent".to_owned());
     }
     semantic.extend(
         point_u128_limbs_v1(eq_commitment)
@@ -527,6 +533,7 @@ fn append_inner_carrier_commitments_v1<F: KagemushaPoseidonFieldV1>(
             .chain(point_u128_limbs_v1(ep_commitment))
             .map(F::from_u128),
     );
+    semantic.extend(digest_limbs::<F>(provider_policy_root));
     if semantic.len() != MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 {
         return Err("mint-authorization inner semantic layout drift".to_owned());
     }
@@ -762,7 +769,7 @@ pub(crate) fn derive_kagemusha_mint_authorization_deferred_audits_v1(
         witness.ep_deferred_audit,
         None,
     )?;
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
     let eq_digest = super::composite::assigned_digest_bytes(&eq_output.challenge_limbs)?;
     drop(eq_builder);
     halo2_proofs::release_allocator_slack();
@@ -811,7 +818,7 @@ pub(crate) fn derive_kagemusha_mint_authorization_deferred_audits_v1(
     {
         return Err("mint-authorization hash-claim carrier binding count drifted".to_owned());
     }
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     let ep_digest = super::composite::assigned_digest_bytes(&ep_output.challenge_limbs)?;
     drop(ep_builder);
     halo2_proofs::release_allocator_slack();
@@ -852,6 +859,7 @@ pub(crate) fn build_kagemusha_mint_authorization_eq_v1(
         &mut semantic_instances,
         audits.eq_carrier_commitment,
         audits.ep_carrier_commitment,
+        witness.relation.platform_credential.hardware_policy_id,
     )?;
     let credential_claim_history =
         witness
@@ -909,7 +917,7 @@ pub(crate) fn build_kagemusha_mint_authorization_eq_v1(
         &output.bound_values,
         &mut dense_jobs,
     )?;
-    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS;
     dense_jobs.validate_capacity(usable_rows)?;
     if super::composite::assigned_digest_bytes(&output.challenge_limbs)? != audits.eq_digest
@@ -951,6 +959,7 @@ pub(crate) fn build_kagemusha_mint_authorization_ep_v1(
         &mut semantic_instances,
         audits.eq_carrier_commitment,
         audits.ep_carrier_commitment,
+        witness.relation.platform_credential.hardware_policy_id,
     )?;
     let credential_claim_history =
         witness
@@ -1008,7 +1017,7 @@ pub(crate) fn build_kagemusha_mint_authorization_ep_v1(
         &output.bound_values,
         &mut dense_jobs,
     )?;
-    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS;
     dense_jobs.validate_capacity(usable_rows)?;
     if super::composite::assigned_digest_bytes(&output.challenge_limbs)? != audits.ep_digest
@@ -1390,7 +1399,11 @@ where
         .assigned_instances
         .first_mut()
         .ok_or_else(|| "mint-authorization semantic instance is missing".to_owned())?
-        .extend(commitment_values);
+        .extend(
+            commitment_values
+                .into_iter()
+                .chain(assigned.provider_policy_root),
+        );
     if builder.assigned_instances[0].len() != MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 {
         return Err("mint-authorization inner semantic instance has wrong shape".to_owned());
     }
@@ -1405,6 +1418,7 @@ struct AssignedAuthorizationV1<F: KagemushaPoseidonFieldV1> {
     public_prefix: Vec<AssignedValue<F>>,
     platform_credential_digest: [AssignedValue<F>; 2],
     release_id: [AssignedValue<F>; 2],
+    provider_policy_root: [AssignedValue<F>; 2],
 }
 
 fn mint_authorization_relation_builder_v1<F: KagemushaPoseidonFieldV1>(
@@ -1774,6 +1788,7 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
         public_prefix,
         platform_credential_digest: digest_limbs_assigned(ctx, &platform.digest),
         release_id,
+        provider_policy_root: digest_limbs_assigned(ctx, &platform.policy_id),
     })
 }
 
@@ -2311,6 +2326,55 @@ mod canonical_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mint_authorization_inner_semantics_carry_both_commitments_and_exact_policy_root() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let prefix = vec![F::from(7); MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1];
+            let root = [0x42; 32];
+            let mut semantic = prefix.clone();
+            append_inner_carrier_commitments_v1(
+                &mut semantic,
+                EqAffine::generator(),
+                EpAffine::generator(),
+                root,
+            )
+            .unwrap();
+            assert_eq!(semantic.len(), 90);
+            assert_eq!(&semantic[..84], &prefix);
+            assert_eq!(
+                &semantic[84..86],
+                &point_u128_limbs_v1(EqAffine::generator()).map(F::from_u128)
+            );
+            assert_eq!(
+                &semantic[86..88],
+                &point_u128_limbs_v1(EpAffine::generator()).map(F::from_u128)
+            );
+            assert_eq!(&semantic[88..90], &digest_limbs::<F>(root));
+            assert!(
+                append_inner_carrier_commitments_v1(
+                    &mut semantic,
+                    EqAffine::generator(),
+                    EpAffine::generator(),
+                    root
+                )
+                .is_err()
+            );
+            let mut absent = prefix.clone();
+            assert!(
+                append_inner_carrier_commitments_v1(
+                    &mut absent,
+                    EqAffine::generator(),
+                    EpAffine::generator(),
+                    [0; 32]
+                )
+                .is_err()
+            );
+            assert_eq!(absent, prefix);
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         NetworkId,

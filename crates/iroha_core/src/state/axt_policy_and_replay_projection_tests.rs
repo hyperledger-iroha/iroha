@@ -490,10 +490,13 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
     let parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
     let mut mint_finality_voters = (1_u8..=4)
         .map(|seed| {
-            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .expect("derive deterministic mint-finality voter");
-            ValidatorPower {
-                validator: PeerId::new(key_pair.public_key().clone()),
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![seed; 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic snapshot mint-finality validator");
+            iroha_data_model::block::consensus_v2::ValidatorPower {
+                validator: iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
                 power: 1,
             }
         })

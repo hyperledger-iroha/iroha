@@ -7839,7 +7839,12 @@ fn parse_world(
     let content_bundles = take_required(&mut map, "content_bundles")?;
     let content_chunks = take_required(&mut map, "content_chunks")?;
     let asset_escrows = take_required(&mut map, "asset_escrows")?;
-    let races = take_optional(&mut map, "races")?.unwrap_or_default();
+    let execution_proof_profiles = take_optional(&mut map, "execution_proof_profiles")?.unwrap_or_default();
+    let execution_proof_verifications = take_optional(&mut map, "execution_proof_verifications")?.unwrap_or_default();
+    let game_sessions = take_optional(&mut map, "game_sessions")?.unwrap_or_default();
+    let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
+    let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
+
     let vpn_leases = take_required(&mut map, "vpn_leases")?;
     let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
@@ -7917,7 +7922,18 @@ fn parse_world(
         asset_escrows_by_seller: Storage::default(),
         asset_escrows_by_buyer: Storage::default(),
         asset_escrows_by_status: Storage::default(),
-        races,
+        execution_proof_profiles,
+        execution_proof_verifications,
+        game_sessions,
+        nft_sale_offers,
+        nft_custody_records,
+        nft_custody_by_nft: Storage::default(),
+        nft_custody_owner_refs: Storage::default(),
+        nft_custody_domain_refs: Storage::default(),
+
+        game_custody_by_account: Storage::default(),
+        game_account_references: Storage::default(),
+        game_asset_references: Storage::default(),
         vpn_leases,
         vpn_active_lease_by_account: Storage::default(),
         vpn_active_lease_by_address_slot: Storage::default(),
@@ -8416,8 +8432,12 @@ fn parse_world(
             message,
         })?;
     world.rebuild_nft_owner_index();
+    world.rebuild_nft_custody_indexes().map_err(|message| json::Error::InvalidField { field: "nft_custody_records".into(), message })?;
     world.rebuild_rwa_indexes();
     world.rebuild_escrow_indexes();
+    world.rebuild_game_session_indexes().map_err(|message| json::Error::InvalidField {
+        field: "game_sessions".into(), message,
+    })?;
     world
         .rebuild_vpn_lease_indexes()
         .map_err(|message| json::Error::InvalidField {
@@ -8795,6 +8815,7 @@ fn build_state(
         #[cfg(feature = "telemetry")]
         telemetry,
         lane_lifecycle_lock: parking_lot::Mutex::new(()),
+        queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
         state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
         state_write_lock: parking_lot::Mutex::new(()),
         view_generation: AtomicU64::new(0),

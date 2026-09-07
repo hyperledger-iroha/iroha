@@ -1,4 +1,233 @@
 #[cfg(feature = "bls")]
+fn ready_durable_store_coordinator(fixture: &DurableStoreFixture) -> LifecycleCoordinator {
+    let work = fixture
+        .registry
+        .entries
+        .get(&fixture.address)
+        .expect("Ready Store fixture retains its closed carrier");
+    let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &work.kind else {
+        unreachable!("Ready Store fixture retains one Store carrier")
+    };
+    let candidate = store
+        .project_candidate(&fixture.verified)
+        .expect("project Ready Store fixture candidate");
+    let active_context =
+        LifecycleContext::new(candidate.key.context(), candidate.key.round().height());
+    let high_water = fixture
+        .lease
+        .ordinal()
+        .checked_sub(1)
+        .expect("Ready Store fixture ordinal is non-zero");
+    let mut coordinator = LifecycleCoordinator::new(
+        active_context,
+        high_water,
+        CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 64))),
+    );
+    assert!(matches!(
+        coordinator.reduce_admit(AdmissionRequest::Candidate(candidate)),
+        AdmissionDecision::Admitted {
+            owner,
+            ordinal,
+            producer_turn_ordinal: None,
+        } if owner == fixture.lease.owner() && ordinal == fixture.lease.ordinal()
+    ));
+    coordinator
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn durable_store_attestation_accepts_only_an_exact_reducer_fence_wake() {
+    let fixture = durable_store_fixture(0x44);
+    let mut coordinator = ready_durable_store_coordinator(&fixture);
+    let ordinal = fixture.lease.ordinal();
+    let ready = fixture
+        .registry
+        .attest_schedulable_certified_body_pipeline(&coordinator, ordinal, None)
+        .expect("exact Ready Store must attest");
+    assert!(
+        ready.matches_schedulable_record(
+            coordinator
+                .records
+                .get(&ordinal)
+                .expect("Ready Store row remains installed")
+        )
+    );
+
+    let source = super::super::reducer_fence_wait_source(coordinator.active_context);
+    let observed_generation = 7;
+    let wait = WaitToken::new(source, observed_generation);
+    assert!(coordinator.ready_index.remove(&ordinal));
+    coordinator
+        .records
+        .get_mut(&ordinal)
+        .expect("Store row remains installed")
+        .state = LifecycleState::Waiting(wait);
+    coordinator
+        .observed_generation
+        .insert(source, observed_generation);
+    let advanced_fence = crate::sumeragi::v2::LifecycleReducerFenceObservationV1::for_test(
+        source,
+        observed_generation + 1,
+    );
+
+    let record = coordinator
+        .records
+        .get(&ordinal)
+        .expect("Waiting Store row remains installed");
+    let metadata = coordinator
+        .durable_records
+        .get(&ordinal)
+        .expect("Waiting Store metadata remains installed");
+    let work = fixture
+        .registry
+        .entries
+        .get(&fixture.address)
+        .expect("Waiting Store carrier remains installed");
+    let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &work.kind else {
+        unreachable!("Waiting Store fixture retains one Store carrier")
+    };
+    assert!(
+        !store.matches_recovered_record(coordinator.active_context, record, metadata, work.digest,),
+        "cold-recovery matching must remain Ready-only",
+    );
+    assert!(store.matches_schedulable_record_shape(
+        coordinator.active_context,
+        record,
+        metadata,
+        work.digest,
+    ));
+    let woken = fixture
+        .registry
+        .attest_schedulable_certified_body_pipeline(&coordinator, ordinal, Some(advanced_fence))
+        .expect("an exact advanced reducer fence must attest the unchanged Waiting Store");
+    assert!(woken.matches_schedulable_record(record));
+
+    assert_eq!(
+        fixture
+            .registry
+            .attest_schedulable_certified_body_pipeline(&coordinator, ordinal, None),
+        Err(ReadyCertifiedBodyPipelineAttestationErrorV1::RowNotSchedulable),
+    );
+    for rejected_fence in [
+        crate::sumeragi::v2::LifecycleReducerFenceObservationV1::for_test(
+            source,
+            observed_generation,
+        ),
+        crate::sumeragi::v2::LifecycleReducerFenceObservationV1::for_test(
+            super::super::reducer_fence_wait_source(LifecycleContext::new(
+                LifecycleDigest::new([0xF4; 32]),
+                coordinator.active_context.height(),
+            )),
+            observed_generation + 1,
+        ),
+    ] {
+        assert_eq!(
+            fixture.registry.attest_schedulable_certified_body_pipeline(
+                &coordinator,
+                ordinal,
+                Some(rejected_fence),
+            ),
+            Err(ReadyCertifiedBodyPipelineAttestationErrorV1::RowNotSchedulable),
+        );
+    }
+
+    let mut generation_mismatch = coordinator.clone();
+    generation_mismatch
+        .observed_generation
+        .insert(source, observed_generation + 1);
+    assert_eq!(
+        fixture.registry.attest_schedulable_certified_body_pipeline(
+            &generation_mismatch,
+            ordinal,
+            Some(advanced_fence),
+        ),
+        Err(ReadyCertifiedBodyPipelineAttestationErrorV1::RowNotSchedulable),
+    );
+
+    let mut corrupt_metadata = coordinator.clone();
+    corrupt_metadata
+        .durable_records
+        .get_mut(&ordinal)
+        .expect("corruption fixture retains Store metadata")
+        .payload = DurablePayloadReference::None;
+    assert_eq!(
+        fixture.registry.attest_schedulable_certified_body_pipeline(
+            &corrupt_metadata,
+            ordinal,
+            Some(advanced_fence),
+        ),
+        Err(ReadyCertifiedBodyPipelineAttestationErrorV1::DurableStoreCarrierMismatch,),
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn durable_commit_store_attestation_accepts_a_future_certified_view() {
+    let fixture = durable_store_fixture_with_views_and_phase(
+        0x45,
+        0,
+        1,
+        wire::GlobalPhase::Commit,
+    );
+    let mut coordinator = ready_durable_store_coordinator(&fixture);
+    let ordinal = fixture.lease.ordinal();
+    fixture
+        .registry
+        .attest_schedulable_certified_body_pipeline(&coordinator, ordinal, None)
+        .expect("Commit-owned Store may precede the certified view");
+
+    let source = super::super::reducer_fence_wait_source(coordinator.active_context);
+    let observed_generation = 11;
+    let wait = WaitToken::new(source, observed_generation);
+    assert!(coordinator.ready_index.remove(&ordinal));
+    coordinator
+        .records
+        .get_mut(&ordinal)
+        .expect("Store row remains installed")
+        .state = LifecycleState::Waiting(wait);
+    coordinator
+        .observed_generation
+        .insert(source, observed_generation);
+    let advanced_fence = crate::sumeragi::v2::LifecycleReducerFenceObservationV1::for_test(
+        source,
+        observed_generation + 1,
+    );
+
+    fixture
+        .registry
+        .attest_schedulable_certified_body_pipeline(&coordinator, ordinal, Some(advanced_fence))
+        .expect("future-view Commit Store must survive an exact reducer-fence wake");
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn durable_store_attestation_rejects_a_replay_source_tag_substitution() {
+    let mut fixture = durable_store_fixture(0x46);
+    let coordinator = ready_durable_store_coordinator(&fixture);
+    let work = fixture
+        .registry
+        .entries
+        .get_mut(&fixture.address)
+        .expect("Store tag-substitution fixture retains its carrier");
+    let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &mut work.kind else {
+        unreachable!("Store tag-substitution fixture retains one Store carrier")
+    };
+    assert!(store.replay_evidence.replace_with_foreign_origin_for_test());
+    assert_eq!(
+        fixture
+            .registry
+            .attest_schedulable_certified_body_pipeline(
+                &coordinator,
+                fixture.lease.ordinal(),
+                None,
+            ),
+        Err(ReadyCertifiedBodyPipelineAttestationErrorV1::Registry(
+            RegistryError::CorruptWork,
+        )),
+    );
+}
+
+#[cfg(feature = "bls")]
 #[test]
 fn durable_store_finalization_census_projects_exact_closed_row() {
     let DurableStoreFixture {
@@ -20,7 +249,13 @@ fn durable_store_finalization_census_projects_exact_closed_row() {
         &store.durable_receipt,
     )
     .expect("reconstruct the exact closed Store publication");
-    assert_eq!(expected.key(), (store.durable_receipt.round(), store.durable_receipt.subject()));
+    assert_eq!(
+        expected.key(),
+        (
+            store.durable_receipt.round(),
+            store.durable_receipt.subject()
+        )
+    );
     assert_eq!(
         registry
             .published_lifecycle_store_retry_census()
@@ -252,9 +487,7 @@ fn assert_corrupt_durable_store_rejected(
     corrupt(work);
     assert!(!work.validate_exact());
     assert!(
-        registry
-            .published_lifecycle_store_retry_census()
-            .is_err(),
+        registry.published_lifecycle_store_retry_census().is_err(),
         "finalization census must reject corrupt authenticated Store work",
     );
     let before = format!("{registry:?}");

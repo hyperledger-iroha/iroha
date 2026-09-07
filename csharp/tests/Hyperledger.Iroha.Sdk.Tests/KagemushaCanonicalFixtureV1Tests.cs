@@ -15,7 +15,7 @@ public sealed class KagemushaCanonicalFixtureV1Tests
         var root = fixture.RootElement;
         Assert.Equal(1, root.GetProperty("fixture_version").GetInt32());
         Assert.Equal("KAGEMUSHA", root.GetProperty("protocol").GetString());
-        Assert.Equal(21, root.GetProperty("operation").GetInt32());
+        Assert.Equal(16, root.GetProperty("operation").GetInt32());
 
         var authorizationRaw = Raw(root.GetProperty("authorization"));
         var authorization = KagemushaCodec.DecodeMintAuthorization(authorizationRaw);

@@ -1,5 +1,5 @@
 //! Production-path tests for strict Sumeragi-v2 Kura replay.
-use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World};
+use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
 use crate::sumeragi::v2_core::{EventTag, Generation};
 use crate::{
     governance::manifest::LaneManifestRegistry,
@@ -16,7 +16,7 @@ use crate::{
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, Registrable,
+    ChainId, HasMetadata, Registrable,
     account::{Account, AccountId},
     block::{
         BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
@@ -24,11 +24,10 @@ use iroha_data_model::{
     },
     bridge::SccpOutboundMessageContextV1,
     domain::Domain,
-    isi::SetParameter,
     parameter::{Parameter, system::SumeragiParameter},
     peer::PeerId,
-    transaction::TransactionBuilder,
 };
+use iroha_primitives::time::TimeSource;
 use norito::codec::Encode;
 use std::{
     collections::BTreeSet,
@@ -230,32 +229,100 @@ impl StateFingerprint {
         );
     }
 }
-struct StrictReplayFixture {
+#[derive(Clone, Copy)]
+struct ReplayFixtureOptions {
+    mode: wire::ConsensusMode,
+    npos_seed: [u8; 32],
+    seed_space_directory: bool,
+    install_compliance: bool,
+}
+impl Default for ReplayFixtureOptions {
+    fn default() -> Self {
+        Self {
+            mode: wire::ConsensusMode::Permissioned,
+            npos_seed: [1; 32],
+            seed_space_directory: false,
+            install_compliance: false,
+        }
+    }
+}
+pub(super) struct AppliedReplayBlock {
+    pub(super) context: wire::HeightContext,
+    pub(super) block: SignedBlock,
+    pub(super) artifact: wire::finality::V2FinalityArtifact,
+    pub(super) checkpoint_hash: Hash,
+}
+pub(super) struct StrictReplayFixture {
     chain_id: ChainId,
-    genesis_account: AccountId,
+    pub(super) genesis_account: AccountId,
     genesis_key: KeyPair,
-    keys: Vec<KeyPair>,
-    context: wire::HeightContext,
-    block: SignedBlock,
-    artifact: wire::finality::V2FinalityArtifact,
+    pub(super) keys: Vec<KeyPair>,
+    pub(super) context: wire::HeightContext,
+    pub(super) block: SignedBlock,
+    pub(super) artifact: wire::finality::V2FinalityArtifact,
     manifest: CommitManifest,
-    checkpoint_hash: Hash,
+    pub(super) checkpoint_hash: Hash,
     expected_snapshot: Vec<u8>,
-    kura: Arc<Kura>,
-    materialized_state: Arc<State>,
+    pub(super) kura: Arc<Kura>,
+    pub(super) materialized_state: Arc<State>,
+    queue: Arc<Queue>,
+    options: ReplayFixtureOptions,
     apply_service: V2ApplyService,
 }
-struct TwoBlockReplayFixture {
-    first: StrictReplayFixture,
-    second_context: wire::HeightContext,
-    second_block: SignedBlock,
-    second_artifact: wire::finality::V2FinalityArtifact,
-    second_checkpoint_hash: Hash,
+pub(super) struct TwoBlockReplayFixture {
+    pub(super) first: StrictReplayFixture,
+    pub(super) second_context: wire::HeightContext,
+    pub(super) second_block: SignedBlock,
+    pub(super) second_artifact: wire::finality::V2FinalityArtifact,
+    pub(super) second_checkpoint_hash: Hash,
 }
 impl StrictReplayFixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
+        Self::new_with_options(ReplayFixtureOptions::default(), Vec::new())
+    }
+    fn new_with_compliance() -> Self {
+        Self::new_with_options(
+            ReplayFixtureOptions {
+                install_compliance: true,
+                ..Default::default()
+            },
+            Vec::new(),
+        )
+    }
+    pub(super) fn new_npos() -> Self {
+        Self::new_with_options(
+            ReplayFixtureOptions {
+                mode: wire::ConsensusMode::Npos,
+                ..Default::default()
+            },
+            Vec::new(),
+        )
+    }
+    pub(super) fn new_with_space_directory() -> Self {
+        Self::new_with_options(
+            ReplayFixtureOptions {
+                seed_space_directory: true,
+                ..Default::default()
+            },
+            Vec::new(),
+        )
+    }
+    pub(super) fn new_with_genesis_instructions(
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> Self {
+        Self::new_with_options(ReplayFixtureOptions::default(), instructions)
+    }
+    fn staking_asset_definition() -> iroha_data_model::asset::AssetDefinitionId {
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+            "replay_stake".parse().expect("fixture staking asset name"),
+        )
+    }
+    fn new_with_options(
+        options: ReplayFixtureOptions,
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> Self {
         let chain_id: ChainId = "strict-production-v2-replay".into();
-        let network_id = crate::sumeragi::synthetic_network_id("strict-production-v2-replay");
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -270,64 +337,195 @@ impl StrictReplayFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
-        let mut context = wire::HeightContext {
-            network_id: network_id.clone(),
-            protocol_version: wire::PROTOCOL_VERSION,
-            height: HEIGHT,
-            epoch: 0,
-            epoch_end_height: u64::MAX,
-            next_epoch_snapshot: None,
-            mode: wire::ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: wire::DualQuorum::from_roster(&roster).expect("derive fixture quorum"),
-            roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
-            nexus_amx_context_hash: Hash::new(b"strict replay fixture pending state"),
-            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 2 * 1024 * 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 2 * 1024 * 1024,
-                max_chunk_count: 2,
-            },
-            leader_seed: [0; 32],
-        };
-        let leader = context.leader(0);
         let genesis_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("derive deterministic genesis authority key");
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
-        let kura = Kura::blank_kura_for_testing();
+        let topology = crate::sumeragi::network_topology::Topology::new(
+            roster.iter().map(|entry| entry.validator.clone()),
+        );
+        let mut genesis_builder =
+            iroha_genesis::GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+                .with_sumeragi_v2_context_parameters(
+                    wire::SumeragiV2GenesisContextParameters::recommended(),
+                )
+                .with_kagemusha_mint_finality_genesis_parameters(
+                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
+                )
+                .with_block_cadence_ms(NonZeroU64::new(1_000).expect("non-zero fixture cadence"))
+                .set_topology(
+                    keys.iter()
+                        .map(|key| {
+                            iroha_genesis::GenesisTopologyEntry::new(
+                                PeerId::new(key.public_key().clone()),
+                                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                    .expect("derive validator proof of possession"),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)));
+        if options.mode == wire::ConsensusMode::Npos {
+            // NPoS eligibility is executed from signed genesis: actual asset minting,
+            // escrow custody, registration and activation replace seeded validator rows.
+            use iroha_data_model::asset::{AssetBalancePolicy, AssetDefinition, AssetId};
+            use iroha_data_model::isi::{
+                ActivatePublicLaneValidator, Mint, Register, RegisterPublicLaneValidator,
+            };
+            let definition = Self::staking_asset_definition();
+            let npos = iroha_data_model::parameter::system::SumeragiNposParameters {
+                epoch_seed: options.npos_seed,
+                ..Default::default()
+            };
+            genesis_builder = genesis_builder
+                .next_transaction()
+                .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
+                .append_instruction(Register::asset_definition(AssetDefinition::numeric(
+                    definition.clone(),
+                    "replay stake".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )));
+            for entry in &roster {
+                let validator = AccountId::new(entry.validator.public_key().clone());
+                genesis_builder = genesis_builder
+                    .append_instruction(Register::account(Account::new(validator.clone())))
+                    .append_instruction(Mint::asset_quantity(
+                        1_000_u64,
+                        AssetId::of(definition.clone(), validator.clone()),
+                    ))
+                    .append_instruction(RegisterPublicLaneValidator::new(
+                        iroha_data_model::nexus::LaneId::SINGLE,
+                        validator.clone(),
+                        entry.validator.clone(),
+                        validator.clone(),
+                        iroha_primitives::numeric::Quantity::from(1_000_u64),
+                        iroha_data_model::metadata::Metadata::default(),
+                    ))
+                    .append_instruction(ActivatePublicLaneValidator::new(
+                        iroha_data_model::nexus::LaneId::SINGLE,
+                        validator,
+                    ));
+            }
+        }
+        if !instructions.is_empty() {
+            genesis_builder = genesis_builder.next_transaction();
+            for instruction in instructions {
+                genesis_builder = genesis_builder.append_instruction(instruction);
+            }
+        }
+        let template = genesis_builder
+            .build_raw()
+            .expect("build complete strict-replay genesis manifest");
+        // As in the production signer, stage a provisional signed genesis to derive
+        // its network-independent commitments, then sign the final complete manifest.
+        let policy_state = Self::new_state(
+            Self::fresh_kura(options),
+            chain_id.clone(),
+            crate::sumeragi::synthetic_network_id("strict-replay-policy-preview"),
+            genesis_account.clone(),
+            &roster,
+            options,
+        );
+        let confidential_policy_hash = {
+            let view = policy_state.view();
+            crate::state::compute_confidential_feature_digest(
+                view.world(),
+                &view.zk,
+                view.sccp_registry.as_ref(),
+                HEIGHT,
+            )
+            .zk_policy_hash
+        };
+        let policies =
+            crate::da::active_proof_policy_bundle_at_height(&policy_state.nexus_snapshot(), HEIGHT);
+        let sign = |manifest: iroha_genesis::RawGenesisTransaction| {
+            manifest
+                .with_consensus_mode(options.mode.into())
+                .with_consensus_meta()
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                    &genesis_key,
+                    Some(policies.clone()),
+                    confidential_policy_hash,
+                    1_000,
+                )
+                .expect("sign complete canonical strict-replay genesis")
+        };
+        let provisional = sign(template.clone());
+        let staging_state = Self::new_state(
+            Self::fresh_kura(options),
+            chain_id.clone(),
+            iroha_data_model::NetworkId::from_genesis_hash(provisional.0.hash()),
+            genesis_account.clone(),
+            &roster,
+            options,
+        );
+        let parameters = {
+            let mut voting_block = None;
+            let (_valid, staged) =
+                crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+                    provisional.0,
+                    &topology,
+                    &genesis_account,
+                    &TimeSource::new_system(),
+                    &staging_state,
+                    &mut voting_block,
+                    options.mode,
+                )
+                .unpack(|_| {})
+                .unwrap_or_else(|(_block, error)| {
+                    panic!("stage complete strict-replay genesis: {error}")
+                });
+            let mut parameters = template.sumeragi_v2_context_parameters();
+            parameters.nexus_amx_context_hash =
+                crate::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).into();
+            parameters.execution_policy_hash =
+                crate::sumeragi::staged_genesis_execution_policy_hash(&staged)
+                    .expect("derive strict-replay genesis execution policy")
+                    .into();
+            parameters
+        };
+        let genesis = sign(template.with_sumeragi_v2_context_parameters(parameters));
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(genesis.0.hash());
+        let kura = Self::fresh_kura(options);
         let state = Arc::new(Self::new_state(
             Arc::clone(&kura),
             chain_id.clone(),
-            network_id.clone(),
+            network_id,
             genesis_account.clone(),
+            &roster,
+            options,
         ));
-        context.nexus_amx_context_hash =
-            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
-        context.validate().expect("validate fixture context");
-        assert_eq!(context.leader(0), leader, "fixture must freeze its leader");
+        let bootstrap = {
+            let mut voting_block = None;
+            let (_valid, staged) =
+                crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+                    genesis.0.clone(),
+                    &topology,
+                    &genesis_account,
+                    &TimeSource::new_system(),
+                    state.as_ref(),
+                    &mut voting_block,
+                    options.mode,
+                )
+                .unpack(|_| {})
+                .unwrap_or_else(|(_block, error)| {
+                    panic!("stage final strict-replay genesis: {error}")
+                });
+            crate::sumeragi::freeze_staged_genesis_v2(&genesis, &staged, options.mode)
+                .expect("freeze exact signed and staged strict-replay genesis authority")
+        };
+        let context = bootstrap.context().clone();
+        let pops = bootstrap.proofs_of_possession().to_vec();
+        assert_eq!(context.network_id, network_id);
+        assert_eq!(context.roster, roster);
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
         let queue = Arc::new(Queue::from_config(
             QueueConfig::default(),
             events_sender.clone(),
         ));
-        let pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("derive validator proof of possession")
-            })
-            .collect::<Vec<_>>();
         let service = V2ApplyService::new(
             Arc::clone(&state),
-            queue,
+            Arc::clone(&queue),
             Arc::clone(&kura),
             None,
             None,
@@ -336,48 +534,7 @@ impl StrictReplayFixture {
             events_sender,
             pops,
         );
-        let transaction = TransactionBuilder::new(
-            network_id,
-            genesis_account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::MaxClockDriftMs(100),
-        ))])
-        .sign(genesis_key.private_key());
-        let creation_time_ms = (transaction.creation_time() + Duration::from_millis(1))
-            .as_millis()
-            .try_into()
-            .expect("fixture creation time fits u64");
-        let mut header = BlockHeader::new(
-            NonZeroU64::new(HEIGHT).expect("non-zero height"),
-            None,
-            None,
-            None,
-            creation_time_ms,
-            0,
-        );
-        let confidential_features = {
-            let view = state.view();
-            let digest = crate::state::compute_confidential_feature_digest(
-                view.world(),
-                &view.zk,
-                view.sccp_registry.as_ref(),
-                HEIGHT,
-            );
-            (!digest.is_empty()).then_some(digest)
-        };
-        header.set_confidential_features(confidential_features);
-        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
-        builder.push_transaction(transaction);
-        builder.set_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
-            &state.nexus_snapshot(),
-            HEIGHT,
-        )));
-        let body = builder
-            .try_build_with_signature(0, genesis_key.private_key())
-            .expect("sign canonical fixture block")
-            .canonical_resultless_proposal();
+        let body = genesis.0.canonical_resultless_proposal();
         let canonical_wire = body.encode_wire().expect("encode canonical fixture block");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -464,54 +621,132 @@ impl StrictReplayFixture {
             expected_snapshot,
             kura,
             materialized_state: state,
+            queue,
+            options,
             apply_service: service,
         }
     }
-    fn into_two_block(self) -> TwoBlockReplayFixture {
-        let second_context = wire::HeightContext {
-            network_id: self.context.network_id.clone(),
-            protocol_version: wire::PROTOCOL_VERSION,
-            height: 2,
-            epoch: 0,
-            epoch_end_height: u64::MAX,
-            next_epoch_snapshot: None,
-            mode: wire::ConsensusMode::Permissioned,
-            parent_commit_qc: Some(self.artifact.commit_qc.clone()),
-            snapshot_bootstrap: None,
-            quorum: self.context.quorum,
-            roster: self.context.roster.clone(),
-            kagemusha_mint_finality_epoch_id: self.context.kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: self
-                .context
-                .kagemusha_mint_finality_epoch_roster
-                .clone(),
-            nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
+    pub(super) fn into_two_block(mut self) -> TwoBlockReplayFixture {
+        let second = self.append_metadata_block();
+        TwoBlockReplayFixture {
+            first: self,
+            second_context: second.context,
+            second_block: second.block,
+            second_artifact: second.artifact,
+            second_checkpoint_hash: second.checkpoint_hash,
+        }
+    }
+    pub(super) fn successor_context(&self) -> wire::HeightContext {
+        let parent_height = self.materialized_state.committed_height();
+        let parent = self
+            .kura
+            .v2_finality_artifact(u64::try_from(parent_height).expect("parent height fits u64"))
+            .expect("read exact parent finality")
+            .expect("parent finality exists");
+        crate::sumeragi::v2_context::build_successor_height_context_from_state(
+            &parent,
+            &self.materialized_state.view(),
+            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                 self.materialized_state.as_ref(),
             ),
-            execution_policy_hash: crate::sumeragi::v2_recovery::committed_execution_policy_hash(
-                self.materialized_state.as_ref(),
+        )
+        .expect("derive unique successor from committed parent authority")
+    }
+    pub(super) fn append_metadata_block(&mut self) -> AppliedReplayBlock {
+        self.append_metadata_block_at_view(0)
+    }
+    pub(super) fn append_metadata_block_at_view(&mut self, view: u64) -> AppliedReplayBlock {
+        let height = u64::try_from(self.materialized_state.committed_height())
+            .expect("fixture height fits u64")
+            + 1;
+        let parent = self
+            .kura
+            .get_block(
+                NonZeroUsize::new(usize::try_from(height - 1).expect("parent index"))
+                    .expect("parent height"),
             )
-            .expect("derive strict-replay execution policy"),
-            da_layout: self.context.da_layout,
-            leader_seed: [0; 32],
-        };
+            .expect("parent block");
+        let transaction = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
+            self.context.network_id,
+            self.genesis_account.clone(),
+            &TimeSource::new_fixed(parent.header().creation_time()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::SetKeyValue::domain(
+            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+            "strict_replay_effect".parse().expect("effect key"),
+            height,
+        )])
+        .sign(self.genesis_key.private_key());
+        let applied = self.append_transaction_at_view(transaction, view);
+        let effect_key: iroha_data_model::name::Name =
+            "strict_replay_effect".parse().expect("effect key");
+        assert_eq!(
+            self.materialized_state
+                .world_view()
+                .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+                .expect("genesis domain")
+                .metadata()
+                .get(&effect_key),
+            Some(&iroha_primitives::json::Json::from(height)),
+            "real Apply must retain the intended successor mutation"
+        );
+        applied
+    }
+    pub(super) fn append_instructions(
+        &mut self,
+        authority: &AccountId,
+        key: &iroha_crypto::PrivateKey,
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> AppliedReplayBlock {
+        let parent = self
+            .kura
+            .get_block(
+                NonZeroUsize::new(self.materialized_state.committed_height())
+                    .expect("parent height"),
+            )
+            .expect("parent block");
+        let transaction = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
+            self.context.network_id,
+            authority.clone(),
+            &TimeSource::new_fixed(parent.header().creation_time()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(key);
+        self.append_transaction_at_view(transaction, 0)
+    }
+    fn append_transaction_at_view(
+        &mut self,
+        transaction: iroha_data_model::transaction::SignedTransaction,
+        view: u64,
+    ) -> AppliedReplayBlock {
+        let second_context = self.successor_context();
+        let height = second_context.height;
+        let parent = self
+            .kura
+            .get_block(
+                NonZeroUsize::new(usize::try_from(height - 1).expect("parent height fits usize"))
+                    .expect("parent height is non-zero"),
+            )
+            .expect("exact parent block exists");
         second_context
             .validate()
-            .expect("validate height-two fixture context");
-        let second_leader = second_context.leader(0);
+            .expect("validate successor fixture context");
+        let second_leader = second_context.leader(view);
         let second_leader_index =
-            usize::try_from(second_leader).expect("height-two leader index fits usize");
-        let creation_time_ms = (self.block.header().creation_time() + Duration::from_secs(1))
+            usize::try_from(second_leader).expect("successor leader index fits usize");
+        let creation_time_ms = (parent.header().creation_time() + Duration::from_secs(1))
             .as_millis()
             .try_into()
-            .expect("height-two creation time fits u64");
+            .expect("successor creation time fits u64");
         let mut header = BlockHeader::new(
-            NonZeroU64::new(2).expect("non-zero height"),
-            Some(self.block.hash()),
+            NonZeroU64::new(height).expect("non-zero height"),
+            Some(parent.hash()),
             None,
             None,
             creation_time_ms,
-            0,
+            view,
         );
         let confidential_features = {
             let view = self.materialized_state.view();
@@ -519,44 +754,79 @@ impl StrictReplayFixture {
                 view.world(),
                 &view.zk,
                 view.sccp_registry.as_ref(),
-                2,
+                height,
             );
             (!digest.is_empty()).then_some(digest)
         };
         header.set_confidential_features(confidential_features);
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+            transaction.clone(),
+        ));
+        let routing_plan = self
+            .queue
+            .route_plan_with_state(&accepted, self.materialized_state.as_ref())
+            .expect("resolve successor metadata mutation route");
+        let route = routing_plan.coordinator_route();
+        let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
+        let lane_plan = crate::sumeragi::lane_planner::prepare_v2_lane_payload_plan(
+            self.materialized_state.as_ref(),
+            self.kura.as_ref(),
+            &second_context,
+            view,
+            &second_context.roster[second_leader_index].validator,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&entrypoint_hash),
+        )
+        .expect("derive successor lane authority and predecessor");
+        assert!(
+            lane_plan.unavailable_indices.is_empty(),
+            "successor production requires the previous ordinary lane certificate and receipt: {:?}",
+            lane_plan.unavailable_indices,
+        );
+        let lane_proposals = lane_plan.proposals;
+        assert_eq!(lane_plan.ownerships.len(), 1);
+        let execution_context = iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            crate::queue::execution_context_for_routing_plan(
+                transaction.hash_as_entrypoint(),
+                &routing_plan,
+            ),
+        ])
+        .with_lane_payload_ownerships(lane_plan.ownerships);
         let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(execution_context));
         builder.set_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
             &self.materialized_state.nexus_snapshot(),
-            2,
+            height,
         )));
         let body = builder
             .try_build_with_signature(
                 u64::from(second_leader),
                 self.keys[second_leader_index].private_key(),
             )
-            .expect("sign canonical height-two heartbeat")
+            .expect("sign canonical successor mutation")
             .canonical_resultless_proposal();
         let canonical_wire = body
             .encode_wire()
-            .expect("encode canonical height-two heartbeat");
+            .expect("encode canonical successor mutation");
         let subject = wire::BlockSubject {
-            parent_block_hash: Some(self.block.hash()),
+            parent_block_hash: Some(parent.hash()),
             block_hash: body.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
         let round = wire::ConsensusRound {
             context_id: second_context.id(),
-            height: 2,
-            view: 0,
+            height,
+            view,
         };
         let payload_manifest = encode_payload(&second_context, round, subject, &canonical_wire)
-            .expect("encode exact height-two replay payload")
+            .expect("encode exact successor replay payload")
             .manifest()
             .clone();
         let execution_commitment = self
             .apply_service
             .validate_candidate(&second_context, &body)
-            .expect("derive height-two execution commitment");
+            .expect("derive successor execution commitment");
         let mut certificate = wire::QuorumCertificate {
             round,
             proposal_round: round,
@@ -567,25 +837,25 @@ impl StrictReplayFixture {
             aggregate_signature: Vec::new(),
         };
         Self::resign_certificate(&mut certificate, &self.keys);
-        let body_root = tempfile::tempdir().expect("create height-two exact-body store");
+        let body_root = tempfile::tempdir().expect("create successor exact-body store");
         let mut body_store = V2BodyStore::open_with_policy(
             body_root.path(),
             second_context.clone(),
             BlockSignaturePolicy::RotatingLeader,
         )
-        .expect("open height-two exact-body store");
+        .expect("open successor exact-body store");
         let durable = body_store
             .store(payload_manifest, canonical_wire)
-            .expect("persist exact height-two body");
+            .expect("persist exact successor body");
         let validated = body_store
             .validate(&durable, |candidate| {
                 self.apply_service
                     .validate_candidate(&second_context, candidate)
             })
-            .expect("persist height-two validation receipt");
+            .expect("persist successor validation receipt");
         let task = ApplyTask::for_test(
-            2,
-            EventTag::new(2, 0, Generation::new(1)),
+            height,
+            EventTag::new(height, view, Generation::new(1)),
             subject,
             certificate,
             validated,
@@ -593,52 +863,258 @@ impl StrictReplayFixture {
         let _completion = self
             .apply_service
             .execute(&second_context, &mut body_store, &task)
-            .expect("materialize exact height-two durable tuple");
+            .expect("materialize exact successor durable tuple");
         let second_block = self
             .kura
-            .get_block(NonZeroUsize::new(2).expect("non-zero height"))
-            .expect("read committed height-two block")
+            .get_block(
+                NonZeroUsize::new(usize::try_from(height).expect("height fits usize"))
+                    .expect("non-zero height"),
+            )
+            .expect("read committed successor block")
             .as_ref()
             .clone();
         let second_artifact = self
             .kura
-            .v2_finality_artifact(2)
-            .expect("read height-two finality")
-            .expect("height-two finality exists");
+            .v2_finality_artifact(height)
+            .expect("read successor finality")
+            .expect("successor finality exists");
         let second_checkpoint_hash = self
             .kura
-            .wsv_checkpoint(2)
-            .expect("read height-two checkpoint")
-            .expect("height-two checkpoint exists")
+            .wsv_checkpoint(height)
+            .expect("read successor checkpoint")
+            .expect("successor checkpoint exists")
             .state_hash();
-        TwoBlockReplayFixture {
-            first: self,
-            second_context,
-            second_block,
-            second_artifact,
-            second_checkpoint_hash,
+        // Global Apply writes canonical lane ownership, but the ordinary lane
+        // certificates and application receipt are independently durable. Close
+        // that real protocol boundary before asking the producer for a successor.
+        self.finalize_applied_lane_proposals(&second_block, lane_proposals);
+        assert_eq!(second_block.results().len(), 1);
+        assert!(second_block.results().all(|result| result.as_ref().is_ok()));
+        AppliedReplayBlock {
+            context: second_context,
+            block: second_block,
+            artifact: second_artifact,
+            checkpoint_hash: second_checkpoint_hash,
         }
+    }
+    fn finalize_applied_lane_proposals(
+        &self,
+        block: &SignedBlock,
+        proposals: Vec<iroha_data_model::block::consensus::LaneBlockProposalV1>,
+    ) {
+        use iroha_data_model::block::consensus::{CertPhase, LaneBlockProposalPayloadHintV1};
+        for mut proposal in proposals {
+            proposal.payload_block_hint = Some(LaneBlockProposalPayloadHintV1 {
+                proposal_height: block.header().height().get(),
+                proposal_view: block.header().view_change_index(),
+                proposal_block_hash: block.hash(),
+            });
+            crate::lane_consensus::validate_lane_block_proposal(&proposal)
+                .expect("planner produced the exact canonical ordinary lane proposal");
+            let committee_keys = proposal
+                .descriptor
+                .validator_set
+                .iter()
+                .map(|peer| {
+                    self.keys
+                        .iter()
+                        .find(|key| key.public_key() == peer.public_key())
+                        .expect("fixture owns the exact lane committee key")
+                })
+                .collect::<Vec<_>>();
+            let sign_qc = |phase| {
+                let body = proposal.vote_body(phase);
+                let votes = committee_keys
+                    .iter()
+                    .map(|key| crate::lane_consensus::LaneBlockVoteV1 {
+                        body: body.clone(),
+                        signer: PeerId::new(key.public_key().clone()),
+                        bls_signature: Signature::try_new(
+                            key.private_key(),
+                            &body.signature_preimage(),
+                        )
+                        .expect("sign the applied lane's exact vote body")
+                        .payload()
+                        .to_vec(),
+                        payload_availability_vote: None,
+                    })
+                    .collect::<Vec<_>>();
+                crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+                    body,
+                    proposal.descriptor.validator_set.clone(),
+                    &votes,
+                )
+                .expect("exact committee votes form an authenticated lane QC")
+            };
+            let session = crate::lane_consensus::CommittedLaneBlockSession {
+                prepare_qc: sign_qc(CertPhase::Prepare),
+                commit_qc: sign_qc(CertPhase::Commit),
+                proposal,
+            };
+            // The QC contains its exact quorum subset, even when every committee
+            // member voted. Persist PoPs for the union of actual certificate
+            // signers, rather than adding non-signing committee members.
+            let qc_signer_keys = [&session.prepare_qc, &session.commit_qc]
+                .into_iter()
+                .flat_map(|qc| {
+                    qc.validator_set
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, peer)| {
+                            (qc.signers_bitmap[index / 8] & (1_u8 << (index % 8)) != 0)
+                                .then(|| peer.public_key().clone())
+                        })
+                })
+                .collect::<BTreeSet<_>>();
+            let signer_pops = qc_signer_keys
+                .iter()
+                .map(|public_key| {
+                    let key = committee_keys
+                        .iter()
+                        .find(|key| key.public_key() == public_key)
+                        .expect("fixture owns each selected QC signer");
+                    (
+                        key.public_key().clone(),
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("derive lane signer proof of possession"),
+                    )
+                })
+                .collect();
+            self.materialized_state
+                .persist_committed_lane_block_session_lifecycle_bound(&session, &signer_pops)
+                .expect("persist signed ordinary lane finality under current lifecycle authority");
+            self.kura
+                .persist_lane_block_application_receipt(&session.proposal)
+                .expect("derive application receipt from exact canonical committed results");
+            assert!(
+                self.materialized_state
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored(&session)
+                    .expect("authenticate finalized ordinary lane application"),
+                "the finalized fixture must authorize its next producer slot",
+            );
+        }
+    }
+    fn fresh_kura(options: ReplayFixtureOptions) -> Arc<Kura> {
+        if options.mode != wire::ConsensusMode::Npos {
+            return Kura::blank_kura_for_testing();
+        }
+        // The NPoS staking policy is startup configuration. Open its immutable
+        // configured catalog before State publishes that configuration.
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let config = iroha_config::parameters::actual::Kura {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        };
+        Kura::new_temporary_with_configured_lane_catalog(
+            &config,
+            &iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog),
+            &nexus.lane_catalog,
+        )
+        .expect("open exact configured NPoS fixture catalog before State startup")
     }
     fn new_state(
         kura: Arc<Kura>,
         chain_id: ChainId,
         network_id: iroha_data_model::NetworkId,
         genesis_account: AccountId,
+        roster: &[wire::ValidatorPower],
+        options: ReplayFixtureOptions,
     ) -> State {
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account);
         let account = Account::new(genesis_account.clone()).build(&genesis_account);
-        let state = State::new_with_chain_and_network_id_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             World::with([genesis_domain], [account], []),
             kura,
             LiveQueryStore::start_test(),
             chain_id,
             network_id,
         );
+        if options.mode == wire::ConsensusMode::Npos {
+            let mut nexus = state.nexus_snapshot();
+            nexus.staking.stake_asset_id = Self::staking_asset_definition().to_string();
+            nexus.staking.stake_escrow_account_id = genesis_account.to_string();
+            nexus.staking.slash_sink_account_id = genesis_account.to_string();
+            // Follow the configured-primary startup sequence for fresh signing
+            // states and empty-state replay against already populated Kura.
+            state
+                .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+                .expect("authenticate the NPoS configured primary before publication");
+            state
+                .restore_kura_lane_segments_before_startup_replay()
+                .expect("recover the exact configured NPoS lane geometry");
+            state
+                .set_nexus_from_config(nexus)
+                .expect("install the same NPoS startup policy before signing, Apply and replay");
+        }
+        if options.install_compliance {
+            state.install_lane_compliance_engine(Some(Arc::new(
+                crate::compliance::LaneComplianceEngine::from_policies(Vec::new(), true)
+                    .expect("construct exact fixture compliance policy before genesis signing"),
+            )));
+        }
+        if options.seed_space_directory {
+            super::replay_validation_tests::seed_space_directory_manifest_for_retired_checkpoint_test(
+                &state, iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            );
+        }
         let nexus = state.nexus_snapshot();
-        let lane_manifests =
-            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
-        state.install_lane_manifests(&lane_manifests);
+        let mut statuses = LaneManifestRegistry::empty()
+            .rebind(&nexus.lane_catalog, &nexus.governance)
+            .statuses()
+            .into_iter()
+            .map(|status| (status.lane, status))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let lane = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == iroha_data_model::nexus::LaneId::SINGLE)
+            .expect("strict replay fixture has the primary lane");
+        let validators = roster
+            .iter()
+            .map(|entry| AccountId::new(entry.validator.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_bindings = validators
+            .iter()
+            .zip(roster)
+            .map(
+                |(validator, entry)| crate::governance::manifest::ManifestValidatorBinding {
+                    validator: validator.clone(),
+                    peer_id: entry.validator.clone(),
+                    torii_url: None,
+                },
+            )
+            .collect();
+        statuses.insert(
+            lane.id,
+            crate::governance::manifest::LaneManifestStatus {
+                lane: lane.id,
+                alias: lane.alias.clone(),
+                dataspace: lane.dataspace_id,
+                visibility: lane.visibility,
+                storage: lane.storage.clone(),
+                governance: lane.governance.clone(),
+                manifest_path: Some(PathBuf::from("/tmp/strict-replay-lane-manifest.json")),
+                governance_rules: Some(crate::governance::manifest::GovernanceRules {
+                    validators,
+                    validator_bindings,
+                    ..Default::default()
+                }),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
         {
             let mut parameters = state.world.parameters.block();
             parameters.sumeragi.block_cadence_ms =
@@ -647,15 +1123,17 @@ impl StrictReplayFixture {
         }
         state
     }
-    fn replay_state(&self, kura: Arc<Kura>) -> State {
+    pub(super) fn replay_state(&self, kura: Arc<Kura>) -> State {
         Self::new_state(
             kura,
             self.chain_id.clone(),
             self.context.network_id.clone(),
             self.genesis_account.clone(),
+            &self.context.roster,
+            self.options,
         )
     }
-    fn resign_certificate(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
+    pub(super) fn resign_certificate(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
         let signatures = certificate
             .signers
             .iter()
@@ -684,7 +1162,7 @@ impl StrictReplayFixture {
         )
         .expect("aggregate Commit votes");
     }
-    fn exact_kura_copy(&self) -> Arc<Kura> {
+    pub(super) fn exact_kura_copy(&self) -> Arc<Kura> {
         self.kura_with_block_and_artifact(self.block.clone(), self.artifact.clone())
     }
     fn kura_with_block_and_artifact(
@@ -707,7 +1185,11 @@ impl StrictReplayFixture {
             .expect("store forked finality artifact");
         kura
     }
-    fn fork_with_signature(&self, index: u64, private_key: &iroha_crypto::PrivateKey) -> Arc<Kura> {
+    pub(super) fn fork_with_signature(
+        &self,
+        index: u64,
+        private_key: &iroha_crypto::PrivateKey,
+    ) -> Arc<Kura> {
         let mut block = self.block.clone();
         let signature = BlockSignature::new(
             index,
@@ -961,6 +1443,7 @@ strict_replay_test!(
     {
         let fixture = StrictReplayFixture::new();
         let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
+        let frozen = replay_state.lane_manifests.read().clone();
         replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
         let before = StateFingerprint::capture(&replay_state);
         let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
@@ -975,9 +1458,6 @@ strict_replay_test!(
             "replay rejection must expose the missing registry binding: {diagnostic}"
         );
         before.assert_unchanged(&replay_state);
-        let nexus = replay_state.nexus_snapshot();
-        let frozen =
-            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
         replay_state.install_lane_manifests(&frozen);
         super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect("the identical durable block replays after the lane snapshot is installed");
@@ -1122,7 +1602,7 @@ strict_replay_test!(
 strict_replay_test!(
     production_replay_range_is_atomic_when_height_two_fails_late,
     {
-        let fixture = StrictReplayFixture::new().into_two_block();
+        let fixture = StrictReplayFixture::new_with_compliance().into_two_block();
         assert_eq!(fixture.second_context.height, 2);
         let forged_checkpoint = Hash::new(b"late height-two replay failure");
         assert_ne!(forged_checkpoint, fixture.second_checkpoint_hash);
@@ -1150,11 +1630,9 @@ strict_replay_test!(
             )
             .expect("forge correlated height-two checkpoint");
         let mut replay_state = fixture.first.replay_state(Arc::clone(&fixture.first.kura));
-        let compliance_engine = Arc::new(
-            crate::compliance::LaneComplianceEngine::from_policies(Vec::new(), true)
-                .expect("construct non-empty replay compliance handle"),
-        );
-        replay_state.install_lane_compliance_engine(Some(Arc::clone(&compliance_engine)));
+        let compliance_engine = replay_state
+            .lane_compliance_engine()
+            .expect("replay uses the same configured compliance policy signed into genesis");
         seed_recovery_candidates_for_read_only_prevalidation(fixture.first.kura.as_ref());
         let kura_before = kura_tree_fingerprint(fixture.first.kura.as_ref());
         let ivm_cache_before = ivm::ivm_cache::cache_limits();

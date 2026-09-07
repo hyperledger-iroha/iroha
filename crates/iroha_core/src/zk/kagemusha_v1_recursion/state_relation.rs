@@ -919,8 +919,6 @@ pub(super) struct KagemushaAssignedReceiveFoldCreditV1<F: KagemushaPoseidonField
     pub(super) transition_nullifier: [AssignedValue<F>; 2],
     pub(super) recipient_encryption_key: [AssignedValue<F>; 2],
     pub(super) ciphertext_commitment: [AssignedValue<F>; 2],
-    pub(super) opening_credit_id: [AssignedValue<F>; 2],
-    pub(super) opening_amount: AssignedValue<F>,
     pub(super) credit_commitment_opening: [AssignedValue<F>; 2],
     pub(super) recipient_binding_opening: [AssignedValue<F>; 2],
     pub(super) recovery_nonce: [AssignedValue<F>; 2],
@@ -1476,8 +1474,6 @@ where
             transition_nullifier: slot_transition_nullifier,
             recipient_encryption_key: slot_recipient_key,
             ciphertext_commitment: slot_ciphertext_commitment,
-            opening_credit_id,
-            opening_amount,
             credit_commitment_opening,
             recipient_binding_opening,
             recovery_nonce,
@@ -1807,7 +1803,7 @@ where
     ];
     debug_assert_eq!(public.len(), PUBLIC_INSTANCE_COUNT);
     builder.assigned_instances = vec![public];
-    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
     Ok((
         builder,
         KagemushaAssignedStateRelationV1 {

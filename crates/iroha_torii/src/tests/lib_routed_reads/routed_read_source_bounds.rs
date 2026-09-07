@@ -15,8 +15,7 @@ struct RoutedReadSourceFixture {
 }
 #[test]
 fn routed_read_source_accepts_only_canonical_uaid_literals() {
-    const HEX: &str =
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    const HEX: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
     let canonical = format!("uaid:{HEX}");
     assert!(parse_torii_space_directory_uaid_literal(&canonical).is_ok());
     for literal in [
@@ -153,13 +152,14 @@ fn asset_definition_source_lookup_never_calls_cloning_world_accessor() {
 #[test]
 fn space_directory_bindings_borrowed_json_matches_legacy_shape() {
     let uaid: iroha_data_model::nexus::UniversalAccountId =
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
             .parse()
             .expect("UAID");
     let source = ToriiSpaceDirectoryBindingsJsonSource {
         uaid: &uaid,
         bindings: None,
         catalog: &iroha_data_model::nexus::DataSpaceCatalog::default(),
+        visibility: &routing::DataspaceReadVisibility::all_for_tests(),
     };
     let expected = norito::json::to_json_bounded_boxed(
         &norito::json!({ "dataspaces": [], "uaid": (uaid.to_string()) }),

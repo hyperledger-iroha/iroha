@@ -339,26 +339,23 @@ pub(super) fn encode_bounded_frame<T: NoritoSerialize>(
         .map_err(|_| Error::CapacityLimit)?;
     Ok(writer.finish()?.into_vec())
 }
-fn decode_bounded_frame<T>(
-    frame: &[u8],
+/// Copy an already validated world-state peer into its exact admitted key allocation.
+///
+/// Peer constructors and decoders establish key validity before world-state insertion. Re-decoding
+/// a canonical frame here would charge parser scratch against the retained graph allowance and
+/// reject BLS keys that fit that allowance. The compact clone preserves the validated key bytes;
+/// its fallible allocation remains charged to both this row and any enclosing Norito budget.
+fn clone_peer_for_admission(
+    peer: &PeerId,
     maximum_allocated_bytes: usize,
-) -> Result<(T, usize), Error>
-where
-    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
-{
-    let elements = frame.len().checked_mul(8).ok_or(Error::CapacityLimit)?;
-    let limits = norito::DecodeLimits::new(
-        elements,
-        frame.len(),
-        elements,
-        maximum_allocated_bytes,
-        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
-    );
-    let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
-        norito::decode_from_bytes_with_limits::<T>(frame, limits)
+) -> Result<(PeerId, usize), Error> {
+    // This operation allocates a compact key but does not decode a wire value.
+    let limits = norito::DecodeLimits::new(0, 0, 0, maximum_allocated_bytes, 0);
+    let (cloned, usage) = norito::core::with_decode_limits_measured(limits, || {
+        peer.public_key().try_clone_for_admission().map(PeerId::new)
     });
     Ok((
-        decoded.map_err(|_| Error::CapacityLimit)?,
+        cloned.map_err(|_| Error::CapacityLimit)?,
         usage.total_allocated_bytes(),
     ))
 }
@@ -413,7 +410,8 @@ fn collect_peers(
         let frame = encode_bounded_frame(peer, maximum)?;
         stats.record_preflighted_item(source_work_per_item, Some(budget))?;
         let decode_limit = retained_decode.next_limit()?;
-        let (owned, allocated) = decode_bounded_frame::<PeerId>(&frame, decode_limit)?;
+        drop(frame);
+        let (owned, allocated) = clone_peer_for_admission(peer, decode_limit)?;
         retained_decode.record_decoded(allocated)?;
         rows.push(owned)?;
         if rows.len == selected {
@@ -653,7 +651,7 @@ mod tests {
         assert_eq!(stats, source_stats);
     }
     #[test]
-    fn peer_adapter_carries_source_work_into_the_final_response_budget() {
+    fn peer_adapter_carries_mixed_key_source_work_into_the_final_response_budget() {
         use crate::{
             kura::Kura,
             query::store::LiveQueryStore,
@@ -673,9 +671,13 @@ mod tests {
         {
             let mut world_block = world.block();
             let mut peers = world_block.peers_mut_for_testing().transaction();
-            for seed in [0x31_u8, 0x32, 0x33] {
+            for (seed, algorithm) in [
+                (0x31_u8, Algorithm::Ed25519),
+                (0x32, Algorithm::BlsNormal),
+                (0x33, Algorithm::BlsSmall),
+            ] {
                 let peer = PeerId::new(
-                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    KeyPair::try_from_seed(vec![seed; 32], algorithm)
                         .expect("peer key")
                         .public_key()
                         .clone(),
@@ -760,6 +762,71 @@ mod tests {
             Some(2)
         );
         assert!(output.has_more);
+        let expected = view
+            .world()
+            .peers()
+            .iter()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            output.batch.columns(),
+            &[QueryOutputBatchBox::from(expected)],
+            "the bounded copy preserves peer order and exact key bytes"
+        );
+    }
+    #[test]
+    fn peer_clone_admission_charges_exact_key_bytes_and_enforces_row_budget() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        for (algorithm, compact_bytes) in [
+            (Algorithm::Ed25519, 33),
+            (Algorithm::BlsNormal, 49),
+            (Algorithm::BlsSmall, 97),
+        ] {
+            let peer = PeerId::new(
+                KeyPair::try_from_seed(vec![0xb9; 32], algorithm)
+                    .expect("validated peer fixture key")
+                    .public_key()
+                    .clone(),
+            );
+            let (copy, charged) = clone_peer_for_admission(&peer, compact_bytes)
+                .expect("exact compact key budget admits the validated peer");
+            assert_eq!(copy, peer);
+            assert_eq!(charged, compact_bytes);
+            assert!(matches!(
+                clone_peer_for_admission(&peer, compact_bytes - 1),
+                Err(Error::CapacityLimit)
+            ));
+            let mut copied_wire = Vec::new();
+            norito::core::write_canonical_to_writer(&copy, &mut copied_wire)
+                .expect("copied peer wire");
+            let mut original_wire = Vec::new();
+            norito::core::write_canonical_to_writer(&peer, &mut original_wire)
+                .expect("original peer wire");
+            assert_eq!(copied_wire, original_wire);
+        }
+    }
+    #[test]
+    fn peer_clone_admission_preserves_enclosing_aggregate_budget() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let peer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xbb; 32], Algorithm::BlsSmall)
+                .expect("validated BLS peer fixture key")
+                .public_key()
+                .clone(),
+        );
+        let outer = norito::DecodeLimits::new(0, 0, 0, 193, 0);
+        let ((first, second), usage) = norito::core::with_decode_limits_measured(outer, || {
+            (
+                clone_peer_for_admission(&peer, 97),
+                clone_peer_for_admission(&peer, 97),
+            )
+        });
+        assert_eq!(first.expect("first peer fits the aggregate").0, peer);
+        assert!(matches!(second, Err(Error::CapacityLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 97);
     }
     #[test]
     fn exact_canonical_frame_has_no_capacity_excess() {

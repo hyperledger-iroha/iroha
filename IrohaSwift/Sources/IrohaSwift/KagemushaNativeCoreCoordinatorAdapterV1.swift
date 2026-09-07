@@ -22,6 +22,10 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1: KagemushaNativeCoreC
     try bridge.invoke(.reserveOperationID, fields: [u32(UInt32(operation)), operationID, publicBinding])[0]
   }
 
+  public func beginObservation(operation: UInt8, canonicalCommand: Data) throws -> Data {
+    try bridge.invoke(.beginObservation, fields: [u32(UInt32(operation)), canonicalCommand])[0]
+  }
+
   public func acceptQualification(
     _ qualification: KagemushaHardwareQualificationV1, hardwarePolicyDigest: Data
   ) throws {

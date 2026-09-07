@@ -76,7 +76,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 51] = [
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+    "connect_norito_kagemusha_device_command_response_v1_verify",
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -93,7 +93,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 51] = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1",
     "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
     "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
     "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
@@ -570,15 +570,19 @@ fn normalize_release_projection_value(value: JsonValue) -> color_eyre::Result<Js
             for (field, value) in values {
                 let value = if is_release_digest_field(&field) {
                     JsonValue::String(fixed_byte_array_to_hex(value, 32, &field)?)
-                } else if field == "governance_credential_public_key" {
+                } else if matches!(
+                    field.as_str(),
+                    "governance_credential_public_key" | "issuer_signature"
+                ) {
                     let mut tuple = value
                         .as_array()
-                        .ok_or_else(|| eyre!("governance credential key must be a JSON tuple"))?
+                        .ok_or_else(|| eyre!("{field} must be a JSON tuple"))?
                         .clone();
                     if tuple.len() != 1 {
-                        bail!("governance credential key JSON tuple is malformed");
+                        bail!("{field} JSON tuple is malformed");
                     }
-                    JsonValue::String(fixed_byte_array_to_hex(tuple.remove(0), 65, &field)?)
+                    let width = if field == "issuer_signature" { 64 } else { 65 };
+                    JsonValue::String(fixed_byte_array_to_hex(tuple.remove(0), width, &field)?)
                 } else if let Some(tag) = release_unit_enum_tag(&field) {
                     JsonValue::String(tagged_unit_enum_name(value, tag, &field)?)
                 } else {
@@ -599,10 +603,13 @@ fn is_release_digest_field(field: &str) -> bool {
             | "source_tree_digest"
             | "cargo_lock_digest"
             | "profile_digest"
+            | "native_profile_digest"
             | "eq_protocol_digest"
             | "ep_protocol_digest"
             | "artifact_set_digest"
             | "hardware_policy_digest"
+            | "provider_policy_root"
+            | "provider_authority_commitment"
             | "verification_records_digest"
             | "candidate_context_digest"
             | "hardware_profile_id"
@@ -993,6 +1000,11 @@ fn authenticated_release_report_v1(
     )?;
     insert_json_field(
         &mut report,
+        "native_profile_digest",
+        &hex::encode(inputs.receipt.native_profile_digest),
+    )?;
+    insert_json_field(
+        &mut report,
         "artifact_set_digest",
         &hex::encode(inputs.receipt.artifact_set_digest),
     )?;
@@ -1000,6 +1012,11 @@ fn authenticated_release_report_v1(
         &mut report,
         "hardware_policy_digest",
         &hex::encode(inputs.receipt.hardware_policy_digest),
+    )?;
+    insert_json_field(
+        &mut report,
+        "provider_policy_root",
+        &hex::encode(inputs.receipt.provider_policy_root),
     )?;
     insert_json_field(
         &mut report,
@@ -1271,6 +1288,26 @@ mod tests {
         let mut duplicate = inventory;
         duplicate[41].sha256 = duplicate[40].sha256;
         assert!(validate_exact_release_inventory_v1(&duplicate).is_err());
+    }
+
+    #[test]
+    fn provider_issuer_signature_projection_requires_exact_raw_tuple_width() {
+        let raw = norito::json!({ "issuer_signature": [vec![1_u8; 64]] });
+        let normalized = normalize_release_projection_value(raw).unwrap();
+        assert_eq!(
+            normalized
+                .get("issuer_signature")
+                .and_then(JsonValue::as_str),
+            Some("01".repeat(64).as_str())
+        );
+        for value in [
+            norito::json!({ "issuer_signature": [vec![1_u8; 63]] }),
+            norito::json!({ "issuer_signature": [vec![1_u8; 65]] }),
+            norito::json!({ "issuer_signature": [] }),
+            norito::json!({ "issuer_signature": [[1_u8], [1_u8]] }),
+        ] {
+            assert!(normalize_release_projection_value(value).is_err());
+        }
     }
 
     #[test]

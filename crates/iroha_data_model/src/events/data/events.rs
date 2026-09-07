@@ -97,7 +97,7 @@ mod model {
         /// Bridge event
         Bridge(bridge::BridgeEvent),
         /// Native race lifecycle transition.
-        Race(super::race::RaceEventV1),
+        GameSession(super::game::GameSessionEventV1),
     }
 }
 #[cfg(feature = "json")]

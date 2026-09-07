@@ -333,18 +333,34 @@ require_exact_token \
   "    native_amx_grouped_fixture_sha256 \"\$native_amx_grouped_fixture_sha256\" \\"
 require_exact_token \
   "$release_runner" \
-  "    native_amx_grouped_negative_control_count 56 \\"
+  "    native_amx_grouped_negative_control_count 58 \\"
 require_exact_token \
   "$grouped_parity_harness" \
-  "readonly expected_negative_control_count=56"
-for grouped_test_count in 7 63 61 5 7 6; do
-  require_exact_token \
-    "$grouped_parity_harness" \
-    "    observed_test_count=${grouped_test_count}"
+  "readonly expected_negative_control_count=58"
+require_exact_fragment "$grouped_parity_harness" "    observed_test_count=" 6
+for grouped_surface_count in openapi:7 python:65 javascript:63 swift:7 kotlin:9 java:7; do
+  grouped_surface="${grouped_surface_count%%:*}"
+  grouped_test_count="${grouped_surface_count#*:}"
+  grouped_case="  ${grouped_surface})"
+  require_exact_token "$grouped_parity_harness" "$grouped_case"
+  # Different consumers may require the same number of tests. Bind the count
+  # to its exact case instead of requiring globally unique numeric assignments.
+  grouped_count_matches="$(
+    awk -v expected_case="$grouped_case" \
+      -v expected_assignment="    observed_test_count=${grouped_test_count}" '
+      previous == expected_case && $0 == expected_assignment { count += 1 }
+      { previous = $0 }
+      END { print count + 0 }
+    ' "$grouped_parity_harness"
+  )"
+  if [[ "$grouped_count_matches" != 1 ]]; then
+    echo "grouped Native AMX test count differs for ${grouped_surface}: expected ${grouped_test_count}" >&2
+    exit 1
+  fi
 done
 require_exact_token \
   "$release_receipt_writer" \
-  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
+  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 58"
 require_exact_token \
   "$release_receipt_writer" \
   "_G_UNIT_TEST_COUNT = 522"
@@ -380,11 +396,11 @@ require_exact_token \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
-  '    ("python", 63),' \
-  '    ("javascript", 61),' \
-  '    ("swift", 5),' \
-  '    ("kotlin", 7),' \
-  '    ("java", 6),'; do
+  '    ("python", 65),' \
+  '    ("javascript", 63),' \
+  '    ("swift", 7),' \
+  '    ("kotlin", 9),' \
+  '    ("java", 7),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 for sdk_diagnostics_suite in \
@@ -1387,11 +1403,11 @@ native_amx_parity_inventory = """\
   )
   native_amx_grouped_parity_test_counts=(
     7
+    65
     63
-    61
-    5
     7
-    6
+    9
+    7
   )"""
 if source.count(native_amx_parity_inventory) != 1:
     reject(

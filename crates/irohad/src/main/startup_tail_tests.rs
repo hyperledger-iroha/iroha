@@ -1,3 +1,6 @@
+#[cfg(unix)]
+use super::root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget;
+
 #[test]
 #[allow(clippy::bool_assert_comparison)] // for expressiveness
 fn default_args() {

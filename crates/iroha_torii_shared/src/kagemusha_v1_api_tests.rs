@@ -164,7 +164,7 @@ fn unchecked_payment_request_with_id(request_id: [u8; 32]) -> KagemushaPaymentRe
             .expect("liability pool"),
         recipient: account(0x32),
         amount: 12_345,
-        recipient_encryption_key: recipient_encryption_key(0x27),
+        recipient_encryption_key: recipient_encryption_key(0x29),
         hardware_credential: hardware_credential(
             network_id,
             recipient_lane_id,
@@ -318,13 +318,14 @@ fn peer_boundary_roundtrips_only_the_exact_request_payment_ack_exchange() {
         );
     }
     assert_eq!(
-        validate_kagemusha_complete_exchange_v1(&request, &payment, &acknowledgement)
+        validate_kagemusha_complete_exchange_v1(&request, &payment, &acknowledgement,)
             .expect("validate complete exchange"),
         request_bytes.len() + payment_bytes.len() + acknowledgement_bytes.len(),
     );
+
     assert!(decode_kagemusha_payment_v1(&payment_bytes, &other_request).is_err());
     assert!(
-        decode_kagemusha_acknowledgement_v1(&acknowledgement_bytes, &other_request, &payment,)
+        decode_kagemusha_acknowledgement_v1(&acknowledgement_bytes, &other_request, &payment)
             .is_err()
     );
 }
@@ -337,7 +338,7 @@ fn peer_boundary_pre_caps_every_message_and_rejects_trailing_bytes() {
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
     ));
     assert!(matches!(
-        decode_kagemusha_payment_v1(&vec![0; KAGEMUSHA_PAYMENT_MAX_BYTES_V1 + 1], &request,),
+        decode_kagemusha_payment_v1(&vec![0; KAGEMUSHA_PAYMENT_MAX_BYTES_V1 + 1], &request),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
     ));
     assert!(matches!(
@@ -424,8 +425,8 @@ fn payment_request_has_no_receiver_balance_or_history_shape() {
         );
     }
     assert!(json.contains("lane_commitment"));
-    assert!(json.contains("recipient_encryption_key"));
     assert!(json.contains("amount"));
+    assert!(json.contains("recipient_encryption_key"));
     assert!(json.contains("request_id"));
 }
 

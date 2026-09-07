@@ -25,6 +25,7 @@ pub(crate) fn kagemusha_reserve_receipt_witnesses_v1(
     let tagged_write_count = witness
         .writes
         .iter()
+        // Select the entire reserved family so malformed key lengths fail validation below.
         .filter(|entry| entry.key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1))
         .count();
     let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
@@ -399,6 +400,10 @@ mod tests {
                 ExecKv {
                     key: b"ordinary".to_vec(),
                     value: b"value".to_vec(),
+                },
+                ExecKv {
+                    key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                    value: b"separate d5-prefixed synthetic namespace".to_vec(),
                 },
                 receipt_write.clone(),
             ],

@@ -18,15 +18,16 @@ class KagemushaOperationReservationV1Test {
         val fixture = fixture()
         val core = RecordingCore()
         val transport = UnavailableTransport()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core)
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
         val id = ByteArray(32) { 7 }
         val request = bytes(fixture, "send_request_hex")
         assertContentEquals(id, provider.reservePaymentOperationId(id, request))
         assertContentEquals(bytes(fixture, "send_binding_hex"), core.bindings.last())
+        val redemptionId = ByteArray(32) { 17 }
         assertContentEquals(
-            id,
+            redemptionId,
             provider.reserveRedemptionOperationId(
-                id, BigInteger(value(fixture, "redeem_amount_decimal")),
+                redemptionId, BigInteger(value(fixture, "redeem_amount_decimal")),
                 bytes(fixture, "redeem_beneficiary_payload_hex"),
             ),
         )
@@ -40,7 +41,7 @@ class KagemushaOperationReservationV1Test {
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes(fixture(), "send_request_hex"))
         val id = ByteArray(32) { 8 }
         val core = RecordingCore()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(UnavailableTransport(), core)
+        val provider = KagemushaAuthenticatedHardwareProviderV1(UnavailableTransport(), core, TestOperationIntentStoreV1(), {})
         repeat(2) {
             assertContentEquals(id, provider.reservePaymentRequestOperationId(id, request.recipient.canonicalPayload(), request.amount, 1000L))
         }
@@ -51,6 +52,9 @@ class KagemushaOperationReservationV1Test {
             ), core.bindings[0],
         )
         assertContentEquals(id, provider.reserveMintOperationId(id, request.amount, request.recipient.canonicalPayload(), request.recipient.canonicalPayload()))
+        assertContentEquals(KagemushaDeviceOperationCodecV1.encodeControlCommand(
+            KagemushaDeviceControlCommandV1.PrepareMintAuthorization(id, request.amount,
+                request.recipient.canonicalPayload(), request.recipient.canonicalPayload())), core.bindings.last())
         assertEquals(listOf(22, 22, 14), core.operations)
         core.ids.forEach { assertContentEquals(id, it) }
     }
@@ -60,7 +64,7 @@ class KagemushaOperationReservationV1Test {
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes(fixture(), "send_request_hex"))
         val core = RecordingCore().also { it.substituteId = true }
         val transport = UnavailableTransport()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core)
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
         val id = ByteArray(32) { 9 }
         assertFailsWith<IllegalArgumentException> { provider.qualification() }
         assertFailsWith<IllegalArgumentException> { provider.reservePaymentOperationId(id, bytes(fixture(), "send_request_hex")) }
@@ -94,7 +98,7 @@ class KagemushaOperationReservationV1Test {
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes(fixture(), "send_request_hex"))
         val core = RecordingCore().also { it.substituteId = true }
         val transport = UnavailableTransport()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core)
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
         val id = ByteArray(32) { 12 }
         assertFailsWith<IllegalArgumentException> {
             provider.createPaymentRequest(id, request.recipient.canonicalPayload(), request.amount, 1000L)
@@ -131,6 +135,8 @@ class KagemushaOperationReservationV1Test {
     }
 
     private class RecordingCore : KagemushaNativeCoreCoordinatorV1 {
+        override fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray =
+            if (substituteId) ByteArray(32) else error("unused")
         var substituteId = false
         val operations = mutableListOf<Int>()
         val ids = mutableListOf<ByteArray>()

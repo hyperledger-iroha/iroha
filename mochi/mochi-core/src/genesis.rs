@@ -248,6 +248,7 @@ mod tests {
     use iroha_data_model::{
         block::consensus_v2::SumeragiV2GenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
+        peer::PeerId,
         prelude::ChainId,
     };
     use iroha_genesis::GenesisBuilder;
@@ -407,6 +408,7 @@ mod tests {
             assert_eq!(count, 1, "permission must be granted exactly once");
         }
     }
+
     #[test]
     fn bundled_sample_asset_ids_are_canonical_and_distinct() {
         let rose = sample_rose_definition_id();

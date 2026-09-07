@@ -135,6 +135,7 @@ mod handle_update_tests {
             block_sync: usize::MAX,
             tx_gossip: usize::MAX,
             peer_gossip: usize::MAX,
+            connect: usize::MAX,
             health: usize::MAX,
             other: usize::MAX,
         }

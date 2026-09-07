@@ -259,7 +259,6 @@ async fn handle_v1_transactions_visible_query_returns_empty_on_blank_state() {
             allow_dataspace_wide: false,
             asset_definition_domains: std::collections::BTreeMap::new(),
         },
-        DataspaceReadVisibility::all_for_tests(),
         None,
     )
     .await

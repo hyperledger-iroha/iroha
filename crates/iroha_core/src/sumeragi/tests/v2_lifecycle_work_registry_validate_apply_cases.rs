@@ -854,7 +854,7 @@ fn ready_validate_apply_publishes_at_actor_global_child_coordinates() {
     let handle = std::thread::Builder::new()
         .name("ready-validate-apply-actor-global-child".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, false))
         .expect("spawn Ready Validate Apply actor-global child fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -867,7 +867,7 @@ fn ready_validate_apply_rejects_a_tampered_body_frame_before_publication() {
     let handle = std::thread::Builder::new()
         .name("ready-validate-apply-tampered-body-frame".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(true, false))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(true, false, false))
         .expect("spawn tampered Ready Validate Apply body-frame fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -880,8 +880,21 @@ fn lifecycle_decision_apply_live_recovered_substitution_matrix_is_inert() {
     let handle = std::thread::Builder::new()
         .name("lifecycle-apply-live-recovered-substitution".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, true))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, true, false))
         .expect("spawn lifecycle Decision Apply lineage substitution fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn observer_apply_defers_missing_pre_apply_commit_qc_to_delayed_successor() {
+    let handle = std::thread::Builder::new()
+        .name("observer-apply-delayed-successor".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, true))
+        .expect("spawn observer Apply parked-predecessor fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -905,6 +918,7 @@ fn recovered_decision_apply_finality_retires_authenticated_validate_retry_seal()
 fn ready_validate_apply_actor_global_child_fixture(
     tamper_apply_frame: bool,
     exercise_lineage_matrix: bool,
+    exercise_observer_predecessor: bool,
 ) {
     let marker = 0xE0;
     let ReadyDurableValidateFixture {
@@ -1081,6 +1095,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         (1, 0),
         "the remote-Proposal Validate parent owns one admission retry seal"
     );
+
     coordinator.ready_index.remove(&lease.ordinal());
     coordinator
         .records
@@ -1210,6 +1225,10 @@ fn ready_validate_apply_actor_global_child_fixture(
         coordinator.records[&child_ordinal].stage.kind(),
         LifecycleStageKind::ApplyDecision
     );
+    assert_eq!(
+        coordinator.ready_index.iter().copied().collect::<Vec<_>>(),
+        vec![child_ordinal]
+    );
     if exercise_lineage_matrix {
         assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             &fixture.verified,
@@ -1331,9 +1350,18 @@ fn ready_validate_apply_actor_global_child_fixture(
             live_started_at,
         )
         .expect("arm exact live Apply clocks after service construction");
+    executor
+        .arm_live_lifecycle_validate_successor(
+            live_validate_dispatch_key,
+            None,
+            decision.proposal_round,
+            subject,
+            true,
+        )
+        .expect("restore the production-equivalent preliminary Validate-to-Apply owner");
     assert_eq!(
         executor
-            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services, false)
+            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services, true)
             .expect("reconcile exact live Apply Decision into the executor"),
         (
             decision.round,
@@ -1370,6 +1398,202 @@ fn ready_validate_apply_actor_global_child_fixture(
             .ready_to_finish_blockers()
             .contains(&"durable-validate-retry-seal")
     );
+
+    let mut observer_output_ordinal = None;
+    if exercise_observer_predecessor {
+        executor.enter_observer_completion_mode_for_test();
+
+        let mut foreign_decision = decision.clone();
+        foreign_decision.subject.payload_hash = Hash::new(b"foreign observer CommitQC");
+        let foreign_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(foreign_decision),
+        ));
+        let foreign_ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&foreign_broadcast),
+            vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
+                tag,
+                local_prediction,
+            )],
+        )
+        .expect("bind substituted CommitQC Broadcast")
+        .pop()
+        .expect("one substituted CommitQC Broadcast retains one owner");
+        let foreign_pending =
+            PendingLifecycleOutputAdmissionV1::seal_exact(foreign_broadcast, foreign_ownership)
+                .unwrap_or_else(|_| panic!("seal substituted CommitQC output"));
+        let foreign_authority = owner
+            .registry
+            .prepare_ready_live_decision_apply_reconciliation(&owner.coordinator, child_ordinal)
+            .expect("reattest live Apply for foreign CommitQC check")
+            .expect("live Apply remains Ready for foreign CommitQC check");
+        assert_eq!(
+            owner
+                .try_classify_lifecycle_decision_apply_pending_output_census(
+                    foreign_authority,
+                    core::iter::once(&foreign_pending),
+                )
+                .err(),
+            Some(super::LifecycleDecisionApplyPendingOutputCensusErrorV1::CertificateMismatch),
+            "foreign CommitQC substitution must fail before delayed admission"
+        );
+
+        let foreign_owner_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ));
+        let foreign_owner = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&foreign_owner_broadcast),
+            vec![
+                RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                    tag,
+                    local_prediction,
+                    b"foreign observer CommitQC runtime owner",
+                ),
+            ],
+        )
+        .expect("bind foreign runtime owner to exact CommitQC Broadcast")
+        .pop()
+        .expect("one foreign runtime owner retains one Broadcast");
+        let foreign_owner_pending =
+            PendingLifecycleOutputAdmissionV1::seal_exact(foreign_owner_broadcast, foreign_owner)
+                .unwrap_or_else(|_| panic!("seal foreign runtime-owner output"));
+        let foreign_owner_authority = owner
+            .registry
+            .prepare_ready_live_decision_apply_reconciliation(&owner.coordinator, child_ordinal)
+            .expect("reattest live Apply for foreign runtime-owner check")
+            .expect("live Apply remains Ready for foreign runtime-owner check");
+        assert_eq!(
+            owner
+                .try_classify_lifecycle_decision_apply_pending_output_census(
+                    foreign_owner_authority,
+                    core::iter::once(&foreign_owner_pending),
+                )
+                .err(),
+            Some(
+                super::LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingOutputNotPeriodicRetransmit
+            ),
+            "foreign runtime-owner substitution must fail before delayed admission"
+        );
+
+        let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ));
+        let ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&broadcast),
+            vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
+                tag,
+                local_prediction,
+            )],
+        )
+        .expect("bind exact pre-Apply periodic CommitQC Broadcast")
+        .pop()
+        .expect("one periodic Broadcast retains one owner");
+        let pending = PendingLifecycleOutputAdmissionV1::seal_exact(broadcast, ownership)
+            .unwrap_or_else(|_| panic!("seal exact pre-Apply periodic output"));
+        assert_eq!(
+            pending.lifecycle_owner().lifecycle_ordinal(),
+            local_prediction
+        );
+        let fence = executor.lifecycle_reducer_fence_observation();
+        assert!(executor.install_pending_lifecycle_output_for_test(pending));
+        assert_eq!(
+            owner.classify_completion_ready_work(fence),
+            super::super::ProductionCompletionReadyWorkV1::CompletionIo
+        );
+        assert_eq!(
+            owner
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                .expect("defer the missing periodic predecessor without closing the observer"),
+            super::super::ProductionCompletionDispatchV1::CapacityUnavailable {
+                protected_live_apply_ordinal: Some(child_ordinal),
+            }
+        );
+        assert_eq!(owner.coordinator.high_water, child_ordinal);
+        assert_eq!(owner.registry.registry_for_test().entries.len(), 1);
+        assert!(!output_guard.restart_required());
+
+        let outer_ingress = crate::sumeragi::FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
+        let admission_slice = crate::sumeragi::v2_runner::advance_executor(
+            &outer_ingress,
+            &mut owner,
+            &mut executor,
+            &mut services,
+            Some(child_ordinal),
+            1,
+        )
+        .expect("durably admit the delayed CommitQC and retry Completion");
+        match admission_slice {
+            crate::sumeragi::v2_runner::AdvanceExecutorSliceOutcomeV1::Yielded(yielded) => {
+                assert!(
+                    yielded.requires_completion_retry(),
+                    "delayed admission must immediately hand control back to Apply"
+                );
+            }
+            other => panic!("delayed admission must yield to Completion, got {other:?}"),
+        }
+        let mut exact_commit_qc_broadcasts =
+            owner.coordinator.records.iter().filter(|(_, record)| {
+                record.work_class == LifecycleWorkClass::Broadcast
+                    && record.key.phase() == LifecyclePhase::BroadcastCommitQc
+                    && record.stage.kind() == LifecycleStageKind::BroadcastCommitQc
+            });
+        let (&output_ordinal, output_record) = exact_commit_qc_broadcasts
+            .next()
+            .expect("delayed generic admission installs one exact CommitQC row");
+        assert!(exact_commit_qc_broadcasts.next().is_none());
+        assert!(output_ordinal > child_ordinal);
+        assert_eq!(output_record.state, LifecycleState::Ready);
+        assert_eq!(
+            owner
+                .coordinator
+                .ready_index
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![child_ordinal, output_ordinal]
+        );
+        observer_output_ordinal = Some(output_ordinal);
+        let original_output_digest = *output_record
+            .physical_slots
+            .values()
+            .next()
+            .expect("delayed output retains one physical slot");
+        let output_record = owner
+            .coordinator
+            .records
+            .get_mut(&output_ordinal)
+            .expect("corrupt only the copied delayed output row");
+        let output_digest = output_record
+            .physical_slots
+            .values_mut()
+            .next()
+            .expect("delayed output retains one physical slot");
+        let corrupted_output_digest = if original_output_digest == LifecycleDigest::new([0xD4; 32])
+        {
+            LifecycleDigest::new([0x4D; 32])
+        } else {
+            LifecycleDigest::new([0xD4; 32])
+        };
+        *output_digest = corrupted_output_digest;
+        assert_eq!(
+            owner.dispatch_completion_for_test(&mut services, &mut executor, 0),
+            Err(
+                super::super::ProductionCompletionDispatchErrorV1::InvalidLiveApplyPendingOutputCensus(
+                    super::super::work_registry::LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidInstalledOutputCarrier,
+                ),
+            ),
+            "malformed delayed debt must still fail closed"
+        );
+        let output_record = owner
+            .coordinator
+            .records
+            .get_mut(&output_ordinal)
+            .expect("restore the exact delayed-successor row");
+        *output_record
+            .physical_slots
+            .values_mut()
+            .next()
+            .expect("delayed output retains one physical slot") = original_output_digest;
+    }
 
     planner_io.saturate_consensus_prefix(&services);
     assert_eq!(
@@ -1469,7 +1693,6 @@ fn ready_validate_apply_actor_global_child_fixture(
         crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(_)
     ));
     assert_eq!(status.height, fixture.verified.context().height);
-    assert!(owner.registry.registry_for_test().entries.is_empty());
     assert_eq!(
         owner.coordinator.records[&child_ordinal].state,
         LifecycleState::Terminal(TerminalOutcome::Advanced)
@@ -1481,6 +1704,37 @@ fn ready_validate_apply_actor_global_child_fixture(
             .is_none()
     );
     assert!(executor.durable_finality().is_some());
+    if let Some(output_ordinal) = observer_output_ordinal {
+        assert_eq!(owner.registry.registry_for_test().entries.len(), 1);
+        assert_eq!(
+            owner.coordinator.records[&output_ordinal].state,
+            LifecycleState::Ready
+        );
+        let blockers = executor.ready_to_finish_blockers();
+        assert!(
+            blockers.contains(&"lifecycle-output-admission")
+                && blockers.contains(&"post-apply-output-census"),
+            "terminal observer Apply lost its delayed output blockers: {blockers:?}"
+        );
+
+        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        let prepared = owner
+            .prepare_apply_terminal_direct_broadcast()
+            .expect("seal the delayed post-Apply CommitQC Broadcast");
+        assert_eq!(prepared.ordinal(), output_ordinal);
+        assert_eq!(
+            executor
+                .settle_apply_terminal_direct_broadcast(&mut owner, &mut services, prepared)
+                .expect("terminalize the delayed CommitQC output after Apply finality"),
+            crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed
+        );
+        assert!(!executor.has_pending_lifecycle_output_admissions());
+        assert!(matches!(
+            owner.coordinator.records[&output_ordinal].state,
+            LifecycleState::Terminal(TerminalOutcome::Advanced)
+        ));
+    }
+    assert!(owner.registry.registry_for_test().entries.is_empty());
     assert!(
         executor.ready_to_finish(),
         "terminal live Apply left rollover blockers: {:?}",
@@ -1489,7 +1743,10 @@ fn ready_validate_apply_actor_global_child_fixture(
     let (_, terminal_ledger) =
         super::super::ledger::LifecycleLedgerStoreV1::open(ledger_directory.path(), active_context)
             .expect("reopen exact terminal live Apply LedgerV1");
-    assert_eq!(terminal_ledger.high_water(), child_ordinal);
+    assert_eq!(
+        terminal_ledger.high_water(),
+        observer_output_ordinal.unwrap_or(child_ordinal)
+    );
     assert_eq!(
         terminal_ledger
             .records()

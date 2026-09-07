@@ -21,7 +21,9 @@ use crate::{
     },
     transaction::FeePaymentIntent,
 };
-use iroha_crypto::{Hash, HashOf, HybridPublicKey, PublicKey, SignatureOf};
+use iroha_crypto::{
+    Hash, HashOf, HybridPublicKey, PublicKey, SignatureOf, zeroize_value_for_confidential_discard,
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -156,8 +158,131 @@ const FEE_INTENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:fee-
 const REIMBURSEMENT_TERMS_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:reimbursement-terms:v1\0";
 
+struct ConfidentialBytes {
+    bytes: Vec<u8>,
+    expected_len: usize,
+}
+
+impl ConfidentialBytes {
+    fn with_capacity(expected_len: usize) -> Result<Self, norito::Error> {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(expected_len).map_err(|_| {
+            norito::Error::Io(std::io::Error::other(
+                "confidential byte buffer allocation failed",
+            ))
+        })?;
+        Ok(Self {
+            bytes,
+            expected_len,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn extend_from_slice(&mut self, bytes: &[u8]) -> Result<(), norito::Error> {
+        std::io::Write::write_all(self, bytes).map_err(norito::Error::Io)
+    }
+
+    fn into_vec(mut self) -> Vec<u8> {
+        debug_assert_eq!(self.bytes.len(), self.expected_len);
+        std::mem::take(&mut self.bytes)
+    }
+
+    fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.bytes);
+        self.expected_len = 0;
+    }
+}
+
+impl std::io::Write for ConfidentialBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("confidential byte buffer is too large"))?;
+        if next_len > self.expected_len {
+            return Err(std::io::Error::other(
+                "confidential byte buffer length changed during encoding",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for ConfidentialBytes {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        let had_nonzero_bytes = self.bytes.iter().any(|byte| *byte != 0);
+        self.zeroize_for_confidential_discard();
+        #[cfg(test)]
+        if had_nonzero_bytes && self.bytes.is_empty() {
+            CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS
+                .with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+fn zeroize_confidential_vec_spare_capacity<T>(values: &mut Vec<T>) {
+    zeroize_value_for_confidential_discard(values.spare_capacity_mut());
+}
+
+fn encode_confidential_canonical<T: Encode>(value: &T) -> Result<ConfidentialBytes, norito::Error> {
+    // Consensus-facing `Encode` implementations must be deterministic. The
+    // sizing pass exists only to reserve one hard-capped allocation; Norito's
+    // canonical streaming pass then rejects length, checksum, or layout drift
+    // between its own validation and output passes.
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let encoded_len = norito::core::encoded_frame_len(value)?;
+    let mut encoded = ConfidentialBytes::with_capacity(encoded_len)?;
+    norito::core::write_canonical_to_writer(value, &mut encoded)?;
+    if encoded.len() != encoded_len {
+        return Err(norito::Error::LengthMismatch);
+    }
+    Ok(encoded)
+}
+
+fn private_settlement_signature_preimage<T: Encode>(
+    domain: &[u8],
+    body: &T,
+    too_large_error: &'static str,
+) -> Result<Vec<u8>, norito::Error> {
+    let body = encode_confidential_canonical(body)?;
+    let body_len = u64::try_from(body.len())
+        .map_err(|_| norito::Error::Io(std::io::Error::other(too_large_error)))?;
+    let preimage_len = domain
+        .len()
+        .checked_add(std::mem::size_of::<u64>())
+        .and_then(|prefix_len| prefix_len.checked_add(body.len()))
+        .ok_or_else(|| norito::Error::Io(std::io::Error::other(too_large_error)))?;
+    let mut preimage = ConfidentialBytes::with_capacity(preimage_len)?;
+    preimage.extend_from_slice(domain)?;
+    preimage.extend_from_slice(&body_len.to_le_bytes())?;
+    preimage.extend_from_slice(body.as_slice())?;
+    Ok(preimage.into_vec())
+}
+
 fn canonical_hash<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
-    let encoded = norito::encode_canonical(value)?;
+    let encoded = encode_confidential_canonical(value)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("canonical payload is too large")))?;
     Ok(Hash::new_from_chunks(&[
@@ -211,12 +336,25 @@ pub struct PrivateSettlementRouteV1 {
     pub lane_incarnation: Hash,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, PartialEq, Eq, Decode, Encode)]
 struct PrivateSettlementAssetBindingMaterialV1 {
     route: PrivateSettlementRouteV1,
     pool_id: PrivacyPoolIdV1,
     asset_definition_id: AssetDefinitionId,
     asset_binding_salt: [u8; 32],
+}
+
+impl PrivateSettlementAssetBindingMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+    }
+}
+
+impl Drop for PrivateSettlementAssetBindingMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
 }
 
 /// Recompute the salted commitment opening one restricted pool-to-asset mapping.
@@ -241,13 +379,13 @@ pub fn private_settlement_asset_binding_commitment_v1(
         asset_definition_id: asset_definition_id.clone(),
         asset_binding_salt,
     };
-    let encoded = norito::encode_canonical(&material)?;
+    let encoded = encode_confidential_canonical(&material)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("asset binding is too large")))?;
     let mut hasher = Sha256::new();
     hasher.update(ASSET_BINDING_COMMITMENT_DOMAIN_V1);
     hasher.update(encoded_len.to_le_bytes());
-    hasher.update(encoded);
+    hasher.update(encoded.as_slice());
     Ok(Hash::prehashed(hasher.finalize().into()))
 }
 
@@ -974,7 +1112,7 @@ pub enum PrivateSettlementAuditOutputRoleV1 {
 ///
 /// The slot carries only public note identifiers and a digest of the note
 /// spending authority. It never contains the corresponding spending secret.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1000,6 +1138,24 @@ pub struct PrivateSettlementAuditPayerInputV1 {
 impl fmt::Debug for PrivateSettlementAuditPayerInputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditPayerInputV1(<redacted>)")
+    }
+}
+
+impl PrivateSettlementAuditPayerInputV1 {
+    /// Wipe the restricted input-authority metadata before discard.
+    ///
+    /// Public commitment and nullifier bindings remain intact. The value
+    /// intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.active);
+        zeroize_value_for_confidential_discard(&mut self.note_spending_authority);
+        zeroize_value_for_confidential_discard(&mut self.dummy_domain);
+    }
+}
+
+impl Drop for PrivateSettlementAuditPayerInputV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1042,6 +1198,18 @@ impl fmt::Debug for PrivateSettlementAuditPayerAuthorizationBodyV1 {
 }
 
 impl PrivateSettlementAuditPayerAuthorizationBodyV1 {
+    /// Wipe restricted payer identity and input-authority metadata before discard.
+    ///
+    /// Public replay and proof bindings remain intact. The body intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.payer.zeroize_for_confidential_discard();
+        for input in &mut self.inputs {
+            input.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.inputs);
+    }
+
     fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
             || self.purpose != Hash::new(PAYER_INPUT_AUTHORIZATION_DOMAIN_V1)
@@ -1072,6 +1240,12 @@ impl PrivateSettlementAuditPayerAuthorizationBodyV1 {
     }
 }
 
+impl Drop for PrivateSettlementAuditPayerAuthorizationBodyV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// One controller-member signature authorizing both fixed payer inputs.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1093,6 +1267,14 @@ impl fmt::Debug for PrivateSettlementAuditPayerSignatureV1 {
 }
 
 impl PrivateSettlementAuditPayerSignatureV1 {
+    /// Wipe confidential signer and signature metadata before discard.
+    ///
+    /// The entry intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.signer.zeroize_for_confidential_discard();
+        self.signature.zeroize_for_confidential_discard();
+    }
+
     /// Construct one typed controller signature entry.
     #[must_use]
     pub fn new(
@@ -1100,6 +1282,12 @@ impl PrivateSettlementAuditPayerSignatureV1 {
         signature: SignatureOf<PrivateSettlementAuditPayerAuthorizationBodyV1>,
     ) -> Self {
         Self { signer, signature }
+    }
+}
+
+impl Drop for PrivateSettlementAuditPayerSignatureV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1124,6 +1312,18 @@ impl fmt::Debug for PrivateSettlementAuditPayerAuthorizationV1 {
 }
 
 impl PrivateSettlementAuditPayerAuthorizationV1 {
+    /// Wipe every restricted field in this payer authorization before discard.
+    ///
+    /// Public binding context remains intact. The authorization intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.body.zeroize_for_confidential_discard();
+        for signature in &mut self.signatures {
+            signature.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.signatures);
+    }
+
     /// Construct an authorization with canonical signer ordering.
     #[must_use]
     pub fn new(
@@ -1145,6 +1345,12 @@ impl PrivateSettlementAuditPayerAuthorizationV1 {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
         Ok(())
+    }
+}
+
+impl Drop for PrivateSettlementAuditPayerAuthorizationV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1196,6 +1402,25 @@ impl fmt::Debug for PrivateSettlementAuditViewKeyAuthorizationBodyV1 {
     }
 }
 
+impl PrivateSettlementAuditViewKeyAuthorizationBodyV1 {
+    /// Wipe restricted account and one-time output-key metadata before discard.
+    ///
+    /// Public replay and route bindings remain intact. The body intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.authorized_account.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.recipient_view_key);
+        zeroize_value_for_confidential_discard(&mut self.output_active);
+        zeroize_value_for_confidential_discard(&mut self.note_spending_authority);
+    }
+}
+
+impl Drop for PrivateSettlementAuditViewKeyAuthorizationBodyV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// One controller-member signature authorizing an output view key.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1217,6 +1442,14 @@ impl fmt::Debug for PrivateSettlementAuditViewKeySignatureV1 {
 }
 
 impl PrivateSettlementAuditViewKeySignatureV1 {
+    /// Wipe confidential signer and signature metadata before discard.
+    ///
+    /// The entry intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.signer.zeroize_for_confidential_discard();
+        self.signature.zeroize_for_confidential_discard();
+    }
+
     /// Construct one typed controller signature entry.
     #[must_use]
     pub fn new(
@@ -1224,6 +1457,12 @@ impl PrivateSettlementAuditViewKeySignatureV1 {
         signature: SignatureOf<PrivateSettlementAuditViewKeyAuthorizationBodyV1>,
     ) -> Self {
         Self { signer, signature }
+    }
+}
+
+impl Drop for PrivateSettlementAuditViewKeySignatureV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1248,6 +1487,18 @@ impl fmt::Debug for PrivateSettlementAuditViewKeyAuthorizationV1 {
 }
 
 impl PrivateSettlementAuditViewKeyAuthorizationV1 {
+    /// Wipe every restricted field in this view-key authorization before discard.
+    ///
+    /// Public binding context remains intact. The authorization intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.body.zeroize_for_confidential_discard();
+        for signature in &mut self.signatures {
+            signature.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.signatures);
+    }
+
     /// Construct an authorization with canonical signer ordering.
     #[must_use]
     pub fn new(
@@ -1275,12 +1526,18 @@ impl PrivateSettlementAuditViewKeyAuthorizationV1 {
     }
 }
 
+impl Drop for PrivateSettlementAuditViewKeyAuthorizationV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// Capsule-only opening of the ephemeral X25519 output-encryption public key.
 ///
 /// This is encryption randomness, not a note spending secret. An auditor uses
 /// it with the public one-time view key to authenticate and open the published
 /// ciphertext deterministically; it must never leave the restricted capsule.
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1298,12 +1555,27 @@ impl fmt::Debug for PrivateSettlementAuditEncryptionOpeningV1 {
     }
 }
 
+impl PrivateSettlementAuditEncryptionOpeningV1 {
+    /// Wipe the ephemeral encryption secret before discard.
+    ///
+    /// The opening intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.ephemeral_secret);
+    }
+}
+
+impl Drop for PrivateSettlementAuditEncryptionOpeningV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// Auditor-visible opening of one fixed private-note slot.
 ///
 /// The opening deliberately excludes every spending secret.  Active slots
 /// carry the values needed to recompute their commitments; inactive slots
 /// carry only a domain-separated dummy identifier.
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1340,7 +1612,21 @@ impl fmt::Debug for PrivateSettlementAuditNoteOpeningV1 {
 }
 
 impl PrivateSettlementAuditNoteOpeningV1 {
-    fn validate(self) -> Result<(), PrivateSettlementValidationError> {
+    /// Wipe every private note-opening field before discard.
+    ///
+    /// The public commitment remains intact. The opening intentionally becomes
+    /// invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.active);
+        zeroize_value_for_confidential_discard(&mut self.value);
+        zeroize_value_for_confidential_discard(&mut self.spending_authority);
+        zeroize_value_for_confidential_discard(&mut self.rho);
+        zeroize_value_for_confidential_discard(&mut self.blinding);
+        zeroize_value_for_confidential_discard(&mut self.memo_digest);
+        zeroize_value_for_confidential_discard(&mut self.dummy_domain);
+    }
+
+    fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
         if self.commitment.is_zero() {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
@@ -1354,11 +1640,17 @@ impl PrivateSettlementAuditNoteOpeningV1 {
             }
         } else if self.value != 0
             || has_zero_private_field
-            || self.dummy_domain.is_none_or(|domain| hash_is_zero(&domain))
+            || self.dummy_domain.as_ref().is_none_or(hash_is_zero)
         {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
         Ok(())
+    }
+}
+
+impl Drop for PrivateSettlementAuditNoteOpeningV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1386,6 +1678,26 @@ pub struct PrivateSettlementAuditOutputV1 {
 impl fmt::Debug for PrivateSettlementAuditOutputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditOutputV1(<redacted>)")
+    }
+}
+
+impl PrivateSettlementAuditOutputV1 {
+    /// Wipe every restricted key, authorization, and opening before discard.
+    ///
+    /// Public role context remains intact. The output intentionally becomes
+    /// invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.recipient_view_key);
+        self.view_key_authorization
+            .zeroize_for_confidential_discard();
+        self.encryption_opening.zeroize_for_confidential_discard();
+        self.note.zeroize_for_confidential_discard();
+    }
+}
+
+impl Drop for PrivateSettlementAuditOutputV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1448,7 +1760,7 @@ pub struct PrivateSettlementAuditPlaintextV1 {
     pub outputs: Vec<PrivateSettlementAuditOutputV1>,
 }
 
-#[derive(Clone, Encode)]
+#[derive(Encode)]
 struct PrivateSettlementAuditOutputCommitmentMaterialV1 {
     role: PrivateSettlementAuditOutputRoleV1,
     recipient_view_key: [u8; 32],
@@ -1462,7 +1774,7 @@ struct PrivateSettlementAuditOutputCommitmentMaterialV1 {
     dummy_domain: Option<Hash>,
 }
 
-#[derive(Clone, Encode)]
+#[derive(Encode)]
 struct PrivateSettlementAuditCommitmentMaterialV1 {
     version: u8,
     network_id: NetworkId,
@@ -1487,7 +1799,7 @@ struct PrivateSettlementAuditCommitmentMaterialV1 {
     outputs: Vec<PrivateSettlementAuditOutputCommitmentMaterialV1>,
 }
 
-#[derive(Clone, Encode)]
+#[derive(Encode)]
 struct PrivateSettlementReimbursementTermsMaterialV1 {
     network_id: NetworkId,
     leg_ordinal: u8,
@@ -1501,13 +1813,113 @@ struct PrivateSettlementReimbursementTermsMaterialV1 {
     reimbursement_terms_salt: [u8; 32],
 }
 
+impl PrivateSettlementAuditOutputCommitmentMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.recipient_view_key);
+        self.view_key_authorization
+            .zeroize_for_confidential_discard();
+        self.encryption_opening.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.active);
+        zeroize_value_for_confidential_discard(&mut self.value);
+        zeroize_value_for_confidential_discard(&mut self.spending_authority);
+        zeroize_value_for_confidential_discard(&mut self.rho);
+        zeroize_value_for_confidential_discard(&mut self.blinding);
+        zeroize_value_for_confidential_discard(&mut self.dummy_domain);
+    }
+}
+
+impl Drop for PrivateSettlementAuditOutputCommitmentMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
+impl PrivateSettlementAuditCommitmentMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        self.payer.zeroize_for_confidential_discard();
+        self.payer_authorization.zeroize_for_confidential_discard();
+        self.recipient.zeroize_for_confidential_discard();
+        self.sponsor.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+        zeroize_value_for_confidential_discard(&mut self.amount);
+        zeroize_value_for_confidential_discard(&mut self.sponsor_reimbursement_amount);
+        zeroize_value_for_confidential_discard(&mut self.reimbursement_terms_salt);
+        zeroize_value_for_confidential_discard(&mut self.memo);
+        zeroize_value_for_confidential_discard(&mut self.policy_references);
+        for input in &mut self.inputs {
+            input.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.inputs);
+        for output in &mut self.outputs {
+            output.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.outputs);
+    }
+}
+
+impl Drop for PrivateSettlementAuditCommitmentMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
+impl PrivateSettlementReimbursementTermsMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        self.sponsor.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.sponsor_reimbursement_amount);
+        zeroize_value_for_confidential_discard(&mut self.reimbursement_terms_salt);
+    }
+}
+
+impl Drop for PrivateSettlementReimbursementTermsMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 impl fmt::Debug for PrivateSettlementAuditPlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditPlaintextV1(<redacted>)")
     }
 }
 
+impl Drop for PrivateSettlementAuditPlaintextV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 impl PrivateSettlementAuditPlaintextV1 {
+    /// Wipe every secret-bearing field before discarding this plaintext.
+    ///
+    /// Public binding context remains intact, but the plaintext intentionally
+    /// becomes invalid and must not be used after this call. Calling this
+    /// method more than once is safe.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.payer.zeroize_for_confidential_discard();
+        self.recipient.zeroize_for_confidential_discard();
+        self.sponsor.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+        zeroize_value_for_confidential_discard(&mut self.amount);
+        zeroize_value_for_confidential_discard(&mut self.sponsor_reimbursement_amount);
+        zeroize_value_for_confidential_discard(&mut self.reimbursement_terms_salt);
+        zeroize_value_for_confidential_discard(&mut self.memo);
+        zeroize_value_for_confidential_discard(&mut self.policy_references);
+
+        self.payer_authorization.zeroize_for_confidential_discard();
+        for input in &mut self.inputs {
+            input.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.inputs);
+        for output in &mut self.outputs {
+            output.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.outputs);
+    }
+
     /// Derive the exact purpose-separated authorization body for both inputs.
     ///
     /// Public nullifiers are supplied by the proof statement; every remaining
@@ -1642,7 +2054,7 @@ impl PrivateSettlementAuditPlaintextV1 {
                     role: output.role,
                     recipient_view_key: output.recipient_view_key,
                     view_key_authorization: output.view_key_authorization.clone(),
-                    encryption_opening: output.encryption_opening,
+                    encryption_opening: output.encryption_opening.clone(),
                     active: output.note.active,
                     value: output.note.value,
                     spending_authority: output.note.spending_authority,
@@ -1666,7 +2078,8 @@ impl PrivateSettlementAuditPlaintextV1 {
     ///
     /// Returns a Norito error when canonical encoding fails.
     pub fn commitment(&self) -> Result<Hash, norito::Error> {
-        let encoded = norito::encode_canonical(&self.commitment_material())?;
+        let material = self.commitment_material();
+        let encoded = encode_confidential_canonical(&material)?;
         let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
             norito::Error::Io(std::io::Error::other(
                 "audit commitment material is too large",
@@ -1675,7 +2088,7 @@ impl PrivateSettlementAuditPlaintextV1 {
         let mut hasher = Sha256::new();
         hasher.update(AUDIT_PLAINTEXT_COMMITMENT_DOMAIN_V1);
         hasher.update(encoded_len.to_le_bytes());
-        hasher.update(encoded);
+        hasher.update(encoded.as_slice());
         Ok(Hash::prehashed(hasher.finalize().into()))
     }
 
@@ -2163,7 +2576,7 @@ pub struct PrivateSettlementPoolGovernanceLifecycleV1 {
 }
 
 impl PrivateSettlementPoolGovernanceLifecycleV1 {
-    fn validate(self) -> Result<(), PrivateSettlementValidationError> {
+    fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
         if self.governance_revision == 0
             || self.activation_height == 0
             || self
@@ -2226,6 +2639,16 @@ impl fmt::Debug for PrivateSettlementPoolGovernanceBodyV1 {
 }
 
 impl PrivateSettlementPoolGovernanceBodyV1 {
+    /// Wipe the literal asset identifier and random commitment opening before discard.
+    ///
+    /// Public route, pool, commitment, policy, and lifecycle bindings remain
+    /// intact. The body intentionally becomes invalid and must not be used after
+    /// this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+    }
+
     /// Construct a restricted mapping while deriving its asset and policy commitments.
     ///
     /// # Errors
@@ -2312,6 +2735,12 @@ impl PrivateSettlementPoolGovernanceBodyV1 {
     }
 }
 
+impl Drop for PrivateSettlementPoolGovernanceBodyV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// Self-authenticating restricted governance record for one confidential pool.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2333,6 +2762,14 @@ impl fmt::Debug for PrivateSettlementPoolGovernanceV1 {
 }
 
 impl PrivateSettlementPoolGovernanceV1 {
+    /// Wipe the restricted pool-to-asset opening before discard.
+    ///
+    /// The public governance digest remains intact. The record intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.body.zeroize_for_confidential_discard();
+    }
+
     /// Construct a self-authenticating restricted governance record.
     ///
     /// # Errors
@@ -2484,6 +2921,12 @@ impl PrivateSettlementPoolGovernanceV1 {
     #[must_use]
     pub fn is_active_at(&self, height: u64) -> bool {
         self.body.lifecycle.is_active_at(height)
+    }
+}
+
+impl Drop for PrivateSettlementPoolGovernanceV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -2647,21 +3090,11 @@ impl PrivateSettlementSidecarAvailabilityBodyV1 {
     ///
     /// Returns a Norito error if the body cannot be canonically encoded.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
-        let body = norito::encode_canonical(self)?;
-        let body_len = u64::try_from(body.len()).map_err(|_| {
-            norito::Error::Io(std::io::Error::other(
-                "availability certificate body is too large",
-            ))
-        })?;
-        let mut preimage = Vec::with_capacity(
-            SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1.len()
-                + std::mem::size_of::<u64>()
-                + body.len(),
-        );
-        preimage.extend_from_slice(SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1);
-        preimage.extend_from_slice(&body_len.to_le_bytes());
-        preimage.extend_from_slice(&body);
-        Ok(preimage)
+        private_settlement_signature_preimage(
+            SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1,
+            self,
+            "availability certificate body is too large",
+        )
     }
 
     /// Validate the immutable availability statement before any signature work.
@@ -2876,21 +3309,11 @@ impl PrivateSettlementAuditorViewAttestationBodyV1 {
     ///
     /// Returns a Norito error if the body cannot be canonically encoded.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
-        let body = norito::encode_canonical(self)?;
-        let body_len = u64::try_from(body.len()).map_err(|_| {
-            norito::Error::Io(std::io::Error::other(
-                "auditor view attestation body is too large",
-            ))
-        })?;
-        let mut preimage = Vec::with_capacity(
-            AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1.len()
-                + std::mem::size_of::<u64>()
-                + body.len(),
-        );
-        preimage.extend_from_slice(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1);
-        preimage.extend_from_slice(&body_len.to_le_bytes());
-        preimage.extend_from_slice(&body);
-        Ok(preimage)
+        private_settlement_signature_preimage(
+            AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            self,
+            "auditor view attestation body is too large",
+        )
     }
 
     /// Validate fixed attestation fields before authority and signature work.
@@ -3034,21 +3457,11 @@ impl PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
     ///
     /// Returns a Norito error if the body cannot be canonically encoded.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
-        let body = norito::encode_canonical(self)?;
-        let body_len = u64::try_from(body.len()).map_err(|_| {
-            norito::Error::Io(std::io::Error::other(
-                "audit approval acknowledgement attestation body is too large",
-            ))
-        })?;
-        let mut preimage = Vec::with_capacity(
-            AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1.len()
-                + std::mem::size_of::<u64>()
-                + body.len(),
-        );
-        preimage.extend_from_slice(AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1);
-        preimage.extend_from_slice(&body_len.to_le_bytes());
-        preimage.extend_from_slice(&body);
-        Ok(preimage)
+        private_settlement_signature_preimage(
+            AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            self,
+            "audit approval acknowledgement attestation body is too large",
+        )
     }
 
     /// Validate fixed fields before authority and signature verification.
@@ -3958,16 +4371,11 @@ impl PrivateSettlementPhaseBodyV1 {
     ///
     /// Returns a Norito error if the body cannot be canonically encoded.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
-        let body = norito::encode_canonical(self)?;
-        let body_len = u64::try_from(body.len())
-            .map_err(|_| norito::Error::Io(std::io::Error::other("phase body is too large")))?;
-        let mut preimage = Vec::with_capacity(
-            PHASE_SIGNATURE_DOMAIN_V1.len() + std::mem::size_of::<u64>() + body.len(),
-        );
-        preimage.extend_from_slice(PHASE_SIGNATURE_DOMAIN_V1);
-        preimage.extend_from_slice(&body_len.to_le_bytes());
-        preimage.extend_from_slice(&body);
-        Ok(preimage)
+        private_settlement_signature_preimage(
+            PHASE_SIGNATURE_DOMAIN_V1,
+            self,
+            "phase body is too large",
+        )
     }
 }
 
@@ -4723,9 +5131,12 @@ mod tests {
             private_settlement_proof_digest_v1(&suffixed)
         );
     }
-    use crate::block::BlockHeader;
     use crate::domain::DomainId;
     use crate::privacy::{PrivacyEncryptionKeyV1, PrivacyRecipientIdV1};
+    use crate::{
+        account::{AccountController, MultisigMember, MultisigPolicy},
+        block::BlockHeader,
+    };
     use iroha_crypto::{Algorithm, HashOf, HybridKeyPair, KeyPair};
 
     fn network(seed: u8) -> NetworkId {
@@ -4736,6 +5147,19 @@ mod tests {
 
     fn hash(seed: u8) -> Hash {
         Hash::new([seed])
+    }
+
+    fn legacy_signature_preimage<T: Encode>(domain: &[u8], body: &T) -> Vec<u8> {
+        let body = norito::encode_canonical(body).expect("legacy canonical body encoding");
+        let mut preimage = Vec::with_capacity(domain.len() + 8 + body.len());
+        preimage.extend_from_slice(domain);
+        preimage.extend_from_slice(
+            &u64::try_from(body.len())
+                .expect("fixture body length fits u64")
+                .to_le_bytes(),
+        );
+        preimage.extend_from_slice(&body);
+        preimage
     }
 
     #[test]
@@ -5432,6 +5856,447 @@ mod tests {
     }
 
     #[test]
+    fn confidential_canonical_staging_preserves_audit_commitment_bytes() {
+        let (_, plaintext) = audit_plaintext_fixture();
+        let material = plaintext.commitment_material();
+        let mut previous_encoding =
+            norito::encode_canonical(&material).expect("legacy canonical encoding succeeds");
+        let guarded_encoding =
+            encode_confidential_canonical(&material).expect("guarded canonical encoding succeeds");
+
+        assert_eq!(guarded_encoding.as_slice(), previous_encoding.as_slice());
+
+        let encoded_len =
+            u64::try_from(previous_encoding.len()).expect("fixture encoding length fits u64");
+        let mut hasher = Sha256::new();
+        hasher.update(AUDIT_PLAINTEXT_COMMITMENT_DOMAIN_V1);
+        hasher.update(encoded_len.to_le_bytes());
+        hasher.update(&previous_encoding);
+        assert_eq!(
+            plaintext.commitment().expect("guarded commitment succeeds"),
+            Hash::prehashed(hasher.finalize().into())
+        );
+
+        zeroize_value_for_confidential_discard(&mut previous_encoding);
+    }
+
+    #[test]
+    fn audit_commitment_material_confidential_discard_scrubs_secret_projection() {
+        fn account_is_scrubbed(account: &AccountId) -> bool {
+            match account.controller() {
+                AccountController::Single(key) => key
+                    .try_to_bytes()
+                    .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0)),
+                AccountController::Multisig(policy) => {
+                    policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
+                }
+            }
+        }
+
+        let (_, plaintext) = audit_plaintext_fixture();
+        let mut material = plaintext.commitment_material();
+        let mut reimbursement = plaintext
+            .reimbursement_terms_material(PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1);
+        let mut asset_binding = PrivateSettlementAssetBindingMaterialV1 {
+            route: plaintext.route,
+            pool_id: plaintext.pool_id,
+            asset_definition_id: plaintext.asset_definition_id.clone(),
+            asset_binding_salt: plaintext.asset_binding_salt,
+        };
+
+        material.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&material.payer));
+        assert!(account_is_scrubbed(&material.recipient));
+        assert!(account_is_scrubbed(&material.sponsor));
+        assert!(account_is_scrubbed(
+            &material.payer_authorization.body.payer
+        ));
+        assert_eq!(material.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(material.asset_binding_salt, [0; 32]);
+        assert_eq!(material.amount, 0);
+        assert_eq!(material.sponsor_reimbursement_amount, 0);
+        assert_eq!(material.reimbursement_terms_salt, [0; 32]);
+        assert!(material.memo.is_empty());
+        assert!(material.policy_references.is_empty());
+        assert!(material.inputs.iter().all(|opening| {
+            !opening.active
+                && opening.value == 0
+                && opening.spending_authority == [0; 32]
+                && opening.rho == [0; 32]
+                && opening.blinding == [0; 32]
+                && opening.memo_digest == [0; 32]
+                && opening.dummy_domain.is_none()
+        }));
+        assert!(material.outputs.iter().all(|output| {
+            output.recipient_view_key == [0; 32]
+                && output.view_key_authorization.body.recipient_view_key == [0; 32]
+                && output.view_key_authorization.body.note_spending_authority == [0; 32]
+                && !output.view_key_authorization.body.output_active
+                && account_is_scrubbed(&output.view_key_authorization.body.authorized_account)
+                && output
+                    .view_key_authorization
+                    .signatures
+                    .iter()
+                    .all(|signature| signature.signature.payload().is_empty())
+                && output.encryption_opening.ephemeral_secret == [0; 32]
+                && !output.active
+                && output.value == 0
+                && output.spending_authority == [0; 32]
+                && output.rho == [0; 32]
+                && output.blinding == [0; 32]
+                && output.dummy_domain.is_none()
+        }));
+
+        reimbursement.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&reimbursement.sponsor));
+        assert_eq!(reimbursement.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(reimbursement.sponsor_reimbursement_amount, 0);
+        assert_eq!(reimbursement.reimbursement_terms_salt, [0; 32]);
+
+        asset_binding.zeroize_for_confidential_discard();
+        assert_eq!(asset_binding.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(asset_binding.asset_binding_salt, [0; 32]);
+    }
+
+    #[test]
+    fn confidential_canonical_error_path_scrubs_staged_bytes() {
+        struct FailAfterLengthPass {
+            calls: std::cell::Cell<usize>,
+        }
+
+        impl norito::core::NoritoSerialize for FailAfterLengthPass {
+            fn serialize(
+                &self,
+                encoder: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                let call = self.calls.get();
+                self.calls.set(call.saturating_add(1));
+                encoder.write_all(&[0xA5; 32])?;
+                if call == 2 {
+                    return Err(norito::Error::Message(
+                        "intentional confidential encoding failure".into(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+
+        let material = FailAfterLengthPass {
+            calls: std::cell::Cell::new(0),
+        };
+        let drops_before = CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS.with(std::cell::Cell::get);
+        let error = match encode_confidential_canonical(&material) {
+            Ok(_) => panic!("the output pass must fail after staging confidential bytes"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, norito::Error::Message(_)));
+        assert_eq!(material.calls.get(), 3);
+        let drops_after = CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS.with(std::cell::Cell::get);
+        assert_eq!(drops_after, drops_before + 1);
+    }
+
+    #[test]
+    fn auditor_plaintext_confidential_discard_scrubs_every_secret_field_idempotently() {
+        fn public_key_is_scrubbed(key: &PublicKey) -> bool {
+            key.try_to_bytes()
+                .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+        }
+
+        fn account_is_scrubbed(account: &AccountId) -> bool {
+            match account.controller() {
+                AccountController::Single(key) => public_key_is_scrubbed(key),
+                AccountController::Multisig(policy) => {
+                    policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
+                }
+            }
+        }
+
+        fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
+            !opening.active
+                && opening.value == 0
+                && opening.spending_authority == [0; 32]
+                && opening.rho == [0; 32]
+                && opening.blinding == [0; 32]
+                && opening.memo_digest == [0; 32]
+                && opening.dummy_domain.is_none()
+        }
+
+        fn assert_secret_fields_are_scrubbed(plaintext: &PrivateSettlementAuditPlaintextV1) {
+            assert!(account_is_scrubbed(&plaintext.payer));
+            assert!(account_is_scrubbed(&plaintext.recipient));
+            assert!(account_is_scrubbed(&plaintext.sponsor));
+            assert_eq!(plaintext.asset_definition_id.aid_bytes, [0; 16]);
+            assert_eq!(plaintext.asset_binding_salt, [0; 32]);
+            assert_eq!(plaintext.amount, 0);
+            assert_eq!(plaintext.sponsor_reimbursement_amount, 0);
+            assert_eq!(plaintext.reimbursement_terms_salt, [0; 32]);
+            assert!(plaintext.memo.is_empty());
+            assert!(plaintext.policy_references.is_empty());
+            assert!(account_is_scrubbed(
+                &plaintext.payer_authorization.body.payer
+            ));
+            assert!(
+                plaintext
+                    .payer_authorization
+                    .body
+                    .inputs
+                    .iter()
+                    .all(|input| {
+                        !input.active
+                            && input.note_spending_authority == [0; 32]
+                            && input.dummy_domain.is_none()
+                    })
+            );
+            assert!(
+                plaintext
+                    .payer_authorization
+                    .signatures
+                    .iter()
+                    .all(|entry| public_key_is_scrubbed(&entry.signer)
+                        && entry.signature.payload().is_empty())
+            );
+            assert!(plaintext.inputs.iter().all(note_opening_is_scrubbed));
+            assert!(plaintext.outputs.iter().all(|output| {
+                output.recipient_view_key == [0; 32]
+                    && output.view_key_authorization.body.recipient_view_key == [0; 32]
+                    && !output.view_key_authorization.body.output_active
+                    && output.view_key_authorization.body.note_spending_authority == [0; 32]
+                    && account_is_scrubbed(&output.view_key_authorization.body.authorized_account)
+                    && output
+                        .view_key_authorization
+                        .signatures
+                        .iter()
+                        .all(|entry| {
+                            public_key_is_scrubbed(&entry.signer)
+                                && entry.signature.payload().is_empty()
+                        })
+                    && output.encryption_opening.ephemeral_secret == [0; 32]
+                    && note_opening_is_scrubbed(&output.note)
+            }));
+        }
+
+        let (_, mut plaintext) = audit_plaintext_fixture();
+        let multisig_members = [0xB3, 0xB4]
+            .map(|seed| {
+                let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+                MultisigMember::new(keypair.public_key().clone(), 1).expect("multisig member")
+            })
+            .to_vec();
+        plaintext.recipient = AccountId::new_multisig(
+            MultisigPolicy::new(2, multisig_members).expect("multisig recipient"),
+        );
+
+        assert!(!plaintext.memo.is_empty());
+        assert!(!plaintext.policy_references.is_empty());
+        assert!(
+            plaintext
+                .payer_authorization
+                .body
+                .inputs
+                .iter()
+                .any(|input| input.active && input.dummy_domain.is_none())
+        );
+        assert!(
+            plaintext
+                .payer_authorization
+                .body
+                .inputs
+                .iter()
+                .any(|input| !input.active && input.dummy_domain.is_some())
+        );
+        assert!(
+            plaintext
+                .inputs
+                .iter()
+                .any(|input| input.active && input.dummy_domain.is_none())
+        );
+        assert!(
+            plaintext
+                .inputs
+                .iter()
+                .any(|input| !input.active && input.dummy_domain.is_some())
+        );
+        assert!(plaintext.outputs.iter().any(|output| {
+            output.view_key_authorization.body.output_active
+                && output.note.active
+                && output.note.dummy_domain.is_none()
+        }));
+        assert!(plaintext.outputs.iter().any(|output| {
+            !output.view_key_authorization.body.output_active
+                && !output.note.active
+                && output.note.dummy_domain.is_some()
+        }));
+        assert!(matches!(
+            plaintext.recipient.controller(),
+            AccountController::Multisig(policy) if !policy.members().is_empty()
+        ));
+
+        plaintext.zeroize_for_confidential_discard();
+        assert_secret_fields_are_scrubbed(&plaintext);
+
+        plaintext.zeroize_for_confidential_discard();
+        assert_secret_fields_are_scrubbed(&plaintext);
+    }
+
+    #[test]
+    fn restricted_child_owners_scrub_standalone_copies_idempotently() {
+        fn public_key_is_scrubbed(key: &PublicKey) -> bool {
+            key.try_to_bytes()
+                .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+        }
+
+        fn account_is_scrubbed(account: &AccountId) -> bool {
+            match account.controller() {
+                AccountController::Single(key) => public_key_is_scrubbed(key),
+                AccountController::Multisig(policy) => {
+                    policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
+                }
+            }
+        }
+
+        fn payer_input_is_scrubbed(input: &PrivateSettlementAuditPayerInputV1) -> bool {
+            !input.active
+                && input.note_spending_authority == [0; 32]
+                && input.dummy_domain.is_none()
+        }
+
+        fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
+            !opening.active
+                && opening.value == 0
+                && opening.spending_authority == [0; 32]
+                && opening.rho == [0; 32]
+                && opening.blinding == [0; 32]
+                && opening.memo_digest == [0; 32]
+                && opening.dummy_domain.is_none()
+        }
+
+        assert!(core::mem::needs_drop::<PrivateSettlementAuditPayerInputV1>());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditPayerAuthorizationBodyV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditPayerSignatureV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditPayerAuthorizationV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditViewKeyAuthorizationBodyV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditViewKeySignatureV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditViewKeyAuthorizationV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditEncryptionOpeningV1,
+        >());
+        assert!(core::mem::needs_drop::<PrivateSettlementAuditNoteOpeningV1>());
+        assert!(core::mem::needs_drop::<PrivateSettlementAuditOutputV1>());
+
+        let (_, plaintext) = audit_plaintext_fixture();
+
+        let mut payer_input = plaintext.payer_authorization.body.inputs[0].clone();
+        payer_input.zeroize_for_confidential_discard();
+        payer_input.zeroize_for_confidential_discard();
+        assert!(payer_input_is_scrubbed(&payer_input));
+
+        let mut payer_body = plaintext.payer_authorization.body.clone();
+        payer_body.zeroize_for_confidential_discard();
+        payer_body.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&payer_body.payer));
+        assert!(payer_body.inputs.iter().all(payer_input_is_scrubbed));
+
+        let mut payer_signature = plaintext.payer_authorization.signatures[0].clone();
+        payer_signature.zeroize_for_confidential_discard();
+        payer_signature.zeroize_for_confidential_discard();
+        assert!(public_key_is_scrubbed(&payer_signature.signer));
+        assert!(payer_signature.signature.payload().is_empty());
+
+        let mut payer_authorization = plaintext.payer_authorization.clone();
+        payer_authorization.zeroize_for_confidential_discard();
+        payer_authorization.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&payer_authorization.body.payer));
+        assert!(
+            payer_authorization
+                .body
+                .inputs
+                .iter()
+                .all(payer_input_is_scrubbed)
+        );
+        assert!(payer_authorization.signatures.iter().all(|entry| {
+            public_key_is_scrubbed(&entry.signer) && entry.signature.payload().is_empty()
+        }));
+
+        let output = &plaintext.outputs[0];
+        let mut view_body = output.view_key_authorization.body.clone();
+        view_body.zeroize_for_confidential_discard();
+        view_body.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&view_body.authorized_account));
+        assert_eq!(view_body.recipient_view_key, [0; 32]);
+        assert!(!view_body.output_active);
+        assert_eq!(view_body.note_spending_authority, [0; 32]);
+
+        let mut view_signature = output.view_key_authorization.signatures[0].clone();
+        view_signature.zeroize_for_confidential_discard();
+        view_signature.zeroize_for_confidential_discard();
+        assert!(public_key_is_scrubbed(&view_signature.signer));
+        assert!(view_signature.signature.payload().is_empty());
+
+        let mut view_authorization = output.view_key_authorization.clone();
+        view_authorization.zeroize_for_confidential_discard();
+        view_authorization.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(
+            &view_authorization.body.authorized_account
+        ));
+        assert_eq!(view_authorization.body.recipient_view_key, [0; 32]);
+        assert_eq!(view_authorization.body.note_spending_authority, [0; 32]);
+        assert!(view_authorization.signatures.iter().all(|entry| {
+            public_key_is_scrubbed(&entry.signer) && entry.signature.payload().is_empty()
+        }));
+
+        let mut encryption_opening = output.encryption_opening.clone();
+        encryption_opening.zeroize_for_confidential_discard();
+        encryption_opening.zeroize_for_confidential_discard();
+        assert_eq!(encryption_opening.ephemeral_secret, [0; 32]);
+
+        let mut note_opening = output.note.clone();
+        note_opening.zeroize_for_confidential_discard();
+        note_opening.zeroize_for_confidential_discard();
+        assert!(note_opening_is_scrubbed(&note_opening));
+
+        let mut output = output.clone();
+        output.zeroize_for_confidential_discard();
+        output.zeroize_for_confidential_discard();
+        assert_eq!(output.recipient_view_key, [0; 32]);
+        assert!(account_is_scrubbed(
+            &output.view_key_authorization.body.authorized_account
+        ));
+        assert_eq!(output.encryption_opening.ephemeral_secret, [0; 32]);
+        assert!(note_opening_is_scrubbed(&output.note));
+    }
+
+    #[test]
+    fn restricted_pool_governance_owner_scrubs_opening_idempotently() {
+        assert!(core::mem::needs_drop::<PrivateSettlementPoolGovernanceBodyV1>());
+        assert!(core::mem::needs_drop::<PrivateSettlementPoolGovernanceV1>());
+
+        let (_, governance, _) = pool_governance_fixture();
+        let mut body = governance.body.clone();
+        body.zeroize_for_confidential_discard();
+        body.zeroize_for_confidential_discard();
+        assert_eq!(body.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(body.asset_binding_salt, [0; 32]);
+
+        let mut record = governance.clone();
+        record.zeroize_for_confidential_discard();
+        record.zeroize_for_confidential_discard();
+        assert_eq!(record.body.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(record.body.asset_binding_salt, [0; 32]);
+    }
+
+    #[test]
     fn proof_binding_excludes_post_proof_artifacts_but_manifest_digest_binds_them() {
         let original = manifest(2);
         let mut changed = original.clone();
@@ -5766,21 +6631,21 @@ mod tests {
             Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle)
         );
 
-        let mut invalid_lifecycle = governance.clone().body;
+        let mut invalid_lifecycle = governance.body.clone();
         invalid_lifecycle.lifecycle.activation_height = 0;
         assert_eq!(
             PrivateSettlementPoolGovernanceV1::new(invalid_lifecycle),
             Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle)
         );
 
-        let mut invalid_revision = governance.clone().body;
+        let mut invalid_revision = governance.body.clone();
         invalid_revision.lifecycle.governance_revision = 0;
         assert_eq!(
             PrivateSettlementPoolGovernanceV1::new(invalid_revision),
             Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle)
         );
 
-        let mut invalid_interval = governance.clone().body;
+        let mut invalid_interval = governance.body.clone();
         invalid_interval.lifecycle.retirement_height =
             Some(invalid_interval.lifecycle.activation_height);
         assert_eq!(
@@ -6029,6 +6894,10 @@ mod tests {
     fn phase_vote_and_prepare_barrier_roundtrip_with_closed_shape() {
         let receipt = measured_receipt(2);
         let body = receipt.legs[0].prepare.body;
+        assert_eq!(
+            body.signature_preimage().expect("phase preimage encodes"),
+            legacy_signature_preimage(PHASE_SIGNATURE_DOMAIN_V1, &body),
+        );
         let authority = receipt
             .authority_catalog
             .authority_for_leg(&receipt.manifest, 0)
@@ -6184,6 +7053,10 @@ mod tests {
         body.validate_shape().expect("attestation body shape");
         let preimage = body.signature_preimage().expect("attestation preimage");
         assert!(preimage.starts_with(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1));
+        assert_eq!(
+            preimage,
+            legacy_signature_preimage(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1, &body),
+        );
 
         let mut substituted = body.clone();
         substituted.authoritative_height += 1;
@@ -6239,6 +7112,13 @@ mod tests {
             .expect("acknowledgement attestation preimage");
         assert!(
             preimage.starts_with(AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1)
+        );
+        assert_eq!(
+            preimage,
+            legacy_signature_preimage(
+                AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1,
+                &body,
+            ),
         );
 
         let mut substituted = body.clone();

@@ -6,8 +6,8 @@ The runner has two deliberately separate phases:
 * ``plan`` freezes the exact N=2,3,4,8,16 matrix, harness executable,
   hardware description, configurations, canaries, and request identities.
   A plan is scaffolding and is never qualification evidence.
-* ``execute`` checks out the same clean source revision, invokes the frozen
-  external process harness once per request, validates every acknowledgement
+* ``execute`` requires ten retained fresh N=3 smoke successes at the same signed
+  clean source revision, invokes the frozen external process harness once per request, validates every acknowledgement
   and measurement, and writes a publication fragment only after the complete
   matrix passes.
 
@@ -16,12 +16,16 @@ exercise authenticated message control and persistence cuts, and capture the
 network/storage surfaces.  This script never substitutes synthetic values for
 missing harness output.  The harness protocol is a JSON request/response file
 contract described by :func:`invoke_harness` and validated below.
+Execution uses permanent owner-only attempt directories. Every request, raw
+stream, response, evidence file and terminal outcome is retained on failure;
+the frozen plan remains the denominator and no retry replaces a failed job.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import csv
 import hashlib
 import json
@@ -76,6 +80,23 @@ MAX_BOOTSTRAP_ITERATIONS = 10_000_000
 MAX_OBSERVATION_COUNT = (1 << 64) - 1
 DEFAULT_BOOTSTRAP_ITERATIONS = 2_000
 MAX_HARNESS_RESPONSE_BYTES = 16 * 1024 * 1024
+# Keep this timing contract synchronized with the production-like real-process
+# fixture.  A fault job must first pay the governed private-profile activation
+# delay and then advance four deliberately non-finalized crash trials past
+# their bundle expiries.  This is a protocol floor, before startup, proof,
+# restart, transaction, and polling overhead.
+REAL_PROCESS_BLOCK_CADENCE_SECONDS = 4
+PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS = 300
+FAULT_NONFINALIZED_EXPIRY_TRIALS = 4
+FAULT_BUNDLE_EXPIRY_BLOCKS = 96
+FAULT_EXPIRY_ADVANCE_BLOCKS = FAULT_BUNDLE_EXPIRY_BLOCKS + 1
+FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS = (
+    PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS
+    + FAULT_NONFINALIZED_EXPIRY_TRIALS * FAULT_EXPIRY_ADVANCE_BLOCKS
+) * REAL_PROCESS_BLOCK_CADENCE_SECONDS
+# Leave substantial headroom above the deterministic floor for 16 processes,
+# native proofs, restart recovery, and control acknowledgements.
+DEFAULT_HARNESS_TIMEOUT_SECONDS = 7_200
 GIT_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 IROHA_HASH_LITERAL = re.compile(r"hash:([0-9A-F]{64})#[0-9A-F]{4}")
@@ -196,6 +217,16 @@ FAULT_PAYLOAD_FIELDS = {
 FAULT_CONTROL_EVIDENCE_FILE = "fault-control.jsonl"
 FAULT_OBSERVATION_EVIDENCE_FILE = "fault-observations.jsonl"
 FAULT_EVIDENCE_MAX_BYTES = 64 * 1024 * 1024
+FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1 = (
+    b"iroha:aps-fault-continuous-observation:v1\0"
+)
+FAULT_CONTINUOUS_OBSERVATION_PHASE_DOMAIN_V1 = (
+    b"iroha:aps-fault-continuous-observation-phase:v1\0"
+)
+FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1 = (
+    "expected_transport_unavailable"
+)
+FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER = 20_000
 FAULT_STATE_COUNT_FIELDS = {
     "governance",
     "pools",
@@ -279,15 +310,9 @@ def canonical_iroha_hash_body(value: Any, label: str) -> str:
     if matched is None:
         raise RunnerError(f"{label} is not a canonical Iroha hash literal")
     body = matched.group(1)
-    crc = 0xFFFF
-    for byte in f"hash:{body}".encode("ascii"):
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = (
-                ((crc << 1) ^ 0x1021) & 0xFFFF
-                if crc & 0x8000
-                else (crc << 1) & 0xFFFF
-            )
+    # Match norito::literal::crc16: polynomial 0x1021, initial value 0xFFFF,
+    # no reflection or final XOR, over the ASCII tag, colon and uppercase body.
+    crc = binascii.crc_hqx(f"hash:{body}".encode("ascii"), 0xFFFF)
     if value[-4:] != f"{crc:04X}":
         raise RunnerError(f"{label} has an invalid Iroha hash checksum")
     return body.lower()
@@ -2136,8 +2161,10 @@ def validate_fault_trial_control_semantics(
         matched = sum(ack["matched"] for _command, ack in loss)
         dropped = sum(ack["dropped"] for _command, ack in loss)
         if (
-            not loss
-            or not healing
+            len(controls) != 2
+            or len(route_controls) != 2
+            or len(loss) != 1
+            or len(healing) != 1
             or matched == 0
             or dropped * 100 != matched * trial["loss_percent"]
             or any(ack["matched"] == 0 for ack in healing)
@@ -2227,6 +2254,10 @@ def validate_fault_trial_control_semantics(
             before_pids = {control["before_pid"] for control in restart_controls}
             after_pids = {control["after_pid"] for control in restart_controls}
             if (
+                route_controls
+                or len(controls)
+                != 2 * VALIDATORS_PER_DATASPACE + participants + 2
+                or
                 len(carrier_controls) != 2 * VALIDATORS_PER_DATASPACE
                 or not carrier_peer_coverage
                 or len(validator_restarts) != participants
@@ -2262,7 +2293,11 @@ def validate_fault_trial_control_semantics(
         released = sum(ack["released"] for _control, _command, ack in passes)
         if (
             phase is None
-            or not hold_digests
+            or len(controls) != 2
+            or len(route_controls) != 2
+            or len(holds) != 1
+            or len(passes) != 1
+            or len(hold_digests) != 1
             or released == 0
             or any(ack["predecessor_command_sha256"] not in hold_digests for _control, _command, ack in passes)
         ):
@@ -2303,6 +2338,7 @@ def validate_fault_trial_control_semantics(
     )
     if (
         expected_phase is None
+        or len(controls) != 2
         or len(cuts) != 1
         or len(restarts) != 1
         or restarts[0]["control_type"] != expected_restart_type
@@ -2416,14 +2452,331 @@ def _validate_fault_state_response(
     )
 
 
+def _fault_observation_phase_contract(
+    control_row: Mapping[str, Any],
+    *,
+    collection: str,
+    label: str,
+) -> list[tuple[str, frozenset[int], bool, tuple[str, ...]]]:
+    """Derive the exact observation contract from canonical authenticated controls."""
+
+    controls = control_row["controls"]
+    empty = frozenset()
+
+    def command_binding(control: Mapping[str, Any]) -> str:
+        return f"command:{control['command_sha256']}"
+
+    def acknowledgement_binding(control: Mapping[str, Any]) -> str:
+        return f"acknowledgement:{control['acknowledgement_sha256']}"
+
+    if collection == "loss_trials":
+        loss_count = len(fault_report.REQUIRED_LOSS_PERCENTAGES)
+        trial_index = control_row["trial_index"]
+        if not 0 <= trial_index < len(fault_report.REQUIRED_LOSS_PHASES) * loss_count:
+            raise RunnerError(f"{label} has a non-canonical route-loss trial identity")
+        phase = fault_report.REQUIRED_LOSS_PHASES[trial_index // loss_count]
+        expected_percentage = fault_report.REQUIRED_LOSS_PERCENTAGES[
+            trial_index % loss_count
+        ]
+        if len(controls) != 2:
+            raise RunnerError(f"{label} has a non-canonical route-loss control set")
+        parsed = [
+            _validate_route_control_pair(control, f"{label}.controls[{index}]")
+            for index, control in enumerate(controls)
+        ]
+        loss_command, loss_ack = parsed[0]
+        pass_command, pass_ack = parsed[1]
+        if (
+            any(control["control_type"] != phase for control in controls)
+            or [loss_command["action"], pass_command["action"]] != ["loss", "pass"]
+            or any(command["phase"] != phase for command, _ack in parsed)
+            or any(command["seed"] != control_row["seed"] for command, _ack in parsed)
+            or loss_ack["matched"] == 0
+            or loss_ack["dropped"] * 100
+            != loss_ack["matched"] * expected_percentage
+            or pass_ack["matched"] == 0
+            or pass_ack["passed"] != pass_ack["matched"]
+            or controls[0]["peer_index"] != VALIDATORS_PER_DATASPACE
+            or controls[1]["peer_index"] != controls[0]["peer_index"]
+            or loss_command["revision"] >= pass_command["revision"]
+        ):
+            raise RunnerError(f"{label} has a non-canonical route-loss control set")
+        return [
+            ("preflight", empty, False, ()),
+            (
+                f"{phase}_loss",
+                empty,
+                False,
+                (acknowledgement_binding(controls[0]),),
+            ),
+            (
+                "post_recovery",
+                empty,
+                True,
+                (acknowledgement_binding(controls[1]),),
+            ),
+            ("terminal", empty, True, ()),
+        ]
+
+    trial_index = control_row["trial_index"]
+    if collection == "phase_cut_partitions" and trial_index in range(3):
+        phase = fault_report.REQUIRED_LOSS_PHASES[trial_index]
+        if len(controls) != 2:
+            raise RunnerError(f"{label} has a non-canonical route-Hold control set")
+        parsed = [
+            _validate_route_control_pair(control, f"{label}.controls[{index}]")
+            for index, control in enumerate(controls)
+        ]
+        hold_command, hold_ack = parsed[0]
+        pass_command, pass_ack = parsed[1]
+        if (
+            any(control["control_type"] != phase for control in controls)
+            or [hold_command["action"], pass_command["action"]] != ["hold", "pass"]
+            or any(command["phase"] != phase for command, _ack in parsed)
+            or any(command["seed"] != control_row["seed"] for command, _ack in parsed)
+            or hold_ack["held"] == 0
+            or pass_ack["released"] == 0
+            or pass_ack["predecessor_command_sha256"]
+            != controls[0]["command_sha256"]
+            or controls[0]["peer_index"] != VALIDATORS_PER_DATASPACE
+            or controls[1]["peer_index"] != controls[0]["peer_index"]
+            or hold_command["revision"] >= pass_command["revision"]
+        ):
+            raise RunnerError(f"{label} has a non-canonical route-Hold control set")
+        return [
+            ("preflight", empty, False, ()),
+            (
+                f"{phase}_hold",
+                empty,
+                False,
+                (acknowledgement_binding(controls[0]),),
+            ),
+            (
+                "post_recovery",
+                empty,
+                True,
+                (acknowledgement_binding(controls[1]),),
+            ),
+            ("terminal", empty, True, ()),
+        ]
+
+    if collection == "phase_cut_partitions" and trial_index == 3:
+        participants = control_row["participants"]
+        expected_types = (
+            ["validator_restart"] * participants
+            + ["global_restart", "coordinator_restart"]
+            + ["consensus_carrier"] * (2 * VALIDATORS_PER_DATASPACE)
+        )
+        if (
+            len(controls) != len(expected_types)
+            or [control["control_type"] for control in controls] != expected_types
+        ):
+            raise RunnerError(f"{label} has a non-canonical carrier control allowlist")
+        committee_controls = controls[:participants]
+        committee_targets = tuple(
+            (dataspace_ordinal + 1) * VALIDATORS_PER_DATASPACE
+            for dataspace_ordinal in range(participants)
+        )
+        for control_index, (control, expected_peer) in enumerate(
+            zip(committee_controls, committee_targets, strict=True)
+        ):
+            command, _ack = _decoded_control_pair(
+                control, f"{label}.controls[{control_index}]"
+            )
+            if (
+                control["peer_index"] != expected_peer
+                or command.get("operation") != "stop_validator_for_quorum_progress"
+            ):
+                raise RunnerError(
+                    f"{label} has a non-canonical committee-restart control"
+                )
+        global_control = controls[participants]
+        global_command, _global_ack = _decoded_control_pair(
+            global_control, f"{label}.controls[{participants}]"
+        )
+        if (
+            global_control["peer_index"] != 0
+            or global_command.get("operation") != "restart_validator"
+            or controls[participants + 1]["peer_index"] is not None
+        ):
+            raise RunnerError(f"{label} has a non-canonical global recovery topology")
+        carrier_controls = controls[participants + 2 :]
+        carrier_actions = [
+            _validate_consensus_carrier_control(
+                control, f"{label}.controls[{participants + 2 + index}]"
+            )
+            for index, control in enumerate(carrier_controls)
+        ]
+        expected_carrier_sequence = [
+            *(('hold', peer_index) for peer_index in range(VALIDATORS_PER_DATASPACE)),
+            *(('heal', peer_index) for peer_index in range(VALIDATORS_PER_DATASPACE)),
+        ]
+        actual_carrier_sequence = [
+            (action, control["peer_index"])
+            for control, (action, _revision) in zip(
+                carrier_controls, carrier_actions, strict=True
+            )
+        ]
+        if actual_carrier_sequence != expected_carrier_sequence:
+            raise RunnerError(f"{label} has a non-canonical carrier control sequence")
+        hold_controls = carrier_controls[:VALIDATORS_PER_DATASPACE]
+        healing_controls = carrier_controls[VALIDATORS_PER_DATASPACE:]
+        return [
+            ("preflight", empty, False, ()),
+            (
+                "committee_unavailable",
+                frozenset(committee_targets),
+                False,
+                tuple(command_binding(control) for control in committee_controls),
+            ),
+            (
+                "committee_recovery",
+                empty,
+                False,
+                tuple(
+                    acknowledgement_binding(control)
+                    for control in committee_controls
+                ),
+            ),
+            (
+                "global_restart",
+                frozenset({0}),
+                False,
+                (command_binding(global_control),),
+            ),
+            (
+                "global_recovery",
+                empty,
+                False,
+                (acknowledgement_binding(global_control),),
+            ),
+            (
+                "consensus_carrier_hold",
+                empty,
+                False,
+                tuple(
+                    acknowledgement_binding(control) for control in hold_controls
+                ),
+            ),
+            (
+                "post_recovery",
+                empty,
+                True,
+                tuple(
+                    acknowledgement_binding(control) for control in healing_controls
+                ),
+            ),
+            ("terminal", empty, True, ()),
+        ]
+
+    if collection == "crash_recoveries":
+        if not 0 <= trial_index < len(fault_report.REQUIRED_CRASH_BOUNDARIES):
+            raise RunnerError(f"{label} has a non-canonical crash trial identity")
+        expected_phase = {
+            "sidecar_fsync": "after_private_settlement_sidecar_fsync",
+            "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
+            "prepare_qc": "after_private_settlement_prepare_qc_fsync",
+            "prepare_registration_kura_append": "after_private_settlement_kura_append",
+            "prepare_registration_wsv_application": "after_private_settlement_wsv_application",
+            "commit_qc": "after_private_settlement_commit_qc_fsync",
+            "finalization_kura_append": "after_private_settlement_kura_append",
+            "finalization_wsv_application": "after_private_settlement_wsv_application",
+            "receipt_publication": "after_private_settlement_receipt_publication",
+        }[fault_report.REQUIRED_CRASH_BOUNDARIES[trial_index]]
+        if len(controls) != 2 or controls[0]["control_type"] != "persistence_cut":
+            raise RunnerError(f"{label} has a non-canonical persistence control set")
+        cut_command, cut_ack = _decoded_control_pair(controls[0], f"{label}.controls[0]")
+        restart_command, _restart_ack = _decoded_control_pair(
+            controls[1], f"{label}.controls[1]"
+        )
+        expected_global_target = trial_index in {3, 4, 6, 7}
+        expected_restart_type = (
+            "global_restart" if expected_global_target else "validator_restart"
+        )
+        cut_target = controls[0]["peer_index"]
+        if (
+            cut_command != cut_ack
+            or cut_command.get("phase") != expected_phase
+            or controls[1]["control_type"] != expected_restart_type
+            or controls[1]["peer_index"] != cut_target
+            or restart_command.get("operation") != "recover_crashed_validator"
+            or (expected_global_target and cut_target != 0)
+            or (not expected_global_target and cut_target != VALIDATORS_PER_DATASPACE)
+        ):
+            raise RunnerError(f"{label} has a non-canonical persistence control set")
+        finalization_cut = trial_index in {6, 7, 8}
+        expected_finalized = trial_index in {3, 4, 6, 7, 8}
+        return [
+            ("preflight", empty, False, ()),
+            (
+                "persistence_cut",
+                frozenset({cut_target}),
+                finalization_cut,
+                (acknowledgement_binding(controls[0]),),
+            ),
+            (
+                "post_recovery",
+                empty,
+                expected_finalized,
+                (acknowledgement_binding(controls[1]),),
+            ),
+            ("terminal", empty, expected_finalized, ()),
+        ]
+
+    raise RunnerError(f"{label} has no continuous-observation phase contract")
+
+
+def _fault_attempt_response(
+    evidence: Any,
+    *,
+    label: str,
+    peer_index: int,
+) -> tuple[str, tuple[str, str, str, tuple[tuple[str, int], ...]]]:
+    """Decode one canonical public state response carried by an attempt run."""
+
+    raw, decoded = _decode_bound_evidence_json_hex(evidence, label)
+    response_sha256 = hashlib.sha256(raw).hexdigest()
+    observation = {
+        "peer_index": peer_index,
+        "response_sha256": response_sha256,
+        "response_hex": evidence,
+        "height": decoded.get("height"),
+        "commitment": decoded.get("commitment"),
+        "ledger_commitment": decoded.get("ledger_commitment"),
+        "replicated_staged_lock_commitment": decoded.get(
+            "replicated_staged_lock_commitment"
+        ),
+        "staged_lock_commitment": decoded.get("staged_lock_commitment"),
+        "counts": decoded.get("counts"),
+    }
+    return response_sha256, _validate_fault_state_response(
+        observation,
+        label=label,
+        expected_peer_index=peer_index,
+    )
+
+
+def _fault_ledger_attempt_identity(
+    identity: tuple[str, str, str, tuple[tuple[str, int], ...]],
+) -> tuple[str, tuple[tuple[str, int], ...]]:
+    """Project a state identity onto financial APS state, excluding staged locks."""
+
+    ledger, _replicated_staged, _staged, counts = identity
+    return (
+        ledger,
+        tuple((field, count) for field, count in counts if field in FAULT_LEDGER_COUNT_FIELDS),
+    )
+
+
 def validate_fault_observation_records(
     records: Sequence[Mapping[str, Any]],
     *,
     participants: int,
     seed: int,
     run: int,
+    control_by_record: Mapping[str, Mapping[str, Any]],
 ) -> tuple[dict[str, Mapping[str, Any]], int]:
-    """Validate all-validator before/nonfinalized/after APS state commitments."""
+    """Validate snapshots plus control-bound continuous coverage for every peer."""
 
     by_record: dict[str, Mapping[str, Any]] = {}
     observed_bundle_ids: set[str] = set()
@@ -2477,6 +2830,19 @@ def validate_fault_observation_records(
             or row["trial_index"] < 0
         ):
             raise RunnerError(f"fault observation evidence[{index}] changes its bound job")
+        control_row = control_by_record.get(record_id)
+        if (
+            control_row is None
+            or control_row["bundle_id"] != bundle_id
+            or control_row["participants"] != participants
+            or control_row["seed"] != seed
+            or control_row["run"] != run
+            or control_row["collection"] != row["collection"]
+            or control_row["trial_index"] != row["trial_index"]
+        ):
+            raise RunnerError(
+                f"fault observation evidence[{index}] has no exact authenticated control record"
+            )
         expected_after_state = row["expected_after_state"]
         if expected_after_state not in {"reverted", "finalized"}:
             raise RunnerError(
@@ -2714,6 +3080,11 @@ def validate_fault_observation_records(
                 raise RunnerError(
                     f"fault observation evidence[{index}] is not one complete {participants}-leg finalization"
                 )
+        phase_contract = _fault_observation_phase_contract(
+            control_row,
+            collection=row["collection"],
+            label=f"fault observation evidence[{index}]",
+        )
         continuous_observations = row["continuous_observations"]
         if not isinstance(continuous_observations, list) or len(continuous_observations) != peer_count:
             raise RunnerError(
@@ -2726,11 +3097,13 @@ def validate_fault_observation_records(
                 {
                     "peer_index",
                     "check_count",
+                    "poll_failure_count",
                     "first_response_sha256",
                     "last_response_sha256",
                     "response_chain_sha256",
                     "baseline_observations",
                     "finalized_observations",
+                    "phase_coverage",
                 },
                 f"fault observation evidence[{index}].continuous_observations[{peer_index}]",
             )
@@ -2746,6 +3119,10 @@ def validate_fault_observation_records(
                 raise RunnerError(
                     f"fault observation evidence[{index}].continuous_observations[{peer_index}] lacks a live polling observation"
                 )
+            poll_failure_count = nonnegative_integer(
+                summary["poll_failure_count"],
+                f"fault observation evidence[{index}].continuous_observations[{peer_index}].poll_failure_count",
+            )
             baseline_observations = nonnegative_integer(
                 summary["baseline_observations"],
                 f"fault observation evidence[{index}].continuous_observations[{peer_index}].baseline_observations",
@@ -2766,28 +3143,295 @@ def validate_fault_observation_records(
                 raise RunnerError(
                     f"fault observation evidence[{index}].continuous_observations[{peer_index}] contradicts the trial outcome"
                 )
-            for digest_field in (
-                "first_response_sha256",
-                "last_response_sha256",
-                "response_chain_sha256",
+            response_chain = hashlib.sha256()
+            response_chain.update(FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1)
+            response_chain.update(bytes.fromhex(bundle_id))
+            response_chain.update(struct.pack("<Q", peer_index))
+            recomputed_first_response: str | None = None
+            recomputed_last_response: str | None = None
+            seen_finalized = False
+            phase_coverage = summary["phase_coverage"]
+            if (
+                not isinstance(phase_coverage, list)
+                or len(phase_coverage) != len(phase_contract)
             ):
-                digest = summary[digest_field]
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] has incomplete phase coverage"
+                )
+            captured_phase_successes = 0
+            captured_phase_failures = 0
+            captured_phase_baseline = 0
+            captured_phase_finalized = 0
+            for phase_index, (phase_item, contract) in enumerate(
+                zip(phase_coverage, phase_contract, strict=True)
+            ):
+                phase = exact_fields(
+                    phase_item,
+                    {
+                        "phase",
+                        "expected_unavailable",
+                        "finalization_allowed",
+                        "successful_observations",
+                        "poll_failures",
+                        "baseline_observations",
+                        "finalized_observations",
+                        "checkpoint_attempt",
+                        "checkpoint_control_bindings",
+                        "attempt_chain_sha256",
+                        "attempts",
+                    },
+                    (
+                        f"fault observation evidence[{index}].continuous_observations"
+                        f"[{peer_index}].phase_coverage[{phase_index}]"
+                    ),
+                )
+                (
+                    expected_phase,
+                    expected_unavailable_peers,
+                    finalization_allowed,
+                    expected_checkpoint_bindings,
+                ) = contract
+                expected_unavailable = peer_index in expected_unavailable_peers
                 if (
-                    not isinstance(digest, str)
-                    or SHA256.fullmatch(digest) is None
-                    or digest == "0" * 64
+                    phase["phase"] != expected_phase
+                    or phase["expected_unavailable"] is not expected_unavailable
+                    or phase["finalization_allowed"] is not finalization_allowed
+                    or phase["checkpoint_control_bindings"]
+                    != list(expected_checkpoint_bindings)
                 ):
                     raise RunnerError(
-                        f"fault observation evidence[{index}].continuous_observations[{peer_index}].{digest_field} is invalid"
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}] phase coverage contradicts authenticated controls"
                     )
+                phase_successes = nonnegative_integer(
+                    phase["successful_observations"],
+                    (
+                        f"fault observation evidence[{index}].continuous_observations"
+                        f"[{peer_index}].phase_coverage[{phase_index}].successful_observations"
+                    ),
+                )
+                phase_failures = nonnegative_integer(
+                    phase["poll_failures"],
+                    (
+                        f"fault observation evidence[{index}].continuous_observations"
+                        f"[{peer_index}].phase_coverage[{phase_index}].poll_failures"
+                    ),
+                )
+                phase_baseline = nonnegative_integer(
+                    phase["baseline_observations"],
+                    (
+                        f"fault observation evidence[{index}].continuous_observations"
+                        f"[{peer_index}].phase_coverage[{phase_index}].baseline_observations"
+                    ),
+                )
+                phase_finalized = nonnegative_integer(
+                    phase["finalized_observations"],
+                    (
+                        f"fault observation evidence[{index}].continuous_observations"
+                        f"[{peer_index}].phase_coverage[{phase_index}].finalized_observations"
+                    ),
+                )
+                checkpoint_attempt = nonnegative_integer(
+                    phase["checkpoint_attempt"],
+                    (
+                        f"fault observation evidence[{index}].continuous_observations"
+                        f"[{peer_index}].phase_coverage[{phase_index}].checkpoint_attempt"
+                    ),
+                )
+                if expected_phase == "preflight" and phase_successes < 2:
+                    raise RunnerError(
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}] lacks a live preflight poll"
+                    )
+                attempts = phase["attempts"]
+                if not isinstance(attempts, list) or not attempts:
+                    raise RunnerError(
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}] has no ordered phase attempts"
+                    )
+                attempt_chain = hashlib.sha256()
+                attempt_chain.update(FAULT_CONTINUOUS_OBSERVATION_PHASE_DOMAIN_V1)
+                attempt_chain.update(bytes.fromhex(bundle_id))
+                attempt_chain.update(struct.pack("<Q", peer_index))
+                attempt_chain.update(struct.pack("<Q", phase_index))
+                phase_name = expected_phase.encode("ascii")
+                attempt_chain.update(struct.pack("<Q", len(phase_name)))
+                attempt_chain.update(phase_name)
+                attempt_chain.update(bytes((int(expected_unavailable),)))
+                attempt_chain.update(bytes((int(finalization_allowed),)))
+                logical_attempt = 0
+                recomputed_phase_successes = 0
+                recomputed_phase_failures = 0
+                recomputed_phase_baseline = 0
+                recomputed_phase_finalized = 0
+                post_checkpoint_successes = 0
+                post_checkpoint_failures = 0
+                previous_run: tuple[str, str] | None = None
+                for run_index, attempt_item in enumerate(attempts):
+                    attempt = exact_fields(
+                        attempt_item,
+                        {"class", "evidence", "repetitions"},
+                        (
+                            f"fault observation evidence[{index}].continuous_observations"
+                            f"[{peer_index}].phase_coverage[{phase_index}].attempts[{run_index}]"
+                        ),
+                    )
+                    attempt_class = attempt["class"]
+                    evidence = attempt["evidence"]
+                    repetitions = positive_integer(
+                        attempt["repetitions"],
+                        (
+                            f"fault observation evidence[{index}].continuous_observations"
+                            f"[{peer_index}].phase_coverage[{phase_index}]"
+                            f".attempts[{run_index}].repetitions"
+                        ),
+                    )
+                    if (
+                        attempt_class
+                        not in {"baseline", "finalized", "expected_unavailable"}
+                        or not isinstance(evidence, str)
+                        or previous_run == (attempt_class, evidence)
+                    ):
+                        raise RunnerError(
+                            f"fault observation evidence[{index}].continuous_observations[{peer_index}] has a non-canonical attempt stream"
+                        )
+                    previous_run = (attempt_class, evidence)
+                    if (
+                        logical_attempt + repetitions
+                        > FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER
+                    ):
+                        raise RunnerError(
+                            f"fault observation evidence[{index}].continuous_observations[{peer_index}] exceeds the attempt bound"
+                        )
+                    response_digest: str | None = None
+                    response_identity = None
+                    if attempt_class == "expected_unavailable":
+                        if (
+                            not expected_unavailable
+                            or evidence
+                            != FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1
+                        ):
+                            raise RunnerError(
+                                f"fault observation evidence[{index}].continuous_observations[{peer_index}] has an unallowlisted poll failure"
+                            )
+                    else:
+                        response_digest, response_identity = _fault_attempt_response(
+                            evidence,
+                            label=(
+                                f"fault observation evidence[{index}].continuous_observations"
+                                f"[{peer_index}].phase_coverage[{phase_index}]"
+                                f".attempts[{run_index}].evidence"
+                            ),
+                            peer_index=peer_index,
+                        )
+                        if attempt_class == "baseline":
+                            if (
+                                seen_finalized
+                                or _fault_ledger_attempt_identity(response_identity)
+                                != _fault_ledger_attempt_identity(before_identity)
+                            ):
+                                raise RunnerError(
+                                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] finalized state rolled back or was misclassified"
+                                )
+                        elif (
+                            not finalization_allowed
+                            or expected_after_state != "finalized"
+                            or response_identity != after_identity
+                        ):
+                            raise RunnerError(
+                                f"fault observation evidence[{index}].continuous_observations[{peer_index}] finalized in a disallowed phase or was misclassified"
+                            )
+                    for _ in range(repetitions):
+                        after_checkpoint = logical_attempt >= checkpoint_attempt
+                        if attempt_class == "expected_unavailable":
+                            recomputed_phase_failures += 1
+                            if after_checkpoint:
+                                post_checkpoint_failures += 1
+                            attempt_chain.update(b"\x00")
+                            attempt_chain.update(
+                                FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1.encode(
+                                    "ascii"
+                                )
+                            )
+                        else:
+                            assert response_digest is not None
+                            recomputed_phase_successes += 1
+                            if after_checkpoint:
+                                post_checkpoint_successes += 1
+                            if attempt_class == "baseline":
+                                recomputed_phase_baseline += 1
+                                attempt_chain.update(b"\x01")
+                            else:
+                                recomputed_phase_finalized += 1
+                                seen_finalized = True
+                                attempt_chain.update(b"\x02")
+                            digest_bytes = bytes.fromhex(response_digest)
+                            attempt_chain.update(digest_bytes)
+                            response_chain.update(digest_bytes)
+                            recomputed_first_response = (
+                                recomputed_first_response or response_digest
+                            )
+                            recomputed_last_response = response_digest
+                        logical_attempt += 1
+                if not 0 <= checkpoint_attempt < logical_attempt:
+                    raise RunnerError(
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}] has no post-checkpoint attempt"
+                    )
+                attempt_chain.update(b"checkpoint\0")
+                attempt_chain.update(struct.pack("<Q", checkpoint_attempt))
+                attempt_chain.update(b"checkpoint-controls\0")
+                attempt_chain.update(
+                    struct.pack("<Q", len(expected_checkpoint_bindings))
+                )
+                for binding in expected_checkpoint_bindings:
+                    encoded_binding = binding.encode("ascii")
+                    attempt_chain.update(struct.pack("<Q", len(encoded_binding)))
+                    attempt_chain.update(encoded_binding)
+                if (
+                    recomputed_phase_successes != phase_successes
+                    or recomputed_phase_failures != phase_failures
+                    or recomputed_phase_baseline != phase_baseline
+                    or recomputed_phase_finalized != phase_finalized
+                    or phase_baseline + phase_finalized != phase_successes
+                    or attempt_chain.hexdigest() != phase["attempt_chain_sha256"]
+                ):
+                    raise RunnerError(
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}] attempt stream does not bind its phase summary"
+                    )
+                if expected_unavailable:
+                    if post_checkpoint_failures == 0:
+                        raise RunnerError(
+                            f"fault observation evidence[{index}].continuous_observations[{peer_index}] did not observe its authenticated outage after the fault checkpoint"
+                        )
+                elif post_checkpoint_successes == 0 or phase_failures != 0:
+                    raise RunnerError(
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}] did not successfully cover an available phase after the fault checkpoint"
+                    )
+                captured_phase_successes += phase_successes
+                captured_phase_failures += phase_failures
+                captured_phase_baseline += phase_baseline
+                captured_phase_finalized += phase_finalized
             if (
-                summary["first_response_sha256"]
+                captured_phase_successes != check_count
+                or captured_phase_failures != poll_failure_count
+                or captured_phase_baseline != baseline_observations
+                or captured_phase_finalized != finalized_observations
+                or captured_phase_successes + captured_phase_failures
+                > FAULT_CONTINUOUS_MAX_ATTEMPTS_PER_PEER
+            ):
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] phase totals do not equal its summary"
+                )
+            if (
+                recomputed_first_response is None
+                or recomputed_last_response is None
+                or summary["first_response_sha256"] != recomputed_first_response
+                or summary["last_response_sha256"] != recomputed_last_response
+                or summary["response_chain_sha256"] != response_chain.hexdigest()
+                or recomputed_first_response
                 != snapshots[0]["validators"][peer_index]["response_sha256"]
-                or summary["last_response_sha256"]
+                or recomputed_last_response
                 != snapshots[2]["validators"][peer_index]["response_sha256"]
             ):
                 raise RunnerError(
-                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] is not bound to the exemplar endpoints"
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] chain is invalid or not bound to the exemplar endpoints"
                 )
             captured_checks += check_count
         if captured_checks != checks:
@@ -2890,7 +3534,11 @@ def materialize_fault_response(
         control_rows, participants=participants, seed=seed, run=run
     )
     observation_by_record, total_continuous_checks = validate_fault_observation_records(
-        observation_rows, participants=participants, seed=seed, run=run
+        observation_rows,
+        participants=participants,
+        seed=seed,
+        run=run,
+        control_by_record=control_by_record,
     )
     prepared: dict[str, list[dict[str, Any]]] = {}
     atomicity = payload["atomicity"]
@@ -4681,130 +5329,195 @@ def _terminate_owned_process_group(
     process.wait(timeout=1)
 
 
+def private_record(path: Path, value: Any) -> None:
+    """Durably create one immutable owner-only attempt/outcome JSON record."""
+
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(canonical_bytes(value) + b"\n")
+            stream.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def publish_campaign_fragment(path: Path, value: Any) -> None:
+    """Publish fully synced bytes atomically, retaining the pending record on error.
+
+    The success name is never used for an incomplete write. A hard link gives
+    an atomic no-overwrite publication, while the pending name preserves the
+    exact bytes if syncing the new directory entry fails. Such a failure
+    removes the success name before it propagates to the campaign failure log.
+    """
+
+    pending = path.with_name(f"{path.stem}.pending{path.suffix}")
+    private_record(pending, value)
+    linked = False
+    try:
+        os.link(pending, path, follow_symlinks=False)
+        linked = True
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        if linked:
+            path.unlink()
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        raise
+
+
+def fresh_private_directory(path: Path) -> None:
+    """Create a new canonical owner-only directory without adopting prior evidence."""
+
+    if not path.is_absolute() or path.resolve(strict=False) != path:
+        raise RunnerError("attempt/output directory must be absolute and canonical")
+    path.mkdir(mode=0o700)
+    path.chmod(0o700)
+
+
+def retained_file_inventory(root: Path) -> list[dict[str, Any]]:
+    """Record regular raw files without following unexpected harness-created symlinks."""
+
+    inventory = []
+    for directory, subdirectories, files in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in sorted(subdirectories + files):
+            path = directory_path / name
+            relative = path.relative_to(root).as_posix()
+            try:
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    inventory.append({"path": relative, "kind": "symlink", "target": os.readlink(path)})
+                elif stat.S_ISREG(info.st_mode):
+                    inventory.append({"path": relative, "kind": "file", **file_binding(path)})
+                elif not stat.S_ISDIR(info.st_mode):
+                    inventory.append({"path": relative, "kind": "nonregular", "mode": stat.S_IMODE(info.st_mode)})
+            except (OSError, RunnerError) as error:
+                # An unreadable/unstable failed artifact must not erase the other
+                # files or replace the original failure with an inventory error.
+                inventory.append({"path": relative, "kind": "unreadable", "error": str(error)})
+    return sorted(inventory, key=lambda item: item["path"])
+
+
 def invoke_harness(
     harness: Path,
     request: Mapping[str, Any],
     *,
+    attempt_dir: Path,
     timeout_seconds: int,
     expected_harness_binding: Mapping[str, Any] | None = None,
-) -> tuple[
-    dict[str, Any],
-    Path,
-    Path,
-    dict[str, Any],
-    tempfile.TemporaryDirectory[str],
-]:
-    """Invoke the frozen harness through the strict file protocol.
+) -> tuple[dict[str, Any], Path, Path, dict[str, Any]]:
+    """Run one harness in a permanent fresh attempt directory, retaining failures.
 
-    The executable receives ``--aps-request``, ``--aps-response``, and
-    ``--aps-evidence-dir``.  It must exit zero, create exactly one response
-    JSON file, and (for fault or leakage jobs) write only their declared files
-    beneath the evidence directory. Stdout/stderr never substitute for the response.
-    The returned temporary directory remains owned by the caller until its
-    ``cleanup`` method is called.
+    Request, stdout, stderr, raw response and evidence remain on disk even when
+    process execution or response validation fails. The caller owns semantic
+    validation and its separate immutable validation outcome. No temporary
+    owner or automatic cleanup is returned; retries require a new campaign.
     """
 
     if timeout_seconds <= 0:
         raise RunnerError("harness timeout must be positive")
-    if (
-        expected_harness_binding is not None
-        and verify_harness(harness) != dict(expected_harness_binding)
-    ):
-        raise RunnerError("harness executable changed before invocation")
-    temporary = tempfile.TemporaryDirectory(prefix="aps-harness-")
-    root = Path(temporary.name)
+    fresh_private_directory(attempt_dir)
+    root = attempt_dir
     request_path = root / "request.json"
     response_path = root / "response.json"
     evidence_dir = root / "evidence"
     stdout_path = root / "stdout.log"
     stderr_path = root / "stderr.log"
-    evidence_dir.mkdir(mode=0o700)
-    write_json(request_path, request)
-    command = [
-        str(harness),
-        "--aps-request",
-        str(request_path),
-        "--aps-response",
-        str(response_path),
-        "--aps-evidence-dir",
-        str(evidence_dir),
-    ]
+    fresh_private_directory(evidence_dir)
+    private_record(request_path, request)
+    request_binding = file_binding(request_path)
+    command = [str(harness), "--aps-request", str(request_path), "--aps-response", str(response_path),
+               "--aps-evidence-dir", str(evidence_dir)]
+    private_record(root / "started.json", {
+        "version": VERSION, "protocol": PROTOCOL, "request_id": request.get("request_id"),
+        "invocation_nonce": request.get("invocation_nonce"), "command": command,
+        "request": request_binding, "harness": expected_harness_binding,
+        "timeout_seconds": timeout_seconds, "started_ns": time.time_ns(),
+    })
     process: subprocess.Popen[bytes] | None = None
+    returncode: int | None = None
+    process_error: str | None = None
+    timed_out = False
     try:
-        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-            )
+        # Explicit modes also protect partial files if the caller's umask is permissive.
+        with os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stdout, \
+             os.fdopen(os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stderr:
+            if expected_harness_binding is not None and verify_harness(harness) != dict(expected_harness_binding):
+                raise RunnerError("harness executable changed before invocation")
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                       start_new_session=True, umask=0o077)
             process_group = process.pid
             try:
                 returncode = process.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired as error:
+                timed_out = True
                 _terminate_owned_process_group(process, process_group)
-                raise RunnerError(
-                    f"real-process harness exceeded its {timeout_seconds}-second deadline"
-                ) from error
+                raise RunnerError(f"real-process harness exceeded its {timeout_seconds}-second deadline") from error
             if _process_group_exists(process_group):
                 _terminate_owned_process_group(process, process_group)
-                raise RunnerError(
-                    "real-process harness exited while owned child processes remained"
-                )
+                raise RunnerError("real-process harness exited while owned child processes remained")
+            stdout.flush()
+            stderr.flush()
+            os.fsync(stdout.fileno())
+            os.fsync(stderr.fileno())
     except OSError as error:
-        if process is not None and process.poll() is None:
-            _terminate_owned_process_group(process, process.pid)
-        temporary.cleanup()
-        raise RunnerError(f"real-process harness invocation failed: {error}") from error
-    except RunnerError:
-        temporary.cleanup()
+        process_error = str(error)
+        raise RunnerError(f"real-process harness invocation failed; retained {root}: {error}") from error
+    except BaseException as error:
+        process_error = str(error) or type(error).__name__
         raise
-    if (
-        expected_harness_binding is not None
-        and verify_harness(harness) != dict(expected_harness_binding)
-    ):
-        temporary.cleanup()
-        raise RunnerError("harness executable changed during invocation")
-    if returncode != 0:
-        try:
-            with stderr_path.open("rb") as stream:
-                stream.seek(max(0, stderr_path.stat().st_size - 2_000))
-                stderr_tail = stream.read().decode("utf-8", errors="replace")
-        except OSError:
-            stderr_tail = "<stderr unavailable>"
-        temporary.cleanup()
-        raise RunnerError(
-            f"real-process harness exited {returncode}: {stderr_tail}"
-        )
-    if response_path.is_symlink() or not response_path.is_file():
-        temporary.cleanup()
-        raise RunnerError("harness exited successfully without a regular response file")
-    response_binding = file_binding(response_path)
-    if response_binding["bytes"] > MAX_HARNESS_RESPONSE_BYTES:
-        temporary.cleanup()
-        raise RunnerError("harness response exceeds the bounded response size")
+    finally:
+        if process is not None:
+            returncode = process.poll()
+        private_record(root / "process-outcome.json", {
+            "version": VERSION, "protocol": PROTOCOL, "request_id": request.get("request_id"),
+            "finished_ns": time.time_ns(), "pid": None if process is None else process.pid,
+            "exit_code": returncode, "timed_out": timed_out, "error": process_error,
+            "passed": process_error is None and returncode == 0,
+            "retained_files": retained_file_inventory(root),
+        })
     try:
-        response = read_bound_json_file(
-            response_path, response_binding, "harness response"
-        )
-    except RunnerError as error:
-        temporary.cleanup()
-        raise RunnerError(str(error)) from error
-    if request.get("kind") == "benchmark" and any(evidence_dir.iterdir()):
-        temporary.cleanup()
-        raise RunnerError("benchmark harness wrote undeclared evidence files")
-    expected_root_names = {
-        "request.json",
-        "response.json",
-        "evidence",
-        "stdout.log",
-        "stderr.log",
-    }
-    if {entry.name for entry in root.iterdir()} != expected_root_names:
-        temporary.cleanup()
-        raise RunnerError("harness wrote an undeclared protocol file")
-    return response, evidence_dir, response_path, response_binding, temporary
+        if file_binding(request_path) != request_binding:
+            raise RunnerError("harness changed its bound request; original digest retained in started.json")
+        if expected_harness_binding is not None and verify_harness(harness) != dict(expected_harness_binding):
+            raise RunnerError("harness executable changed during invocation")
+        if returncode != 0:
+            raise RunnerError(f"real-process harness exited {returncode}; raw streams retained at {root}")
+        if response_path.is_symlink() or not response_path.is_file():
+            raise RunnerError("harness exited successfully without a regular response file")
+        response_binding = file_binding(response_path)
+        if response_binding["bytes"] > MAX_HARNESS_RESPONSE_BYTES:
+            raise RunnerError("harness response exceeds the bounded response size")
+        response = read_bound_json_file(response_path, response_binding, "harness response")
+        if request.get("kind") == "benchmark" and any(evidence_dir.iterdir()):
+            raise RunnerError("benchmark harness wrote undeclared evidence files")
+        expected_root_names = {"request.json", "response.json", "evidence", "stdout.log", "stderr.log",
+                               "started.json", "process-outcome.json"}
+        if {entry.name for entry in root.iterdir()} != expected_root_names:
+            raise RunnerError("harness wrote an undeclared protocol file")
+    except BaseException as error:
+        private_record(root / "response-outcome.json", {
+            "version": VERSION, "protocol": PROTOCOL, "passed": False,
+            "error": str(error) or type(error).__name__, "retained_files": retained_file_inventory(root),
+        })
+        raise
+    private_record(root / "response-outcome.json", {
+        "version": VERSION, "protocol": PROTOCOL, "passed": True, "response": response_binding,
+    })
+    return response, evidence_dir, response_path, response_binding
 
 
 def copy_bound_file(
@@ -5114,33 +5827,99 @@ def validate_publication_fragment(
     )
 
 
+def validate_smoke_prerequisite(
+    campaign_root: Path, *, source_root: Path, commit: str
+) -> dict[str, Any]:
+    """Require the complete signed ten-run gate before release experiments.
+
+    Raw smoke evidence remains in its owner-only directory. The publication
+    records its content binding and source/executable identities, without
+    copying private process configuration or local filesystem paths.
+    """
+
+    # Import lazily: the smoke reader reuses this module's strict state decoder.
+    import private_settlement_smoke_campaign as smoke_campaign
+
+    try:
+        campaign = smoke_campaign.validate_campaign(
+            campaign_root, expected_commit=commit
+        )
+        if smoke_campaign.source_seal(source_root.resolve(strict=True), commit) != campaign["source"]:
+            raise RunnerError("execution source differs from the signed smoke source")
+        binding = file_binding(campaign_root / "campaign.json")
+        if read_bound_json_file(
+            campaign_root / "campaign.json", binding, "smoke campaign"
+        ) != campaign:
+            raise RunnerError("smoke campaign changed after validation")
+    except (smoke_campaign.release_runner.RunnerError, OSError, ValueError, KeyError, TypeError) as error:
+        raise RunnerError(f"ten-run N=3 smoke prerequisite failed: {error}") from error
+    return {
+        "version": VERSION,
+        "protocol": PROTOCOL,
+        "kind": "smoke_campaign_prerequisite",
+        "commit": commit,
+        "campaign_sha256": binding["sha256"],
+        "campaign_bytes": binding["bytes"],
+        "source_tree": campaign["source"]["tree"],
+        "source_sha256": campaign["source"]["source_sha256"],
+        "validator_sha256": campaign["artifacts"]["validator"]["sha256"],
+        "integration_sha256": campaign["artifacts"]["integration"]["sha256"],
+        "runs": smoke_campaign.RUN_COUNT,
+        "passed": True,
+    }
+
+
 def execute_plan(
     plan_path: Path,
     output_dir: Path,
     *,
     source_root: Path,
     harness: Path,
+    smoke_campaign: Path,
     timeout_seconds: int,
 ) -> Path:
-    """Execute the complete frozen campaign and publish only a clean result."""
+    """Retain every attempt and denominator; publish a fragment only after complete validation."""
 
     if output_dir.exists():
         raise RunnerError(f"execution output already exists: {output_dir}")
     require_external_output(output_dir, source_root)
     plan, plan_root = load_plan(plan_path)
+    validate_campaign_timeout(plan["jobs"], timeout_seconds)
     plan_file_binding = file_binding(plan_path)
     verify_source_checkout(source_root, plan["commit"])
     harness_binding = verify_harness(harness)
     if harness_binding != plan["harness"]:
         raise RunnerError("harness executable differs from the frozen plan")
+    smoke_prerequisite = validate_smoke_prerequisite(
+        smoke_campaign, source_root=source_root, commit=plan["commit"]
+    )
 
     parent = output_dir.parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="aps-execute-", dir=parent) as temporary:
-        staging = Path(temporary)
+    fresh_private_directory(output_dir)
+    staging = output_dir
+    previous_umask = os.umask(0o077)
+    completed_jobs: list[dict[str, Any]] = []
+    active_job: dict[str, Any] | None = None
+    active_attempt: Path | None = None
+    stage = "foundation"
+    try:
+        private_record(staging / "started.json", {
+            "version": VERSION, "protocol": PROTOCOL, "commit": plan["commit"],
+            "started_ns": time.time_ns(), "planned_jobs": len(plan["jobs"]),
+            "plan": plan_file_binding, "harness": harness_binding,
+        })
+        private_record(staging / "frozen-plan.json", plan)
+        attempts = staging / "attempts"
+        fresh_private_directory(attempts)
         publication = staging / "publication"
-        publication.mkdir()
+        fresh_private_directory(publication)
         artifacts: list[dict[str, Any]] = []
+        smoke_receipt = publication / "smoke-prerequisite-v1.json"
+        write_json(smoke_receipt, smoke_prerequisite)
+        artifacts.append(
+            {"kind": "operator_log", **file_binding(smoke_receipt, relative_to=publication)}
+        )
         publication_plan = publication / "run-plan-v1.json"
         copy_bound_file(plan_path, publication_plan, expected=plan_file_binding)
         artifacts.append(
@@ -5206,19 +5985,25 @@ def execute_plan(
                 **job,
                 "invocation_nonce": os.urandom(32).hex(),
             }
+            active_job = {"ordinal": ordinal, "request_id": job["request_id"],
+                          "kind": job["kind"], "invocation_nonce": execution_job["invocation_nonce"]}
+            stage = "request"
+            active_attempt = attempts / f"{ordinal:05}-{job['request_id']}"
             request = build_request(plan, plan_root, execution_job)
+            stage = "invocation"
             (
                 response,
                 evidence_dir,
                 response_path,
                 response_binding,
-                temporary_job,
             ) = invoke_harness(
                 harness,
                 request,
+                attempt_dir=active_attempt,
                 timeout_seconds=timeout_seconds,
                 expected_harness_binding=plan["harness"],
             )
+            stage = "validation"
             try:
                 if job["kind"] == "fault":
                     raw, fault_artifacts = materialize_fault_response(
@@ -5284,14 +6069,27 @@ def execute_plan(
                         job["request_id"],
                     )
                 )
-            finally:
-                temporary_job.cleanup()
+            except BaseException as error:
+                private_record(active_attempt / "validation-outcome.json", {
+                    "version": VERSION, "protocol": PROTOCOL, **active_job,
+                    "passed": False, "stage": stage, "error": str(error) or type(error).__name__,
+                    "finished_ns": time.time_ns(),
+                })
+                raise
+            private_record(active_attempt / "validation-outcome.json", {
+                "version": VERSION, "protocol": PROTOCOL, **active_job,
+                "passed": True, "response": response_binding, "finished_ns": time.time_ns(),
+            })
+            completed_jobs.append(active_job)
+            active_job = None
+            active_attempt = None
             if ordinal % 25 == 0:
                 print(
                     f"validated {ordinal}/{len(plan['jobs'])} real-process jobs",
                     file=sys.stderr,
                 )
 
+        stage = "reports"
         if len(fault_rows) != len(PARTICIPANTS) * len(
             plan["requirements"]["seeds"]
         ):
@@ -5375,12 +6173,12 @@ def execute_plan(
                 ) from error
         benchmark_report_value["regressions"] = regressions
         benchmark_report_value["passed"] = not regressions
+        benchmark_report_path = publication / "reports" / "benchmark-report-v1.json"
+        write_json(benchmark_report_path, benchmark_report_value)
         if regressions:
             raise RunnerError(
                 "benchmark campaign exceeds the signed regression baseline"
             )
-        benchmark_report_path = publication / "reports" / "benchmark-report-v1.json"
-        write_json(benchmark_report_path, benchmark_report_value)
         artifacts.append(
             {
                 "kind": "benchmark_report",
@@ -5438,13 +6236,13 @@ def execute_plan(
             traffic_counts_left=count_paths["left"],
             traffic_counts_right=count_paths["right"],
         )
+        leakage_report_path = publication / "reports" / "leakage-report-v1.json"
+        write_json(leakage_report_path, leakage_report_value)
         if leakage_report_value["passed"] is not True:
             raise RunnerError(
                 "leakage audit found a canary, public-shape, size, or "
                 "traffic-count mismatch"
             )
-        leakage_report_path = publication / "reports" / "leakage-report-v1.json"
-        write_json(leakage_report_path, leakage_report_value)
         artifacts.append(
             {
                 "kind": "leakage_report",
@@ -5467,6 +6265,7 @@ def execute_plan(
             "publication_root": "publication",
             "real_process_campaign_complete": True,
             "publication_evidence": False,
+            "smoke_campaign_prerequisite": smoke_prerequisite,
             "benchmark_baseline": (
                 None
                 if plan["benchmark_baseline"] is None
@@ -5488,7 +6287,7 @@ def execute_plan(
             ],
             "artifacts": artifacts,
         }
-        write_json(staging / "release-artifact-fragment-v1.json", fragment)
+        stage = "final_revalidation"
         if verify_harness(harness) != plan["harness"]:
             raise RunnerError("harness executable changed during the campaign")
         if file_binding(plan_path) != plan_file_binding:
@@ -5497,8 +6296,53 @@ def execute_plan(
         if reloaded_plan != plan or reloaded_root != plan_root:
             raise RunnerError("frozen plan inputs changed during the campaign")
         verify_source_checkout(source_root, plan["commit"])
-        staging.rename(output_dir)
+        if validate_smoke_prerequisite(
+            smoke_campaign, source_root=source_root, commit=plan["commit"]
+        ) != smoke_prerequisite:
+            raise RunnerError("ten-run smoke evidence changed during release experiments")
+        private_record(staging / "campaign-validation.json", {
+            "version": VERSION, "protocol": PROTOCOL, "passed": True,
+            "planned_jobs": len(plan["jobs"]), "completed_jobs": completed_jobs,
+            "finished_ns": time.time_ns(),
+        })
+        stage = "publication"
+        publish_campaign_fragment(staging / "release-artifact-fragment-v1.json", fragment)
+    except BaseException as error:
+        reason = str(error) or type(error).__name__
+        if active_attempt is not None and active_attempt.is_dir() and not (active_attempt / "validation-outcome.json").exists():
+            private_record(active_attempt / "validation-outcome.json", {
+                "version": VERSION, "protocol": PROTOCOL, **(active_job or {}),
+                "passed": False, "stage": stage, "error": reason, "finished_ns": time.time_ns(),
+            })
+        completed_ids = {job["request_id"] for job in completed_jobs}
+        failed_id = None if active_job is None else active_job["request_id"]
+        private_record(staging / "failure.json", {
+            "version": VERSION, "protocol": PROTOCOL, "passed": False, "stage": stage,
+            "error": reason, "finished_ns": time.time_ns(), "planned_jobs": len(plan["jobs"]),
+            "completed_jobs": completed_jobs, "failed_job": active_job,
+            "not_started_request_ids": [job["request_id"] for job in plan["jobs"]
+                if job["request_id"] not in completed_ids and job["request_id"] != failed_id],
+        })
+        raise
+    finally:
+        os.umask(previous_umask)
     return output_dir / "release-artifact-fragment-v1.json"
+
+
+def validate_campaign_timeout(
+    jobs: Sequence[Mapping[str, Any]], timeout_seconds: int
+) -> None:
+    """Reject a per-job deadline shorter than a job's protocol-time floor."""
+
+    if timeout_seconds <= 0:
+        raise RunnerError("harness timeout must be positive")
+    if any(job.get("kind") == "fault" for job in jobs) and (
+        timeout_seconds < FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS
+    ):
+        raise RunnerError(
+            "fault harness timeout is shorter than its mandatory activation-and-expiry "
+            f"protocol floor ({FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS} seconds)"
+        )
 
 
 def parse_seeds(value: str) -> tuple[int, ...]:
@@ -5551,7 +6395,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     execute.add_argument("--output-dir", required=True, type=Path)
     execute.add_argument("--source-root", required=True, type=Path)
     execute.add_argument("--harness", required=True, type=Path)
-    execute.add_argument("--timeout-seconds", type=int, default=1_800)
+    execute.add_argument(
+        "--smoke-campaign", required=True, type=Path,
+        help="retained ten-run N=3 smoke campaign at the exact signed plan commit",
+    )
+    execute.add_argument(
+        "--timeout-seconds", type=int, default=DEFAULT_HARNESS_TIMEOUT_SECONDS
+    )
     return parser.parse_args(argv)
 
 
@@ -5579,6 +6429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output_dir,
                 source_root=args.source_root,
                 harness=args.harness,
+                smoke_campaign=args.smoke_campaign,
                 timeout_seconds=args.timeout_seconds,
             )
     except (

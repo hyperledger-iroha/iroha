@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from binascii import crc_hqx
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -37,6 +38,50 @@ MAX_GROUP_SOURCES = 4_096
 MAX_PARTICIPANT_LEGS = 255
 MAX_VALIDATORS = 128
 BLS_PROOF_BYTES = 96
+PARTICIPANT_SETTLEMENT_FIELDS = {
+    "lane_id",
+    "dataspace_id",
+    "lane_incarnation",
+    "participant_lane_block_height",
+    "authority_context_height",
+    "previous_native_settlement_hash",
+    "source_ids",
+}
+
+
+def _validate_nonzero_hash(value: Any) -> None:
+    assert isinstance(value, str) and HASH_RE.fullmatch(value)
+    raw = bytes.fromhex(value[5:69])
+    assert raw[-1] & 1 == 1 and raw != bytes(31) + b"\x01"
+    assert int(value[70:], 16) == crc_hqx(value[:69].encode("ascii"), 0xFFFF)
+
+
+def _validate_participant_settlement(settlement: dict[str, Any]) -> None:
+    assert isinstance(settlement, dict)
+    assert set(settlement) == PARTICIPANT_SETTLEMENT_FIELDS
+    for field, bits, minimum in (
+        ("lane_id", 32, 0),
+        ("dataspace_id", 64, 0),
+        ("participant_lane_block_height", 64, 1),
+        ("authority_context_height", 64, 1),
+    ):
+        value = settlement[field]
+        assert isinstance(value, int) and not isinstance(value, bool)
+        assert minimum <= value < 1 << bits
+    _validate_nonzero_hash(settlement["lane_incarnation"])
+    previous = settlement["previous_native_settlement_hash"]
+    if previous is not None:
+        _validate_nonzero_hash(previous)
+        assert settlement["participant_lane_block_height"] > 1
+    sources = settlement["source_ids"]
+    assert isinstance(sources, list) and 1 <= len(sources) <= MAX_GROUP_SOURCES
+    assert all(
+        isinstance(source, str)
+        and SOURCE_ID_RE.fullmatch(source)
+        and source != "00" * 32
+        for source in sources
+    )
+    assert len(set(sources)) == len(sources)
 
 
 def _tokens(pointer: str) -> list[str]:
@@ -224,7 +269,7 @@ def _validate_receipt_group(document: dict[str, Any]) -> None:
     assert 1 <= len(receipts) <= MAX_GROUP_SOURCES
     source_ids = [receipt["source_id"] for receipt in receipts]
     assert all(SOURCE_ID_RE.fullmatch(source_id) for source_id in source_ids)
-    assert source_ids == sorted(source_ids)
+    assert all(source_id != "00" * 32 for source_id in source_ids)
     assert len(set(source_ids)) == len(source_ids)
     assert group["tx_count"] == len(receipts)
 
@@ -335,46 +380,20 @@ def _validate_receipt_group(document: dict[str, Any]) -> None:
             assert descriptor["min_quorum"] == body["participant_min_quorum"]
 
             settlement = leg["participant_settlement"]
-            settlement_receipts = settlement["receipts"]
-            assert 1 <= len(settlement_receipts) <= MAX_GROUP_SOURCES
-            settlement_sources = [
-                settlement_receipt["source_id"]
-                for settlement_receipt in settlement_receipts
-            ]
-            assert settlement_sources == source_ids
-            assert settlement_sources == sorted(settlement_sources)
-            assert len(set(settlement_sources)) == len(settlement_sources)
+            _validate_participant_settlement(settlement)
+            settlement_sources = settlement["source_ids"]
             assert settlement_sources.count(receipt["source_id"]) == 1
-            assert settlement["tx_count"] == len(settlement_receipts)
-            assert settlement["block_height"] == body["participant_lane_block_height"]
+            assert (
+                settlement["participant_lane_block_height"]
+                == body["participant_lane_block_height"]
+            )
+            assert settlement["authority_context_height"] == body["authority_context_height"]
             assert settlement["lane_id"] == leg["lane_id"]
             assert settlement["dataspace_id"] == leg["dataspace_id"]
             assert (
                 settlement["lane_incarnation"]
                 == body["participant_lane_incarnation"]
             )
-            for field in (
-                "total_local_amount",
-                "total_xor_due",
-                "total_xor_after_haircut",
-                "total_xor_variance",
-            ):
-                assert settlement[field] == "0"
-            assert settlement["swap_metadata"] is None
-            assert settlement["nexus_fee_receipts"] == []
-            assert settlement["native_amx_receipts"] == []
-            for settlement_receipt in settlement_receipts:
-                assert settlement_receipt["source_id"] in source_ids
-                assert settlement_receipt["timestamp_ms"] == body[
-                    "authority_context_height"
-                ]
-                for field in (
-                    "local_amount",
-                    "xor_due",
-                    "xor_after_haircut",
-                    "xor_variance",
-                ):
-                    assert settlement_receipt[field] == "0"
             assert leg[
                 "participant_settlement_hash"
             ] == compute_native_amx_participant_settlement_hash(settlement)
@@ -390,19 +409,17 @@ def _validate_receipt_group(document: dict[str, Any]) -> None:
                 else None
             )
             if entrypoint_position is not None:
-                assert len(accepted) == len(settlement_receipts)
+                assert len(accepted) == len(settlement_sources)
                 assert len(descriptor["accepted_candidate_indices"]) == len(
-                    settlement_receipts
+                    settlement_sources
                 )
-                assert (
-                    settlement_receipts[entrypoint_position]["source_id"]
-                    == body["source_id"]
-                )
+                assert settlement_sources[entrypoint_position] == body["source_id"]
             same_route = (
                 leg["lane_id"],
                 leg["dataspace_id"],
             ) == (receipt["lane_id"], receipt["dataspace_id"])
             if same_route:
+                assert settlement_sources == source_ids
                 assert entrypoint_position is not None
                 assert descriptor["lane_incarnation"] == receipt["lane_incarnation"]
                 assert (
@@ -450,6 +467,10 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     assert leaf["executed_block_wire_hash"] == execution["executed_block_wire_hash"]
     assert execution["executed_block_wire_len"] == 49
     assert leaf["predecessor_height"] + 1 == leaf["participant_height"]
+    previous_native_hash = leaf["previous_native_settlement_hash"]
+    if previous_native_hash is not None:
+        _validate_nonzero_hash(previous_native_hash)
+        assert leaf["participant_height"] > 1
     assert evidence["active_lane_incarnations"] == [
         {
             "lane_id": leaf["lane_id"],
@@ -480,6 +501,10 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
         assert descriptor["descriptor_hash"] == leaf["descriptor_hash"]
         assert leg["participant_proposal"]["proposal_hash"] == leaf["proposal_hash"]
         assert leg["participant_settlement_hash"] == leaf["settlement_hash"]
+        settlement = leg["participant_settlement"]
+        _validate_participant_settlement(settlement)
+        assert settlement["previous_native_settlement_hash"] == previous_native_hash
+        assert settlement["source_ids"] == [member["source_id"] for member in members]
         assert leg["prepare_qc"]["body"]["source_id"] == member["source_id"]
         assert (
             leg["prepare_qc"]["body"]["tx_entrypoint_hash"]
@@ -516,21 +541,45 @@ def _validate_schema(
         prefix = "#/components/schemas/"
         assert reference.startswith(prefix), f"{path}: unsupported reference {reference}"
         _validate_schema(value, components[reference[len(prefix) :]], components, path)
-        return
+
+    for requirement in schema.get("allOf", []):
+        _validate_schema(value, requirement, components, path)
+    if "not" in schema:
+        try:
+            _validate_schema(value, schema["not"], components, path)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"{path}: forbidden schema accepted value")
+    if "if" in schema:
+        try:
+            _validate_schema(value, schema["if"], components, path)
+        except AssertionError:
+            branch = schema.get("else")
+        else:
+            branch = schema.get("then")
+        if branch is not None:
+            _validate_schema(value, branch, components, path)
 
     alternatives = schema.get("oneOf") or schema.get("anyOf")
     if alternatives is not None:
         failures: list[str] = []
+        accepted = 0
         for alternative in alternatives:
             try:
                 _validate_schema(value, alternative, components, path)
-                return
             except AssertionError as error:
                 failures.append(str(error))
-        raise AssertionError(f"{path}: no schema alternative accepted value: {failures}")
+            else:
+                accepted += 1
+        assert accepted > 0, f"{path}: no schema alternative accepted value: {failures}"
+        if "oneOf" in schema:
+            assert accepted == 1, f"{path}: more than one schema alternative accepted value"
 
     expected_type = schema.get("type")
-    if expected_type == "object":
+    if expected_type == "object" or (
+        isinstance(value, dict) and ("properties" in schema or "required" in schema)
+    ):
         assert isinstance(value, dict), f"{path}: expected object"
         properties = schema.get("properties", {})
         missing = set(schema.get("required", ())) - value.keys()
@@ -566,13 +615,13 @@ def _validate_schema(
         assert len(value) >= schema.get("minLength", 0), f"{path}: below minLength"
         maximum = schema.get("maxLength")
         assert maximum is None or len(value) <= maximum, f"{path}: above maxLength"
-        pattern = schema.get("pattern")
-        assert pattern is None or re.fullmatch(pattern, value), (
-            f"{path}: does not match {pattern}"
-        )
     elif expected_type == "null":
         assert value is None, f"{path}: expected null"
 
+    if "pattern" in schema and isinstance(value, str):
+        assert re.search(schema["pattern"], value), (
+            f"{path}: does not match {schema['pattern']}"
+        )
     if "enum" in schema:
         assert value in schema["enum"], f"{path}: value is not in enum"
     if "const" in schema:
@@ -589,8 +638,8 @@ def test_grouped_native_amx_v2_fixture_matches_current_openapi() -> None:
         receipt["source_id"] for receipt in group["native_amx_receipts"]
     ]
     expected_settlement_hashes = {
-        (7, 11): "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
-        (8, 12): "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+        (7, 11): "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813",
+        (8, 12): "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240",
     }
     for leg in group["native_amx_receipts"][0]["legs"]:
         expected = expected_settlement_hashes[
@@ -639,8 +688,7 @@ def test_grouped_native_amx_v2_fixture_matches_current_openapi() -> None:
                     "NativeAmxLegRecord",
                     "NativeAmxParticipantLaneBlockDescriptor",
                     "NativeAmxParticipantLaneBlockProposal",
-                    "NativeAmxParticipantSettlementCommitment",
-                    "NativeAmxParticipantSettlementReceipt",
+                    "NativeAmxParticipantSettlement",
                     "NativeAmxReceipt",
                     "SumeragiNativeAmxParticipantApplication",
                 )
@@ -667,53 +715,95 @@ def test_native_amx_openapi_expresses_direct_group_bounds() -> None:
             assert descriptor[field]["maxItems"] == MAX_GROUP_SOURCES
             assert descriptor[field]["uniqueItems"] is True
 
-        participant = schemas["NativeAmxParticipantSettlementCommitment"]
+        assert "NativeAmxParticipantSettlementCommitment" not in schemas
+        assert "NativeAmxParticipantSettlementReceipt" not in schemas
+        participant = schemas["NativeAmxParticipantSettlement"]
         assert participant["additionalProperties"] is False
+        assert set(participant["required"]) == PARTICIPANT_SETTLEMENT_FIELDS
         participant_properties = participant["properties"]
-        assert participant_properties["tx_count"]["minimum"] == 1
-        assert participant_properties["tx_count"]["maximum"] == MAX_GROUP_SOURCES
-        assert participant_properties["receipts"] == {
+        assert set(participant_properties) == PARTICIPANT_SETTLEMENT_FIELDS
+        for field in ("participant_lane_block_height", "authority_context_height"):
+            assert participant_properties[field]["minimum"] == 1
+            assert participant_properties[field]["maximum"] == (1 << 64) - 1
+        assert participant_properties["source_ids"] == {
             "items": {
-                "$ref": (
-                    "#/components/schemas/"
-                    "NativeAmxParticipantSettlementReceipt"
-                )
+                "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
+                "type": "string",
             },
             "maxItems": MAX_GROUP_SOURCES,
             "minItems": 1,
             "type": "array",
             "uniqueItems": True,
         }
-        for field in (
-            "total_local_amount",
-            "total_xor_due",
-            "total_xor_after_haircut",
-            "total_xor_variance",
-        ):
-            assert participant_properties[field] == {"const": "0"}
-        assert participant_properties["swap_metadata"] == {"type": "null"}
-        for field in ("nexus_fee_receipts", "native_amx_receipts"):
-            assert participant_properties[field] == {
-                "maxItems": 0,
-                "type": "array",
-            }
+        nonzero_hash = {
+            "allOf": [
+                {"$ref": "#/components/schemas/Hash"},
+                {"not": {"pattern": "^hash:0{63}1#"}},
+            ]
+        }
+        assert participant_properties["lane_incarnation"] == nonzero_hash
+        assert participant_properties["previous_native_settlement_hash"]["oneOf"] == [
+            {"type": "null"}, nonzero_hash,
+        ]
+        assert participant["allOf"] == [{
+            "if": {"properties": {"participant_lane_block_height": {"const": 1}}},
+            "then": {"properties": {"previous_native_settlement_hash": {"type": "null"}}},
+        }]
 
-        receipt = schemas["NativeAmxParticipantSettlementReceipt"]
-        assert receipt["additionalProperties"] is False
-        for field in (
-            "local_amount",
-            "xor_due",
-            "xor_after_haircut",
-            "xor_variance",
-        ):
-            assert receipt["properties"][field] == {"const": "0"}
+        # This constructor does not read the pending Rust-generated corpus.
+        # Descending source hashes prove that candidate FIFO is not hash sorting.
+        incarnation = "hash:" + "01" * 32 + "#B86C"
+        first = {
+            "lane_id": 0, "dataspace_id": 0, "lane_incarnation": incarnation,
+            "participant_lane_block_height": 1, "authority_context_height": 2,
+            "previous_native_settlement_hash": None,
+            "source_ids": ["F0" * 32, "10" * 32],
+        }
+        later = {**first, "participant_lane_block_height": 2}
+        positives = [
+            first, later,
+            {**later, "previous_native_settlement_hash": incarnation},
+            {**first, "source_ids": [f"{index:064X}" for index in range(1, 4097)]},
+        ]
+        for value in positives:
+            _validate_participant_settlement(value)
+            _validate_schema(value, participant, schemas, "participant")
+        marked_zero_body = "hash:" + "0" * 63 + "1"
+        marked_zero = marked_zero_body + f"#{crc_hqx(marked_zero_body.encode('ascii'), 0xFFFF):04X}"
+        negatives = [{key: value for key, value in first.items() if key != missing}
+                     for missing in PARTICIPANT_SETTLEMENT_FIELDS]
+        negatives.extend({**first, field: None} for field in (
+            "block_height", "tx_count", "total_local_amount", "total_xor_due",
+            "total_xor_after_haircut", "total_xor_variance", "swap_metadata",
+            "receipts", "nexus_fee_receipts", "native_amx_receipts", "timestamp_ms",
+        ))
+        negatives.extend([
+            {**first, "previous_native_settlement_hash": incarnation},
+            {**first, "lane_incarnation": marked_zero},
+            {**later, "previous_native_settlement_hash": marked_zero},
+            {**first, "lane_id": 1 << 32},
+            {**first, "dataspace_id": 1 << 64},
+            {**first, "participant_lane_block_height": 0},
+            {**first, "authority_context_height": 1 << 64},
+        ])
+        negatives.extend({**first, "source_ids": sources} for sources in (
+            [], ["00" * 32], ["F0" * 32, "F0" * 32], ["f0" * 32],
+            [f"{index:064X}" for index in range(1, 4098)],
+        ))
+        for index, value in enumerate(negatives):
+            for validate in (
+                _validate_participant_settlement,
+                lambda item: _validate_schema(item, participant, schemas, "participant"),
+            ):
+                try:
+                    validate(value)
+                except AssertionError:
+                    continue
+                raise AssertionError(f"participant schema negative {index} passed")
 
         leg = schemas["NativeAmxLegRecord"]["properties"]
         assert leg["participant_settlement"] == {
-            "$ref": (
-                "#/components/schemas/"
-                "NativeAmxParticipantSettlementCommitment"
-            )
+            "$ref": "#/components/schemas/NativeAmxParticipantSettlement"
         }
         outer_receipts = schemas["LaneSettlementCommitment"]["properties"][
             "native_amx_receipts"
@@ -734,7 +824,6 @@ def test_native_amx_openapi_expresses_direct_group_bounds() -> None:
             {
                 "descriptor": descriptor,
                 "participant": participant,
-                "participant_receipt": receipt,
                 "leg": leg,
                 "outer_receipts": outer_receipts,
                 "qc": qc,
@@ -831,7 +920,7 @@ def test_sumeragi_status_and_diagnostics_openapi_surfaces_are_disjoint() -> None
 def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     controls = fixture["negative_controls"]
-    assert 12 <= len(controls) <= 64
+    assert len(controls) == 58
     assert len({control["id"] for control in controls}) == len(controls)
     assert all(control["expectation"] == "reject" for control in controls)
     assert {
@@ -864,6 +953,8 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         for mutation in control["mutations"]
     )
     assert {
+        "missing_previous_native_settlement_hash",
+        "manifest_missing_previous_native_settlement_hash",
         "coherent_unordered_validator_set",
         "coherent_duplicate_validator_set",
         "coherent_over_quorum_requirement",
@@ -956,6 +1047,18 @@ def test_receipt_group_dynamic_relationship_checks_are_bounded() -> None:
         "participant_proposal/descriptor"
     )
     cases = {
+        # This hash is the exact Rust fixture encoded incorrectly with raw
+        # Hash source elements, while all three commitments remain coherent.
+        "raw_hash_source_encoding": [
+            {"op": "replace", "path": (
+                "/golden/receipt_group/native_amx_receipts/0/legs/0/" + suffix),
+             "value": "hash:F4FBF033695C8BE66DAD0D4296C8C20207C2558175D7FC7E30284A1685F007E3#ED3B"}
+            for suffix in (
+                "participant_settlement_hash",
+                "prepare_qc/body/participant_settlement_commitment",
+                "commit_qc/body/participant_settlement_commitment",
+            )
+        ],
         "accepted_work_overflow": [
             {
                 "op": "repeat",

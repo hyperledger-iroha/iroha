@@ -40,6 +40,8 @@ pub mod timed_ovn;
 #[cfg(feature = "bls")]
 /// Generic timelock-encryption KEM/DEM helpers outside the folded ballot path.
 pub mod tle;
+/// SHAKE256 expansion into caller-owned buffers.
+pub mod xof;
 /// Deterministic dual-`rand_core` RNG used by protocols that must replay an
 /// exact prover-randomness schedule from secret seed material.
 pub use rng::rng_from_seed_slice;
@@ -162,6 +164,17 @@ use crate::secrecy::Secret;
 pub use algorithm::{Algorithm, ED_25519, SECP_256_K1};
 #[cfg(feature = "bls")]
 pub use algorithm::{BLS_NORMAL, BLS_SMALL};
+
+/// Securely wipe a supported value before confidential discard.
+///
+/// This bridge lets dependent crates erase scalars and containers using
+/// [`zeroize::Zeroize`]'s volatile writes and compiler fences without taking a
+/// separate dependency on `zeroize`. The value may intentionally become
+/// invalid and must not be used after this call.
+pub fn zeroize_value_for_confidential_discard<T: Zeroize + ?Sized>(value: &mut T) {
+    <T as Zeroize>::zeroize(value);
+}
+
 /// Domain separator for BLS Proof-of-Possession over a validator public key.
 /// Message = Hash("iroha:bls:pop:v1" || `pk_bytes`)
 #[cfg(feature = "bls")]

@@ -11,6 +11,10 @@ use crate::{
         IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
         resolve_runtime_deps_from_bindings,
     },
+    sorafs_provider_ingest_runtime::https_source_pool::{
+        ProviderIngestHttpsCompositionErrorV1, ProviderIngestHttpsSourceRegistrationV1,
+        compose_provider_ingest_https_pool_v1,
+    },
 };
 use std::{fmt, sync::Arc};
 const BROKER_LIFECYCLE_STARTING_V1: u8 = 0;
@@ -878,6 +882,29 @@ define_runtime_provider_backends_v1! {
 }
 
 impl RuntimeProviderBrokerBackendsV1 {
+    /// Compose catalog-bound native HTTPS sources in a deployment-owned backend registry.
+    ///
+    /// Call this from `RuntimeProviderBrokerBackendRegistryV1::resolve` with the exact catalog
+    /// passed by `RuntimeProviderBrokerDeploymentV1::try_new`. Governance/grant resolvers remain
+    /// mandatory injected authorities. Successful composition does not assert readiness; the
+    /// stock broker still independently qualifies the complete backend set before serving.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free failure for an already installed source backend or any catalog,
+    /// policy, identity or live qualification mismatch. Other backend roles remain unchanged.
+    pub fn with_provider_ingest_https_sources(
+        self,
+        catalog: &IrohaRuntimeProviderBindingsV1,
+        sources: Vec<ProviderIngestHttpsSourceRegistrationV1>,
+    ) -> Result<Self, ProviderIngestHttpsCompositionErrorV1> {
+        if self.provider_ingest_authenticated_source.is_some() {
+            return Err(ProviderIngestHttpsCompositionErrorV1::AlreadyInstalled);
+        }
+        let pool = compose_provider_ingest_https_pool_v1(catalog, sources)?;
+        Ok(self.with_provider_ingest_authenticated_source(Arc::new(pool)))
+    }
+
     pub(crate) fn contains_external_software_signer_v1(&self) -> bool {
         self.governance_dag_signer.is_some()
             || self.stream_token_signer.is_some()

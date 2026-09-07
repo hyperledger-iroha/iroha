@@ -14,13 +14,33 @@ class KagemushaCoreCoordinatorFrameV1Test {
     @Test
     fun `all native methods agree with the shared current schema vectors`() {
         val cases = fixtures()
-        assertEquals((1..10).toSet(), cases.map { it.method.code }.toSet())
-        assertEquals(14, cases.size)
+        assertEquals((1..11).toSet(), cases.map { it.method.code }.toSet())
+        assertEquals(18, cases.size)
         cases.forEach { case ->
             val request = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
             assertContentEquals(case.request, KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method, request), case.name)
             assertContentEquals(case.response, KagemushaCoreCoordinatorFrameV1.encodeResponse(case.method, case.request, response), case.name)
+        }
+    }
+
+    @Test fun `native observation fixtures match actual canonical Kotlin read commands`() {
+        val commands = mapOf(
+            "observation-credential" to KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential,
+            "observation-time" to KagemushaDeviceControlCommandV1.ReadTrustedTimeOrLease,
+            "observation-watermark" to KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(null, KagemushaPendingCreditTargetV1.DrainAll),
+            "observation-wallet" to KagemushaDeviceControlCommandV1.RecoverWalletSnapshot,
+        )
+        for (fixture in fixtures().filter { it.name in commands }) {
+            val command = commands.getValue(fixture.name)
+            val canonical = KagemushaDeviceOperationCodecV1.encodeControlCommand(command)
+            assertContentEquals(fixture.request, KagemushaCoreCoordinatorFrameV1.encodeRequest(
+                KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(command.operation), canonical)))
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,
+                    listOf(KagemushaCoreCoordinatorFrameV1.u32(command.operation), ByteArray(32) { 1 }, canonical))
+            }
         }
     }
 

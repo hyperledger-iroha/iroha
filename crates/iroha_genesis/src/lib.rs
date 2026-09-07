@@ -92,17 +92,29 @@ fn checked_genesis_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPa
         .expect("genesis fixture key generation should succeed")
 }
 #[cfg(test)]
-fn deterministic_test_kagemusha_mint_finality_genesis_parameters()
--> KagemushaMintFinalityGenesisParametersV1 {
-    let validators = (0_u8..4)
+fn deterministic_test_genesis_topology_entries() -> Vec<GenesisTopologyEntry> {
+    let mut topology = (0_u8..4)
         .map(|index| {
-            iroha_data_model::peer::PeerId::new(
+            let validator =
                 KeyPair::try_from_seed(vec![0x20_u8.wrapping_add(index); 32], Algorithm::BlsNormal)
-                    .expect("derive deterministic genesis fixture validator")
-                    .public_key()
-                    .clone(),
+                    .expect("derive deterministic genesis fixture validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                .expect("derive deterministic genesis fixture proof of possession");
+            GenesisTopologyEntry::new(
+                iroha_data_model::peer::PeerId::new(validator.public_key().clone()),
+                pop,
             )
         })
+        .collect::<Vec<_>>();
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+    topology
+}
+#[cfg(test)]
+fn deterministic_test_kagemusha_mint_finality_genesis_parameters()
+-> KagemushaMintFinalityGenesisParametersV1 {
+    let validators = deterministic_test_genesis_topology_entries()
+        .into_iter()
+        .map(|entry| entry.peer)
         .collect();
     deterministic_test_kagemusha_mint_finality_genesis_parameters_for(validators)
 }
@@ -3773,6 +3785,55 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
+    /// Validate that the signed epoch-zero KAGEMUSHA authority names the
+    /// exact canonical validator topology which will enter genesis.
+    ///
+    /// The Pasta proof keys are separately provisioned and must never be
+    /// inferred from consensus keys while signing. Consequently, changing a
+    /// topology requires replacing the manifest's
+    /// `kagemusha_mint_finality` authority before the manifest can be
+    /// signed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the topology is not an exact supported `3f + 1`
+    /// committee, repeats a peer, or differs from the ordered validator
+    /// identities in the epoch-zero authority template.
+    pub fn validate_kagemusha_mint_finality_topology(&self) -> Result<()> {
+        self.kagemusha_mint_finality.validate().map_err(|error| {
+            eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
+        })?;
+        let mut topology = self
+            .transactions
+            .iter()
+            .flat_map(|transaction| transaction.topology.iter())
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        if !is_valid_committee_size(topology.len()) {
+            return Err(eyre!(
+                "genesis signing requires an exact Sumeragi v2 `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the KAGEMUSHA mint-finality authority can be bound (saw {})",
+                topology.len()
+            ));
+        }
+        topology.sort();
+        if topology.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(eyre!(
+                "genesis topology repeats a validator identity; provision one canonical entry per validator"
+            ));
+        }
+        let authority = &self.kagemusha_mint_finality.epoch_roster.validators;
+        if authority.len() != topology.len()
+            || authority
+                .iter()
+                .zip(&topology)
+                .any(|(keys, peer)| &keys.validator != peer)
+        {
+            return Err(eyre!(
+                "genesis KAGEMUSHA mint-finality epoch-zero authority differs from the canonical validator topology; provision `kagemusha_mint_finality` with independently generated Pasta keys for this exact topology before signing"
+            ));
+        }
+        Ok(())
+    }
     /// Replace one instruction-only raw transaction with one or more instruction-only transactions.
     ///
     /// This deliberately refuses to rewrite a transaction that also carries parameters, IVM
@@ -4036,7 +4097,9 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if `RawGenesisTransaction::parse` fails.
+    /// Fails if the system clock is invalid, the signed KAGEMUSHA authority
+    /// does not match the canonical genesis topology, or
+    /// [`RawGenesisTransaction::parse`] fails.
     pub fn build_and_sign_with_confidential_policy_hash(
         self,
         genesis_key_pair: &KeyPair,
@@ -4095,8 +4158,10 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if `RawGenesisTransaction::parse` fails or the transaction and
-    /// block timestamps cannot be represented in `u64` milliseconds.
+    /// Fails if the signed KAGEMUSHA authority does not match the canonical
+    /// genesis topology, [`RawGenesisTransaction::parse`] fails, or the
+    /// transaction and block timestamps cannot be represented in `u64`
+    /// milliseconds.
     pub fn build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
         self,
         genesis_key_pair: &KeyPair,
@@ -4104,6 +4169,7 @@ impl RawGenesisTransaction {
         confidential_policy_hash: Option<[u8; 32]>,
         creation_time_base_ms: u64,
     ) -> Result<GenesisBlock> {
+        self.validate_kagemusha_mint_finality_topology()?;
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
         let timestamp_span = u64::try_from(instruction_batches.len())
@@ -4984,15 +5050,36 @@ mod tests {
 
     impl GenesisBuilder {
         fn build_raw_for_test(self) -> RawGenesisTransaction {
+            let topology = self
+                .transactions
+                .iter()
+                .flat_map(|transaction| transaction.topology.iter())
+                .map(|entry| entry.peer.clone())
+                .collect::<Vec<_>>();
+            let mut canonical_topology = topology.clone();
+            canonical_topology.sort();
+            let exact_unique_committee = canonical_topology.len() == 4
+                && !canonical_topology.windows(2).any(|pair| pair[0] == pair[1]);
+            let kagemusha_mint_finality = if exact_unique_committee {
+                deterministic_test_kagemusha_mint_finality_genesis_parameters_for(topology)
+            } else {
+                deterministic_test_kagemusha_mint_finality_genesis_parameters()
+            };
             self.with_sumeragi_v2_context_parameters(
                 SumeragiV2GenesisContextParameters::recommended(),
             )
-            .with_kagemusha_mint_finality_genesis_parameters(
-                deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-            )
+            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .build_raw()
             .expect("complete deterministic test genesis builder")
         }
+    }
+    fn with_test_signing_topology(mut manifest: RawGenesisTransaction) -> RawGenesisTransaction {
+        manifest
+            .transactions
+            .first_mut()
+            .expect("test genesis manifest has one transaction")
+            .topology = deterministic_test_genesis_topology_entries();
+        manifest
     }
 
     fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {
@@ -5028,6 +5115,7 @@ mod tests {
             ChainId::from("permissioned-successor-authority"),
             PathBuf::from("."),
         )
+        .set_topology(deterministic_test_genesis_topology_entries())
         .build_raw_for_test()
         .with_kagemusha_mint_finality_genesis_parameters(authority);
         let error = permissioned
@@ -5044,6 +5132,7 @@ mod tests {
             PathBuf::from("."),
         )
         .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter()))
+        .set_topology(deterministic_test_genesis_topology_entries())
         .build_raw_for_test()
         .with_consensus_mode(SumeragiConsensusMode::Npos);
         let error = npos
@@ -5108,7 +5197,7 @@ mod tests {
             norito::json::to_vec(&from_hashed_bytes)?,
             "in-memory admission must reproduce the signer's exact path semantics"
         );
-        from_path.build_and_sign(&kp)?;
+        with_test_signing_topology(from_path).build_and_sign(&kp)?;
         Ok(())
     }
     #[test]
@@ -5180,7 +5269,8 @@ mod tests {
             .clone()
             .expect("expected consensus fingerprint");
         manifest.consensus_fingerprint = Some(ConsensusFingerprint::new([0xDE; 32]));
-        let genesis = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
+        let genesis = with_test_signing_topology(manifest)
+            .build_and_sign(&checked_genesis_fixture_keypair())?;
         let mut found = None;
         for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {
@@ -6034,6 +6124,7 @@ mod tests {
             .domain(DomainId::try_new("wonderland", "universal")?)
             .account(alice_public_key)
             .finish_domain()
+            .set_topology(deterministic_test_genesis_topology_entries())
             .build_and_sign(&genesis_key_pair)?;
         Ok(())
     }
@@ -6043,7 +6134,9 @@ mod tests {
         let genesis_key_pair = checked_genesis_fixture_keypair();
         let (tmp_dir, builder) = test_builder();
         let _ = tmp_dir;
-        let block = builder.build_and_sign(&genesis_key_pair)?;
+        let block = builder
+            .set_topology(deterministic_test_genesis_topology_entries())
+            .build_and_sign(&genesis_key_pair)?;
         let encoded = block.0.encode_versioned();
         let decoded = SignedBlock::decode_all_versioned(&encoded)?;
         assert_eq!(

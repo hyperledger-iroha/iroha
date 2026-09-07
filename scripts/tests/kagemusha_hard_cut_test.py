@@ -77,6 +77,8 @@ WIRE_CONTRACT_SOURCES = (
     ROOT
     / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaNoritoV1.kt",
     ROOT
+    / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWireV1.kt",
+    ROOT
     / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaNoritoV1.java",
     ROOT / "javascript/iroha_js/src/kagemusha.js",
     ROOT / "javascript/iroha_js/kagemusha.d.ts",
@@ -115,6 +117,13 @@ RETIRED_HANDSHAKE_SPELLINGS = (
     _reversed("V1", "Closure", "Commit", "No", "Kagemusha"),
     _reversed("intent", "acceptance_"),
     _reversed("ticket", "acceptance_"),
+)
+
+RETIRED_LIFECYCLE_SPELLINGS = (
+    _reversed("Upgrade", "Suite"),
+    _reversed("upgrade", "suite_"),
+    _reversed("Batch", "ReceiveFold"),
+    _reversed("batch", "receive_fold_"),
 )
 
 RETIRED_PUBLIC_PROOF_TOKENS = (
@@ -255,8 +264,8 @@ class KagemushaHardCutTests(unittest.TestCase):
 
         expected_v1_assertions = (
             'fixture["fixture_version"] as? Int), 1)',
-            'assertEquals(1, fixtureInt(fixture, "fixture_version"))',
-            'assertEquals(1L, fixtureLong(fixture, "fixture_version"))',
+            "assertEquals(listOf(1, 2, 3), IrohaPeerPayloadKind.values()",
+            'assertEquals(1L, fixtureLong(fixture, null, "fixture_version"))',
             "assert.equal(fixture.fixture_version, 1)",
             'fixture["fixture_version"] == 1',
             'Assert.Equal(1, root.GetProperty("fixture_version")',
@@ -372,8 +381,8 @@ class KagemushaHardCutTests(unittest.TestCase):
                     failures.append(f"{path.relative_to(ROOT)} contains {token!r}")
         self.assertEqual(failures, [])
 
-    def test_public_wire_has_no_retired_handshake(self) -> None:
-        """The first release has no request modes, intent, ticket, or cancellation path."""
+    def test_public_wire_has_no_retired_handshake_or_lifecycle(self) -> None:
+        """The first release has no retired handshake or lifecycle transition."""
         failures: list[str] = []
         for path in WIRE_CONTRACT_SOURCES:
             data = path.read_bytes()
@@ -386,6 +395,11 @@ class KagemushaHardCutTests(unittest.TestCase):
                         f"{path.relative_to(ROOT)} contains {retired.decode()}"
                     )
             for retired in RETIRED_HANDSHAKE_SPELLINGS:
+                if retired.lower() in data.lower():
+                    failures.append(
+                        f"{path.relative_to(ROOT)} contains {retired.decode()}"
+                    )
+            for retired in RETIRED_LIFECYCLE_SPELLINGS:
                 if retired.lower() in data.lower():
                     failures.append(
                         f"{path.relative_to(ROOT)} contains {retired.decode()}"

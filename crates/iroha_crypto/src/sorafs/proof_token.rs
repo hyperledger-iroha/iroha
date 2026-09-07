@@ -21,7 +21,6 @@ const SIGNING_DOMAIN: &[u8] = b"sorafs.proof_token.sign.v1";
 const MAX_ENTRY_IDS: usize = 32;
 const MAX_ENTRY_LEN: usize = 255;
 const FLAG_HAS_EXPIRY: u8 = 0x01;
-const PROOF_TOKEN_SIGNATURE_PLACEHOLDER: [u8; SIGNATURE_LENGTH] = [0xA6; SIGNATURE_LENGTH];
 /// Secret used to derive the blinded digest portion of a token body.
 #[derive(Clone)]
 pub struct ProofTokenDigestKey(Zeroizing<[u8; 32]>);
@@ -171,21 +170,25 @@ impl ProofToken {
         let blinded_digest =
             compute_blinded_digest(digest_key, &token_id, params.evidence_digest, &entry_ids)
                 .map_err(MintError::Encoding)?;
-        let mut token = Self {
+        let body = encode_token_body(
+            &token_id,
+            params.moderation,
+            issued_at,
+            expires_at,
+            &entry_ids,
+            &blinded_digest,
+        )
+        .map_err(MintError::Encoding)?;
+        let signature = signing_key.sign(&signing_message(&body));
+        Ok(Self {
             token_id,
             moderation: params.moderation,
             issued_at,
             expires_at,
             entry_ids,
             blinded_digest,
-            signature: proof_token_signature_placeholder(),
-        };
-        let body = token
-            .body_without_signature()
-            .map_err(MintError::Encoding)?;
-        let message = signing_message(&body);
-        token.signature = signing_key.sign(&message);
-        Ok(token)
+            signature,
+        })
     }
     /// Try to serialize the token frame.
     ///
@@ -432,36 +435,14 @@ impl ProofToken {
         }
     }
     fn body_without_signature(&self) -> Result<Vec<u8>, EncodeError> {
-        let mut out = Vec::new();
-        out.push(Self::VERSION);
-        let mut flags = 0u8;
-        if self.expires_at.is_some() {
-            flags |= FLAG_HAS_EXPIRY;
-        }
-        out.push(flags);
-        out.push(self.moderation.to_u8());
-        out.extend_from_slice(&self.issued_at.to_be_bytes());
-        if let Some(ts) = self.expires_at {
-            out.extend_from_slice(&ts.to_be_bytes());
-        }
-        out.extend_from_slice(&self.token_id);
-        let entry_count =
-            u16::try_from(self.entry_ids.len()).map_err(|_| EncodeError::EntryCountTooLarge {
-                max: usize::from(u16::MAX),
-                actual: self.entry_ids.len(),
-            })?;
-        out.extend_from_slice(&entry_count.to_be_bytes());
-        for entry in &self.entry_ids {
-            let entry_bytes = entry.as_bytes();
-            let len = u16::try_from(entry_bytes.len()).map_err(|_| EncodeError::EntryTooLong {
-                max: usize::from(u16::MAX),
-                actual: entry_bytes.len(),
-            })?;
-            out.extend_from_slice(&len.to_be_bytes());
-            out.extend_from_slice(entry_bytes);
-        }
-        out.extend_from_slice(&self.blinded_digest);
-        Ok(out)
+        encode_token_body(
+            &self.token_id,
+            self.moderation,
+            self.issued_at,
+            self.expires_at,
+            &self.entry_ids,
+            &self.blinded_digest,
+        )
     }
 }
 /// Errors surfaced while serializing proof tokens.
@@ -672,6 +653,47 @@ fn compute_blinded_digest(
     }
     Ok(hasher.finalize().into())
 }
+// Share the unsigned wire preimage between minting and serialization. A token is
+// constructed only after its real signature exists; no synthetic signature is parsed.
+fn encode_token_body(
+    token_id: &[u8; 16],
+    moderation: ModerationAction,
+    issued_at: u64,
+    expires_at: Option<u64>,
+    entry_ids: &[String],
+    blinded_digest: &[u8; 32],
+) -> Result<Vec<u8>, EncodeError> {
+    let mut out = Vec::new();
+    out.push(ProofToken::VERSION);
+    let mut flags = 0u8;
+    if expires_at.is_some() {
+        flags |= FLAG_HAS_EXPIRY;
+    }
+    out.push(flags);
+    out.push(moderation.to_u8());
+    out.extend_from_slice(&issued_at.to_be_bytes());
+    if let Some(ts) = expires_at {
+        out.extend_from_slice(&ts.to_be_bytes());
+    }
+    out.extend_from_slice(token_id);
+    let entry_count =
+        u16::try_from(entry_ids.len()).map_err(|_| EncodeError::EntryCountTooLarge {
+            max: usize::from(u16::MAX),
+            actual: entry_ids.len(),
+        })?;
+    out.extend_from_slice(&entry_count.to_be_bytes());
+    for entry in entry_ids {
+        let entry_bytes = entry.as_bytes();
+        let len = u16::try_from(entry_bytes.len()).map_err(|_| EncodeError::EntryTooLong {
+            max: usize::from(u16::MAX),
+            actual: entry_bytes.len(),
+        })?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(entry_bytes);
+    }
+    out.extend_from_slice(blinded_digest);
+    Ok(out)
+}
 fn signing_message(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + body.len());
     out.extend_from_slice(SIGNING_DOMAIN);
@@ -681,9 +703,9 @@ fn signing_message(body: &[u8]) -> Vec<u8> {
 fn signature_bytes_are_all_zero(signature: &[u8; SIGNATURE_LENGTH]) -> bool {
     signature.iter().all(|&byte| byte == 0)
 }
-fn proof_token_signature_placeholder() -> Signature {
-    crate::signature::ed25519::Ed25519Sha512::parse_signature(&PROOF_TOKEN_SIGNATURE_PLACEHOLDER)
-        .expect("proof-token placeholder signature has canonical Ed25519 R material")
+#[cfg(test)]
+fn test_proof_token_signature() -> Signature {
+    SigningKey::from_bytes(&[0xA6; 32]).sign(b"sorafs.proof-token.fixture-signature.v1")
 }
 #[cfg(test)]
 mod tests {
@@ -749,10 +771,43 @@ mod tests {
     }
     impl TryCryptoRng for FixedTryRng {}
     #[test]
-    fn proof_token_signature_placeholder_is_nonzero() {
-        let placeholder = proof_token_signature_placeholder();
+    fn unsigned_token_body_matches_v1_wire_vector() {
+        let entries = vec!["ab".to_owned()];
+        let body = encode_token_body(
+            &[3; 16],
+            ModerationAction::Quarantine,
+            1,
+            Some(2),
+            &entries,
+            &[4; 32],
+        )
+        .expect("bounded unsigned token body");
+        let expected = [
+            0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+            0x03, 0x03, 0x03, 0x03, 0x03, 0x00, 0x01, 0x00, 0x02, 0x61, 0x62, 0x04, 0x04, 0x04, 0x04,
+            0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+            0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+        ];
+        assert_eq!(body, expected);
+        let signing = test_signing_key();
+        let token = ProofToken {
+            token_id: [3; 16],
+            moderation: ModerationAction::Quarantine,
+            issued_at: 1,
+            expires_at: Some(2),
+            entry_ids: entries,
+            blinded_digest: [4; 32],
+            signature: signing.sign(&signing_message(&expected)),
+        };
+        assert_eq!(token.body_without_signature().unwrap(), expected);
+        token.verify_signature(&signing.verifying_key()).unwrap();
+    }
+    #[test]
+    fn test_proof_token_signature_is_canonical() {
+        let placeholder = test_proof_token_signature();
         let payload = placeholder.to_bytes();
-        assert_eq!(payload, PROOF_TOKEN_SIGNATURE_PLACEHOLDER);
+        assert!(crate::signature::ed25519::Ed25519Sha512::parse_signature(&payload).is_ok());
         assert!(!payload.iter().all(|byte| *byte == 0));
     }
     #[test]
@@ -890,7 +945,7 @@ mod tests {
             expires_at: None,
             entry_ids: Vec::new(),
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let err = ProofToken::decode(&token.encode()).expect_err("empty entries should fail");
         assert!(matches!(err, DecodeError::MissingEntries));
@@ -904,7 +959,7 @@ mod tests {
             expires_at: Some(19),
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let err = ProofToken::decode(&token.encode()).expect_err("invalid expiry should fail");
         assert!(matches!(
@@ -924,7 +979,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let err = ProofToken::decode(&issued_overflow.encode())
             .expect_err("unrepresentable issued_at should fail closed");
@@ -942,7 +997,7 @@ mod tests {
             expires_at: Some(u64::MAX),
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let err = ProofToken::decode(&expiry_overflow.encode())
             .expect_err("unrepresentable expires_at should fail closed");
@@ -963,7 +1018,7 @@ mod tests {
             expires_at: Some(u64::MAX),
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         assert!(token.checked_issued_at().is_none());
         assert_eq!(token.issued_at(), UNIX_EPOCH);
@@ -985,7 +1040,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let mut bytes = token.encode();
         bytes[FRAME_MAGIC.len() + 1] = 0x80;
@@ -1134,7 +1189,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec![String::new(); usize::from(u16::MAX) + 1],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let err = token
             .try_encode()
@@ -1167,7 +1222,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["x".repeat(usize::from(u16::MAX) + 1)],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         let err = token
             .try_encode()
@@ -1226,7 +1281,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: proof_token_signature_placeholder(),
+            signature: test_proof_token_signature(),
         };
         for counter in 0u32..2048 {
             token.token_id[..4].copy_from_slice(&counter.to_le_bytes());

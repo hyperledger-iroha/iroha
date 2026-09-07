@@ -658,7 +658,18 @@ pub fn queue_plan_journal_record_claim_digest(
     )
     .claim_digest()
 }
-/// Failure to capture a bounded, authoritative queue-plan admission context.
+/// Relationship between a supplied QueuePlan admission context and the local
+/// canonical frontier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueuePlanAdmissionContextDisposition {
+    /// The supplied context is the exact current admission generation.
+    Current,
+    /// The supplied context is structurally valid but its canonical frontier
+    /// has not arrived locally yet, and its embedded authority matches the
+    /// exact current source authority.
+    Future,
+}
+/// Failure to capture or validate a bounded, authoritative queue-plan admission context.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum QueuePlanAdmissionContextError {
     /// Routing plan is no longer valid for the contiguous next proposal height.
@@ -15345,6 +15356,125 @@ impl Queue {
             authority_height,
         )
     }
+    pub(crate) fn classify_plan_admission_context_in_view(
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV1,
+    ) -> Result<QueuePlanAdmissionContextDisposition, QueuePlanAdmissionContextError> {
+        admission_context
+            .validate_for_routing_plan(routing_plan)
+            .map_err(|reason| QueuePlanAdmissionContextError::NonCanonical { reason })?;
+        let current_authority_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        let current_plan = resolve_routing_plan_for_queue_admission(
+            routing_plan.clone(),
+            state_view.nexus(),
+            current_authority_height,
+        )?;
+        if &current_plan != routing_plan {
+            return Err(QueuePlanAdmissionContextError::NonCanonical {
+                reason: "supplied routing plan differs from the exact current plan".to_owned(),
+            });
+        }
+        let future = admission_context.authority_height > current_authority_height;
+        if admission_context.authority_height < current_authority_height {
+            return Err(QueuePlanAdmissionContextError::NonCanonical {
+                reason: "first-time historical admission requires rebinding at the current canonical frontier"
+                    .to_owned(),
+            });
+        }
+        let current_proposal_height = current_authority_height.checked_add(1).ok_or_else(|| {
+            QueuePlanAdmissionContextError::NonCanonical {
+                reason: "current authority height overflows its proposal height".to_owned(),
+            }
+        })?;
+        if !future {
+            let exact_predecessor = if admission_context.authority_height == 0 {
+                None
+            } else {
+                let predecessor_index =
+                    usize::try_from(admission_context.authority_height.saturating_sub(1)).map_err(
+                        |_| QueuePlanAdmissionContextError::MissingPredecessor {
+                            authority_height: admission_context.authority_height,
+                        },
+                    )?;
+                Some(
+                    state_view
+                        .block_hashes()
+                        .get(predecessor_index)
+                        .copied()
+                        .ok_or(QueuePlanAdmissionContextError::MissingPredecessor {
+                            authority_height: admission_context.authority_height,
+                        })?,
+                )
+            };
+            if exact_predecessor != admission_context.predecessor_block_hash {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: "supplied predecessor differs from canonical history".to_owned(),
+                });
+            }
+        }
+        for bound in &admission_context.route_incarnations {
+            // A future predecessor is not locally available yet, so authenticate
+            // the certificate's source against the exact current route authority.
+            // This prevents an embedded self-declared roster from manufacturing
+            // an apparently quorum-certified Future that consumes durable Kura
+            // capacity before catch-up.
+            let source_proposal_height = if future {
+                current_proposal_height
+            } else {
+                admission_context.proposal_height
+            };
+            if state_view
+                .lane_incarnation_at_height(bound.leg.route.lane_id, source_proposal_height)
+                != Some(bound.lane_incarnation)
+            {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: format!(
+                        "lane {} dataspace {} incarnation is not canonical at source proposal height {}",
+                        bound.leg.route.lane_id,
+                        bound.leg.route.dataspace_id,
+                        source_proposal_height
+                    ),
+                });
+            }
+            if state_view
+                .lane_incarnation_at_height(bound.leg.route.lane_id, current_proposal_height)
+                != Some(bound.lane_incarnation)
+            {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: format!(
+                        "lane {} dataspace {} admission incarnation is no longer active",
+                        bound.leg.route.lane_id, bound.leg.route.dataspace_id
+                    ),
+                });
+            }
+            let validator_set = queue_plan_authoritative_peers_in_view_at_height(
+                state_view,
+                bound.leg.route,
+                source_proposal_height,
+            )
+            .map_err(|_| QueuePlanAdmissionContextError::MissingAuthority {
+                lane_id: bound.leg.route.lane_id,
+                dataspace_id: bound.leg.route.dataspace_id,
+                proposal_height: source_proposal_height,
+            })?;
+            if validator_set != bound.validator_set {
+                return Err(QueuePlanAdmissionContextError::NonCanonical {
+                    reason: format!(
+                        "lane {} dataspace {} validator set differs from canonical source authority at proposal height {}",
+                        bound.leg.route.lane_id,
+                        bound.leg.route.dataspace_id,
+                        source_proposal_height
+                    ),
+                });
+            }
+        }
+        Ok(if future {
+            QueuePlanAdmissionContextDisposition::Future
+        } else {
+            QueuePlanAdmissionContextDisposition::Current
+        })
+    }
     /// Capture the exact active route incarnations for a precomputed admission plan.
     ///
     /// The lifecycle admission guard is held while the plan is revalidated against
@@ -15368,6 +15498,29 @@ impl Queue {
             state_view_height_for_routing(&state_view),
         )?;
         Self::queue_plan_admission_context_in_view(&state_view, &routing_plan)
+    }
+    /// Classify an ingress-supplied context against one coherent local state view.
+    ///
+    /// A first-time historical context is rejected because current WSV cannot
+    /// reconstruct an immutable old committee after authority churn. Exact
+    /// already-owned durable retries are handled before this classifier. A
+    /// future context is reported only when its embedded roster and incarnation
+    /// match the exact current authority source, without mutating queue ownership.
+    ///
+    /// # Errors
+    /// Returns an error when the routing plan is inactive, the context is
+    /// historical, or any authority, roster, or incarnation binding is not
+    /// canonical at the current source frontier.
+    pub fn classify_plan_admission_context_with_state(
+        &self,
+        state: &State,
+        routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV1,
+    ) -> Result<QueuePlanAdmissionContextDisposition, QueuePlanAdmissionContextError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        Self::classify_plan_admission_context_in_view(&state_view, routing_plan, admission_context)
     }
     /// Sample the queue time source once for a synthetic global admission binding.
     ///
@@ -16235,16 +16388,32 @@ impl Queue {
                 Some(expected_context.clone())
             } else {
                 match expected_admission_context {
-                    Some(expected_context)
-                        if current_context.as_ref() == Some(expected_context) => {}
-                    Some(_) => {
-                        return Err(Failure {
-                            tx: tx.into(),
-                            err: Error::UnresolvedRoute {
-                                reason: "queue-plan admission context no longer matches the active lane/authority generation".to_owned(),
-                            },
-                        });
-                    }
+                    Some(expected_context) => match Self::classify_plan_admission_context_in_view(
+                        &state_view,
+                        &routing_plan,
+                        expected_context,
+                    ) {
+                        Ok(QueuePlanAdmissionContextDisposition::Current) => {}
+                        Ok(QueuePlanAdmissionContextDisposition::Future) => {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: Error::UnresolvedRoute {
+                                    reason: "queue-plan admission context is ahead of the local canonical frontier"
+                                        .to_owned(),
+                                },
+                            });
+                        }
+                        Err(error) => {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: Error::UnresolvedRoute {
+                                    reason: format!(
+                                        "queue-plan admission context no longer matches canonical history or the active lane/authority generation: {error}"
+                                    ),
+                                },
+                            });
+                        }
+                    },
                     None => {
                         return Err(Failure {
                             tx: tx.into(),
@@ -16254,7 +16423,7 @@ impl Queue {
                         });
                     }
                 }
-                current_context
+                expected_admission_context.cloned()
             }
         } else {
             debug_assert!(expected_admission_context.is_none());
@@ -21486,9 +21655,12 @@ impl Queue {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
         let router = Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
+        // State owns the installed consensus policy. A Queue cache may lag
+        // startup replay or committed lifecycle publication and cannot supply
+        // authority for this refresh.
         let registry = Arc::new(
-            self.lane_manifests
-                .read()
+            state_view
+                .lane_manifests
                 .rebind(&lane_catalog, &nexus.governance),
         );
         if let Err(err) = registry.validate_active_coverage_for_catalog(&lane_catalog) {
@@ -21531,8 +21703,11 @@ impl Queue {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
         let router = Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
+        // State owns the installed consensus policy. Rebinding a stale Queue
+        // cache here could erase or resurrect validator authority after Apply.
         let registry = Arc::new(
-            self.lane_manifests
+            state
+                .lane_manifests
                 .read()
                 .rebind(&lane_catalog, &nexus.governance),
         );
@@ -21542,9 +21717,9 @@ impl Queue {
                 "rebound lane-manifest snapshot is incomplete; affected ingress remains fail-closed"
             );
         }
-        // State and queue receive the same Arc while queue manifest admission is
-        // write-locked; publish routing only after that shared generation lands.
-        self.install_lane_manifests_with_state(&registry, state);
+        // Refresh the Queue projection before routing. Only explicit manifest
+        // installation or an authenticated lifecycle may publish State policy.
+        self.install_lane_manifests(&registry);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
@@ -25738,6 +25913,164 @@ pub mod tests {
                 .claim_digest()
                 .expect("digest persisted V1 record"),
             claim.journal_record_digest
+        );
+    }
+    #[test]
+    fn strict_durable_claim_rejects_unowned_history_and_defers_authenticated_future() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-claim-frontier-v1.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        install_single_validator_topology_for_queue_test(&mut state, 0x96);
+        let (_queue_time_handle, queue_time_source) =
+            TimeSource::new_mock(Duration::from_millis(911));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &queue_time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install frontier claim journal");
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_historical_time_handle, historical_time_source) =
+            TimeSource::new_mock(Duration::from_millis(731));
+        let historical_tx = accepted_tx_by_someone(&historical_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &historical_tx);
+        let plan = queue
+            .route_plan_with_state(&historical_tx, &state)
+            .expect("resolve frontier route");
+        let historical_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture canonical historical context");
+        assert_eq!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &historical_context,)
+                .expect("classify current context"),
+            QueuePlanAdmissionContextDisposition::Current
+        );
+
+        seed_committed_height_for_queue_test(&state, 3);
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &historical_context,)
+                .is_err(),
+            "current WSV cannot authenticate a first-time historical authority roster"
+        );
+        let historical_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                historical_tx,
+                &state,
+                plan.clone(),
+                &historical_context,
+            )
+            .expect_err("an unowned historical context must be rebound at the current frontier");
+        assert!(matches!(
+            historical_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("historical admission requires rebinding")
+        ));
+        assert_eq!(queue.active_len(), 0);
+
+        let journal_len_after_historical_rejection = std::fs::metadata(&journal_path)
+            .expect("frontier journal metadata after historical rejection")
+            .len();
+        let (_invalid_time_handle, invalid_time_source) =
+            TimeSource::new_mock(Duration::from_millis(732));
+        let invalid_tx = accepted_tx_by_someone(&invalid_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &invalid_tx);
+        let mut invalid_history = historical_context.clone();
+        invalid_history.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"noncanonical historical predecessor",
+        )));
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &invalid_history)
+                .is_err()
+        );
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                invalid_tx,
+                &state,
+                plan.clone(),
+                &invalid_history,
+            )
+            .expect_err("noncanonical history must fail before durable ownership");
+
+        let (_future_time_handle, future_time_source) =
+            TimeSource::new_mock(Duration::from_millis(733));
+        let future_tx = accepted_tx_by_someone(&future_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &future_tx);
+        let mut future_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture current context before moving it into the future");
+        future_context.authority_height = future_context
+            .authority_height
+            .checked_add(1)
+            .expect("future authority height");
+        future_context.proposal_height = future_context
+            .proposal_height
+            .checked_add(1)
+            .expect("future proposal height");
+        future_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"unarrived canonical predecessor",
+        )));
+        assert_eq!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &future_context)
+                .expect("classify structurally valid future context"),
+            QueuePlanAdmissionContextDisposition::Future
+        );
+        let mut self_declared_future = future_context.clone();
+        let coordinator = self_declared_future
+            .route_incarnations
+            .first_mut()
+            .expect("single-route future context has a coordinator");
+        coordinator.validator_set.truncate(1);
+        coordinator.validator_count = 1;
+        coordinator.durability_threshold = 1;
+        coordinator.validator_set_hash = HashOf::new(&coordinator.validator_set);
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &self_declared_future,)
+                .is_err(),
+            "a future context cannot reduce the locally authoritative roster"
+        );
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                future_tx.clone(),
+                &state,
+                plan.clone(),
+                &self_declared_future,
+            )
+            .expect_err("self-declared future authority must not acquire durable ownership");
+        let future_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                future_tx,
+                &state,
+                plan,
+                &future_context,
+            )
+            .expect_err("future context must wait for canonical catch-up");
+        assert!(matches!(
+            future_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("ahead of the local canonical frontier")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("frontier journal metadata after rejected contexts")
+                .len(),
+            journal_len_after_historical_rejection,
+            "invalid and future contexts must not append queue ownership"
         );
     }
     #[test]

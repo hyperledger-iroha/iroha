@@ -659,7 +659,7 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             PropertyRefContract {
                 owner: "NativeAmxLegRecord",
                 property: "participant_settlement",
-                expected: "#/components/schemas/NativeAmxParticipantSettlementCommitment",
+                expected: "#/components/schemas/NativeAmxParticipantSettlement",
             },
             PropertyRefContract { owner: "NativeAmxLegRecord", property: "participant_settlement_hash", expected: "#/components/schemas/Hash" },
             PropertyRefContract { owner: "NativeAmxLegRecord", property: "prepare_qc", expected: "#/components/schemas/NativeAmxAttestationQc" },
@@ -673,17 +673,34 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
     assert_eq!(contract_property(schemas, "NativeAmxParticipantLaneBlockProposal", "payload_block_hint").get("type").and_then(Value::as_str), Some("null"));
     let proposal_description = proposal.get("description").and_then(Value::as_str).expect("native AMX participant proposal description");
     assert!(proposal_description.contains("requires payload_block_hint to be present as null"));
-    let participant = contract_schema(schemas, "NativeAmxParticipantSettlementCommitment");
+    let participant = contract_schema(schemas, "NativeAmxParticipantSettlement");
     assert_eq!(participant.get("additionalProperties").and_then(Value::as_bool), Some(false));
-    for field in ["total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance"] {
-        assert_eq!(contract_property(schemas, "NativeAmxParticipantSettlementCommitment", field).get("const").and_then(Value::as_str), Some("0"));
+    let expected_fields = ["lane_id", "dataspace_id", "lane_incarnation", "participant_lane_block_height", "authority_context_height", "previous_native_settlement_hash", "source_ids"].into_iter().collect::<BTreeSet<_>>();
+    assert_eq!(schema_fields(participant, "required", "native participant settlement").iter().filter_map(Value::as_str).collect::<BTreeSet<_>>(), expected_fields);
+    assert_eq!(participant.get("properties").and_then(Value::as_object).expect("participant properties").keys().map(String::as_str).collect::<BTreeSet<_>>(), expected_fields);
+    for (field, minimum, maximum) in [("lane_id", 0, u64::from(u32::MAX)), ("dataspace_id", 0, u64::MAX), ("participant_lane_block_height", 1, u64::MAX), ("authority_context_height", 1, u64::MAX)] {
+        let property = contract_property(schemas, "NativeAmxParticipantSettlement", field);
+        assert_eq!(property.get("minimum").and_then(Value::as_u64), Some(minimum));
+        assert_eq!(property.get("maximum").and_then(Value::as_u64), Some(maximum));
     }
-    for field in ["nexus_fee_receipts", "native_amx_receipts"] {
-        assert_eq!(contract_property(schemas, "NativeAmxParticipantSettlementCommitment", field).get("maxItems").and_then(Value::as_u64), Some(0));
-    }
-    let participant_receipts = contract_property(schemas, "NativeAmxParticipantSettlementCommitment", "receipts");
-    assert_array_bounds(participant_receipts, 1, 4_096, Some(true));
-    assert_item_ref(participant_receipts, "#/components/schemas/NativeAmxParticipantSettlementReceipt", "participant receipts");
+    let sources = contract_property(schemas, "NativeAmxParticipantSettlement", "source_ids");
+    assert_array_bounds(sources, 1, 4_096, Some(true));
+    assert_eq!(sources.get("items").and_then(|item| item.get("pattern")).and_then(Value::as_str), Some("^(?!0{64}$)[0-9A-F]{64}$"));
+    let incarnation = contract_property(schemas, "NativeAmxParticipantSettlement", "lane_incarnation");
+    let alternatives = incarnation.get("allOf").and_then(Value::as_array).expect("nonzero canonical incarnation hash");
+    assert_eq!(alternatives[0].get("$ref").and_then(Value::as_str), Some("#/components/schemas/Hash"));
+    assert_eq!(alternatives[1].get("not").and_then(|schema| schema.get("pattern")).and_then(Value::as_str), Some("^hash:0{63}1#"));
+    let previous = contract_property(schemas, "NativeAmxParticipantSettlement", "previous_native_settlement_hash");
+    let previous_variants = previous.get("oneOf").and_then(Value::as_array).expect("required optional Native hash");
+    assert_eq!(previous_variants.len(), 2);
+    assert_eq!(previous_variants[0].get("type").and_then(Value::as_str), Some("null"));
+    assert_eq!(previous_variants[1].get("allOf"), incarnation.get("allOf"));
+    let rules = participant.get("allOf").and_then(Value::as_array).expect("first-control rule");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].get("if").and_then(|value| value.get("properties")).and_then(|value| value.get("participant_lane_block_height")).and_then(|value| value.get("const")).and_then(Value::as_u64), Some(1));
+    assert_eq!(rules[0].get("then").and_then(|value| value.get("properties")).and_then(|value| value.get("previous_native_settlement_hash")).and_then(|value| value.get("type")).and_then(Value::as_str), Some("null"));
+    assert!(!schemas.contains_key("NativeAmxParticipantSettlementCommitment"));
+    assert!(!schemas.contains_key("NativeAmxParticipantSettlementReceipt"));
     let qc = contract_schema(schemas, "NativeAmxAttestationQc").get("properties").and_then(Value::as_object).expect("native AMX QC properties");
     for (field, minimum, maximum, unique, item) in [("validator_set", 1, 128, Some(true), "#/components/schemas/SumeragiV2BlsValidatorId"), ("validator_set_pops", 1, 128, None, "#/components/schemas/SumeragiV2BlsProof")] {
         let array = qc.get(field).and_then(Value::as_object).unwrap_or_else(|| panic!("{field} schema"));

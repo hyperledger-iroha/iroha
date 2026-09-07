@@ -1,6 +1,6 @@
 #[cfg(all(test, feature = "app_api"))]
 #[test]
-fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
+fn account_filter_projection_preserves_exact_and_boolean_constraints() {
     let first = AccountId::new(
         checked_routing_fixture_keypair(
             0xF0,
@@ -19,13 +19,22 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
         .public_key()
         .clone(),
     );
+    let first_projection = AccountListItem {
+        canonical_id: first.to_string(),
+        display_id: crate::account_literal::display_literal(&first),
+        primary_alias: Default::default(),
+    };
+    let second_projection = AccountListItem {
+        canonical_id: second.to_string(),
+        display_id: crate::account_literal::display_literal(&second),
+        primary_alias: Default::default(),
+    };
     let exact = FilterExpr::Eq(
         FieldPath("id".to_owned()),
         norito::json::Value::from(first.to_string()),
     );
-    let candidates = account_filter_candidate_ids(Some(&exact))
-        .expect("account id equality should produce direct lookup candidates");
-    assert_eq!(candidates, BTreeSet::from([first.clone()]));
+    assert!(account_filter_projection(&exact, &first_projection));
+    assert!(!account_filter_projection(&exact, &second_projection));
     let combined = FilterExpr::And(vec![
         exact.clone(),
         FilterExpr::Eq(
@@ -33,9 +42,8 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
             norito::json::Value::from(false),
         ),
     ]);
-    let candidates = account_filter_candidate_ids(Some(&combined))
-        .expect("AND should preserve safe account id candidates");
-    assert_eq!(candidates, BTreeSet::from([first]));
+    assert!(account_filter_projection(&combined, &first_projection));
+    assert!(!account_filter_projection(&combined, &second_projection));
     let many = FilterExpr::In(
         FieldPath("id".to_owned()),
         vec![
@@ -43,15 +51,15 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
             norito::json::Value::from(second.to_string()),
         ],
     );
-    let candidates =
-        account_filter_candidate_ids(Some(&many)).expect("account id IN should produce candidates");
-    assert_eq!(candidates, BTreeSet::from([second]));
-    let unsafe_or = FilterExpr::Or(vec![
+    assert!(!account_filter_projection(&many, &first_projection));
+    assert!(account_filter_projection(&many, &second_projection));
+    let disjunction = FilterExpr::Or(vec![
         exact,
         FilterExpr::Eq(
             FieldPath("has_primary_alias".to_owned()),
             norito::json::Value::from(false),
         ),
     ]);
-    assert!(account_filter_candidate_ids(Some(&unsafe_or)).is_none());
+    assert!(account_filter_projection(&disjunction, &first_projection));
+    assert!(account_filter_projection(&disjunction, &second_projection));
 }

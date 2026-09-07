@@ -974,6 +974,19 @@ fn arbitrary_self_signed_first_roster_is_rejected_before_state_or_context_mutati
     attacker_context.roster = attacker_roster;
     attacker_context.quorum = wire::DualQuorum::from_roster(&attacker_context.roster)
         .expect("attacker roster is internally valid");
+    // The attack presents a coherent self-signed committee; authorization must
+    // fail against the retained snapshot, not an unrelated malformed mint roster.
+    (
+        attacker_context.kagemusha_mint_finality_epoch_id,
+        attacker_context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        attacker_context.network_id,
+        attacker_context.epoch,
+        &attacker_context.roster,
+    );
+    attacker_context
+        .validate()
+        .expect("attacker context is internally valid");
     let block = dummy_block(
         &attacker_keys[0],
         record.context.height,

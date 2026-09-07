@@ -1910,7 +1910,12 @@ pub(crate) mod tests {
         sync::Arc,
         time::Duration,
     };
-    fn sample_certified_merge_execution_entry(epoch: u64, result_ok: bool) -> MergeLedgerEntry {
+    fn sample_certified_merge_execution_entry(
+        epoch: u64,
+        result_ok: bool,
+        previous_lane: Option<&LaneBlockDescriptorV1>,
+        transaction_metadata_bytes: usize,
+    ) -> MergeLedgerEntry {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"merge-query-network")),
         );
@@ -1927,6 +1932,14 @@ pub(crate) mod tests {
                 .with_admission_intent(
                     iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
                 );
+                if transaction_metadata_bytes > 0 {
+                    let mut metadata = Metadata::default();
+                    metadata.insert(
+                        "query_padding".parse().expect("valid metadata name"),
+                        Json::new("p".repeat(transaction_metadata_bytes)),
+                    );
+                    builder = builder.with_metadata(metadata);
+                }
                 builder.set_creation_time(Duration::from_millis(
                     epoch.saturating_mul(10).saturating_add(index),
                 ));
@@ -1980,15 +1993,28 @@ pub(crate) mod tests {
         let lane_incarnation = Hash::new(b"merge-query-lane-incarnation");
         let accepted_candidate_indices = vec![0, 1];
         let qc_mode_tag = "permissioned:merge-query-test".to_owned();
+        let lane_block_height = previous_lane.map_or(1, |descriptor| {
+            descriptor
+                .lane_block_height
+                .checked_add(1)
+                .expect("fixture lane height")
+        });
         let mut ownership = SumeragiLanePayloadOwnership {
-            proposal_height: 2,
+            proposal_height: previous_lane.map_or(2, |descriptor| {
+                descriptor
+                    .proposal_height
+                    .checked_add(1)
+                    .expect("fixture proposal height")
+            }),
             proposal_view: 0,
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
             lane_incarnation,
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
-            lane_block_height: 1,
+            previous_lane_block_height: previous_lane
+                .map_or(0, |descriptor| descriptor.lane_block_height),
+            previous_lane_block_descriptor_hash: previous_lane
+                .map(|descriptor| descriptor.descriptor_hash),
+            lane_block_height,
             lane_block_view: 0,
             subject_hash: Hash::prehashed([0; Hash::LENGTH]),
             qc_mode_tag: qc_mode_tag.clone(),
@@ -2249,7 +2275,7 @@ pub(crate) mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("encode canonical merge-query routing plans");
         let settlement_commitment = LaneBlockCommitment {
-            block_height: 1,
+            block_height: lane_block_height,
             lane_id: LaneId::SINGLE,
             lane_incarnation,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -2332,6 +2358,7 @@ pub(crate) mod tests {
             epoch_id: epoch,
             lane_catalog_hash: Hash::new(b"merge-query-catalog"),
             active_lanes: Vec::new(),
+            lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
             incarnation_root: Hash::new(b"merge-query-incarnations"),
             activation_root: Hash::new(b"merge-query-activations"),
             lane_snapshots: Vec::new(),
@@ -2358,7 +2385,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn certified_merge_projection_is_reverse_ordered_and_rejects_tampering() {
-        let entry = sample_certified_merge_execution_entry(1, true);
+        let entry = sample_certified_merge_execution_entry(1, true, None, 0);
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-carrier-block"));
         let committed = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
@@ -2390,7 +2417,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn certified_merge_exact_projection_returns_only_requested_canonical_entry() {
-        let entry = sample_certified_merge_execution_entry(2, true);
+        let entry = sample_certified_merge_execution_entry(2, true, None, 0);
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"exact-merge-carrier"));
         let full = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
@@ -2436,10 +2463,11 @@ pub(crate) mod tests {
         previous: &SignedBlock,
         epoch: u64,
         result_ok: bool,
+        previous_lane: Option<&LaneBlockDescriptorV1>,
     ) -> (Arc<SignedBlock>, MergeLedgerEntry) {
         certified_query_carrier_with_entry(
             previous,
-            sample_certified_merge_execution_entry(epoch, result_ok),
+            sample_certified_merge_execution_entry(epoch, result_ok, previous_lane, 0),
         )
     }
     fn certified_query_carrier_with_entry(
@@ -2465,6 +2493,8 @@ pub(crate) mod tests {
     pub(crate) struct MergeQueryFixture {
         /// State sandbox containing the seeded canonical history.
         pub(crate) sandbox: Sandbox,
+        /// Exact final lane descriptor for extending the authenticated history.
+        pub(crate) latest_lane_descriptor: LaneBlockDescriptorV1,
         /// Carrier hash selected by indexed-filter tests.
         pub(crate) target_block_hash: HashOf<BlockHeader>,
         /// Entrypoint hash selected by indexed-filter tests.
@@ -2481,6 +2511,22 @@ pub(crate) mod tests {
     /// Seed sixteen two-entry merge carriers above an empty genesis block.
     pub(crate) fn merge_query_fixture() -> MergeQueryFixture {
         let mut sandbox = Sandbox::default();
+        {
+            let mut world = sandbox.state.world.block();
+            world.accounts.insert(
+                iroha_test_samples::ALICE_ID.clone(),
+                iroha_data_model::account::AccountValue::new(
+                    iroha_data_model::account::AccountDetails::default(),
+                ),
+            );
+            world.account_permissions.insert(
+                iroha_test_samples::ALICE_ID.clone(),
+                std::collections::BTreeSet::from([
+                    iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
+                ]),
+            );
+            world.commit();
+        }
         let genesis = Arc::new(empty_query_block(None));
         sandbox
             .state
@@ -2490,11 +2536,26 @@ pub(crate) mod tests {
         sandbox.state.push_block_hash_for_testing(genesis.hash());
         let target_epoch = 9;
         let mut previous = genesis;
+        let mut previous_lane = None;
         let mut target = None;
         let mut unrelated_entry_hash = None;
         for epoch in 1..=16 {
-            let (carrier, entry) =
-                certified_query_carrier(previous.as_ref(), epoch, epoch != target_epoch);
+            let (carrier, entry) = certified_query_carrier(
+                previous.as_ref(),
+                epoch,
+                epoch != target_epoch,
+                previous_lane.as_ref(),
+            );
+            previous_lane = Some(
+                entry
+                    .execution_batch
+                    .as_ref()
+                    .expect("execution batch")
+                    .lanes[0]
+                    .proposal
+                    .descriptor
+                    .clone(),
+            );
             if epoch == 1 {
                 unrelated_entry_hash = Some(entry.canonical_hash());
             }
@@ -2525,6 +2586,10 @@ pub(crate) mod tests {
             sandbox.state.push_block_hash_for_testing(carrier.hash());
             previous = carrier;
         }
+        crate::kura::tests::persist_v2_finality_chain_through(
+            sandbox.state.kura(),
+            NonZeroUsize::new(17).expect("complete query history"),
+        );
         let (
             target_block_hash,
             target_entrypoint_hash,
@@ -2534,6 +2599,7 @@ pub(crate) mod tests {
         ) = target.expect("target merge query carrier was seeded");
         MergeQueryFixture {
             sandbox,
+            latest_lane_descriptor: previous_lane.expect("seeded lane history"),
             target_block_hash,
             target_entrypoint_hash,
             target_authority,
@@ -2687,6 +2753,18 @@ pub(crate) mod tests {
             .force_hash_only_block_for_testing(target_height)
             .expect("convert target transaction carrier to hash-only form");
         let state_view = fixture.sandbox.state.view();
+        for height in 1..target_height.get() {
+            state_view
+                .canonical_block_by_height(NonZeroUsize::new(height).expect("positive height"))
+                .expect("evicting the selected body must preserve earlier canonical bodies");
+        }
+        assert_eq!(
+            state_view
+                .kura()
+                .hash_only_unavailable_prefix_len(state_view.height()),
+            0,
+            "single-body eviction must not invent an unavailable historical prefix"
+        );
         let indexed_error = committed_transactions_indexed_snapshot(
             &state_view,
             CompoundPredicate::from_filters(CommittedTxFilters {
@@ -2926,7 +3004,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {
-        const LARGE_SOURCE_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
+        const TRANSACTION_METADATA_BYTES: usize = 256 * 1024;
         let mut sandbox = Sandbox::default();
         let genesis = Arc::new(empty_query_block(None));
         sandbox
@@ -2935,19 +3013,18 @@ pub(crate) mod tests {
             .store_block(Arc::clone(&genesis))
             .expect("store large-sidecar query genesis");
         sandbox.state.push_block_hash_for_testing(genesis.hash());
-        let mut entry = sample_certified_merge_execution_entry(1, true);
-        let batch = entry
+        let entry =
+            sample_certified_merge_execution_entry(1, true, None, TRANSACTION_METADATA_BYTES);
+        let source_bundle = &entry
             .execution_batch
-            .as_mut()
-            .expect("query fixture execution batch");
-        let source_bundle = vec![0xA5; LARGE_SOURCE_BUNDLE_BYTES];
-        batch.lanes[0].source_bundle_hash = Hash::new_from_chunks(&[
-            b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
-            &source_bundle,
-        ]);
-        batch.lanes[0].source_bundle = source_bundle;
-        batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
-        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+            .as_ref()
+            .expect("query execution batch")
+            .lanes[0]
+            .source_bundle;
+        assert!(source_bundle.len() > 2 * TRANSACTION_METADATA_BYTES);
+        assert!(
+            source_bundle.len() < iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES
+        );
         let (carrier, entry) = certified_query_carrier_with_entry(&genesis, entry);
         let carrier_hash = carrier.hash();
         sandbox
@@ -2956,6 +3033,10 @@ pub(crate) mod tests {
             .store_block_with_merge_entry(carrier, &entry)
             .expect("store large certified merge sidecar");
         sandbox.state.push_block_hash_for_testing(carrier_hash);
+        crate::kura::tests::persist_v2_finality_chain_through(
+            sandbox.state.kura(),
+            NonZeroUsize::new(2).expect("large query carrier"),
+        );
         let state_view = sandbox.state.view();
         state_view.kura().reset_merge_query_read_counters_for_test();
         reset_certified_merge_projection_calls_for_test();

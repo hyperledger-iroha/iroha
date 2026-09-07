@@ -2127,6 +2127,12 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
         /// Structural validation failure.
         reason: String,
     },
+    /// Local durable consensus evidence could not be authenticated.
+    #[error("lane reservation storage read failed: {reason}")]
+    Storage {
+        /// Exact storage validation failure.
+        reason: String,
+    },
     /// The context belongs to a different exact network than committed state.
     #[error("frozen height context belongs to a different network")]
     NetworkIdMismatch,
@@ -2303,12 +2309,30 @@ pub(crate) fn autonomous_lane_reservation_identity_hashes_for_proposal(
 #[error("{message}")]
 pub(crate) struct V2LanePayloadPlanError {
     message: String,
+    kind: V2LanePayloadPlanErrorKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2LanePayloadPlanErrorKind {
+    Input,
+    Storage,
 }
 impl V2LanePayloadPlanError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            kind: V2LanePayloadPlanErrorKind::Input,
         }
+    }
+    fn storage(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: V2LanePayloadPlanErrorKind::Storage,
+        }
+    }
+    /// Whether local consensus evidence failed authentication and requires
+    /// retaining exact work ownership until restart.
+    pub(crate) const fn is_storage_error(&self) -> bool {
+        matches!(self.kind, V2LanePayloadPlanErrorKind::Storage)
     }
 }
 fn v2_lane_context_mode_tag(context: &wire::HeightContext) -> String {
@@ -2326,15 +2350,11 @@ fn autonomous_lane_predecessor_blocked(
     state: &State,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-) -> bool {
-    state
-        .unapplied_lane_block_artifact_heights_snapshot_cached()
-        .map_or(true, |pending| {
-            pending.contains_key(&(lane_id, dataspace_id))
-        })
-        || state
-            .unapplied_certified_lane_block_heights_snapshot_cached()
-            .contains_key(&(lane_id, dataspace_id))
+) -> Result<bool, crate::state::MergeLedgerCommitError> {
+    let raw = state.unapplied_lane_block_artifact_heights_snapshot_cached()?;
+    let certified = state.unapplied_certified_lane_block_heights_snapshot_cached()?;
+    Ok(raw.contains_key(&(lane_id, dataspace_id))
+        || certified.contains_key(&(lane_id, dataspace_id)))
 }
 fn validate_autonomous_lane_reservation_eligibility(
     context_height: u64,
@@ -2511,7 +2531,13 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
         lane_incarnation,
         context.height,
     );
-    let predecessor_blocked = autonomous_lane_predecessor_blocked(state, lane_id, dataspace_id);
+    let storage_error = |error: crate::state::MergeLedgerCommitError| {
+        AutonomousLaneReservationSlotPlanError::Storage {
+            reason: error.to_string(),
+        }
+    };
+    let predecessor_blocked =
+        autonomous_lane_predecessor_blocked(state, lane_id, dataspace_id).map_err(storage_error)?;
     validate_autonomous_lane_reservation_eligibility(
         context.height,
         committed_height,
@@ -2529,6 +2555,7 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
             dataspace_id,
             lane_incarnation,
         )
+        .map_err(storage_error)?
         .ok_or(
             AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
                 lane_id,
@@ -2555,7 +2582,8 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
         lane_id,
         dataspace_id,
         lane_incarnation,
-    );
+    )
+    .map_err(storage_error)?;
     let exact_committee_after =
         autonomous_lane_reservation_committee(state, context, lane_id, dataspace_id).ok();
     if committed_height_after != committed_height
@@ -2567,6 +2595,7 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
             context.height,
         )
         || autonomous_lane_predecessor_blocked(state, lane_id, dataspace_id)
+            .map_err(storage_error)?
         || exact_tip_after
             != Some((
                 previous_lane_block_height,
@@ -2661,14 +2690,24 @@ fn prepare_v2_lane_payload_plan_inner(
     if routing_decisions.is_empty() {
         return Ok(V2LanePayloadPlan::default());
     }
-    let native_amx_blocked_routes =
-        state.unapplied_native_amx_participant_control_heights_snapshot_cached();
+    let native_amx_blocked_routes = state
+        .unapplied_native_amx_participant_control_heights_snapshot()
+        .map_err(|error| {
+            V2LanePayloadPlanError::storage(format!(
+                "Native AMX application frontier is unreadable: {error}"
+            ))
+        })?;
     let mut blocked_routes = state
         .unapplied_lane_block_artifact_heights_snapshot_cached()
         .map_err(|error| {
-            V2LanePayloadPlanError::new(format!("lane frontier unavailable: {error}"))
+            V2LanePayloadPlanError::storage(format!("lane frontier unavailable: {error}"))
         })?;
-    for (route, height) in state.unapplied_certified_lane_block_heights_snapshot_cached() {
+    for (route, height) in state
+        .unapplied_certified_lane_block_heights_snapshot_cached()
+        .map_err(|error| {
+            V2LanePayloadPlanError::storage(format!("certified lane frontier unavailable: {error}"))
+        })?
+    {
         blocked_routes
             .entry(route)
             .and_modify(|blocked_height| *blocked_height = (*blocked_height).max(height))
@@ -2700,7 +2739,7 @@ fn prepare_v2_lane_payload_plan_inner(
                         )
                 })
                 .map_err(|error| {
-                    V2LanePayloadPlanError::new(format!(
+                    V2LanePayloadPlanError::storage(format!(
                         "canonical lane frontier unavailable: {error}"
                     ))
                 })?
@@ -2717,12 +2756,12 @@ fn prepare_v2_lane_payload_plan_inner(
                     |ownership| ownership == &artifact.ownership,
                 )
                 .map_err(|error| {
-                    V2LanePayloadPlanError::new(format!(
+                    V2LanePayloadPlanError::storage(format!(
                         "canonical lane carrier is unreadable: {error}"
                     ))
                 })?;
             if canonical.first() != Some(&artifact) || canonical.len() != 1 {
-                return Err(V2LanePayloadPlanError::new(
+                return Err(V2LanePayloadPlanError::storage(
                     "canonical lane frontier does not match exact block ownership",
                 ));
             }
@@ -2830,6 +2869,11 @@ fn prepare_v2_lane_payload_plan_inner(
                 domain.dataspace_id,
                 lane_incarnation,
             )
+            .map_err(|error| {
+                V2LanePayloadPlanError::storage(format!(
+                    "lane predecessor storage read failed: {error}"
+                ))
+            })?
             .ok_or_else(|| {
                 V2LanePayloadPlanError::new(format!(
                     "lane {} has conflicting durable predecessor evidence at height {}",
@@ -2908,7 +2952,7 @@ fn v2_relay_route_is_active(
 fn v2_known_lane_tips(
     state: &State,
     proposal_height: u64,
-) -> Result<Vec<LaneBlockTip>, crate::kura::Error> {
+) -> Result<Vec<LaneBlockTip>, crate::state::MergeLedgerCommitError> {
     let nexus = state.nexus_snapshot();
     let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
     let mut tips = state
@@ -2959,7 +3003,7 @@ fn v2_known_lane_tips(
     );
     tips.extend(
         state
-            .certified_lane_block_tips_snapshot_cached()
+            .certified_lane_block_tips_snapshot_cached()?
             .into_iter()
             .map(
                 |(
@@ -2987,9 +3031,8 @@ pub(crate) fn v2_known_lane_tip_for_route(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     lane_incarnation: Hash,
-) -> Option<(u64, Option<Hash>)> {
-    let mut matching = v2_known_lane_tips(state, proposal_height)
-        .ok()?
+) -> Result<Option<(u64, Option<Hash>)>, crate::state::MergeLedgerCommitError> {
+    let mut matching = v2_known_lane_tips(state, proposal_height)?
         .into_iter()
         .filter(|tip| {
             tip.lane_id == lane_id
@@ -2998,43 +3041,57 @@ pub(crate) fn v2_known_lane_tip_for_route(
         })
         .collect::<Vec<_>>();
     if !kura.emergency_fast_startup_enabled() {
-        let latest_receipt = kura
-            .checked_latest_native_amx_participant_application_receipt_matching(
-                lane_id,
-                dataspace_id,
-                lane_incarnation,
-                |receipt| receipt.application_block_height < proposal_height,
-            )
-            .ok()?;
-        if let Some(latest_receipt) = latest_receipt {
-            let descriptor = &latest_receipt.participant_proposal.descriptor;
-            matching.push(LaneBlockTip {
-                lane_id: descriptor.lane_id,
-                dataspace_id: descriptor.dataspace_id,
-                lane_incarnation: descriptor.lane_incarnation,
-                latest_lane_block_height: descriptor.lane_block_height,
-                latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
-            });
+        let observation = kura
+            .read_latest_native_amx_participant_application_receipt(lane_id)
+            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;
+        match observation {
+            crate::kura::NativeAmxLatestReceiptObservation::Absent => {}
+            crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {
+                // The exact durable frontier is occupied. Owned Apply recovery
+                // must complete before a new participant slot can be planned.
+                return Ok(None);
+            }
+            crate::kura::NativeAmxLatestReceiptObservation::Applied(latest_receipt) => {
+                let descriptor = &latest_receipt.participant_proposal.descriptor;
+                if descriptor.dataspace_id != dataspace_id
+                    || descriptor.lane_incarnation != lane_incarnation
+                    || latest_receipt.application_block_height >= proposal_height
+                {
+                    // A stale caller or a frontier ahead of its planning height
+                    // cannot treat authenticated occupied evidence as height zero.
+                    return Ok(None);
+                }
+                matching.push(LaneBlockTip {
+                    lane_id: descriptor.lane_id,
+                    dataspace_id: descriptor.dataspace_id,
+                    lane_incarnation: descriptor.lane_incarnation,
+                    latest_lane_block_height: descriptor.lane_block_height,
+                    latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+                });
+            }
         }
     } else if matching.is_empty() {
         // The skipped latest-receipt index means an apparently empty route is unknown. Abstain
         // instead of synthesizing a height-zero predecessor until Strict rebuilds the index.
-        return None;
+        return Ok(None);
     }
     if matching.is_empty() {
-        return Some((0, None));
+        return Ok(Some((0, None)));
     }
     matching.sort_by_key(|tip| tip.latest_lane_block_height);
-    let latest_height = matching.last()?.latest_lane_block_height;
+    let latest_height = matching
+        .last()
+        .expect("nonempty matching lane tips")
+        .latest_lane_block_height;
     let mut hashes = matching
         .iter()
         .filter(|tip| tip.latest_lane_block_height == latest_height)
         .filter_map(|tip| tip.latest_lane_block_descriptor_hash)
         .collect::<BTreeSet<_>>();
     if hashes.len() > 1 {
-        return None;
+        return Ok(None);
     }
-    Some((latest_height, hashes.pop_first()))
+    Ok(Some((latest_height, hashes.pop_first())))
 }
 fn v2_lane_payload_ownership(
     entry: &LanePayloadPlanEntry,

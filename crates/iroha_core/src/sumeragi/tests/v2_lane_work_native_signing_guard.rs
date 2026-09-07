@@ -210,10 +210,11 @@ fn native_request_for_distinct_routes(
     body.participant_lane_block_view = participant_descriptor.lane_block_view;
     body.participant_proposal_hash = participant_proposal.proposal_hash;
     let participant_settlement = body
-        .computed_grouped_participant_settlement(&[body.source_id])
+        .computed_grouped_participant_settlement(None, &[body.source_id])
         .expect("fixture distinct participant settlement");
     body.participant_settlement_commitment = Hash::from(
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+        participant_settlement
+            .computed_hash()
             .expect("hash fixture distinct participant settlement"),
     );
     NativeAmxAttestationRequestV2 {
@@ -248,14 +249,8 @@ fn recreate_native_signing_test_lane(
 }
 #[test]
 fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let participant = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
-    enable_multilane_nexus(
-        &mut adapter,
-        &keys,
-        participant.lane_id,
-        participant.dataspace_id,
-    );
     let mut request = native_request_with_distinct_participant(
         &adapter,
         &keys,
@@ -286,10 +281,12 @@ fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
     request.participant_proposal = participant_proposal;
     request.participant_settlement = request
         .body
-        .computed_grouped_participant_settlement(&[request.body.source_id])
+        .computed_grouped_participant_settlement(None, &[request.body.source_id])
         .expect("plan-valid predecessor-drift settlement");
     request.body.participant_settlement_commitment = Hash::from(
-        iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
+        request
+            .participant_settlement
+            .computed_hash()
             .expect("hash plan-valid predecessor-drift settlement"),
     );
     assert_eq!(request.validate_plan_binding(), Ok(()));
@@ -310,14 +307,8 @@ fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
 }
 #[test]
 fn native_signing_boundary_rejects_delayed_participant_after_same_id_recreation() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let participant = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
-    enable_multilane_nexus(
-        &mut adapter,
-        &keys,
-        participant.lane_id,
-        participant.dataspace_id,
-    );
     let request = native_request_with_distinct_participant(
         &adapter,
         &keys,
@@ -363,14 +354,8 @@ fn native_signing_boundary_rejects_delayed_participant_after_same_id_recreation(
 }
 #[test]
 fn native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let recreated_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
-    enable_multilane_nexus(
-        &mut adapter,
-        &keys,
-        recreated_route.lane_id,
-        recreated_route.dataspace_id,
-    );
     let participant = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request = native_request_for_distinct_routes(&adapter, &keys, recreated_route, participant);
     assert_eq!(request.validate_plan_binding(), Ok(()));
@@ -408,14 +393,8 @@ fn native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation() {
 }
 #[test]
 fn native_signing_boundary_rechecks_state_after_durable_record_before_signature() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let participant = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
-    enable_multilane_nexus(
-        &mut adapter,
-        &keys,
-        participant.lane_id,
-        participant.dataspace_id,
-    );
     let request = native_request_with_distinct_participant(
         &adapter,
         &keys,

@@ -22,6 +22,11 @@ name = "swift_parity_regen"
 path = "src/bin/swift_parity_regen.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "kagemusha_sender_release_parser"
+path = "src/bin/kagemusha_sender_release_parser.rs"
+required-features = ["dev-tools"]
+
 [features]
 dev-tools = []
 # Enable qualified proving and verification for the generic privacy bridge.
@@ -59,7 +64,7 @@ sorafs_manifest = { workspace = true }
 sha2 = { version = "0.10.8", default-features = false, features = ["std"] }
 curve25519-dalek = { version = "4.1.3", default-features = false, features = ["alloc", "zeroize"] }
 blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
-rand = { version = "0.9.3", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.9.3", default-features = false, features = ["os_rng", "std", "std_rng"] }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 tracing.workspace = true
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }

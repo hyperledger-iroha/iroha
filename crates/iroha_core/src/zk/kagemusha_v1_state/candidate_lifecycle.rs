@@ -1971,7 +1971,8 @@ struct SenderOutboxReservationRecordV1 {
     released: bool,
 }
 
-/// Sender-owned physical capacity ledger for recoverable terminal operations.
+/// Sender-owned working-capacity ledger for live recoverable terminal operations.
+/// Released bindings remain in durable history and telemetry, outside the live admission budget.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaSenderOutboxCapacityV1 {
     total_outbox_bytes: u64,
@@ -2005,13 +2006,13 @@ impl KagemushaSenderOutboxCapacityV1 {
         self.total_outbox_bytes
     }
 
-    /// Return all live reservations plus exact retained reservation metadata.
+    /// Return live payload reservations and live reservation/index metadata.
     #[must_use]
     pub const fn committed_outbox_bytes(&self) -> u64 {
         self.committed_outbox_bytes
     }
 
-    /// Return exact permanent reservation/release metadata bytes.
+    /// Return exact retained reservation, release and operation-index metadata bytes.
     #[must_use]
     pub const fn retained_metadata_bytes(&self) -> u64 {
         self.retained_metadata_bytes
@@ -2264,10 +2265,26 @@ fn sender_outbox_capacity_meters_v1(
         reservations: BTreeMap::new(),
         released_envelopes: BTreeMap::new(),
     })?;
+    let retained_index_bytes = journal
+        .operation_index
+        .retained_record_bytes()
+        .map_err(map_operation_index_error)?;
     let metadata = encoded_metadata
         .checked_sub(baseline_metadata)
-        .and_then(|bytes| bytes.checked_add(journal.operation_index.reserved_bytes()))
+        .and_then(|bytes| bytes.checked_add(retained_index_bytes))
         .ok_or(KagemushaStateErrorV1::StateInvariant)?;
+    let live_metadata = canonical_len(&SenderCapacityMetadataProjectionV1 {
+        reservations: outbox
+            .reservations
+            .iter()
+            .filter(|(_, record)| !record.released)
+            .map(|(id, record)| (*id, *record))
+            .collect(),
+        released_envelopes: BTreeMap::new(),
+    })?
+    .checked_sub(baseline_metadata)
+    .and_then(|bytes| bytes.checked_add(journal.operation_index.reserved_bytes()))
+    .ok_or(KagemushaStateErrorV1::StateInvariant)?;
     let live = outbox
         .reservations
         .values()
@@ -2277,7 +2294,7 @@ fn sender_outbox_capacity_meters_v1(
                 .checked_add(u64::from(record.reservation.reserved_outbox_bytes))
                 .ok_or(KagemushaStateErrorV1::ArithmeticOverflow)
         })?;
-    let committed = metadata
+    let committed = live_metadata
         .checked_add(live)
         .ok_or(KagemushaStateErrorV1::ArithmeticOverflow)?;
     Ok((committed, metadata))
@@ -2532,4 +2549,70 @@ fn digest_raw_bytes(domain: &[u8], bytes: &[u8]) -> DigestV1 {
     hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
     hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod sender_capacity_tests {
+    use super::*;
+
+    #[test]
+    fn released_history_does_not_consume_live_outbox_capacity_or_forget_ids() {
+        let total = LIVE_OUTBOX_SLOT_BYTES_V1 + 4 * 1024;
+        let mut outbox = KagemushaSenderOutboxCapacityV1::new(total);
+        let mut journal = KagemushaOutgoingCandidateJournalV1::default();
+        for tag in 1..=96_u8 {
+            let reservation = KagemushaOutboxReservationV1 {
+                reservation_id: [tag; 32],
+                operation_kind: KagemushaOperationKindV1::RedeemSplit,
+                reserved_outbox_bytes: LIVE_OUTBOX_SLOT_BYTES_V1 as u32,
+                issued_at_ms: 100,
+                expires_at_ms: 10_000,
+            };
+            assert_eq!(
+                outbox.reserve(reservation, &journal),
+                Ok(SenderOutboxReservationOutcomeV1::Reserved)
+            );
+            assert!(outbox.committed_outbox_bytes() > LIVE_OUTBOX_SLOT_BYTES_V1);
+            let mut other = reservation;
+            other.reservation_id = [255; 32];
+            assert_eq!(
+                outbox.reserve(other, &journal),
+                Err(KagemushaStateErrorV1::SenderOutboxCapacityExhausted)
+            );
+            // Exercise the capacity reducer after the Core receipt-owning release path. This
+            // accounting test does not mint a receipt or stand in for its signature checks.
+            let envelope_digest = [tag.wrapping_add(1); 32];
+            outbox
+                .reservations
+                .get_mut(&reservation.reservation_id)
+                .unwrap()
+                .terminal_envelope_digest = Some(envelope_digest);
+            outbox
+                .mark_terminal_released(reservation.reservation_id, envelope_digest)
+                .unwrap();
+            journal
+                .released_envelopes
+                .insert(reservation.reservation_id, envelope_digest);
+            outbox.reconcile_capacity_meters(&journal).unwrap();
+            assert_eq!(outbox.committed_outbox_bytes(), 0);
+            assert_eq!(outbox.available_outbox_bytes(), total);
+            assert_eq!(
+                outbox.reserve(reservation, &journal),
+                Err(KagemushaStateErrorV1::CandidateConflict)
+            );
+        }
+        assert!(outbox.retained_metadata_bytes() > total - LIVE_OUTBOX_SLOT_BYTES_V1);
+        assert_eq!(outbox.reservations.len(), 96);
+        assert_eq!(journal.released_envelopes.len(), 96);
+        let bytes = norito::encode_canonical(&outbox).unwrap();
+        let restored: KagemushaSenderOutboxCapacityV1 = norito::decode_canonical(&bytes).unwrap();
+        restored.validate_recovered(&journal).unwrap();
+        assert_eq!(restored, outbox);
+        let mut retired_accounting = restored;
+        retired_accounting.committed_outbox_bytes = retired_accounting.retained_metadata_bytes;
+        assert_eq!(
+            retired_accounting.validate_capacity_meters(&journal, true),
+            Err(KagemushaStateErrorV1::SnapshotIntegrity)
+        );
+    }
 }

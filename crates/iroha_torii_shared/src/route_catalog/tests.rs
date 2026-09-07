@@ -127,6 +127,7 @@ mod tests {
             application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET,
             application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET,
             application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
+            application_api::OFFLINE_ASSET_REGISTRATION_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET,

@@ -15,6 +15,12 @@ import java.math.BigInteger
 class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     private val bridge: KagemushaCoreCoordinatorBridgeV1,
 ) : KagemushaNativeCoreCoordinatorV1 {
+    override fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray =
+        bridge.invoke(KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION,
+            listOf(u32(operation), canonicalCommand)).single().also {
+            KagemushaDeviceOperationCodecV1.decodeControlCommand(operation, it, canonicalCommand)
+        }
+
     override fun reserveOperationId(operation: Int, operationId: ByteArray, publicBinding: ByteArray): ByteArray =
         bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,
             listOf(u32(operation), operationId, publicBinding)).single()

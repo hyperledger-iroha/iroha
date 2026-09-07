@@ -63,6 +63,15 @@ pub mod isi {
             amount: &Quantity,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            if self
+                .game_custody_by_account
+                .get(resolved_id.account())
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native game custody requires an exact game movement capability".into(),
+                ));
+            }
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
             if sccp_registry_references_custody_asset(
@@ -287,6 +296,11 @@ pub mod isi {
             id: &AssetId,
             amount: &Quantity,
         ) -> Result<Quantity, Error> {
+            if self.game_custody_by_account.get(id.account()).is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native game custody accepts only exact native entry funding".into(),
+                ));
+            }
             self.account(id.account())?;
             let spec = self.asset_definition(id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
@@ -1351,6 +1365,7 @@ pub mod isi {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum NumericAssetTransferSourcePolicy {
         User,
+        GameSessionFunding,
         SccpEscrowDeposit,
         FxEscrowDeposit,
         NativeEscrowCustody,
@@ -1758,7 +1773,7 @@ pub mod isi {
         /// Fund a native escrow retained record.
         NativeEscrow(Vec<u8>),
         /// Fund an exact native racing seat.
-        Race(Vec<u8>),
+        GameSession(Vec<u8>),
         /// Fund a VPN lease retained record.
         VpnLease(Vec<u8>),
         /// Lock one user's outbound transfer in an exact governed SCCP route escrow.
@@ -1802,7 +1817,7 @@ pub mod isi {
         /// Move value according to an exact native escrow record.
         NativeEscrow(Vec<u8>),
         /// Settle or refund an exact native racing liability.
-        Race(Vec<u8>),
+        GameSession(Vec<u8>),
         /// Move value according to an exact VPN lease record.
         VpnLease(Vec<u8>),
         /// Release one exact approved SoraFS reserve withdrawal.
@@ -1851,6 +1866,7 @@ pub mod isi {
                 &purpose,
                 EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(_)
             );
+            let is_game_funding = matches!(&purpose, EmbeddedNumericAssetMovementPurpose::GameSession(_));
             let (debit, tag, binding) = match purpose {
                 EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
@@ -1924,9 +1940,9 @@ pub mod isi {
                     "native-escrow-funding",
                     binding,
                 ),
-                EmbeddedNumericAssetMovementPurpose::Race(binding) => (
+                EmbeddedNumericAssetMovementPurpose::GameSession(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
-                    "race-seat-funding",
+                    "game-seat-funding",
                     binding,
                 ),
                 EmbeddedNumericAssetMovementPurpose::VpnLease(binding) => (
@@ -1961,6 +1977,8 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::SccpEscrowDeposit
                 } else if is_fx_deposit {
                     NumericAssetTransferSourcePolicy::FxEscrowDeposit
+                } else if is_game_funding {
+                    NumericAssetTransferSourcePolicy::GameSessionFunding
                 } else {
                     NumericAssetTransferSourcePolicy::User
                 },
@@ -2064,8 +2082,8 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
-                RetainedNumericAssetMovementPurpose::Race(binding) => (
-                    "race-proof-settlement",
+                RetainedNumericAssetMovementPurpose::GameSession(binding) => (
+                    "game-proof-settlement",
                     binding,
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
@@ -3883,53 +3901,192 @@ pub mod isi {
         }
         Ok(())
     }
-    /// Consume a one-shot capability selected by native race state and proof validation.
-    pub(in crate::smartcontracts::isi) fn execute_verified_race_movement(
+    /// Consume an exact game capability; only initial awards may defer before any transfer writes.
+    pub(in crate::smartcontracts::isi) fn execute_verified_game_movement(
         state_transaction: &mut StateTransaction<'_, '_>,
-        authorization: crate::smartcontracts::isi::race::VerifiedRaceMovement,
-    ) -> Result<(), Error> {
-        let (race_id, authority, funding, legs) = authorization.into_parts();
-        let race = state_transaction.world.races.get(&race_id)
-            .ok_or_else(|| InstructionExecutionError::InvariantViolation("race movement has no retained race".into()))?;
-        let expected_custody = crate::smartcontracts::isi::race::race_custody_account_v1(
-            state_transaction.network_id(), &race_id, &race.asset_definition,
+        authorization: crate::smartcontracts::isi::game::VerifiedGameMovement,
+    ) -> Result<bool, Error> {
+        use crate::smartcontracts::isi::game::VerifiedGameMovementPurpose;
+        use iroha_data_model::game::GamePhaseV1;
+        let (session_id, authority, purpose, legs) = authorization.into_parts();
+        let session = state_transaction
+            .world
+            .game_sessions
+            .get(&session_id)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "session movement has no retained session".into(),
+                )
+            })?;
+        let expected_custody = crate::smartcontracts::isi::game::game_custody_account_v1(
+            state_transaction.network_id(),
+            &session_id,
+            &session.asset_definition,
         );
-        if race.custody != expected_custody || legs.len() > 8 {
-            return Err(InstructionExecutionError::InvariantViolation("race custody or movement bounds invalid".into()));
+        if session.custody != expected_custody
+            || legs.len() > iroha_data_model::game::GAME_MAX_PARTICIPANTS_V1
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "session custody or movement bounds invalid".into(),
+            ));
         }
-        let custody_asset = AssetId::new(race.asset_definition.clone(), expected_custody);
-        let binding = canonical_numeric_movement_binding(&(race_id, race.revision, legs.clone()))?;
-        let movement = if funding {
-            if legs.as_slice() != [(AssetId::new(race.asset_definition.clone(), authority.clone()), custody_asset, race.stake.clone())]
-                || race.phase != iroha_data_model::race::RacePhaseV1::Lobby
-                || race.participants.iter().any(|participant| participant.account == authority)
-            {
-                return Err(InstructionExecutionError::InvariantViolation("race funding differs from exact wallet-authorized seat".into()));
+        let custody_asset = AssetId::new(session.asset_definition.clone(), expected_custody);
+        if !matches!(&purpose, VerifiedGameMovementPurpose::Funding) {
+            let resolved = state_transaction
+                .world
+                .resolve_asset_id_for_current_scope(&custody_asset)?;
+            let balance = state_transaction
+                .world
+                .assets
+                .get(&resolved)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            if balance != session.liability {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "session claims differ from exact retained custody".into(),
+                ));
             }
-            NumericAssetMovementAuthorization::embedded_user(&authority, EmbeddedNumericAssetMovementPurpose::Race(binding))
-        } else {
-            if authority != race.custody || matches!(race.phase, iroha_data_model::race::RacePhaseV1::Settled | iroha_data_model::race::RacePhaseV1::Cancelled) {
-                return Err(InstructionExecutionError::InvariantViolation("race custody has already settled".into()));
-            }
-            let mut total = Quantity::zero();
-            for (source, destination, amount) in &legs {
-                if source != &custody_asset || destination.definition() != &race.asset_definition
-                    || !race.participants.iter().any(|participant| &participant.account == destination.account())
+        }
+        let binding =
+            canonical_numeric_movement_binding(&(session_id, session.revision, legs.clone()))?;
+        let may_defer = matches!(&purpose, VerifiedGameMovementPurpose::Settlement);
+        let movement = match purpose {
+            VerifiedGameMovementPurpose::Funding => {
+                if legs.as_slice()
+                    != [(
+                        AssetId::new(session.asset_definition.clone(), authority.clone()),
+                        custody_asset,
+                        session.stake.clone(),
+                    )]
+                    || session.phase != GamePhaseV1::Lobby
+                    || session
+                        .participants
+                        .iter()
+                        .any(|participant| participant.account == authority)
                 {
-                    return Err(InstructionExecutionError::InvariantViolation("race payout differs from immutable roster".into()));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session funding differs from exact wallet-authorized seat".into(),
+                    ));
                 }
-                total = total.checked_add(amount).map_err(|_| MathError::Overflow)?;
+                let current = state_transaction
+                    .world
+                    .assets
+                    .get(&AssetId::new(
+                        session.asset_definition.clone(),
+                        session.custody.clone(),
+                    ))
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero);
+                if current != session.liability {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session funding reserve differs from its exact admitted liability".into(),
+                    ));
+                }
+                NumericAssetMovementAuthorization::embedded_user(
+                    &authority,
+                    EmbeddedNumericAssetMovementPurpose::GameSession(binding),
+                )
             }
-            if total != race.liability {
-                return Err(InstructionExecutionError::InvariantViolation("race payout must consume exact retained liability".into()));
+            VerifiedGameMovementPurpose::Settlement => {
+                if authority != session.custody
+                    || matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled)
+                    || !session.payout_claims.is_empty()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session custody has already settled".into(),
+                    ));
+                }
+                let mut total = Quantity::zero();
+                for (source, destination, amount) in &legs {
+                    if source != &custody_asset
+                        || destination.definition() != &session.asset_definition
+                        || !session
+                            .participants
+                            .iter()
+                            .any(|participant| &participant.account == destination.account())
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "session payout differs from immutable roster".into(),
+                        ));
+                    }
+                    total = total.checked_add(amount).map_err(|_| MathError::Overflow)?;
+                }
+                if total != session.liability {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session payout must consume exact retained liability".into(),
+                    ));
+                }
+                NumericAssetMovementAuthorization::retained(
+                    &authority,
+                    RetainedNumericAssetMovementPurpose::GameSession(binding),
+                )
             }
-            NumericAssetMovementAuthorization::retained(&authority, RetainedNumericAssetMovementPurpose::Race(binding))
+            VerifiedGameMovementPurpose::Claim { slot } => {
+                let claim = session
+                    .payout_claims
+                    .iter()
+                    .find(|claim| claim.slot == slot)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "session has no matching payout claim".into(),
+                        )
+                    })?;
+                let owner = &session
+                    .participants
+                    .get(usize::from(slot))
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "session claim owner is absent".into(),
+                        )
+                    })?
+                    .account;
+                let [(source, destination, amount)] = legs.as_slice() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session claim requires one exact transfer".into(),
+                    ));
+                };
+                if !matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled)
+                    || source != &custody_asset
+                    || destination.definition() != &session.asset_definition
+                    || destination.account() == &session.custody
+                    || (destination.account() != owner && &authority != owner)
+                    || amount.is_zero()
+                    || amount > &claim.remaining
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session claim exceeds its immutable owner authorization or remaining amount"
+                            .into(),
+                    ));
+                }
+                NumericAssetMovementAuthorization::retained(
+                    &session.custody,
+                    RetainedNumericAssetMovementPurpose::GameSession(binding),
+                )
+            }
         };
-        let applied = PreparedNumericAssetMovementBatch::prepare_with_authorization(state_transaction, &legs, movement)?.apply(state_transaction)?;
+        // This purpose only admits existing destination accounts. Preparation
+        // performs policy checks and checked balance arithmetic without account,
+        // balance, control, event, or transcript writes. A failure can therefore
+        // retain all exact backed claims instead of vetoing the proved result.
+        let prepared = match PreparedNumericAssetMovementBatch::prepare_with_authorization(
+            state_transaction,
+            &legs,
+            movement,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) if may_defer => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let applied = prepared.apply(state_transaction)?;
         for movement in applied {
-            emit_numeric_asset_transfer_events(state_transaction, movement.source_id, movement.destination_id, movement.amount);
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
         }
-        Ok(())
+        Ok(true)
     }
     /// Consume an exact VPN funding, settlement, or refund capability atomically.
     pub(in crate::smartcontracts::isi) fn execute_verified_vpn_numeric_batch(
@@ -5164,8 +5321,7 @@ pub mod isi {
                     source_id.definition(),
                     "transfer",
                 )?;
-                let source_dataspace =
-                    transfer_source_dataspace_hint(state_transaction, source_id)?;
+                let source_dataspace = transfer_source_dataspace_hint(state_transaction, source_id)?;
                 let source_id = state_transaction
                     .world
                     .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
@@ -5252,6 +5408,17 @@ pub mod isi {
                 .into(),
             ));
         }
+        if state_transaction
+            .world
+            .game_custody_by_account
+            .get(destination_id.account())
+            .is_some()
+            && source_policy != NumericAssetTransferSourcePolicy::GameSessionFunding
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native game custody accepts only exact native entry funding".into(),
+            ));
+        }
         let spec = state_transaction
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
@@ -5298,7 +5465,8 @@ pub mod isi {
             ensure_not_fx_corridor_escrow_destination(state_transaction, &destination_id)?;
         }
         match source_policy {
-            NumericAssetTransferSourcePolicy::User => {
+            NumericAssetTransferSourcePolicy::User
+            | NumericAssetTransferSourcePolicy::GameSessionFunding => {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
@@ -5309,8 +5477,7 @@ pub mod isi {
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !is_sccp_custody_asset(state_transaction, &destination_id) {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "SCCP route escrow deposit destination is not governed protocol custody"
-                            .into(),
+                        "SCCP route escrow deposit destination is not governed protocol custody".into(),
                     )
                     .into());
                 }
@@ -5379,8 +5546,7 @@ pub mod isi {
                         .sponsor_vault_custody_account_id
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "fee sponsor custody transfer source does not match configured custody"
-                            .into(),
+                        "fee sponsor custody transfer source does not match configured custody".into(),
                     )
                     .into());
                 }
@@ -5522,16 +5688,13 @@ pub mod isi {
         authorization: crate::state::VerifiedNexusFeeBurn,
     ) -> Result<(), Error> {
         let (source_id, amount) = authorization.into_parts();
-        let expected_definition = crate::block::parse_asset_definition_literal_with_world(
-            world,
-            &nexus.fees.fee_asset_id,
-            0,
-        )
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "verified Nexus fee burn has an invalid configured fee asset".into(),
-            )
-        })?;
+        let expected_definition =
+            crate::block::parse_asset_definition_literal_with_world(world, &nexus.fees.fee_asset_id, 0)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "verified Nexus fee burn has an invalid configured fee asset".into(),
+                    )
+                })?;
         if nexus.fees.settlement_mode
             != iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
             || source_id.definition() != &expected_definition
@@ -5625,6 +5788,16 @@ pub mod isi {
             let resolved_asset_id = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
+            if state_transaction
+                .world
+                .game_custody_by_account
+                .get(resolved_asset_id.account())
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native game custody accepts only exact native entry funding".into(),
+                ));
+            }
             ensure_not_sccp_custody_destination(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_destination(state_transaction, &resolved_asset_id)?;
             let _created = ensure_receiving_account(

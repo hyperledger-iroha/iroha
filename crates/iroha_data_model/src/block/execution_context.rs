@@ -390,6 +390,7 @@ mod tests {
             epoch_id: 9,
             lane_catalog_hash: Hash::new(b"lane-catalog"),
             active_lanes: Vec::new(),
+            lane_authority_catalog: crate::merge::MergeLaneAuthorityCatalogV1::default(),
             incarnation_root: Hash::new(b"incarnations"),
             activation_root: Hash::new(b"activations"),
             lane_snapshots: Vec::new(),

@@ -18,6 +18,12 @@ pub enum Error {
     /// Serialization failure while computing deterministic commitments.
     #[error("failed to encode batch: {0}")]
     Encode(#[from] norito::core::Error),
+    /// A recognized compact artifact has no admitted production verification route.
+    #[error("FASTPQ compact artifact `{schema}` is not production-qualified")]
+    UnqualifiedCompactArtifact {
+        /// Exact recognized nominal schema; this is not a caller-provided label.
+        schema: &'static str,
+    },
     /// The verifier recomputed a commitment that does not match the proof.
     #[error("trace commitment mismatch")]
     CommitmentMismatch,
@@ -199,6 +205,29 @@ pub enum Error {
     InvalidTraceShape {
         /// Human-readable description of the malformed shape.
         details: String,
+    },
+    /// A nonempty query sample cannot use this domain in the canonical field.
+    #[error("query sampling domain {domain_size} is not representable in the canonical field")]
+    QuerySamplingDomainUnsupported {
+        /// Requested number of evaluation points.
+        domain_size: usize,
+    },
+    /// Query sampling would overflow the transcript's challenge counter.
+    #[error("query sampling exhausted the transcript challenge counter")]
+    QuerySamplingTranscriptCounterExhausted,
+    /// A query sample did not finish within its deterministic digest-draw budget.
+    #[error(
+        "query sampling exhausted {draws} digest draws: selected {selected} of {requested} indices in domain {domain_size}"
+    )]
+    QuerySamplingExhausted {
+        /// Number of evaluation points in the requested domain.
+        domain_size: usize,
+        /// Required distinct indices after clamping to the domain size.
+        requested: usize,
+        /// Distinct indices found before rejection; no partial result is returned.
+        selected: usize,
+        /// Exact number of six-candidate digest draws attempted.
+        draws: u32,
     },
     /// Query index exceeded the 32-bit representation limit.
     #[error("query index {index} exceeds 32-bit bound")]

@@ -20,7 +20,7 @@ test("operation-16 public bodies match the Rust-generated canonical fixture", ()
   ));
   assert.equal(fixture.fixture_version, 1);
   assert.equal(fixture.protocol, "KAGEMUSHA");
-  assert.equal(fixture.operation, 21);
+  assert.equal(fixture.operation, 16);
   assert.equal(fixture.structural_only, true);
   assert.equal(fixture.command.schema,
     "iroha_data_model::kagemusha::kagemusha_device_v1::KagemushaDeviceMintStageCommandV1");

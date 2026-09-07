@@ -231,7 +231,8 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         // through their separate exact-scope gate below, and protected SoraFS records pass
         // through the subsystem-specific gates.
         SingularQueryBox::FindExecutorDataModel(_)
-        | SingularQueryBox::FindRaceById(_)
+        | SingularQueryBox::FindGameSessionById(_)
+        | SingularQueryBox::FindExecutionProofVerificationById(_)
         | SingularQueryBox::FindParameters(_)
         | SingularQueryBox::FindAccountRecoveryPolicyByAlias(_)
         | SingularQueryBox::FindAccountRecoveryRequestByAlias(_)
@@ -324,7 +325,8 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindFxCorridorPolicyById(_)
         | SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
         | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
-        | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
+        | SingularQueryBox::FindNftById(_)
+        | SingularQueryBox::FindNftSaleOfferById(_) => NativeQueryAccess::AllLedger,
     }
 }
 #[allow(clippy::too_many_lines)]
@@ -1029,6 +1031,14 @@ pub(crate) fn execute_instruction_detached(
         return Ok(());
     }
     // Registration and removal depend on live ownership and permission state.
+    if any
+        .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+        .is_some()
+    {
+        return Err(ValidationFail::InternalError(
+            "detached: registration requires sequential authorization".to_owned(),
+        ));
+    }
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
             RegisterBox::Peer(_) => {}
@@ -9502,6 +9512,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         UnregisterBox,
         iroha_data_model::isi::Upgrade,
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
     ) {
         return true;
     }
@@ -9592,16 +9603,20 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     }
     // Native race handlers enforce wallet debits, gameplay signatures and proof settlement.
     if is_any!(
-        iroha_data_model::isi::race::OpenRaceV1,
-        iroha_data_model::isi::race::JoinRaceV1,
-        iroha_data_model::isi::race::StartRaceV1,
-        iroha_data_model::isi::race::CommitRaceCheckpointV1,
-        iroha_data_model::isi::race::ChallengeRaceV1,
-        iroha_data_model::isi::race::CommitRaceInputsV1,
-        iroha_data_model::isi::race::RevealRaceInputsV1,
-        iroha_data_model::isi::race::AdvanceRaceDeadlineV1,
-        iroha_data_model::isi::race::SubmitRaceProofV1,
-        iroha_data_model::isi::race::ExpireRaceV1,
+        iroha_data_model::isi::game::RegisterExecutionProofProfileV1,
+        iroha_data_model::isi::game::VerifyExecutionProofV1,
+        iroha_data_model::isi::game::SettleGameSessionV1,
+        iroha_data_model::isi::game::OpenGameSessionV1,
+        iroha_data_model::isi::game::JoinGameSessionV1,
+        iroha_data_model::isi::game::StartGameSessionV1,
+        iroha_data_model::isi::game::CommitGameCheckpointV1,
+        iroha_data_model::isi::game::ChallengeGameSessionV1,
+        iroha_data_model::isi::game::CommitGameInputsV1,
+        iroha_data_model::isi::game::RevealGameInputsV1,
+        iroha_data_model::isi::game::AdvanceGameDeadlineV1,
+        iroha_data_model::isi::game::ExpireGameSessionV1,
+        iroha_data_model::isi::game::ClaimGamePayoutV1,
+        iroha_data_model::isi::game::StakeGameItemV1,
     ) { return true; }
     // Admit the complete native VPN escrow lifecycle so every lease retains
     // its settlement and timeout-refund terminal paths.
@@ -9704,8 +9719,14 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     if is_any!(iroha_data_model::isi::staking::CancelConsensusEvidencePenalty) {
         return true;
     }
+    // Archive registration enforces the registry policy/revision, exact signed
+    // publisher/network/body binding, admitted provider owner and receipt proof
+    // inside Core. Replay also requires the immutable original registrant.
+    if is_any!(iroha_data_model::isi::musubi::RegisterMusubiArchiveV1) {
+        return true;
+    }
     // The Initial executor is a deliberately narrow CBDC bootstrap profile.
-    // Proof-bound social, endorsement, ZK, and Musubi operations are not part of
+    // Proof-bound social, endorsement, ZK, and other Musubi operations are not part of
     // the PK release surface and remain closed until an installed executor
     // explicitly admits them.
     false
@@ -9885,9 +9906,12 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("consensus evidence penalty cancellation requires CanManagePeers");
     }
-    if any
+    if (any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
         .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+            .is_some())
         && !is_genesis
         && !initial_authority_has_exact_permission(
             state_transaction,
@@ -17185,6 +17209,16 @@ mod tests {
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
         let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
             .expect_err("peer registration must be unsupported in detached mode");
+        assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
+    }
+    #[test]
+    fn detached_register_committee_peer_forces_sequential_path() {
+        let peer_id = make_peer_id();
+        let isi =
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(peer_id, Vec::new());
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
+            .expect_err("committee peer registration must be unsupported in detached mode");
         assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
     }
     #[test]

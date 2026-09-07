@@ -190,7 +190,7 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     second_participant.participant_proposal_hash =
         Hash::new(b"second-planned-participant-proposal");
     second_participant.participant_settlement_commitment = second_participant
-        .computed_grouped_participant_settlement_commitment(&[second_participant.source_id])
+        .computed_grouped_participant_settlement_commitment(None, &[second_participant.source_id])
         .expect("single-source test fixture settlement is valid");
     let restarted =
         open_signing_guard(root.path(), &base, signer.clone(), 32).expect("restart signing guard");
@@ -209,7 +209,7 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     second_source.participant_lane_block_height = 2;
     second_source.participant_proposal_hash = Hash::new(b"second-source-participant-proposal");
     second_source.participant_settlement_commitment = second_source
-        .computed_grouped_participant_settlement_commitment(&[second_source.source_id])
+        .computed_grouped_participant_settlement_commitment(None, &[second_source.source_id])
         .expect("single-source test fixture settlement is valid");
     restarted
         .record_body_for_test(&second_source)
@@ -305,9 +305,10 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
             conflicting_tail.participant_proposal_hash =
                 Hash::new(b"unpublished tail participant proposal");
             conflicting_tail.participant_settlement_commitment = conflicting_tail
-                .computed_grouped_participant_settlement_commitment(&[
-                    conflicting_tail.source_id,
-                ])
+                .computed_grouped_participant_settlement_commitment(
+                    None,
+                    &[conflicting_tail.source_id],
+                )
                 .expect("single-source unpublished tail settlement");
             conflicting_tail.coordinator_proposal_hash =
                 Hash::new(b"unpublished tail source-session conflict");
@@ -439,7 +440,7 @@ fn signing_guard_restart_rejects_duplicate_record_sequence() {
         Hash::prehashed(duplicate_body.source_id),
     );
     duplicate_body.participant_settlement_commitment = duplicate_body
-        .computed_grouped_participant_settlement_commitment(&[duplicate_body.source_id])
+        .computed_grouped_participant_settlement_commitment(None, &[duplicate_body.source_id])
         .expect("duplicate-sequence fixture settlement");
     let duplicate = NativeAmxSigningRecordV2::from_body(
         1,

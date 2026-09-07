@@ -493,7 +493,9 @@ impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
             }
         }
         output.push_str("],\"uaid\":")?;
-        self.uaid.json_serialize_to(output)?;
+        // The route publishes the canonical UAID literal, not the model's
+        // derived JSON representation. Its display length is fixed and bounded.
+        self.uaid.to_string().json_serialize_to(output)?;
         output.push('}')?;
         output.end_container();
         Ok(())

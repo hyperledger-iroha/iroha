@@ -471,7 +471,7 @@ def test_public_facade_and_three_message_caps() -> None:
         assert not hasattr(Kagemusha, name)
 
 
-def test_operation_21_mint_stage_bodies_are_canonical_bounded_and_credit_bound() -> None:
+def test_operation_16_mint_stage_bodies_are_canonical_bounded_and_credit_bound() -> None:
     authorization, credit = _mint_stage_pair()
     authorization_bytes = Kagemusha.encode_mint_authorization(authorization)
     credit_bytes = Kagemusha.encode_mint_credit(credit, authorization)
@@ -557,7 +557,7 @@ def test_operation_21_mint_stage_bodies_are_canonical_bounded_and_credit_bound()
         )
 
 
-def test_operation_21_rejects_malformed_results_and_copies_command_inputs() -> None:
+def test_operation_16_rejects_malformed_results_and_copies_command_inputs() -> None:
     raw = Kagemusha.encode_device_mint_stage_result_shape(
         Kagemusha.DeviceMintStageResult(version=1, disposition=0, credit_id=_bytes(1))
     )

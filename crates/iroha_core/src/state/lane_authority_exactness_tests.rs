@@ -25,6 +25,47 @@ fn exact_manifest_authority_fixture(
     (state, keypairs)
 }
 
+fn seed_committee_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
+    let mut world = state.world.block();
+    for keypair in keypairs {
+        let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+            .expect("generate committee key proof of possession");
+        let id = derive_committee_key_id(keypair.public_key());
+        let record = ConsensusKeyRecord {
+            id: id.clone(),
+            public_key: keypair.public_key().clone(),
+            pop: Some(pop),
+            activation_height: 0,
+            expiry_height: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        };
+        world.consensus_keys.insert(id, record.clone());
+        let public_key = record.public_key.to_string();
+        let mut by_public_key = world
+            .consensus_keys_by_pk
+            .get(&public_key)
+            .cloned()
+            .unwrap_or_default();
+        if !by_public_key.contains(&record.id) {
+            by_public_key.push(record.id.clone());
+            world
+                .consensus_keys_by_pk
+                .insert(public_key, by_public_key);
+        }
+    }
+    world.commit();
+}
+
+fn exact_private_settlement_authority_fixture(
+    fault_tolerance: u32,
+    validator_count: u8,
+) -> (State, Vec<KeyPair>) {
+    let (state, keypairs) = exact_manifest_authority_fixture(fault_tolerance, validator_count);
+    seed_committee_consensus_keys_with_pops(&state, &keypairs);
+    (state, keypairs)
+}
+
 fn exact_stake_authority_fixture(
     fault_tolerance: u32,
     validator_count: u8,
@@ -137,7 +178,7 @@ fn private_settlement_authority_for_keys(
 
 #[test]
 fn private_settlement_authority_accepts_exact_state_anchored_f1_roster() {
-    let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
+    let (state, keypairs) = exact_private_settlement_authority_fixture(1, 4);
     let authority = private_settlement_authority_for_keys(&state, 1, &keypairs);
 
     crate::private_settlement::validate_private_settlement_committee_authority_v1(
@@ -149,8 +190,24 @@ fn private_settlement_authority_accepts_exact_state_anchored_f1_roster() {
 }
 
 #[test]
-fn private_settlement_authority_rejects_forged_and_reordered_rosters() {
+fn private_settlement_authority_rejects_validator_only_state_authority() {
     let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
+    let authority = private_settlement_authority_for_keys(&state, 1, &keypairs);
+
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            1,
+            &authority,
+        )
+        .is_err(),
+        "private settlement must not inherit the transparent participant-lane Validator fallback"
+    );
+}
+
+#[test]
+fn private_settlement_authority_rejects_forged_and_reordered_rosters() {
+    let (state, keypairs) = exact_private_settlement_authority_fixture(1, 4);
     let valid = private_settlement_authority_for_keys(&state, 1, &keypairs);
 
     let forged_keys = (0x41_u8..=0x44)
@@ -187,7 +244,7 @@ fn private_settlement_authority_rejects_forged_and_reordered_rosters() {
 
 #[test]
 fn private_settlement_authority_rejects_rotated_roster_and_stale_incarnation() {
-    let (state, original_keys) = exact_manifest_authority_fixture(1, 4);
+    let (state, original_keys) = exact_private_settlement_authority_fixture(1, 4);
     let original = private_settlement_authority_for_keys(&state, 1, &original_keys);
     let replacement_keys = (0x51_u8..=0x54)
         .map(|seed| {
@@ -196,6 +253,7 @@ fn private_settlement_authority_rejects_rotated_roster_and_stale_incarnation() {
         })
         .collect::<Vec<_>>();
     seed_consensus_keys_with_pops(&state, &replacement_keys);
+    seed_committee_consensus_keys_with_pops(&state, &replacement_keys);
     install_lane_manifest_registry_for_keypairs(&state, &[LaneId::SINGLE], &replacement_keys);
     assert!(
         crate::private_settlement::validate_private_settlement_committee_authority_v1(
@@ -229,7 +287,7 @@ fn private_settlement_authority_rejects_rotated_roster_and_stale_incarnation() {
 
 #[test]
 fn private_settlement_authority_rejects_non_f1_committee_geometry() {
-    let (state, keypairs) = exact_manifest_authority_fixture(2, 7);
+    let (state, keypairs) = exact_private_settlement_authority_fixture(2, 7);
     let four_key_claim = private_settlement_authority_for_keys(&state, 1, &keypairs[..4]);
 
     assert!(
@@ -527,11 +585,10 @@ fn exact_lane_committee_rejects_one_of_one_geometry_and_autoscale_pin() {
             LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
             1,
         ),
-        Err(LaneAuthorityError::InvalidAutoscalePin {
+        Err(LaneAuthorityError::InactiveRoute {
             lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
-            required: 4,
-            actual: 1,
+            authority_height: 1,
         })
     );
 }

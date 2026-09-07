@@ -7,7 +7,7 @@ use iroha::data_model::prelude::*;
 use iroha::data_model::{
     block::{
         consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
-        consensus_v2::SumeragiV2GenesisContextParameters,
+        consensus_v2::recommended_data_availability_layout,
     },
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,

@@ -176,11 +176,15 @@ fn bridge_finality_chain_fixture() -> (
         .collect::<Vec<_>>();
     let height = NonZeroU64::new(1).expect("non-zero finality height");
     let header = BlockHeader::new(height, None, None, None, 0, 0);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        mint_finality_roster_fixture(&roster);
     let context = HeightContext {
         network_id: test_network_id(),
         protocol_version: PROTOCOL_VERSION,
         height: height.get(),
         epoch: 0,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -255,6 +259,13 @@ fn bridge_finality_chain_fixture() -> (
         protocol_version: PROTOCOL_VERSION,
         height: successor_height.get(),
         epoch: parent_artifact.height_context.epoch,
+        kagemusha_mint_finality_epoch_id: parent_artifact
+            .height_context
+            .kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: parent_artifact
+            .height_context
+            .kagemusha_mint_finality_epoch_roster
+            .clone(),
         epoch_end_height: parent_artifact.height_context.epoch_end_height,
         next_epoch_snapshot: None,
         mode: parent_artifact.height_context.mode,
@@ -277,13 +288,14 @@ fn bridge_finality_chain_fixture() -> (
         height: successor_height.get(),
         view: 0,
     };
-    let successor_execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"client finality successor parent state"),
-        Hash::new(b"client finality successor post state"),
-        Hash::new(b"client finality successor ordinary writes"),
-        1,
-        Hash::new(b"client finality successor executed wire"),
-    );
+    let successor_execution_commitment =
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"client finality successor parent state"),
+            Hash::new(b"client finality successor post state"),
+            Hash::new(b"client finality successor ordinary writes"),
+            1,
+            Hash::new(b"client finality successor executed wire"),
+        );
     let mut successor_commit_qc = QuorumCertificate {
         round: successor_round,
         proposal_round: successor_round,

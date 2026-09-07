@@ -5,6 +5,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case reserveOperationID = 1, acceptQualification, acceptAuthenticatedReply
   case beginSenderTransition, provePreparedSenderTransition, buildTerminalEnvelope
   case acceptInstalledTerminal, recoverSender, recoverTerminalEnvelope, releaseOutbox
+  case beginObservation
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -102,6 +103,13 @@ public enum KagemushaCoreCoordinatorFrameV1 {
     switch method {
     case .reserveOperationID:
       try count(fields, 3); try operation(fields, 0); try digest(fields, 1); try nonempty(fields, 2)
+      try require(![UInt32(1), 13, 18, 21].contains(number(fields, 0)), "observations cannot reserve durable operation IDs")
+    case .beginObservation:
+      try count(fields, 2)
+      let operation = try number(fields, 0)
+      try require([UInt32(1), 13, 18, 21].contains(operation), "invalid observation operation")
+      _ = try KagemushaDeviceOperationCodecV1.decodeControlCommand(operation: UInt8(operation),
+        requestID: Data(repeating: 1, count: 32), canonicalBytes: fields[1])
     case .acceptQualification:
       try count(fields, 6); try qualification(fields, 0); try digest(fields, 5)
     case .acceptAuthenticatedReply:
@@ -136,6 +144,8 @@ public enum KagemushaCoreCoordinatorFrameV1 {
     switch method {
     case .reserveOperationID:
       try count(response, 1); try digest(response, 0); try equal(response, 0, request, 1)
+    case .beginObservation:
+      try count(response, 1); try digest(response, 0)
     case .acceptQualification, .acceptAuthenticatedReply:
       try count(response, 0)
     case .beginSenderTransition:

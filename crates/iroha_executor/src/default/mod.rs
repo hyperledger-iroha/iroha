@@ -53,19 +53,19 @@ use iroha_smart_contract::data_model::{
         FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
         MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
         RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
-        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPeerWithPop,
-        RegisterPinManifest, RegisterProviderOwner, RegisterPublicLaneValidator,
-        RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-        RemoveAssetKeyValue, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
-        ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
-        ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
-        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
-        SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy, SetSorafsOrderbookPolicy,
-        SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
-        SetSorafsReservePolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
-        SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal,
-        SubmitSorafsRepairTask, SubmitSorafsReserveAppeal, UnregisterProviderOwner,
-        UpsertProviderCredit,
+        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterCommitteePeerWithPop,
+        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
+        RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
+        RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
+        ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+        RevokeProviderIngestCompletionAuthority, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
+        SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+        SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+        SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
+        SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
+        SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+        SubmitSorafsReserveAppeal, UnregisterProviderOwner, UpsertProviderCredit,
         alias_setup::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
@@ -170,7 +170,7 @@ pub use nft::{
 /// Re-export parameter visitor helpers used by the default executor.
 pub use parameter::visit_set_parameter;
 /// Re-export peer visitor helpers used by the default executor.
-pub use peer::{visit_register_peer, visit_unregister_peer};
+pub use peer::{visit_register_committee_peer, visit_register_peer, visit_unregister_peer};
 /// Re-export permission visitor helpers used by the default executor.
 pub use permission::{visit_grant_account_permission, visit_revoke_account_permission};
 /// Re-export role visitor helpers used by the default executor.
@@ -922,6 +922,10 @@ impl InstructionDispatch for InstructionBox {
             visit_register_peer(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<RegisterCommitteePeerWithPop>() {
+            visit_register_committee_peer(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<MintBox>() {
             executor.visit_mint(isi);
             return;
@@ -1026,17 +1030,25 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<RedeemKagemushaV1>() {
             execute!(executor, isi);
         }
+        // Core validates exact-price NFT consent and protected custody.
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::OfferNftV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::BuyNftV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::CancelNftOfferV1>() { execute!(executor, isi); }
         // Native races enforce every signature, deadline and custody effect in Core.
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::OpenRaceV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::JoinRaceV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::StartRaceV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::CommitRaceCheckpointV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::ChallengeRaceV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::CommitRaceInputsV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::RevealRaceInputsV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::AdvanceRaceDeadlineV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::SubmitRaceProofV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::ExpireRaceV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::RegisterExecutionProofProfileV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::VerifyExecutionProofV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::SettleGameSessionV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::OpenGameSessionV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::JoinGameSessionV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::StartGameSessionV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::CommitGameCheckpointV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ChallengeGameSessionV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::CommitGameInputsV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::RevealGameInputsV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::AdvanceGameDeadlineV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ExpireGameSessionV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ClaimGamePayoutV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::StakeGameItemV1>() { execute!(executor, isi); }
         // Core owns the signature, chain/client binding, canonical policy,
         // active-account, address-slot, escrow, and lifecycle invariants. The
         // three VPN instructions form one indivisible native surface and must
@@ -1685,6 +1697,19 @@ pub mod peer {
             execute!(executor, isi);
         }
         deny!(executor, "Can't register peer");
+    }
+    /// Registers a non-global-voting committee peer when genesis or a peer manager submits it.
+    pub fn visit_register_committee_peer<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RegisterCommitteePeerWithPop,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(executor, "Can't register committee peer");
     }
     /// Unregisters a peer if the caller has peer management privileges.
     pub fn visit_unregister_peer<V: Execute + Visit + ?Sized>(
@@ -4044,6 +4069,19 @@ pub mod asset {
             assert!(
                 executor.verdict().is_ok(),
                 "register peer with pop should succeed during genesis"
+            );
+        }
+        #[test]
+        fn visit_instruction_dispatches_register_committee_peer_with_pop() {
+            let (mut executor, _) = StubExecutor::new(1);
+            let peer_keypair = fixture_key_pair(43);
+            let peer_id = PeerId::from(peer_keypair.public_key().clone());
+            let instruction = RegisterCommitteePeerWithPop::new(peer_id, vec![1, 2, 3]);
+            let instruction_box: InstructionBox = instruction.into();
+            visit_instruction(&mut executor, &instruction_box);
+            assert!(
+                executor.verdict().is_ok(),
+                "register committee peer with pop should succeed during genesis"
             );
         }
         #[test]

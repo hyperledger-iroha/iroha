@@ -432,6 +432,7 @@ public enum KagemushaDeviceOperationCodecV1 {
     requestID: Data,
     canonicalBytes: Data
   ) throws -> KagemushaDeviceReceiverCommandV1 {
+    let expectedID = try deviceDigest(requestID, "requestID")
     let descriptor = try receiverCommandDescriptor(operation)
     var reader = DeviceOperationReader(try deviceUnframe(canonicalBytes, descriptor))
     guard try reader.u16Field() == 1, try reader.u8Field() == operation else {
@@ -458,18 +459,21 @@ public enum KagemushaDeviceOperationCodecV1 {
       throw deviceInvalid("receiverCommand.operation")
     }
     try reader.finish()
-    let expectedID = try deviceDigest(requestID, "requestID")
     switch value {
-    case .stage(let canonicalRequest, let canonicalPayment, _):
-      let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
+    case .stage(let requestBytes, let paymentBytes, _):
+      let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(requestBytes)
       let payment = try KagemushaNoritoV1.decodePaymentShapeExact(
-        canonicalPayment, against: request)
+        paymentBytes,
+        against: request)
       guard payment.output.creditID == expectedID else {
-        throw deviceInvalid("receiverCommand.requestID")
+        throw deviceInvalid("payment.creditID does not match requestID")
       }
     case .recoverStaged(let creditID):
-      guard creditID == expectedID else { throw deviceInvalid("receiverCommand.requestID") }
-    case .page: break
+      guard creditID == expectedID else {
+        throw deviceInvalid("creditID does not match requestID")
+      }
+    case .page:
+      break
     }
     guard try encodeReceiverCommand(value) == canonicalBytes else {
       throw deviceInvalid("receiverCommand.canonical")

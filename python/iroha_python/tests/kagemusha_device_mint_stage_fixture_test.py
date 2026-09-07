@@ -22,11 +22,11 @@ def _wire(section: dict[str, object]) -> bytes:
     return raw
 
 
-def test_operation_21_rust_fixture_is_byte_identical() -> None:
+def test_operation_16_rust_fixture_is_byte_identical() -> None:
     fixture = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
     assert fixture["fixture_version"] == 1
     assert fixture["protocol"] == "KAGEMUSHA"
-    assert fixture["operation"] == 21
+    assert fixture["operation"] == 16
     assert fixture["structural_only"] is True
     device_model = "iroha_data_model::kagemusha::kagemusha_device_v1::"
     assert fixture["command"]["schema"] == f"{device_model}KagemushaDeviceMintStageCommandV1"

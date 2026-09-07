@@ -698,6 +698,7 @@ mod tests {
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
+        .set_topology(crate::deterministic_test_genesis_topology_entries())
         .build_raw()
         .expect("complete bounded signed-genesis fixture")
         .with_consensus_meta();

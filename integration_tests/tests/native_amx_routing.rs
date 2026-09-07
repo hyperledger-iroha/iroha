@@ -1806,37 +1806,14 @@ fn assert_grouped_native_amx_execution(
         "BANK participant proposal did not bind the exact ordered two-source entrypoint group"
     );
     ensure!(
-        canonical_bank_leg.participant_settlement.tx_count == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
-            && canonical_bank_leg
-                .participant_settlement
-                .receipts
-                .iter()
-                .map(|receipt| receipt.source_id)
-                .collect::<Vec<_>>()
-                == ordered_sources,
+        canonical_bank_leg.participant_settlement.tx_count() == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
+            && canonical_bank_leg.participant_settlement.source_ids() == ordered_sources.as_slice(),
         "BANK participant settlement did not bind the exact ordered two-source group"
     );
     ensure!(
-        canonical_bank_leg
-            .participant_settlement
-            .receipts
-            .iter()
-            .all(|receipt| {
-                receipt.local_amount == Quantity::zero()
-                    && receipt.xor_due == Quantity::zero()
-                    && receipt.xor_after_haircut == Quantity::zero()
-                    && receipt.xor_variance == Quantity::zero()
-                    && receipt.timestamp_ms == block.header().height().get()
-            })
-            && canonical_bank_leg
-                .participant_settlement
-                .nexus_fee_receipts
-                .is_empty()
-            && canonical_bank_leg
-                .participant_settlement
-                .native_amx_receipts
-                .is_empty(),
-        "BANK participant settlement must remain zero-effect and contain no nested receipts"
+        canonical_bank_leg.participant_settlement.authority_context_height()
+            == block.header().height().get(),
+        "BANK participant control did not bind its exact application authority height"
     );
     for (transaction, receipt) in transactions.iter().zip(&receipts) {
         let leg = bank_participant_leg(receipt)?;

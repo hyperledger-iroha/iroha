@@ -1307,7 +1307,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     && self
                         .lane_block_application_receipt_available_under_prune_and_canonical_guards(
                             &record.payload.origin_proposal,
-                        )
+                        )?
                 {
                     return Err(Self::invalid_historical_autonomous_recovery(
                         path,
@@ -1821,10 +1821,9 @@ mod historical_autonomous_recovery_bound_tests {
         let temp = tempfile::tempdir().expect("temporary decode-accounting namespace");
         let path = temp.path().join(canonical_record_name(0));
         std::fs::write(&path, [0_u8]).expect("write accounted historical recovery record");
-        let accounted =
-            secure_file_metadata::from_path(&path).expect("accounted record metadata");
-        let directory = secure_file_metadata::from_path(temp.path())
-            .expect("recovery directory metadata");
+        let accounted = secure_file_metadata::from_path(&path).expect("accounted record metadata");
+        let directory =
+            secure_file_metadata::from_path(temp.path()).expect("recovery directory metadata");
         let canonical_path = std::fs::canonicalize(&path).expect("canonical recovery path");
         let length_drift = vec![0_u8, 1_u8];
         let length_mismatch = StableSidecarRead {
@@ -1850,8 +1849,7 @@ mod historical_autonomous_recovery_bound_tests {
             bytes: replacement_bytes,
             metadata: StableSidecarMetadata {
                 canonical_path,
-                file: secure_file_metadata::from_path(&path)
-                    .expect("replacement record metadata"),
+                file: secure_file_metadata::from_path(&path).expect("replacement record metadata"),
                 directory,
             },
         };

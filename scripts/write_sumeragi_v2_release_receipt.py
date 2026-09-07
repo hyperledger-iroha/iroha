@@ -749,14 +749,14 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 58
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 63),
-    ("javascript", 61),
-    ("swift", 5),
-    ("kotlin", 7),
-    ("java", 6),
+    ("python", 65),
+    ("javascript", 63),
+    ("swift", 7),
+    ("kotlin", 9),
+    ("java", 7),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (

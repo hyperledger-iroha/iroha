@@ -526,20 +526,29 @@ fn generate_kagemusha_mint_hash_artifacts_with_limits_v1(
     ordinary_ipa_proof_profile_v1(witness.eq_claim_protocol_seed)
         .and_then(|_| ordinary_ipa_proof_profile_v1(witness.ep_claim_protocol_seed).map(|_| ()))
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    // Inventory the fixed dense-MSM geometry before exact-plan discovery constructs either
-    // claim witness graph. This makes an accidental return to the former thousands-of-advice-
-    // columns layout fail before Base assignments, synthesis, or polynomial allocation.
-    preflight_helper_key_configuration_v1::<EqAffine, KagemushaMintHashClaimEqCircuitV1>(
+    // Inventory every fixed auxiliary gadget before discovery builds either claim graph.
+    // Use the same explicit envelope as consuming keygen: ordinary generation supplies the
+    // immutable release caps, while the non-shipping guarded test path supplies its existing
+    // diagnostic caps. Both paths reject excessive advice width before graph allocation.
+    super::artifact_resource_preflight::preflight_key_configuration_with_limits_v1::<
+        EqAffine,
+        KagemushaMintHashClaimEqCircuitV1,
+    >(
         KAGEMUSHA_HALO2_K_V1 as usize,
         auxiliary_only_k16_base_params_v1(),
         KagemushaPastaParityV1::Eq,
-        "mint-hash claim dense auxiliary geometry",
+        "mint-hash claim auxiliary geometry",
+        claim_key_limits,
     )?;
-    preflight_helper_key_configuration_v1::<EpAffine, KagemushaMintHashClaimEpCircuitV1>(
+    super::artifact_resource_preflight::preflight_key_configuration_with_limits_v1::<
+        EpAffine,
+        KagemushaMintHashClaimEpCircuitV1,
+    >(
         KAGEMUSHA_HALO2_K_V1 as usize,
         auxiliary_only_k16_base_params_v1(),
         KagemushaPastaParityV1::Ep,
-        "mint-hash claim dense auxiliary geometry",
+        "mint-hash claim auxiliary geometry",
+        claim_key_limits,
     )?;
     let exact = exact_mint_hash_plan_v1(
         witness.release_id,

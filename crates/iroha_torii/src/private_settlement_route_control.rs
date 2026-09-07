@@ -363,12 +363,13 @@ impl Controller {
                 })
             }
             Action::Hold => {
-                let mut state = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state.held = state.held.saturating_add(1);
-                drop(state);
+                {
+                    let mut state = self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.held = state.held.saturating_add(1);
+                }
                 self.publish_ack(&command)?;
                 loop {
                     tokio::time::sleep(HOLD_POLL).await;
@@ -713,5 +714,17 @@ mod tests {
         assert_eq!(state.held, 2);
         assert_eq!(state.released, 2);
         assert_eq!(state.request_digests, ["2".repeat(64), "3".repeat(64)]);
+    }
+
+    #[test]
+    fn controller_admit_future_is_send() {
+        fn assert_send<T: Send>(_: T) {}
+
+        assert_send(admit(
+            Phase::Prepare,
+            Hash::new(b"send-future-regression"),
+            b"request",
+            b"authenticated-identity",
+        ));
     }
 }

@@ -385,11 +385,11 @@ fn native_amx_receipts_for_apply_fixture(
         Hash::prehashed([0; Hash::LENGTH]),
     );
     let participant_settlement = settlement_template
-        .computed_grouped_participant_settlement(&source_ids)
+        .computed_grouped_participant_settlement(None, &source_ids)
         .expect("derive exact two-source participant settlement");
-    let participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-            .expect("hash exact two-source participant settlement");
+    let participant_settlement_hash = participant_settlement
+        .computed_hash()
+        .expect("hash exact two-source participant settlement");
     let qc_for = |body: NativeAmxAttestationBodyV2| {
         let votes = validator_keys
             .iter()
@@ -518,10 +518,21 @@ v2_apply_test!(
         drop(store);
         let mut reopened = fixture.reopen_body_store();
         assert!(
+            reopened.validated_recovery_catalog().is_empty(),
+            "checksummed restart markers must remain quarantined before semantic replay"
+        );
+        reopened
+            .revalidate_recovered_markers(|body| {
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect("authenticate recovered validation against the exact durable finality");
+        assert!(
             reopened
                 .validated_recovery_catalog()
                 .contains_key(&(fixture.manifest.round, fixture.manifest.subject)),
-            "restart must recover the exact durable validation marker"
+            "only semantically replayed exact validation may restore authority"
         );
         fixture
             .execute(&mut reopened)

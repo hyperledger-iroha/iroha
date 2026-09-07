@@ -8,6 +8,7 @@ import java.nio.file.Paths
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.int
@@ -25,6 +26,93 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class NativeAmxV2GroupedFixtureTest {
+    private fun flatParticipantSettlement(): Map<String, Any?> = linkedMapOf(
+        "lane_id" to 0L, "dataspace_id" to 0L,
+        "lane_incarnation" to "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C",
+        "participant_lane_block_height" to 1L, "authority_context_height" to 2L,
+        "previous_native_settlement_hash" to null,
+        "source_ids" to listOf("F0".repeat(32), "10".repeat(32)),
+    )
+
+    @Test
+    fun `participant settlement uses the exact seven field FIFO frame`() {
+        val wire = flatParticipantSettlement()
+        val parsed = NativeAmxV2.parseParticipantSettlement(wire)
+        assertEquals(0L, parsed.laneId)
+        assertEquals(BigInteger.ZERO, parsed.dataspaceId)
+        assertEquals(BigInteger.ONE, parsed.participantLaneBlockHeight)
+        assertEquals(BigInteger.valueOf(2L), parsed.authorityContextHeight)
+        assertEquals(listOf("F0".repeat(32), "10".repeat(32)), parsed.sourceIds.map { it.value })
+        assertEquals(
+            "hash:350CB3C0D8728E39820775AC522B345C84631FA81BA164F72FB70043657012CF#EB51",
+            parsed.computedHash().value,
+        )
+        val reversed = NativeAmxV2.parseParticipantSettlement(
+            wire + ("source_ids" to listOf("10".repeat(32), "F0".repeat(32))),
+        )
+        assertNotEquals(parsed.computedHash(), reversed.computedHash())
+        assertEquals(null, parsed.previousNativeSettlementHash)
+        assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.ParticipantSettlement(0L, BigInteger.ZERO, parsed.laneIncarnation,
+                BigInteger.ONE, BigInteger.valueOf(2L), null, emptyList())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.ParticipantSettlement(-1L, BigInteger.ZERO, parsed.laneIncarnation,
+                BigInteger.ONE, BigInteger.valueOf(2L), null, parsed.sourceIds)
+        }
+        val previous = wire.getValue("lane_incarnation")
+        assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseParticipantSettlement(wire + ("previous_native_settlement_hash" to previous))
+        }
+        val later = wire + ("participant_lane_block_height" to 2L)
+        val linked = NativeAmxV2.parseParticipantSettlement(later + ("previous_native_settlement_hash" to previous))
+        assertEquals(previous, linked.previousNativeSettlementHash?.value)
+        assertNotEquals(NativeAmxV2.parseParticipantSettlement(later).computedHash(), linked.computedHash())
+    }
+
+    @Test
+    fun `participant settlement rejects retired shape zero authority and invalid membership`() {
+        val wire = flatParticipantSettlement()
+        wire.keys.forEach { missing ->
+            assertFailsWith<IllegalArgumentException> {
+                NativeAmxV2.parseParticipantSettlement(wire - missing)
+            }
+        }
+        listOf("block_height", "tx_count", "total_local_amount", "total_xor_due",
+            "total_xor_after_haircut", "total_xor_variance", "swap_metadata", "receipts",
+            "nexus_fee_receipts", "native_amx_receipts").forEach { retired ->
+            assertFailsWith<IllegalArgumentException> {
+                NativeAmxV2.parseParticipantSettlement(wire + (retired to null))
+            }
+        }
+        for (field in listOf("participant_lane_block_height", "authority_context_height")) {
+            for (invalid in listOf(BigInteger.ZERO, BigInteger.valueOf(-1), BigInteger.ONE.shiftLeft(64))) {
+                assertFailsWith<IllegalArgumentException> {
+                    NativeAmxV2.parseParticipantSettlement(wire + (field to invalid))
+                }
+            }
+        }
+        val markedZero = HashLiteral.canonicalize(ByteArray(32).also { it[31] = 1 })
+        assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseParticipantSettlement(wire + ("participant_lane_block_height" to 2L) +
+                ("previous_native_settlement_hash" to markedZero))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseParticipantSettlement(wire + ("lane_incarnation" to markedZero))
+        }
+        for (invalid in listOf(emptyList(), listOf("00".repeat(32)),
+            listOf("F0".repeat(32), "F0".repeat(32)), listOf("f0".repeat(32)))) {
+            assertFailsWith<IllegalArgumentException> {
+                NativeAmxV2.parseParticipantSettlement(wire + ("source_ids" to invalid))
+            }
+        }
+        val maximum = (1..4096).map { "%064X".format(it) }
+        assertEquals(4096, NativeAmxV2.parseParticipantSettlement(wire + ("source_ids" to maximum)).sourceIds.size)
+        assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseParticipantSettlement(wire + ("source_ids" to maximum + "%064X".format(4097)))
+        }
+    }
+
     @Test
     fun `Rust-owned grouped golden is consumable`() {
         val fixture = fixture()
@@ -54,7 +142,7 @@ class NativeAmxV2GroupedFixtureTest {
         )
         assertEquals(null, firstLeg.participantProposal.payloadBlockHint)
         assertEquals(
-            "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+            "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813",
             firstLeg.participantSettlementHash.value,
         )
         assertTrue(
@@ -76,14 +164,14 @@ class NativeAmxV2GroupedFixtureTest {
                 assertEquals(96, leg.prepareQc.aggregateSignature.size)
                 assertEquals(
                     expectedSources,
-                    leg.participantSettlement.receipts.map { it.sourceId.value },
+                    leg.participantSettlement.sourceIds.map { it.value },
                 )
             }
         }
         val remoteLeg = group.receipts.first().legs.single { it.laneId == 8L }
         assertEquals(BigInteger.ZERO, remoteLeg.participantProposal.descriptor.laneBlockView)
         assertEquals(
-            "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+            "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240",
             remoteLeg.participantSettlementHash.value,
         )
         assertEquals(false, remoteLeg.requiresMixedRoleAnchorValidation)
@@ -149,6 +237,7 @@ class NativeAmxV2GroupedFixtureTest {
     fun `Rust-owned negative corpus is consumable`() {
         val canonical = fixture()
         val controls = canonical.arrayValue("negative_controls")
+        assertEquals(58, controls.size)
         val identifiers = controls.map { it.jsonObject.string("id") }.toSet()
         assertTrue(
             identifiers.containsAll(
@@ -160,6 +249,8 @@ class NativeAmxV2GroupedFixtureTest {
                     "coherent_duplicate_validator_set",
                     "coherent_over_quorum_requirement",
                     "manifest_leaf_hash_tampering",
+                    "missing_previous_native_settlement_hash",
+                    "manifest_missing_previous_native_settlement_hash",
                     "non_canonical_validator_peer_id",
                     "execution_commitment_merge_carrier_wrong_version",
                     "execution_commitment_missing_merge_carrier_field",
@@ -308,6 +399,12 @@ class NativeAmxV2GroupedFixtureTest {
         )
         val artifact = artifacts.single().jsonObject
         val leaf = artifact.objectValue("leaf")
+        require(leaf.containsKey("previous_native_settlement_hash"))
+        val previousNativeHash = leaf.getValue("previous_native_settlement_hash")
+        if (previousNativeHash != JsonNull) {
+            NativeAmxV2.ConsensusHash(previousNativeHash.jsonPrimitive.content)
+            require(leaf.int("participant_height") > 1)
+        }
         val proof = artifact.objectValue("proof")
         require(artifact.int("version") == 1 && leaf.int("version") == 1)
         require(artifact.int("leaf_index") == 0 && proof.int("leaf_index") == 0)
@@ -380,6 +477,7 @@ class NativeAmxV2GroupedFixtureTest {
                 leg.getValue("participant_settlement_hash") ==
                     leaf.getValue("settlement_hash"),
             )
+            require(leg.objectValue("participant_settlement").getValue("previous_native_settlement_hash") == previousNativeHash)
             val body = leg.objectValue("prepare_qc").objectValue("body")
             require(body.getValue("source_id") == member.getValue("source_id"))
             require(

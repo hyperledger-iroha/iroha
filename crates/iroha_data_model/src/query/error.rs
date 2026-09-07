@@ -266,8 +266,10 @@ mod model {
         SorafsModerationNoShow(String),
         /// Failed to find authoritative `SoraFS` moderation status
         SorafsModerationStatus,
-            /// Native race `{0}` not found
-        Race(iroha_crypto::Hash),
+        /// Native game session `{0}` not found
+        GameSession(iroha_crypto::Hash),
+        /// Native execution proof verification `{0}` not found
+        ExecutionProofVerification(iroha_crypto::Hash),
     }
 }
 

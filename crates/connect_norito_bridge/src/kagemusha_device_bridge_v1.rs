@@ -8,8 +8,11 @@
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1, KagemushaDeviceMintStageCommandV1,
-    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
+    KagemushaHardwareProfileV1, kagemusha_decode_device_success_response_v1,
+    kagemusha_device_response_signing_bytes_v1, kagemusha_verify_device_response_v1,
 };
+use iroha_data_model::{NetworkId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
 use sha2::{Digest as _, Sha256};
 
 use crate::KagemushaDeviceLifecycleOperationV1;
@@ -30,8 +33,91 @@ pub(super) const MAX_RESPONSE_BYTES_V1: usize =
 
 const COMMAND_MAGIC_V1: &[u8; 8] = b"IKGMJCM1";
 const RESPONSE_MAGIC_V1: &[u8; 8] = b"IKGMJRS1";
-const RESPONSE_AUTHENTICATOR_DOMAIN_V1: &[u8] = b"iroha:kagemusha:device:v1:response-authenticator";
 const DEVICE_BRIDGE_VERSION_V1: u16 = 1;
+
+/// Public wallet selectors independently pinned by native enrollment/configuration.
+/// Constructing these fields supplies no authenticated state or bootstrap authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObservationWalletContextV1 {
+    pub(crate) network_id: NetworkId,
+    pub(crate) lane_id: [u8; 32],
+    pub(crate) asset: AssetDefinitionId,
+    pub(crate) asset_incarnation: AxtAssetIncarnationV1,
+    pub(crate) scale: u32,
+}
+
+/// Shape-checked startup projection; catalog membership and freshness are separate native checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QualificationProjectionV1 {
+    pub(crate) release_id: [u8; 32],
+    pub(crate) hardware_policy_digest: [u8; 32],
+    pub(crate) core_authorization_key_reference: [u8; 32],
+    pub(crate) profile: KagemushaHardwareProfileV1,
+    pub(crate) credential: KagemushaHardwareCredentialV1,
+}
+
+pub(crate) fn qualification_projection_v1(bytes: &[u8]) -> Option<QualificationProjectionV1> {
+    control_payload::qualification_projection_v1(bytes).ok()
+}
+
+/// Verify exact coordinator reply components using the sole device signature transcript.
+/// This grants no catalog membership, current credential status, or outstanding-challenge authority.
+pub(crate) fn verify_observation_reply_v1(
+    operation: u8,
+    request_id: [u8; 32],
+    command: &[u8],
+    reply: &[u8],
+    authenticator: &[u8],
+    qualification: &QualificationProjectionV1,
+    wallet: &ObservationWalletContextV1,
+) -> bool {
+    if !validate_coordinator_observation_binding_v1(operation, command)
+        || request_id == [0; 32]
+        || reply.is_empty()
+        || reply.len() > MAX_RESPONSE_PAYLOAD_BYTES_V1
+        || authenticator.len() != RESPONSE_AUTHENTICATOR_BYTES_V1
+    {
+        return false;
+    }
+    let Ok(decoded_command) =
+        control_payload::decode_control_command_v1(operation, request_id, command)
+    else {
+        return false;
+    };
+    if control_payload::validate_control_reply_v1(&decoded_command, reply).is_err()
+        || control_payload::validate_observation_reply_context_v1(
+            operation,
+            reply,
+            qualification,
+            wallet,
+        )
+        .is_err()
+    {
+        return false;
+    }
+    let Some(operation) = KagemushaDeviceLifecycleOperationV1::from_code(operation) else {
+        return false;
+    };
+    let frame = DeviceSuccessResponseFrameV1 {
+        operation,
+        request_id,
+        payload: reply,
+        authenticator,
+    };
+    let Some(transcript) = response_authenticator_transcript_v1(
+        frame,
+        command,
+        qualification.hardware_policy_digest,
+        qualification.profile.qualification_report_digest,
+    ) else {
+        return false;
+    };
+    KagemushaDeviceSignatureV1::from_raw_bytes(authenticator)
+        .and_then(|signature| {
+            signature.verify(&qualification.credential.device_public_key, &transcript)
+        })
+        .is_ok()
+}
 
 /// Stock-service disposition after exact frame and implemented payload checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,7 +215,6 @@ struct DeviceSuccessResponseFrameV1<'a> {
     operation: KagemushaDeviceLifecycleOperationV1,
     request_id: [u8; 32],
     payload: &'a [u8],
-    payload_digest: [u8; 32],
     authenticator: &'a [u8],
 }
 
@@ -138,51 +223,17 @@ fn decode_success_response_frame_v1(
     expected_operation: KagemushaDeviceLifecycleOperationV1,
     expected_request_id: [u8; 32],
 ) -> Option<DeviceSuccessResponseFrameV1<'_>> {
-    if !(RESPONSE_HEADER_BYTES_V1..=MAX_RESPONSE_BYTES_V1).contains(&bytes.len())
-        || bytes.get(..8)? != RESPONSE_MAGIC_V1
-        || u16::from_le_bytes(bytes.get(8..10)?.try_into().ok()?) != DEVICE_BRIDGE_VERSION_V1
-    {
-        return None;
-    }
-    let operation = KagemushaDeviceLifecycleOperationV1::from_code(bytes[10])?;
-    if operation != expected_operation || bytes[11] != 0 {
-        return None;
-    }
-    let request_id: [u8; 32] = bytes.get(12..44)?.try_into().ok()?;
-    if request_id == [0; 32] || request_id != expected_request_id {
-        return None;
-    }
-    let payload_len =
-        usize::try_from(u32::from_le_bytes(bytes.get(44..48)?.try_into().ok()?)).ok()?;
-    let authenticator_len =
-        usize::try_from(u32::from_le_bytes(bytes.get(48..52)?.try_into().ok()?)).ok()?;
-    if payload_len == 0
-        || payload_len > MAX_RESPONSE_PAYLOAD_BYTES_V1
-        || authenticator_len != RESPONSE_AUTHENTICATOR_BYTES_V1
-        || RESPONSE_HEADER_BYTES_V1
-            .checked_add(payload_len)?
-            .checked_add(authenticator_len)?
-            != bytes.len()
-    {
-        return None;
-    }
-    let payload_digest: [u8; 32] = bytes.get(52..84)?.try_into().ok()?;
-    let authenticator_digest: [u8; 32] = bytes.get(84..116)?.try_into().ok()?;
-    let payload = bytes.get(RESPONSE_HEADER_BYTES_V1..RESPONSE_HEADER_BYTES_V1 + payload_len)?;
-    let authenticator = bytes.get(RESPONSE_HEADER_BYTES_V1 + payload_len..)?;
-    let actual_payload_digest: [u8; 32] = Sha256::digest(payload).into();
-    let actual_authenticator_digest: [u8; 32] = Sha256::digest(authenticator).into();
-    if payload_digest != actual_payload_digest
-        || authenticator_digest != actual_authenticator_digest
-    {
-        return None;
-    }
+    let frame = kagemusha_decode_device_success_response_v1(
+        bytes,
+        expected_operation.code(),
+        expected_request_id,
+    )
+    .ok()?;
     Some(DeviceSuccessResponseFrameV1 {
-        operation,
-        request_id,
-        payload,
-        payload_digest,
-        authenticator,
+        operation: expected_operation,
+        request_id: frame.request_id,
+        payload: frame.payload,
+        authenticator: frame.authenticator,
     })
 }
 
@@ -192,33 +243,19 @@ fn decode_success_response_frame_v1(
 /// it hashes the signature itself and therefore cannot be a signature input.
 fn response_authenticator_transcript_v1(
     frame: DeviceSuccessResponseFrameV1<'_>,
+    canonical_command: &[u8],
     hardware_policy_id: [u8; 32],
     qualification_report_digest: [u8; 32],
 ) -> Option<Vec<u8>> {
-    if hardware_policy_id == [0; 32]
-        || qualification_report_digest == [0; 32]
-        || hardware_policy_id == qualification_report_digest
-    {
-        return None;
-    }
-    let payload_len = u32::try_from(frame.payload.len()).ok()?;
-    let authenticator_len = u32::try_from(RESPONSE_AUTHENTICATOR_BYTES_V1).ok()?;
-    let mut transcript = Vec::with_capacity(
-        RESPONSE_AUTHENTICATOR_DOMAIN_V1.len() + 1 + 8 + 2 + 1 + 1 + 32 + 4 + 4 + 32 + 64,
-    );
-    transcript.extend_from_slice(RESPONSE_AUTHENTICATOR_DOMAIN_V1);
-    transcript.push(0);
-    transcript.extend_from_slice(RESPONSE_MAGIC_V1);
-    transcript.extend_from_slice(&DEVICE_BRIDGE_VERSION_V1.to_le_bytes());
-    transcript.push(frame.operation.code());
-    transcript.push(0); // Success.
-    transcript.extend_from_slice(&frame.request_id);
-    transcript.extend_from_slice(&payload_len.to_le_bytes());
-    transcript.extend_from_slice(&authenticator_len.to_le_bytes());
-    transcript.extend_from_slice(&frame.payload_digest);
-    transcript.extend_from_slice(&hardware_policy_id);
-    transcript.extend_from_slice(&qualification_report_digest);
-    Some(transcript)
+    kagemusha_device_response_signing_bytes_v1(
+        frame.operation.code(),
+        frame.request_id,
+        canonical_command,
+        frame.payload,
+        hardware_policy_id,
+        qualification_report_digest,
+    )
+    .ok()
 }
 
 /// Verify a successful response under an already accepted device key.
@@ -227,28 +264,23 @@ fn response_authenticator_transcript_v1(
 /// resolve the returned release through Core's authenticated release catalog.
 pub(super) fn verify_success_response_authenticator_v1(
     bytes: &[u8],
+    canonical_command: &[u8],
     expected_operation: KagemushaDeviceLifecycleOperationV1,
     expected_request_id: [u8; 32],
     hardware_policy_id: [u8; 32],
     qualification_report_digest: [u8; 32],
     device_public_key: &KagemushaDevicePublicKeyV1,
 ) -> bool {
-    let Some(frame) =
-        decode_success_response_frame_v1(bytes, expected_operation, expected_request_id)
-    else {
-        return false;
-    };
-    let Some(transcript) = response_authenticator_transcript_v1(
-        frame,
+    kagemusha_verify_device_response_v1(
+        bytes,
+        canonical_command,
+        expected_operation.code(),
+        expected_request_id,
         hardware_policy_id,
         qualification_report_digest,
-    ) else {
-        return false;
-    };
-    let Ok(signature) = KagemushaDeviceSignatureV1::from_raw_bytes(frame.authenticator) else {
-        return false;
-    };
-    signature.verify(device_public_key, &transcript).is_ok()
+        device_public_key,
+    )
+    .is_ok()
 }
 
 /// Bootstrap the response key from operation 1 after validating its profile
@@ -258,6 +290,7 @@ pub(super) fn verify_success_response_authenticator_v1(
 /// membership before a wallet session may perform monetary operations.
 pub(super) fn verify_qualification_response_authenticator_v1(
     bytes: &[u8],
+    canonical_command: &[u8],
     expected_request_id: [u8; 32],
     hardware_policy_id: [u8; 32],
     qualification_report_digest: [u8; 32],
@@ -272,6 +305,7 @@ pub(super) fn verify_qualification_response_authenticator_v1(
     .ok()?;
     verify_success_response_authenticator_v1(
         bytes,
+        canonical_command,
         operation,
         expected_request_id,
         hardware_policy_id,
@@ -289,6 +323,12 @@ pub(super) fn classify_stock_device_command_v1(bytes: &[u8]) -> StockDeviceComma
     let Some(frame) = decode_command_frame_v1(bytes) else {
         return StockDeviceCommandDispositionV1::Malformed;
     };
+    classify_stock_device_payload_v1(frame)
+}
+
+fn classify_stock_device_payload_v1(
+    frame: DeviceCommandFrameV1<'_>,
+) -> StockDeviceCommandDispositionV1 {
     match frame.operation {
         KagemushaDeviceLifecycleOperationV1::ReadActiveHardwareCredential
         | KagemushaDeviceLifecycleOperationV1::SignReceiveAcknowledgement
@@ -363,6 +403,60 @@ pub(super) fn classify_stock_device_command_v1(bytes: &[u8]) -> StockDeviceComma
             }
         }
     }
+}
+
+/// Validate the sole reservation binding contract before native coordinator admission.
+/// Sender preparation reserves its tagged public inputs before the private preparation exists;
+/// every other operation reserves its exact typed device command body. This proves shape and
+/// nonce correlation only. No command is dispatched or authenticated by this predicate.
+pub(crate) fn validate_coordinator_reservation_binding_v1(
+    operation: u8,
+    operation_id: [u8; 32],
+    binding: &[u8],
+) -> bool {
+    if crate::kagemusha_core_coordinator_v1::is_observation_operation_v1(u32::from(operation)) {
+        return false;
+    }
+    let Some(operation) = KagemushaDeviceLifecycleOperationV1::from_code(operation) else {
+        return false;
+    };
+    if operation_id == [0; 32] || binding.is_empty() || binding.len() > MAX_COMMAND_PAYLOAD_BYTES_V1
+    {
+        return false;
+    }
+    if operation == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition {
+        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+        let maximum = MAX_COMMAND_PAYLOAD_BYTES_V1;
+        let Ok(inputs) = norito::decode_canonical_with_limits::<KagemushaOutgoingPublicInputsV1>(
+            binding,
+            norito::DecodeLimits::new(maximum, maximum, maximum * 4, maximum * 8, 32),
+        ) else {
+            return false;
+        };
+        if !norito::encode_canonical(&inputs).is_ok_and(|canonical| canonical == binding) {
+            return false;
+        }
+        return match &inputs {
+            KagemushaOutgoingPublicInputsV1::SendSplit { .. } => inputs.decode_send_parts().is_ok(),
+            KagemushaOutgoingPublicInputsV1::RedeemSplit { amount, .. } => *amount != 0,
+        };
+    }
+    classify_stock_device_payload_v1(DeviceCommandFrameV1 {
+        operation,
+        request_id: operation_id,
+        payload: binding,
+    }) == StockDeviceCommandDispositionV1::Unavailable
+}
+
+/// Check a transient read's exact typed body without allocating a nonce or executing a device.
+pub(crate) fn validate_coordinator_observation_binding_v1(operation: u8, binding: &[u8]) -> bool {
+    if !crate::kagemusha_core_coordinator_v1::is_observation_operation_v1(u32::from(operation))
+        || binding.is_empty()
+        || binding.len() > MAX_COMMAND_PAYLOAD_BYTES_V1
+    {
+        return false;
+    }
+    control_payload::decode_observation_command_v1(operation, binding).is_ok()
 }
 
 /// Construct an implemented canonical body inside an exact test command frame.
@@ -480,6 +574,7 @@ mod tests {
         let hardware_policy_id = [0x62; 32];
         let qualification_report_digest = [0x63; 32];
         let payload = b"canonical-success-body";
+        let command = b"canonical-command-body";
         let signing_key = SigningKey::from_bytes((&[0x64; 32]).into()).unwrap();
         let device_public_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
             signing_key
@@ -507,6 +602,7 @@ mod tests {
         let frame = decode_success_response_frame_v1(&response, operation, request_id).unwrap();
         let transcript = response_authenticator_transcript_v1(
             frame,
+            command,
             hardware_policy_id,
             qualification_report_digest,
         )
@@ -520,6 +616,7 @@ mod tests {
 
         assert!(verify_success_response_authenticator_v1(
             &response,
+            command,
             operation,
             request_id,
             hardware_policy_id,
@@ -528,9 +625,11 @@ mod tests {
         ));
         assert_eq!(
             unsafe {
-                crate::connect_norito_kagemusha_device_response_authenticator_v1_verify(
+                crate::connect_norito_kagemusha_device_command_response_v1_verify(
                     response.as_ptr(),
                     response.len(),
+                    command.as_ptr(),
+                    command.len(),
                     operation.code(),
                     request_id.as_ptr(),
                     request_id.len(),
@@ -546,6 +645,7 @@ mod tests {
         );
         assert!(!verify_success_response_authenticator_v1(
             &response,
+            command,
             operation,
             request_id,
             [0x65; 32],
@@ -554,6 +654,7 @@ mod tests {
         ));
         assert!(!verify_success_response_authenticator_v1(
             &response,
+            command,
             operation,
             [0x66; 32],
             hardware_policy_id,
@@ -562,9 +663,19 @@ mod tests {
         ));
 
         let mut altered_payload = response.clone();
+        assert!(!verify_success_response_authenticator_v1(
+            &response,
+            b"another-command-with-the-same-native-nonce",
+            operation,
+            request_id,
+            hardware_policy_id,
+            qualification_report_digest,
+            &device_public_key,
+        ));
         altered_payload[RESPONSE_HEADER_BYTES_V1] ^= 1;
         assert!(!verify_success_response_authenticator_v1(
             &altered_payload,
+            command,
             operation,
             request_id,
             hardware_policy_id,
@@ -576,6 +687,7 @@ mod tests {
         wrong_width.pop();
         assert!(!verify_success_response_authenticator_v1(
             &wrong_width,
+            command,
             operation,
             request_id,
             hardware_policy_id,

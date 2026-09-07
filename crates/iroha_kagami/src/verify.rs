@@ -26,6 +26,7 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
+
 /// Verify a genesis manifest against a known profile (chain id, cadence, VRF seed, PoPs).
 #[derive(Debug, Parser, Clone)]
 pub struct Args {

@@ -77,6 +77,11 @@ fn historical_certificate_payload_corruption_is_fail_stop_and_retains_owner() {
         .expect("canonical corrupt-payload carrier")
         .as_ref()
         .clone();
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
+    adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish exact finality before testing historical payload corruption");
     let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
     let certificate = LaneBlockCertificateV1 {
@@ -84,7 +89,7 @@ fn historical_certificate_payload_corruption_is_fail_stop_and_retains_owner() {
         prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
         commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
     };
-    let successor_context = successor_context_for_parent(&adapter, &parent_block);
+    let successor_context = successor_context_for_parent(&adapter, &parent_block, &keys);
     let restart = LaneAdapterRestartParts::capture(&adapter);
     drop(adapter);
     let mut successor = restart
@@ -152,7 +157,9 @@ fn committed_output_source_remains_hard_bounded_after_persistence() {
         "persisting the first source must not free its bounded reconstruction slot"
     );
     adapter.committed_lane_outputs.clear();
-    adapter.collect_committed_lane_sessions();
+    adapter
+        .collect_committed_lane_sessions()
+        .expect("collect eligible committed sessions");
     assert_eq!(adapter.committed_lane_outputs.len(), 1);
     assert_eq!(adapter.pending_committed_lanes.len(), 1);
 }
@@ -213,8 +220,16 @@ fn completed_commit_qc_round_robin_does_not_restart_ahead_of_pending_source() {
         second_lane,
         second_dataspace,
     );
-    assert!(adapter.proposal_predecessor_is_ready_for_progress(&first_proposal));
-    assert!(adapter.proposal_predecessor_is_ready_for_progress(&second_proposal));
+    assert!(
+        adapter
+            .proposal_predecessor_is_ready_for_progress(&first_proposal)
+            .expect("read exact predecessor readiness")
+    );
+    assert!(
+        adapter
+            .proposal_predecessor_is_ready_for_progress(&second_proposal)
+            .expect("read exact predecessor readiness")
+    );
     let first_session = committed_lane_session(&first_proposal, &keys);
     let second_session = committed_lane_session(&second_proposal, &keys);
     adapter.effects.clear();
@@ -299,20 +314,35 @@ fn committed_lane_output_survives_actual_session_cache_eviction() {
         "cache pressure must actually evict the first drained session"
     );
     assert!(
-        adapter.outbound_lane_message_predecessor_is_ready(&BlockMessage::LaneBlockQc(
-            first_session.commit_qc.clone()
-        ))
+        adapter
+            .outbound_lane_message_predecessor_is_ready(&BlockMessage::LaneBlockQc(
+                first_session.commit_qc.clone()
+            ))
+            .expect("read exact retained output predecessor")
     );
     let mut unrelated = first_session.commit_qc.clone();
     unrelated.body.proposal_hash = Hash::new(b"unowned completed output");
     assert!(
-        !adapter.outbound_lane_message_predecessor_is_ready(&BlockMessage::LaneBlockQc(unrelated))
+        !adapter
+            .outbound_lane_message_predecessor_is_ready(&BlockMessage::LaneBlockQc(unrelated))
+            .expect("read unrelated output predecessor")
     );
     adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("one effect slot");
-    adapter.schedule_committed_lane_outputs();
+    adapter
+        .schedule_committed_lane_outputs()
+        .expect("schedule retained committed outputs");
     assert!(matches!(adapter.drain_effects(1).pop(),
         Some(V2LaneWorkEffect::PostLaneBlock { message: BlockMessage::LaneBlockQc(qc), .. })
             if qc == first_session.commit_qc));
+    adapter
+        .schedule_committed_lane_outputs()
+        .expect("rotate to the blocked next completed source");
+    assert!(
+        matches!(adapter.drain_effects(1).pop(),
+        Some(V2LaneWorkEffect::PostLaneBlock { message: BlockMessage::LaneBlockQc(qc), .. })
+            if qc == second_session.commit_qc),
+        "one output slot must alternate sources rather than restart the first source"
+    );
 }
 #[test]
 fn completed_commit_qc_retransmits_after_volatile_peer_handoff() {
@@ -341,7 +371,9 @@ fn completed_commit_qc_retransmits_after_volatile_peer_handoff() {
     adapter.drive_lane_sessions();
     let _ = adapter.drain_effects(usize::MAX);
     assert!(
-        !adapter.has_pending_committed_output_handoff(),
+        !adapter
+            .has_pending_committed_output_handoff()
+            .expect("read pending exact output handoff"),
         "the first complete fanout must have transferred to the volatile peer corridor"
     );
     adapter
@@ -584,7 +616,12 @@ fn lane_route_reset_watermark_is_global_proposal_height_not_lane_local_height() 
         "a newly recreated lane-local height 1 must become active at global reset + 1"
     );
     assert!(
-        fresh_adapter.lane_proposal_authorized(&fresh_lane_one, None, true, 0),
+        fresh_adapter.lane_proposal_authorized(
+            &fresh_lane_one,
+            lane_proposal_author(&fresh_lane_one),
+            false,
+            0
+        ),
         "the fresh lane-local height 1 proposal must pass the complete proposal guard"
     );
     let (stale_adapter, stale_keys) =
@@ -620,7 +657,12 @@ fn lane_route_reset_watermark_is_global_proposal_height_not_lane_local_height() 
         "a high lane-local height must not outrun the global reset watermark"
     );
     assert!(
-        !stale_adapter.lane_proposal_authorized(&stale_high_lane_height, None, true, 0),
+        !stale_adapter.lane_proposal_authorized(
+            &stale_high_lane_height,
+            lane_proposal_author(&stale_high_lane_height),
+            false,
+            0
+        ),
         "the complete proposal guard must reject evidence at the reset boundary"
     );
 }
@@ -645,7 +687,7 @@ fn lane_proposal_vote_and_qc_reject_non_authoritative_incarnation() {
     );
     let active_vote = signed_lane_vote(&active, CertPhase::Prepare, &keys[0]);
     let active_qc = lane_qc(&active, &keys);
-    assert!(adapter.lane_proposal_authorized(&active, None, true, 0));
+    assert!(adapter.lane_proposal_authorized(&active, lane_proposal_author(&active), false, 0));
     assert!(adapter.lane_vote_authorized(&active_vote, 0));
     assert!(adapter.lane_qc_authorized(&active_qc, 0));
     let stale_incarnation = Hash::new(b"retired-v2-lane-work-incarnation");
@@ -666,7 +708,7 @@ fn lane_proposal_vote_and_qc_reject_non_authoritative_incarnation() {
         "route admission must bind the exact active incarnation"
     );
     assert!(
-        !adapter.lane_proposal_authorized(&stale, None, true, 0),
+        !adapter.lane_proposal_authorized(&stale, lane_proposal_author(&stale), false, 0),
         "a well-formed, correctly authored proposal from a retired incarnation must fail"
     );
     assert!(
@@ -697,7 +739,7 @@ pub(in crate::sumeragi) fn quiet_historical_recovery_fixture() -> V2LaneWorkAdap
         prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
         commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
     };
-    let successor_context = successor_context_for_parent(&adapter, &parent_block);
+    let successor_context = successor_context_for_parent(&adapter, &parent_block, &keys);
     let restart = LaneAdapterRestartParts::capture(&adapter);
     drop(adapter);
     let mut successor = restart
@@ -712,7 +754,11 @@ pub(in crate::sumeragi) fn quiet_historical_recovery_fixture() -> V2LaneWorkAdap
         ),
         V2LaneIngressOutcome::Inserted
     );
-    assert!(successor.has_pending_historical_recovery());
+    assert!(
+        successor
+            .has_pending_historical_recovery()
+            .expect("read pending historical recovery")
+    );
     successor
 }
 #[test]
@@ -977,19 +1023,40 @@ fn canonical_executed_block_dispatch_drains_old_output_before_current_request() 
         .expect("install one shared exact-output slot");
     let blocked = Arc::new(AtomicBool::new(true));
     let blocked_for_hook = Arc::clone(&blocked);
-    let admitted = Arc::new(AtomicUsize::new(0));
+    let admitted = Arc::new(Mutex::new(Vec::new()));
     let admitted_for_hook = Arc::clone(&admitted);
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
     services.set_exact_output_admission_hook(move |post, ticket| {
         if blocked_for_hook.load(Ordering::Acquire) {
+            let ticket = ticket.unwrap_or_else(|| {
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixtures_for_hook
+                    .lock()
+                    .expect("retain exact actor-ticket owner")
+                    .push(fixture);
+                ticket
+            });
+            let rank = ticket.rank().expect("exact actor ticket remains ranked");
             return Err(
                 iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
                     message: post,
-                    ticket,
-                    rank: 1,
+                    ticket: Some(ticket),
+                    rank,
                 },
             );
         }
-        admitted_for_hook.fetch_add(1, Ordering::Relaxed);
+        let crate::NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("canonical recovery output must be a block message");
+        };
+        assert!(matches!(
+            envelope.as_message(),
+            BlockMessage::LaneHistoricalRecoveryRequest(_)
+        ));
+        admitted_for_hook
+            .lock()
+            .expect("record exact admitted recovery request")
+            .push((post.peer_id.clone(), HashOf::new(envelope.as_message())));
         Ok(())
     });
     let output_guard = services.lifecycle_output_guard();
@@ -1004,8 +1071,10 @@ fn canonical_executed_block_dispatch_drains_old_output_before_current_request() 
     )
     .expect("install exact-output retry fixture");
     assert!(recovery.service_next().expect("queue responder A request"));
-    let first_peer = match recovery.effects.front() {
-        Some(V2LaneWorkEffect::PostLaneBlock { peer, .. }) => peer.clone(),
+    let (first_peer, first_message_hash) = match recovery.effects.front() {
+        Some(V2LaneWorkEffect::PostLaneBlock { peer, message }) => {
+            (peer.clone(), HashOf::new(message))
+        }
         other => panic!("canonical recovery must queue a lane request: {other:?}"),
     };
     let (_, first_dispatched) =
@@ -1028,12 +1097,14 @@ fn canonical_executed_block_dispatch_drains_old_output_before_current_request() 
             .expect("coalesce responder A retry under exact ownership");
     assert!(retry_dispatched);
     assert!(recovery.service_next().expect("rotate to responder B"));
-    let second_peer = match recovery.effects.front() {
-        Some(V2LaneWorkEffect::PostLaneBlock { peer, .. }) => peer.clone(),
+    let (second_peer, second_message_hash) = match recovery.effects.front() {
+        Some(V2LaneWorkEffect::PostLaneBlock { peer, message }) => {
+            (peer.clone(), HashOf::new(message))
+        }
         other => panic!("rotated recovery must queue a lane request: {other:?}"),
     };
     assert_ne!(second_peer, first_peer);
-    let mut filler_count = 0_usize;
+    let mut filler_messages = Vec::new();
     for nonce in 0_u8..8 {
         if !services
             .can_retain_lane_work_effect(
@@ -1050,16 +1121,15 @@ fn canonical_executed_block_dispatch_drains_old_output_before_current_request() 
         filler.version = filler
             .version
             .saturating_add(u16::from(nonce).saturating_add(1));
+        let filler = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(filler));
         services
-            .post_lane_block(
-                second_peer.clone(),
-                BlockMessage::LaneHistoricalRecoveryRequest(Box::new(filler)),
-            )
+            .post_lane_block(second_peer.clone(), filler.clone())
             .expect("retain exact-output capacity filler");
-        filler_count = filler_count.saturating_add(1);
+        filler_messages.push((second_peer.clone(), HashOf::new(&filler)));
     }
     assert_ne!(
-        filler_count, 0,
+        filler_messages.len(),
+        0,
         "the fixture must consume responder B capacity"
     );
     assert!(
@@ -1084,12 +1154,42 @@ fn canonical_executed_block_dispatch_drains_old_output_before_current_request() 
             .has_pending_exact_output()
             .expect("all canonical exact output reaches transport")
     );
+    let admitted = admitted
+        .lock()
+        .expect("inspect exact admitted recovery requests");
+    let current = (second_peer, second_message_hash);
+    assert!(
+        !admitted.contains(&(first_peer, first_message_hash)),
+        "responder abandonment cancels the coalesced A request before transport"
+    );
     assert_eq!(
-        admitted.load(Ordering::Relaxed),
-        filler_count.saturating_add(3),
-        "both responder-A attempts, every filler, and responder B cross transport exactly once"
+        admitted.last(),
+        Some(&current),
+        "the current B request follows every surviving older filler"
+    );
+    let mut expected = filler_messages;
+    expected.push(current);
+    assert_eq!(
+        admitted.len(),
+        expected.len(),
+        "each surviving output crosses transport once"
+    );
+    assert_eq!(
+        admitted.iter().cloned().collect::<BTreeSet<_>>(),
+        expected.into_iter().collect::<BTreeSet<_>>(),
+        "only exact filler messages and the current B request reach transport"
+    );
+    let tickets = ticket_fixtures
+        .lock()
+        .expect("inspect cancelled responder A actor owner");
+    assert_eq!(tickets[0].waiter_count(), 0);
+    assert_eq!(
+        tickets[0].ticket_drop_cancellations(),
+        1,
+        "the exact coalesced A owner releases its real actor ticket once"
     );
 }
+
 #[test]
 fn historical_missing_canonical_block_schedules_authenticated_retry_then_completes() {
     let mut unbound = quiet_historical_recovery_fixture();
@@ -1143,7 +1243,7 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
         commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
     };
-    adapter.context = successor_context_for_parent(&adapter, &parent_block);
+    adapter.context = successor_context_for_parent(&adapter, &parent_block, &keys);
     assert_eq!(
         accept_lane_message_from(
             &mut adapter,
@@ -1168,6 +1268,10 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
     assert_eq!(
         wait.retry(),
         HistoricalRecoveryRetry::AuthenticatedBlockSync
+    );
+    assert!(
+        !adapter.output_guard.restart_required(),
+        "authenticated remote-only body remains recoverable"
     );
     assert_eq!(adapter.historical_recovery_waits_snapshot(), vec![wait]);
     let first_requests = adapter.drain_effects(usize::MAX);
@@ -1220,6 +1324,53 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .checked_add(adapter.limits.historical_recovery_retry_floor)
             .expect("bounded first retry deadline")
     );
+    let local_validator = adapter
+        .context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == adapter.local_peer)
+        .and_then(|index| wire::ValidatorIndex::try_from(index).ok())
+        .expect("historical recovery requester belongs to the frozen roster");
+    let mut services = service_for_history_context_with_local_validator(
+        Arc::clone(&adapter.kura),
+        adapter.context.clone(),
+        &keys,
+        local_validator,
+    );
+    services.set_exact_output_admission_hook(|post, ticket| {
+        assert!(
+            ticket.is_none(),
+            "the initial reconstruction attempt owns no actor waiter"
+        );
+        Err(
+            iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket: None,
+                rank: 1,
+            },
+        )
+    });
+    let V2LaneWorkEffect::PostLaneBlock { peer, message } = first_requests[0].clone() else {
+        panic!("historical recovery retains a lane request");
+    };
+    services
+        .post_lane_block(peer, message)
+        .expect("ticketless topology attempt returns to producer reconstruction");
+    assert!(
+        !services
+            .has_pending_exact_output()
+            .expect("inspect ticketless output release")
+    );
+    let source = adapter
+        .historical_recovery_requests
+        .get(&identity)
+        .expect("ticketless transport release preserves the producer request owner");
+    assert_eq!(
+        source.cadence.retained_attempts,
+        first_cadence.retained_attempts
+    );
+    assert_eq!(source.cadence.next_retry_at, first_cadence.next_retry_at);
+    assert!(!adapter.output_guard.restart_required());
     let before_deadline = first_cadence
         .next_retry_at
         .checked_sub(Duration::from_nanos(1))
@@ -1311,30 +1462,30 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .expect("bounded second retry deadline"),
         "the next deadline is anchored at the service turn, not the prior schedule"
     );
-    let local_validator = adapter
-        .context
-        .roster
-        .iter()
-        .position(|entry| entry.validator == adapter.local_peer)
-        .and_then(|index| wire::ValidatorIndex::try_from(index).ok())
-        .expect("historical recovery requester belongs to the frozen roster");
-    let mut services = service_for_history_context_with_local_validator(
-        Arc::clone(&adapter.kura),
-        adapter.context.clone(),
-        &keys,
-        local_validator,
-    );
     let block_actor = Arc::new(AtomicBool::new(true));
     let block_actor_for_hook = Arc::clone(&block_actor);
     let admitted = Arc::new(AtomicUsize::new(0));
     let admitted_for_hook = Arc::clone(&admitted);
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
     services.set_exact_output_admission_hook(move |post, ticket| {
         if block_actor_for_hook.load(Ordering::Acquire) {
+            let ticket = ticket.unwrap_or_else(|| {
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixtures_for_hook
+                    .lock()
+                    .expect("retain real historical retry waiter")
+                    .push(fixture);
+                ticket
+            });
+            let rank = ticket
+                .rank()
+                .expect("owned historical retry remains ranked");
             return Err(
                 iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
                     message: post,
-                    ticket,
-                    rank: 29,
+                    ticket: Some(ticket),
+                    rank,
                 },
             );
         }
@@ -1355,6 +1506,13 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         services
             .has_pending_exact_output()
             .expect("inspect service-owned historical retry")
+    );
+    assert_eq!(
+        ticket_fixtures
+            .lock()
+            .expect("inspect retained historical retry waiter")[0]
+            .waiter_count(),
+        1
     );
     let unrelated = second_requests
         .iter()
@@ -1415,6 +1573,13 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .expect("inspect the terminal gate while actor admission remains blocked"),
         "cancellation must release actor-backpressured exact-output ownership"
     );
+    let tickets = ticket_fixtures
+        .lock()
+        .expect("inspect cancelled historical retry waiter");
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0].waiter_count(), 0);
+    assert_eq!(tickets[0].ticket_drop_cancellations(), 1);
+    drop(tickets);
     block_actor.store(false, Ordering::Release);
     assert!(
         !services
@@ -1442,6 +1607,7 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .lane_block_application_receipt_available(&proposal)
     );
 }
+
 #[test]
 fn historical_canonical_body_destination_union_is_bounded_before_fanout() {
     let (mut adapter, keys) = fixture_at_height_inner_with_kura(
@@ -1474,7 +1640,7 @@ fn historical_canonical_body_destination_union_is_bounded_before_fanout() {
         prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
         commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
     };
-    adapter.context = successor_context_for_parent(&adapter, &parent_block);
+    adapter.context = successor_context_for_parent(&adapter, &parent_block, &keys);
     assert_eq!(
         accept_lane_message_from(
             &mut adapter,
@@ -1646,7 +1812,7 @@ fn historical_canonical_body_retry_retains_prior_archive_across_rotation() {
         prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
         commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
     };
-    adapter.context = successor_context_for_parent(&adapter, &parent_block);
+    adapter.context = successor_context_for_parent(&adapter, &parent_block, &keys);
     assert_eq!(
         accept_lane_message_from(
             &mut adapter,
@@ -1854,7 +2020,11 @@ fn historical_canonical_body_retry_retains_prior_archive_across_rotation() {
             .expect("restored canonical body completes historical recovery"),
         HistoricalRecoveryServiceOutcome::Complete(_)
     ));
-    assert!(!adapter.has_pending_historical_recovery());
+    assert!(
+        !adapter
+            .has_pending_historical_recovery()
+            .expect("read pending historical recovery")
+    );
     assert!(
         adapter
             .kura
@@ -2157,6 +2327,7 @@ fn merge_entry_from_reference(
         epoch_id: reference.epoch_id,
         lane_catalog_hash: Hash::new(b"historical sidecar catalog"),
         active_lanes: Vec::new(),
+        lane_authority_catalog: Default::default(),
         incarnation_root: Hash::new(b"historical sidecar incarnations"),
         activation_root: Hash::new(b"historical sidecar activations"),
         lane_snapshots: Vec::new(),
@@ -2243,20 +2414,74 @@ fn historical_sidecar_server_fixture(
     holder_indices: Option<&[usize]>,
     request_noncanonical_entry: bool,
 ) -> HistoricalSidecarServerFixture {
-    let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    historical_sidecar_server_fixture_with_lane_committee(
+        finality_kind,
+        holder_indices,
+        request_noncanonical_entry,
+        None,
+    )
+}
+#[allow(clippy::too_many_lines)]
+fn historical_sidecar_server_fixture_with_lane_committee(
+    finality_kind: HistoricalSidecarFinality,
+    holder_indices: Option<&[usize]>,
+    request_noncanonical_entry: bool,
+    lane_keys: Option<&[KeyPair]>,
+) -> HistoricalSidecarServerFixture {
+    let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    if let Some(lane_keys) = lane_keys {
+        let lane_committee =
+            enable_multilane_nexus(&mut adapter, lane_keys, LaneId::new(1), DataSpaceId::new(7));
+        assert_eq!(lane_committee.len(), lane_keys.len());
+    }
     let canonical_reference = holder_indices.map_or_else(
         || missing_sidecar_reference(&adapter, &keys, 1),
         |indices| missing_sidecar_reference_with_signers(&adapter, &keys, 1, indices),
     );
-    let canonical_entry =
-        merge_entry_from_reference(&canonical_reference, b"historical canonical sidecar");
+    let mut canonical_entry = if lane_keys.is_some() {
+        merge_candidate_for_persistence_retry(&adapter, 1)
+            .into_entry(canonical_reference.merge_qc.clone())
+    } else {
+        merge_entry_from_reference(&canonical_reference, b"historical canonical sidecar")
+    };
+    let candidate = crate::merge::MergeLedgerCandidate::from(&canonical_entry);
+    let qc = &mut canonical_entry.merge_qc;
+    qc.message_digest = crate::merge::merge_qc_message_digest(
+        &qc.network_id,
+        &candidate,
+        qc.validator_set_hash_version,
+        qc.validator_set_hash,
+    );
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, key)| {
+            (qc.signers_bitmap[index / 8] & (1 << (index % 8)) != 0).then(|| {
+                Signature::try_new(key.private_key(), qc.message_digest.as_ref())
+                    .expect("sign complete historical catalog and carrier candidate")
+                    .payload()
+                    .to_vec()
+            })
+        })
+        .collect::<Vec<_>>();
+    qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate exact historical candidate signatures");
     let canonical_entry_hash = adapter
         .kura
         .persist_pending_certified_merge_entry(&canonical_entry)
         .expect("persist historical canonical merge entry");
     let requested_entry = request_noncanonical_entry.then(|| {
         let reference = missing_sidecar_reference(&adapter, &keys, 1);
-        merge_entry_from_reference(&reference, b"historical noncanonical sidecar")
+        if lane_keys.is_some() {
+            let mut entry = merge_candidate_for_persistence_retry(&adapter, 1)
+                .into_entry(reference.merge_qc.clone());
+            entry.global_state_root = Hash::new(b"historical noncanonical sidecar");
+            entry
+        } else {
+            merge_entry_from_reference(&reference, b"historical noncanonical sidecar")
+        }
     });
     let requested_entry = requested_entry.as_ref().unwrap_or(&canonical_entry);
     let requested_reference = CertifiedMergeLedgerReference::new(requested_entry);
@@ -2266,7 +2491,7 @@ fn historical_sidecar_server_fixture(
         .store_block(block.clone())
         .expect("persist historical merge carrier");
     let mut finality_context = adapter.context.clone();
-    let mut finality_keys = keys;
+    let mut finality_keys = keys.clone();
     match finality_kind {
         HistoricalSidecarFinality::Exact | HistoricalSidecarFinality::Missing => {}
         HistoricalSidecarFinality::WrongNetwork => {
@@ -2292,6 +2517,14 @@ fn historical_sidecar_server_fixture(
                 .expect("wrong historical roster has a valid quorum");
         }
     }
+    (
+        finality_context.kagemusha_mint_finality_epoch_id,
+        finality_context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        finality_context.network_id,
+        finality_context.epoch,
+        &finality_context.roster,
+    );
     let finality = verified_finality_for_context(&finality_context, &finality_keys, &block);
     if !matches!(finality_kind, HistoricalSidecarFinality::Missing) {
         let _ = adapter
@@ -2301,7 +2534,19 @@ fn historical_sidecar_server_fixture(
     }
     let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    let successor_context = successor_context_for_parent(&adapter, &block);
+    let mut successor_context = successor_context_for_parent(&adapter, &block, &keys);
+    // The honest successor extends the exact merge-bearing commitment.
+    // Deliberately foreign stored artifacts remain negative controls and must
+    // not become the successor's trusted parent authority.
+    if matches!(
+        finality_kind,
+        HistoricalSidecarFinality::Exact | HistoricalSidecarFinality::Missing
+    ) {
+        successor_context.parent_commit_qc = Some(finality.commit_qc.clone());
+    }
+    successor_context
+        .validate()
+        .expect("exact parent QC authorizes the successor");
     let restart = LaneAdapterRestartParts::capture(&adapter);
     let carrier_height = adapter.context.height;
     let requester = adapter
@@ -2348,6 +2593,25 @@ fn historical_sidecar_server_fixture(
         carrier_height,
     }
 }
+
+fn current_fixture_lane_committee_contains(
+    adapter: &V2LaneWorkAdapter,
+    requester: &PeerId,
+) -> bool {
+    let view = adapter.state.view();
+    crate::state::StateReadOnly::nexus(&view)
+        .lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| {
+            crate::state::StateReadOnly::resolve_lane_committee_at_height(
+                &view,
+                crate::state::LaneAuthorityRoute::new(lane.id, lane.dataspace_id),
+                adapter.context.height,
+            )
+            .is_ok_and(|committee| committee.validators().contains(requester))
+        })
+}
 fn dispatch_historical_sidecar_request(
     fixture: &mut HistoricalSidecarServerFixture,
 ) -> V2LaneIngressOutcome {
@@ -2378,6 +2642,487 @@ fn advanced_responder_serves_exact_finalized_historical_merge_sidecar() {
         posted_sidecar_chunk(effect)
             .is_some_and(|chunk| chunk.entry_hash == fixture.request.entry_hash)
     }));
+}
+#[test]
+fn disjoint_lane_committee_requester_receives_exact_finalized_historical_sidecar() {
+    let mut lane_keys = (0xE8_u8..=0xEB)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic disjoint lane-sidecar requester key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    let mut fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&lane_keys),
+    );
+    let lane_committee = fixture
+        .adapter
+        .state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            fixture.carrier_height,
+        )
+        .expect("carrier-bound participant committee")
+        .into_validators();
+    let requester = lane_committee[0].clone();
+    assert!(
+        !fixture
+            .adapter
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester),
+        "the regression requires a participant committee disjoint from the global roster"
+    );
+    assert!(
+        !fixture
+            .finality
+            .height_context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester),
+        "the participant requester must also be outside the carrier's historical global roster"
+    );
+    assert!(
+        fixture
+            .adapter
+            .state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(LaneId::new(1), DataSpaceId::new(7)),
+                fixture.adapter.context.height,
+            )
+            .expect("resolve current governed lane authority")
+            .validators()
+            .contains(&requester)
+    );
+
+    fixture.requester = requester.clone();
+    fixture.request.requester = requester;
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert!(fixture.adapter.sidecar_effects.iter().any(|effect| {
+        posted_sidecar_chunk(effect).is_some_and(|chunk| {
+            chunk.requester == fixture.requester && chunk.entry_hash == fixture.request.entry_hash
+        })
+    }));
+}
+#[test]
+fn current_lane_validator_absent_from_historical_entry_is_rejected() {
+    let mut fixture =
+        historical_sidecar_server_fixture(HistoricalSidecarFinality::Exact, None, false);
+    let mut lane_keys = (0xF0_u8..=0xF3)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic post-carrier lane validator key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_committee = enable_multilane_nexus(
+        &mut fixture.adapter,
+        &lane_keys,
+        LaneId::new(1),
+        DataSpaceId::new(7),
+    );
+    let requester = lane_committee[0].clone();
+    assert!(
+        fixture
+            .adapter
+            .state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(LaneId::new(1), DataSpaceId::new(7)),
+                fixture.adapter.context.height,
+            )
+            .expect("resolve current governed lane authority")
+            .validators()
+            .contains(&requester)
+    );
+    let entry = fixture
+        .adapter
+        .kura
+        .merge_entry_by_hash(fixture.request.entry_hash)
+        .expect("read exact historical sidecar")
+        .expect("historical sidecar exists");
+    assert!(entry.active_lanes.is_empty());
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &requester)
+    );
+    fixture.requester = requester.clone();
+    fixture.request.requester = requester;
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(fixture.adapter.sidecar_effects.is_empty());
+    assert!(
+        !fixture
+            .adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&fixture.request.requester, &fixture.request)
+    );
+}
+#[test]
+fn finalized_lane_committee_requires_exact_finalized_reference() {
+    let mut lane_keys = (0xD8_u8..=0xDB)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic exact-binding lane validator key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&lane_keys),
+    );
+    let requester = PeerId::new(lane_keys[0].public_key().clone());
+    let entry = fixture
+        .adapter
+        .kura
+        .merge_entry_by_hash(fixture.request.entry_hash)
+        .expect("read exact historical sidecar")
+        .expect("historical sidecar exists");
+    assert!(
+        fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &requester)
+    );
+    let reference = CertifiedMergeLedgerReference::new(&entry);
+    assert!(
+        fixture
+            .adapter
+            .authenticates_certified_merge_sidecar_service_for_requester(
+                &entry,
+                &reference,
+                Some(&requester),
+            )
+            .expect("read exact finalized carrier")
+    );
+
+    let mut wrong_activation = entry.clone();
+    for binding in &mut wrong_activation.active_lanes {
+        binding.activation_height = binding.activation_height.saturating_add(1);
+    }
+    assert!(
+        !fixture
+            .adapter
+            .authenticates_certified_merge_sidecar_service_for_requester(
+                &wrong_activation,
+                &CertifiedMergeLedgerReference::new(&wrong_activation),
+                Some(&requester),
+            )
+            .expect("read finalized carrier for changed activation")
+    );
+
+    let mut wrong_incarnation = entry.clone();
+    for binding in &mut wrong_incarnation.active_lanes {
+        binding.incarnation = Hash::new(b"wrong lane incarnation");
+    }
+    assert!(
+        !fixture
+            .adapter
+            .authenticates_certified_merge_sidecar_service_for_requester(
+                &wrong_incarnation,
+                &CertifiedMergeLedgerReference::new(&wrong_incarnation),
+                Some(&requester),
+            )
+            .expect("read finalized carrier for changed incarnation")
+    );
+
+    let mut wrong_config = entry.clone();
+    for binding in &mut wrong_config.active_lanes {
+        binding.lane_config_hash = Hash::new(b"wrong lane configuration");
+    }
+    assert!(
+        !fixture
+            .adapter
+            .authenticates_certified_merge_sidecar_service_for_requester(
+                &wrong_config,
+                &CertifiedMergeLedgerReference::new(&wrong_config),
+                Some(&requester),
+            )
+            .expect("read finalized carrier for changed config")
+    );
+    let mut wrong_catalog = entry;
+    wrong_catalog.lane_authority_catalog.rosters[0].validator_set_hash =
+        HashOf::new(&Vec::<PeerId>::new());
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&wrong_catalog, &requester,)
+    );
+    assert!(
+        !fixture
+            .adapter
+            .authenticates_certified_merge_sidecar_service_for_requester(
+                &wrong_catalog,
+                &CertifiedMergeLedgerReference::new(&wrong_catalog),
+                Some(&requester),
+            )
+            .expect("read finalized carrier for changed catalog")
+    );
+}
+
+#[test]
+fn finalized_lane_authority_survives_manifest_roster_and_incarnation_churn() {
+    let keys_for = |offset: u8| {
+        let mut keys = (offset..offset + 4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic churn validator")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
+    };
+    let historical_keys = keys_for(0xC0);
+    let replacement_keys = keys_for(0xC4);
+    let mut fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&historical_keys),
+    );
+    let route = crate::state::LaneAuthorityRoute::new(LaneId::new(1), DataSpaceId::new(7));
+    let state = Arc::clone(&fixture.adapter.state);
+    let historical_view = state.view();
+    let historical_committee = crate::state::StateReadOnly::resolve_lane_committee_at_height(
+        &historical_view,
+        route,
+        fixture.carrier_height,
+    )
+    .expect("immutable historical committee")
+    .into_validators();
+    let requester = historical_committee[0].clone();
+    let entry = fixture
+        .adapter
+        .kura
+        .merge_entry_by_hash(fixture.request.entry_hash)
+        .expect("historical entry lookup")
+        .expect("retained historical entry");
+
+    let replacement = enable_multilane_nexus(
+        &mut fixture.adapter,
+        &replacement_keys,
+        route.lane_id(),
+        route.dataspace_id(),
+    );
+    {
+        let mut nexus = fixture.adapter.state.nexus.write();
+        let mut lanes = nexus.lane_catalog.lanes().to_vec();
+        lanes
+            .iter_mut()
+            .find(|lane| lane.id == route.lane_id())
+            .expect("configured route")
+            .visibility = LaneVisibility::Restricted;
+        let catalog = LaneCatalog::new(NonZeroU32::new(2).unwrap(), lanes)
+            .expect("replacement lane configuration");
+        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        nexus.lane_catalog = catalog;
+    }
+    fixture
+        .adapter
+        .state
+        .reseed_static_lane_incarnations_for_tests();
+    let retained_binding = entry
+        .active_lanes
+        .iter()
+        .find(|binding| binding.lane_id == route.lane_id())
+        .expect("historical active lane");
+    assert_ne!(
+        fixture
+            .adapter
+            .state
+            .lane_incarnation_at_height(route.lane_id(), fixture.adapter.context.height),
+        Some(retained_binding.incarnation),
+        "the current lane incarnation must differ from finalized history",
+    );
+    assert_eq!(
+        crate::state::StateReadOnly::resolve_lane_committee_at_height(
+            &historical_view,
+            route,
+            fixture.carrier_height,
+        )
+        .expect("old view retains its own manifest and World")
+        .into_validators(),
+        historical_committee,
+    );
+    assert!(!current_fixture_lane_committee_contains(
+        &fixture.adapter,
+        &requester
+    ));
+    assert!(current_fixture_lane_committee_contains(
+        &fixture.adapter,
+        &replacement[0]
+    ));
+    assert!(
+        fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &requester)
+    );
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &replacement[0])
+    );
+
+    fixture.requester = requester.clone();
+    fixture.request.requester = requester;
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert!(fixture.adapter.sidecar_effects.iter().any(|effect| {
+        posted_sidecar_chunk(effect).is_some_and(|chunk| chunk.requester == fixture.requester)
+    }));
+}
+
+#[test]
+fn historical_lane_sidecar_corrupt_finality_fails_before_responder_allocation() {
+    let mut lane_keys = (0xD4_u8..=0xD7)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic historical lane validator")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let mut fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&lane_keys),
+    );
+    fixture.requester = PeerId::new(lane_keys[0].public_key().clone());
+    fixture.request.requester = fixture.requester.clone();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert!(
+        fixture
+            .adapter
+            .exact_historical_lane_sidecar_requester(&fixture.request, &fixture.requester,)
+            .expect("initially authenticate exact historical lane membership")
+    );
+    // Isolate the lane-authority read after the predecessor roster has already
+    // been authenticated and cached from this exact finality artifact.
+    let predecessor_requesters = fixture
+        .finality
+        .height_context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(!predecessor_requesters.contains(&fixture.requester));
+    assert!(!fixture.adapter.frozen_roster_contains(&fixture.requester));
+    fixture.adapter.predecessor_sidecar_requesters = Some(predecessor_requesters);
+    corrupt_durable_file_for_test(
+        &fixture
+            .adapter
+            .kura
+            .v2_finality_artifact_path_for_testing(fixture.carrier_height),
+    );
+    let hub = PeerId::new(KeyPair::random().public_key().clone());
+    let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+        hub.clone(),
+        fixture.adapter.limits.reply_source_capacity.get(),
+    );
+    let reply_route = routes.mint_via(fixture.requester.clone(), hub);
+    assert!(matches!(
+        fixture.adapter.accept_certified_merge_sidecar_for_test(
+            fixture.requester.clone(),
+            reply_route,
+            fixture.request.clone(),
+        ),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    assert!(fixture.adapter.output_guard.restart_required());
+    assert!(fixture.adapter.sidecar_effects.is_empty());
+    assert!(
+        !fixture
+            .adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&fixture.requester, &fixture.request,)
+    );
+}
+#[test]
+fn disjoint_lane_committee_cannot_fetch_speculative_current_height_sidecar() {
+    let CertifiedSidecarServerFixture {
+        mut adapter,
+        mut request,
+        ..
+    } = certified_sidecar_server_fixture();
+    let mut lane_keys = (0xEC_u8..=0xEF)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic speculative sidecar requester key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_committee = enable_multilane_nexus(
+        &mut adapter,
+        &lane_keys,
+        LaneId::new(1),
+        DataSpaceId::new(7),
+    );
+    let requester = lane_committee[0].clone();
+    assert!(!adapter.frozen_roster_contains(&requester));
+    assert!(
+        adapter
+            .state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(LaneId::new(1), DataSpaceId::new(7)),
+                adapter.context.height,
+            )
+            .expect("resolve current governed lane authority")
+            .validators()
+            .contains(&requester)
+    );
+    request.requester = requester.clone();
+    request.request_id = request.canonical_request_id();
+    let hub = PeerId::new(KeyPair::random().public_key().clone());
+    let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+        hub.clone(),
+        adapter.limits.reply_source_capacity.get(),
+    );
+    let route = routes.mint_via(requester.clone(), hub);
+    assert_eq!(
+        adapter
+            .accept_certified_merge_sidecar_for_test(requester, route, request.clone())
+            .expect("speculative participant request is rejected without local failure"),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(
+        adapter.sidecar_effects.is_empty(),
+        "participant recovery authority must emit no speculative current-height bytes"
+    );
+    assert!(
+        !adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&request.requester, &request),
+        "terminal speculative rejection must release the exact materialization gate"
+    );
 }
 #[test]
 fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {
@@ -2423,6 +3168,14 @@ fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {
     fixture.adapter.context.roster = successor_roster;
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
+    (
+        fixture.adapter.context.kagemusha_mint_finality_epoch_id,
+        fixture.adapter.context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        fixture.adapter.context.network_id,
+        fixture.adapter.context.epoch,
+        &fixture.adapter.context.roster,
+    );
     fixture
         .adapter
         .context
@@ -2498,6 +3251,14 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
     fixture.adapter.context.roster = successor_roster;
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
+    (
+        fixture.adapter.context.kagemusha_mint_finality_epoch_id,
+        fixture.adapter.context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        fixture.adapter.context.network_id,
+        fixture.adapter.context.epoch,
+        &fixture.adapter.context.roster,
+    );
     fixture
         .adapter
         .context
@@ -2679,7 +3440,9 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
     );
     // Fill the rest of the complete predecessor committee first, then
     // prove that every disjoint current-roster identity still owns a
-    // reserved responder slot. The former roster-sized transport table
+    // reserved responder slot. Each identity uses its direct authenticated
+    // connection so one relay's independent output budget cannot mask the
+    // semantic requester capacity under test. The former roster-sized transport table
     // rejected the live roster at this boundary.
     let mut reservation_routes = NetworkReplyRouteTestFixture::with_source_capacity(
         PeerId::new(KeyPair::random().public_key().clone()),
@@ -2692,7 +3455,7 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
         let mut request = fixture.request.clone();
         request.requester = historical.clone();
         request.request_id = request.canonical_request_id();
-        let route = reservation_routes.mint(historical.clone());
+        let route = reservation_routes.mint_via(historical.clone(), historical.clone());
         let before = fixture
             .adapter
             .merge_sidecars
@@ -2727,7 +3490,7 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
         let mut request = fixture.request.clone();
         request.requester = current.clone();
         request.request_id = request.canonical_request_id();
-        let route = reservation_routes.mint(current.clone());
+        let route = reservation_routes.mint_via(current.clone(), current.clone());
         let before = fixture
             .adapter
             .merge_sidecars
@@ -2856,7 +3619,7 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
             .lane_block_application_receipt_available(&parent_proposal),
         "the raw canonical predecessor must not already have an application receipt"
     );
-    let successor_context = successor_context_for_parent(&parent, &parent_block);
+    let successor_context = successor_context_for_parent(&parent, &parent_block, &keys);
     let restart = LaneAdapterRestartParts::capture(&parent);
     let state = Arc::clone(&restart.state);
     let kura = Arc::clone(&restart.kura);
@@ -3017,7 +3780,11 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         V2LaneIngressOutcome::Rejected,
         "an exact PrepareQC-locked successor must not kill a validator merely because its independent predecessor sidecars are catching up"
     );
-    assert!(!successor.proposal_can_progress(&successor_proposal));
+    assert!(
+        !successor
+            .proposal_can_progress(&successor_proposal)
+            .expect("read lane progress eligibility")
+    );
     assert!(
         successor
             .lane_sessions
@@ -3184,7 +3951,11 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
             .kura
             .lane_block_application_receipt_available(&parent_proposal)
     );
-    assert!(successor.proposal_can_progress(&successor_proposal));
+    assert!(
+        successor
+            .proposal_can_progress(&successor_proposal)
+            .expect("read lane progress eligibility")
+    );
     assert!(
         successor
             .lane_sessions
@@ -3352,7 +4123,7 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
             .is_none(),
         "the first raw artifact must not gain an application receipt"
     );
-    let second_context = successor_context_for_parent(&first, &first_block);
+    let second_context = successor_context_for_parent(&first, &first_block, &keys);
     let mut restart = LaneAdapterRestartParts::capture(&first);
     restart.limits.session_capacity = NonZeroUsize::new(2).expect("two-link hydration bound");
     let state = Arc::clone(&restart.state);
@@ -3424,12 +4195,38 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         )])
         .with_lane_payload_ownerships(recovered.ownerships),
     ));
-    let second_block = builder
+    let mut second_block = builder
         .build_with_signature(
             u64::try_from(leader_index).expect("second-link leader index fits u64"),
             keys[leader_index].private_key(),
         )
         .canonical_resultless_proposal();
+    let axt_policy_snapshot = state.block(second_block.header()).axt_policy_snapshot();
+    second_block
+        .set_transaction_results_with_transcripts(
+            Vec::new(),
+            &[entrypoint_hash],
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            BTreeMap::new(),
+            Vec::new(),
+            axt_policy_snapshot,
+        )
+        .expect("attach the executed second-link result and required AXT snapshot");
+    let signature = SignatureOf::try_from_hash(
+        keys[leader_index].private_key(),
+        second_block.header().hash(),
+    )
+    .expect("sign the complete second-link block");
+    second_block
+        .replace_signatures(
+            [BlockSignature::new(
+                u64::try_from(leader_index).expect("second-link signer index"),
+                signature,
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("retain the exact signature before finality and child identity binding");
     let second_ownership = second_block
         .execution_context()
         .expect("second-link block carries execution context")
@@ -3486,7 +4283,7 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
             "neither raw link may gain an application receipt before restart"
         );
     }
-    let third_context = successor_context_for_parent(&second, &second_block);
+    let third_context = successor_context_for_parent(&second, &second_block, &keys);
     drop(second);
     let third = restart
         .reopen(third_context, true)
@@ -3501,9 +4298,22 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         "cold hydration must reconstruct the exact raw chain oldest first"
     );
     for proposal in [&first_proposal, &second_proposal] {
-        assert!(third.canonical_anchor_for_proposal(proposal).is_some());
-        assert!(third.historical_raw_proposal_can_solicit_certificate(proposal));
-        assert!(!third.proposal_can_progress(proposal));
+        assert!(
+            third
+                .canonical_anchor_for_proposal(proposal)
+                .expect("authenticate canonical fixture anchor")
+                .is_some()
+        );
+        assert!(
+            third
+                .historical_raw_proposal_can_solicit_certificate(proposal)
+                .expect("read historical raw transport authority")
+        );
+        assert!(
+            !third
+                .proposal_can_progress(proposal)
+                .expect("read lane progress eligibility")
+        );
         assert!(
             third
                 .kura

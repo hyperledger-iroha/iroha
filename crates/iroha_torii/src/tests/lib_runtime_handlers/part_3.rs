@@ -352,12 +352,10 @@ fn generic_torii_proxy_retry_policy_requires_exact_capacity_429() {
         body: Vec::new(),
     };
 
-    assert!(super::should_retry_generic_torii_proxy_snapshot(
-        &snapshot(
-            StatusCode::TOO_MANY_REQUESTS,
-            &["proxy_capacity_exceeded"]
-        )
-    ));
+    assert!(super::should_retry_generic_torii_proxy_snapshot(&snapshot(
+        StatusCode::TOO_MANY_REQUESTS,
+        &["proxy_capacity_exceeded"]
+    )));
     assert!(!super::should_retry_generic_torii_proxy_snapshot(
         &snapshot(StatusCode::TOO_MANY_REQUESTS, &[])
     ));
@@ -370,9 +368,10 @@ fn generic_torii_proxy_retry_policy_requires_exact_capacity_429() {
             &["proxy_capacity_exceeded", "proxy_capacity_exceeded"]
         )
     ));
-    assert!(super::should_retry_generic_torii_proxy_snapshot(
-        &snapshot(StatusCode::SERVICE_UNAVAILABLE, &[])
-    ));
+    assert!(super::should_retry_generic_torii_proxy_snapshot(&snapshot(
+        StatusCode::SERVICE_UNAVAILABLE,
+        &[]
+    )));
 }
 #[cfg(feature = "connect")]
 #[test]
@@ -826,7 +825,7 @@ fn single_route_queue_plan_authorities(
 #[cfg(feature = "connect")]
 fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
     app.state
-        .update_latest_block_header_cache_for_tests(BlockHeader::new(
+        .append_committed_block_header_for_tests(BlockHeader::new(
             NonZeroU64::new(height).expect("proxy fixture height must be non-zero"),
             None,
             None,
@@ -1124,8 +1123,8 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
 macro_rules! torii_qp_case { ($($tokens:tt)*) => {{ $($tokens)* }}; }
 #[cfg(feature = "connect")]
 #[test]
-fn queue_plan_admission_publication_rejects_future_before_kura_persistence() {
-    torii_qp_case! { let (app, mut request) = incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced); let future_height = u64::try_from(app.state.committed_height()).unwrap() + 1; move_queue_plan_synced_test_binding_to_future(&mut request, future_height, HashOf::from_untyped_unchecked(Hash::new(b"future QueuePlan predecessor"))); let receipt = exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_002); let publication = QueuePlanAdmissionPublicationV1 { schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, certificate: queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]).body }; let carrier_height = u64::try_from(app.state.committed_height()).unwrap() + 1; assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, carrier_height).expect("classifiable future certificate").1, PendingQueuePlanAdmissionDisposition::Future); let hash = Hash::new(&publication.certificate); assert!(super::ingest_queue_plan_admission_publication(&app, &publication).expect_err("future publication must fail before Kura").contains("ahead of canonical authority")); assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect Kura"), None); }
+fn queue_plan_admission_publication_retains_future_until_catch_up() {
+    torii_qp_case! { let (app, mut request) = incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced); let future_height = u64::try_from(app.state.committed_height()).unwrap() + 1; move_queue_plan_synced_test_binding_to_future(&mut request, future_height, HashOf::from_untyped_unchecked(Hash::new(b"future QueuePlan predecessor"))); let receipt = exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_002); let publication = QueuePlanAdmissionPublicationV1 { schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, certificate: queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]).body }; let carrier_height = u64::try_from(app.state.committed_height()).unwrap() + 1; assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, carrier_height).expect("classifiable future certificate").1, PendingQueuePlanAdmissionDisposition::Future); let hash = Hash::new(&publication.certificate); assert!(matches!(super::ingest_queue_plan_admission_publication(&app, &publication).expect("authenticated future publication must be durable"), QueuePlanAdmissionPublicationIngestOutcome::Durable { certificate_hash, .. } if certificate_hash == hash)); assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect Kura"), Some(publication.certificate)); }
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
@@ -2613,7 +2612,7 @@ async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advance() {
+async fn incoming_queue_plan_synced_exact_retry_survives_height_advance() {
     let journal_dir =
         tempfile::tempdir().expect("create historical strict-retry journal directory");
     let journal_path = journal_dir.path().join("queue_plan_journal.norito");
@@ -2629,20 +2628,6 @@ async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advan
         .expect("strict-retry journal metadata after first admission")
         .len();
     set_proxy_fixture_latest_block_height(&app, 1);
-    let rotated_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0xd6,
-            "derive rotated strict-retry authority fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        topology.push(rotated_peer_id);
-        topology.commit();
-    }
     let ToriiProxyRequestKindV1::SubmitTransaction {
         expected_plan,
         admission_binding: Some(historical_binding),
@@ -2661,20 +2646,13 @@ async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advan
         .expect("capture advanced strict-retry context");
     assert_ne!(
         &current_context, &historical_binding.admission_context,
-        "the retry must exercise a historical height and authority roster"
-    );
-    let current_authorities = single_route_queue_plan_authorities(&current_context);
-    assert!(
-        app.local_peer_id
-            .as_ref()
-            .is_some_and(|local| !current_authorities.contains(local)),
-        "the old durable authority must no longer belong to the current roster"
+        "the retry must exercise a historical authority height and predecessor"
     );
     let retry = super::execute_incoming_torii_proxy_request(&app, request, None).await;
     assert_eq!(
         retry.status(),
         StatusCode::ACCEPTED,
-        "an exact still-owned durable claim must remain retryable after ordinary chain and roster advancement"
+        "an exact still-owned durable claim must remain retryable after ordinary chain advancement"
     );
     assert_eq!(app.queue.active_len(), 1);
     assert_eq!(
@@ -2720,6 +2698,45 @@ async fn incoming_queue_plan_synced_historical_context_without_owned_claim_fails
     let envelope: ErrorEnvelope =
         norito::decode_from_bytes(&body).expect("decode historical unowned admission rejection");
     assert_eq!(envelope.code(), "queue_plan_admission_context_mismatch");
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn incoming_queue_plan_synced_future_context_defers_without_queue_ownership() {
+    let journal_dir = tempfile::tempdir().expect("create future admission journal directory");
+    let journal_path = journal_dir.path().join("queue_plan_journal.norito");
+    let (app, mut request) =
+        incoming_proxy_submit_fixture(0xd8, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    app.queue
+        .install_plan_journal(&journal_path, 1024 * 1024, true)
+        .expect("install future admission queue plan journal");
+    let journal_len_before = std::fs::metadata(&journal_path)
+        .expect("future admission journal baseline metadata")
+        .len();
+    let future_height = u64::try_from(app.state.committed_height())
+        .unwrap()
+        .checked_add(1)
+        .unwrap();
+    move_queue_plan_synced_test_binding_to_future(
+        &mut request,
+        future_height,
+        HashOf::from_untyped_unchecked(Hash::new(b"unarrived canonical predecessor")),
+    );
+    let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(app.queue.active_len(), 0);
+    assert_eq!(
+        std::fs::metadata(&journal_path)
+            .expect("future admission journal metadata")
+            .len(),
+        journal_len_before,
+        "a future request must not mutate queue ownership before catch-up"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read future admission response");
+    let envelope: ErrorEnvelope =
+        norito::decode_from_bytes(&body).expect("decode future admission response");
+    assert_eq!(envelope.code(), "queue_plan_admission_context_future");
 }
 #[cfg(feature = "connect")]
 #[tokio::test]

@@ -1311,7 +1311,6 @@ fn retired_storage_pin_subcommand_does_not_send_http() {
 #[test]
 fn storage_prepare_writes_canonical_payload_and_files_manifest() {
     let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
     let payload_dir = tempdir.path().join("site");
     fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
     fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
@@ -1320,6 +1319,8 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
         "console.log('hayahi');",
     )
     .expect("write script");
+    let (manifest_path, _plan_path) =
+        prepare_manifest_artifacts_for_input(tempdir.path(), &payload_dir);
     let payload_out = tempdir.path().join("storage.payload.bin");
     let files_out = tempdir.path().join("storage.files.json");
     let summary_out = tempdir.path().join("storage.prepare.summary.json");
@@ -1362,7 +1363,7 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
     assert_eq!(files.len(), 2);
 }
 #[test]
-fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
+fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("site.bin");
     let payload = b"sorafs deploy payload".to_vec();
@@ -1408,8 +1409,8 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
         .arg(format!("--out-dir={}", out_dir.display()))
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
-        .success();
-    status.assert_calls(1);
+        .failure();
+    status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
     gateway.assert_calls(1);
@@ -1424,7 +1425,7 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
         !summary_file.contains("private_key") && !summary_file.contains(&private_key),
         "deploy summary file must not leak private key"
     );
-    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
     assert_eq!(
         summary.get("payload_bytes").and_then(Value::as_u64),
         Some(payload.len() as u64)
@@ -1437,7 +1438,7 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
     );
     assert_eq!(
         summary
-            .get("paid_pin_fee")
+            .get("reported_pin_fee")
             .and_then(Value::as_object)
             .and_then(|fee| fee.get("pin_fee_nano"))
             .and_then(Value::as_str),
@@ -1449,15 +1450,14 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
             .and_then(Value::as_object)
             .and_then(|ingest| ingest.get("state"))
             .and_then(Value::as_str),
-        Some("awaiting_finalized_provider_assignment")
+        Some("unverified")
     );
     assert_eq!(
         summary
             .get("provider_ingest")
             .and_then(Value::as_object)
-            .and_then(|ingest| ingest.get("queued"))
-            .and_then(Value::as_bool),
-        Some(false)
+            .and_then(|ingest| ingest.get("completion_finalized")),
+        Some(&Value::Null)
     );
     assert_eq!(
         summary
@@ -1517,12 +1517,12 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
             tempdir.path().join("known-chain-out").display()
         ))
         .assert()
-        .success();
+        .failure();
     register.assert_calls(1);
     gateway.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
-    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
 }
 #[test]
 fn deploy_falls_back_to_primary_when_peer_discovery_404() {
@@ -1562,13 +1562,13 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             tempdir.path().join("out").display()
         ))
         .assert()
-        .success();
+        .failure();
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
-    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
     assert!(
         summary
             .get("peer_discovery")
@@ -4147,6 +4147,9 @@ fn prepare_manifest_artifacts(tempdir: &Path) -> (PathBuf, PathBuf) {
     let input_path = tempdir.join("gha_payload.bin");
     let payload: Vec<u8> = (0..1024).map(|i| (i as u8).wrapping_mul(29)).collect();
     fs::write(&input_path, &payload).expect("write payload");
+    prepare_manifest_artifacts_for_input(tempdir, &input_path)
+}
+fn prepare_manifest_artifacts_for_input(tempdir: &Path, input_path: &Path) -> (PathBuf, PathBuf) {
     let car_path = tempdir.join("gha_payload.car");
     let plan_path = tempdir.join("gha_plan.json");
     let summary_path = tempdir.join("gha_summary.json");

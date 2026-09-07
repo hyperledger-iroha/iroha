@@ -6,6 +6,7 @@ import java.nio.file.Paths
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import kotlin.test.assertFalse
 
 class KagemushaThreeMessageV1Test {
@@ -16,6 +17,40 @@ class KagemushaThreeMessageV1Test {
             listOf("REQUEST", "PAYMENT", "ACKNOWLEDGEMENT"),
             IrohaPeerPayloadKind.values().map { it.name },
         )
+    }
+
+    @Test
+    fun `lifecycle operation inventory matches Rust`() {
+        assertEquals(
+            listOf(
+                "BOOTSTRAP",
+                "MINT_FOLD",
+                "SEND_SPLIT",
+                "RECEIVE_FOLD",
+                "REDEEM_SPLIT",
+                "ROTATE",
+            ),
+            KagemushaOperationKindV1.values().map { it.name },
+        )
+        assertEquals((0..5).toList(), KagemushaOperationKindV1.values().map { it.wireTag })
+    }
+
+    @Test
+    fun `peer payload alignment matches the canonical Rust layout`() {
+        val model = "iroha_data_model::kagemusha::kagemusha_v1::"
+        val layouts = listOf(
+            Triple("KagemushaPaymentRequestV1", 16, 8),
+            Triple("KagemushaPaymentV1", 16, 8),
+            Triple("KagemushaAcknowledgementV1", 2, 0),
+        )
+
+        layouts.forEach { (type, expectedAlignment, expectedPadding) ->
+            val alignment = KagemushaNoritoV1.canonicalAlignment(model + type)
+            val padding =
+                (alignment - NoritoHeader.HEADER_LENGTH % alignment) % alignment
+            assertEquals(expectedAlignment, alignment, type)
+            assertEquals(expectedPadding, padding, type)
+        }
     }
 
     @Test

@@ -84,8 +84,10 @@ fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_e
     );
 }
 
-#[test]
-fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external() {
+state_test!(consensus_stack autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external
+    autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external_on_consensus_stack();
+);
+fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external_on_consensus_stack() {
     let (state, entry, _, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut batch = entry
         .execution_batch

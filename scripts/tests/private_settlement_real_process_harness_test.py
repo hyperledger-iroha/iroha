@@ -654,7 +654,7 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("impl Drop for ProcessResourceSampler", harness)
         self.assertIn("impl Drop for TransparentControlAtomicityObserver", harness)
         self.assertIn("classify_transparent_control_values", harness)
-        self.assertIn("atomicity_clients.len() == shape.peer_count()", harness)
+        self.assertIn("atomicity_clients.len() == shape.process_count()", harness)
         self.assertIn("atomicity_observer.begin()", harness)
         self.assertIn("atomicity_observer.finish(3)", harness)
         self.assertIn('"benchmark-before"', private_benchmark)

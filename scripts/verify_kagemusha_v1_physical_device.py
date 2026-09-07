@@ -39,6 +39,52 @@ MAX_THERMAL_LATENCY_MS = 10_000
 MIN_THERMAL_FOLDS = 1_000
 MIN_THERMAL_DURATION_MS = 60_000
 U128_MAX = (1 << 128) - 1
+U64_MAX = (1 << 64) - 1
+SENDER_EVIDENCE_DOMAIN = b"iroha:kagemusha:v1:physical-sender-evidence\0"
+SENDER_PARSER_SCHEMA = "iroha.kagemusha_v1.sender_release_command_projection"
+SENDER_PARSER_ID = "native-sender-command-parser"
+SENDER_PARSER_SOURCE_ID = "native-sender-command-parser-source"
+SENDER_PARSER_PURPOSE = "sender_release_structure"
+SENDER_COMMAND_MAX_BYTES = 16 * 1024
+SENDER_PARSER_SOURCE = Path(__file__).resolve().parents[1] / "crates/connect_norito_bridge/src/kagemusha_sender_release_evidence.rs"
+SENDER_PROJECTION_DIGEST_FIELDS = (
+    "command_sha256", "context_sha256", "envelope_sha256", "certificate_sha256",
+    "terminal_receipt_sha256", "hardware_authorization_sha256", "operation_id",
+    "inputs_digest", "preparation_id", "candidate_digest", "release_id", "outcome_id",
+    "transition_nullifier", "envelope_digest", "terminal_receipt_digest", "authorization_id",
+    "authorization_key_reference", "core_authorization_key_reference",
+    "prepared_one_use_authorization_digest", "outbox_reservation_commitment",
+    "hardware_one_use_nonce", "commit_certificate_digest", "network_id", "lane_commitment",
+    "asset_id", "asset_incarnation", "suite_id", "vk_digest", "hardware_profile_id",
+    "credential_id", "hardware_epoch_id", "device_key_reference", "hardware_policy_id",
+    "commit_evidence_commitment",
+)
+SENDER_PROJECTION_FIELDS = (
+    "schema", "schema_version", "operation_kind", "authorization_purpose", "receipt_kind",
+    "structural_only", "operation", "protocol_version", "policy_epoch",
+    "hardware_epoch_generation", "asset_scale", "artifact_manifest_digest",
+    "commit_evidence_source", "payment_committed_at_ms", "request_sha256",
+    "request_start_ms", "request_end_ms",
+    *SENDER_PROJECTION_DIGEST_FIELDS,
+)
+SENDER_CASES = (
+    "before_issuance", "trusted_valid", "lease_credential_straddle",
+    "lease_empty", "lease_zero",
+    "lease_before_credential", "lease_end",
+    "trusted_before_expiry", "credential_expiry", "credential_after",
+)
+SENDER_OPERATIONS = ("send_split", "redeem_split")
+SENDER_POSITIVE_CASES = frozenset({"trusted_valid", "lease_end", "trusted_before_expiry"})
+SENDER_SNAPSHOT_FIELDS = (
+    "state", "counter", "epoch", "authorization_counter", "lease_counter",
+    "release_counter", "journal_revision", "outbox_revision", "outbox_digest",
+)
+CREDENTIAL_FIELDS = (
+    "version", "credential_id", "network_id", "hardware_profile_id", "suite_id",
+    "firmware_policy_digest", "policy_epoch", "lane_commitment", "hardware_epoch_id",
+    "hardware_epoch_generation", "device_public_key", "device_key_reference",
+    "issued_at_ms", "expires_at_ms", "governance_signature",
+)
 PHYSICAL_CHECKS = (
     "airplane_mode",
     "restart",
@@ -310,6 +356,28 @@ TRANSITION_KINDS = frozenset(
 )
 CONTROL_PAIR_FIELDS = ("control_id", "boot_id")
 EVENT_DATA_FIELDS: dict[str, tuple[str, ...]] = {
+    "sender_validity_context": (
+        "run_id", "candidate_context_digest", "artifact_set_digest", "device_id",
+        "hardware_policy_id", "hardware_profile", "credentials", "vk_digest",
+    ),
+    "sender_admission_attempt": (
+        "case", "operation_kind", "operation_id", "credential_id", "boot_id",
+        "command_sha256", "preparation_sha256", "candidate_sha256", "request_sha256",
+        "request_start_ms", "request_end_ms", "reservation_sha256",
+        "reservation_start_ms", "reservation_end_ms", "source", "trusted_time_ms",
+        "lease_start_ms", "lease_end_ms", "time_evidence_sha256", "before",
+        "commit_evidence_commitment",
+    ),
+    "sender_admission_result": (
+        "operation_id", "attempt_event_hash", "boot_id", "response_sha256", "after",
+        "decision_trusted_time_ms", "result", "certificate_sha256", "envelope_sha256", "hardware_signature",
+    ),
+    "sender_historical_recovery": (
+        "operation_id", "original_result_hash", "control_id", "prior_boot_id", "boot_id",
+        "trusted_time_ms", "time_evidence_sha256", "before", "after", "replies",
+        "receipt_kind", "receipt_sha256", "release_authorization_sha256", "hardware_signature",
+        "native_parser_report", "service_release_observation",
+    ),
     "run_start": ("boot_id", "initial_state", "counter", "epoch"),
     "airplane_mode_enabled": ("control_id",),
     "airplane_mode_disabled": ("control_id",),
@@ -469,6 +537,10 @@ def _validate_event_data(
     if fields is None:
         _fail(f"{label} has unsupported kind {kind!r}")
     data = _exact_fields(value, fields, f"{label}.data")
+    # The sender segment has nested closed records and context-dependent authority;
+    # validate those together after checking the enclosing hash-chain bytes.
+    if kind.startswith("sender_"):
+        return data
     if kind in TRANSITION_KINDS:
         _validate_transition_data(data, f"{label}.data", kind, metrics)
     elif kind == "run_start":
@@ -616,6 +688,461 @@ def _validate_events(
     return events, metrics
 
 
+def _sender_sequence() -> list[str]:
+    """Return the mandatory V1 sender-admission and historical-recovery segment."""
+    return ["sender_validity_context"] + [
+        kind for _case in SENDER_CASES for _operation in SENDER_OPERATIONS
+        for kind in ("sender_admission_attempt", "sender_admission_result")
+    ] + ["sender_historical_recovery"] * (len(SENDER_POSITIVE_CASES) * len(SENDER_OPERATIONS))
+
+
+def _credential_payload(credential: Mapping[str, Any]) -> bytes:
+    """Encode the exact existing Rust compact credential ID preimage payload."""
+    c = credential
+    return release._norito_struct(
+        release._u16(c["version"]), bytes.fromhex(c["network_id"]),
+        bytes.fromhex(c["hardware_profile_id"]), bytes.fromhex(c["suite_id"]),
+        bytes.fromhex(c["firmware_policy_digest"]), release._u64(c["policy_epoch"]),
+        bytes.fromhex(c["lane_commitment"]), bytes.fromhex(c["hardware_epoch_id"]),
+        release._u64(c["hardware_epoch_generation"]), bytes.fromhex(c["device_public_key"]),
+        bytes.fromhex(c["device_key_reference"]), release._u64(c["issued_at_ms"]),
+        release._u64(c["expires_at_ms"]),
+    )
+
+
+def credential_identity(credential: Mapping[str, Any]) -> str:
+    """Reconstruct Rust's SHA-bound canonical credential identity."""
+    return release._rust_digest(
+        b"iroha:kagemusha:v1:hardware-credential-id",
+        "iroha.kagemusha.v1.hardware-credential-id-preimage", _credential_payload(credential),
+    )
+
+
+def credential_signing_bytes(credential: Mapping[str, Any]) -> bytes:
+    """Reconstruct the existing issuer-signed Norito credential subject."""
+    domain = b"iroha:kagemusha:v1:hardware-credential-signing"
+    return release._norito_frame(
+        "iroha.kagemusha.v1.hardware-credential-signing-preimage",
+        release._norito_struct(
+            release._u64(len(domain)) + domain,
+            bytes.fromhex(credential["credential_id"]), _credential_payload(credential),
+        ),
+    )
+
+
+def sender_evidence_signing_bytes(context_hash: str, kind: str, data: Mapping[str, Any]) -> bytes:
+    """Bind a hardware observation to the exact observer-approved context and event kind.
+
+    This evidence-only subject is not a device command or commit authorization.
+    The retained device authenticator supplements the threshold observer chain.
+    """
+    subject = {
+        "context_event_hash": context_hash, "kind": kind,
+        "data": {key: value for key, value in data.items() if key != "hardware_signature"},
+    }
+    encoded = release.canonical_json_bytes(subject)
+    return SENDER_EVIDENCE_DOMAIN + len(encoded).to_bytes(8, "little") + encoded
+
+
+def _sender_context(
+    event: Mapping[str, Any], document: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
+    data = event["data"]
+    _digest(data["vk_digest"], "sender context VK digest")
+    for field in ("run_id", "candidate_context_digest", "artifact_set_digest"):
+        if data[field] != document["run"][field]:
+            _fail("sender context substitutes the authenticated run or release")
+    for field, expected in (
+        ("device_id", document["endpoint"]["device_id"]),
+        ("hardware_policy_id", document["profile"]["hardware_policy_id"]),
+    ):
+        if data[field] != expected:
+            _fail("sender context substitutes the authenticated device or policy")
+    profile = _exact_fields(data["hardware_profile"], release._HARDWARE_PROFILE_FIELDS, "sender profile")
+    try:
+        identity = release.rust_hardware_profile_id(profile)
+    except (ValueError, OverflowError) as exc:
+        _fail(f"invalid sender profile: {exc}")
+    for field in ("hardware_profile_id", "provider_id", "qualification_report_digest", "policy_epoch", "capability_mask"):
+        if profile[field] != document["profile"][field]:
+            _fail("sender profile differs from the exact qualified profile")
+    if identity != profile["hardware_profile_id"] or profile["platform_class"] != document["endpoint"]["platform_class"]:
+        _fail("sender profile canonical identity or platform mismatch")
+    start = _integer(profile["valid_from_ms"], "sender profile.valid_from_ms", maximum=U64_MAX)
+    end = _integer(profile["expires_at_ms"], "sender profile.expires_at_ms", minimum=1, maximum=U64_MAX)
+    run = document["run"]
+    if not (start <= run["started_at_ms"] < run["ended_at_ms"] <= end):
+        _fail("sender qualification run must remain inside the active governed profile")
+    credentials = _array(data["credentials"], "sender credentials")
+    if len(credentials) != 1:
+        _fail("sender context requires exactly one early-expiring qualified credential")
+    for raw in credentials:
+        c = _exact_fields(raw, CREDENTIAL_FIELDS, "sender credential")
+        for field in (
+            "credential_id", "network_id", "hardware_profile_id", "suite_id",
+            "firmware_policy_digest", "lane_commitment", "hardware_epoch_id", "device_key_reference",
+        ):
+            _digest(c[field], f"sender credential.{field}")
+        _integer(c["version"], "sender credential.version", minimum=1, maximum=1)
+        for field in ("policy_epoch", "hardware_epoch_generation", "issued_at_ms", "expires_at_ms"):
+            _integer(c[field], f"sender credential.{field}", maximum=U64_MAX)
+        try:
+            key = release._device_public_key(c["device_public_key"], "sender device key")
+            issuer = release._device_public_key(profile["governance_credential_public_key"], "sender profile issuer")
+        except ValueError as exc:
+            _fail(str(exc))
+        if (
+            c["hardware_profile_id"] != identity
+            or c["policy_epoch"] != profile["policy_epoch"]
+            or c["firmware_policy_digest"] != profile["firmware_policy_digest"]
+            or release._suite_commitment(c["suite_id"]) != profile["allowed_suite_commitment"]
+            or not (start <= c["issued_at_ms"] < c["expires_at_ms"] <= end)
+            or c["device_key_reference"] != _sha256(b"iroha:kagemusha:v1:device-key-reference\0" + key)
+            or credential_identity(c) != c["credential_id"]
+        ):
+            _fail("sender credential identity, lifetime or exact profile binding mismatch")
+        signature = _signature(c["governance_signature"], "sender governance signature")
+        if not release._p256_verify(issuer, credential_signing_bytes(c), signature):
+            _fail("sender credential issuer signature is invalid")
+    if not (credentials[0]["expires_at_ms"] < run["ended_at_ms"] <= end):
+        _fail("sender credential does not support expiry testing within the active profile")
+    return profile, credentials
+
+
+def _sender_snapshot(raw: Any) -> Mapping[str, Any]:
+    snapshot = _exact_fields(raw, SENDER_SNAPSHOT_FIELDS, "sender authoritative snapshot")
+    for field in SENDER_SNAPSHOT_FIELDS:
+        if field in {"state", "outbox_digest"}:
+            _digest(snapshot[field], f"sender snapshot.{field}")
+        else:
+            _integer(snapshot[field], f"sender snapshot.{field}", minimum=1 if field == "epoch" else 0)
+    return snapshot
+
+
+def _sender_signature(context: Mapping[str, Any], kind: str, data: Mapping[str, Any], key: str) -> None:
+    signature = _signature(data["hardware_signature"], "sender hardware signature")
+    if not release._p256_verify(bytes.fromhex(key), sender_evidence_signing_bytes(context["event_hash"], kind, data), signature):
+        _fail("sender hardware observation signature is invalid")
+
+
+def _sender_time_case(case: str, decision: int, issued: int, expires: int) -> bool:
+    """Admit realizable physical time intervals with inclusive/exclusive endpoints."""
+    if case == "before_issuance":
+        return 0 < decision < issued
+    if case == "credential_expiry":
+        return decision >= expires
+    if case == "credential_after":
+        return decision > expires
+    return issued <= decision < expires
+
+
+def sender_parser_approval_message(report: Mapping[str, Any], policy: release.TrustedObserverPolicy) -> bytes:
+    """Bind an independently observed native parse to its exact evidence role and policy."""
+    subject = {
+        "observer_policy_sha256": policy.info.sha256,
+        "report": {key: value for key, value in report.items() if key != "approvals"},
+    }
+    return release._approval_message(subject)
+
+
+def _sender_parser_report(
+    raw: Any, document: Mapping[str, Any], context: Mapping[str, Any],
+    attempt: Mapping[str, Any], result: Mapping[str, Any], recovery: Mapping[str, Any],
+    credential: Mapping[str, Any], policy: release.TrustedObserverPolicy,
+) -> Mapping[str, Any]:
+    """Authenticate a pinned parser observation; never execute a supplied program.
+
+    This establishes structural public-byte bindings only. The separate service
+    observation must attest actual release-authority consumption, including the
+    in-process finalized redemption capability when required.
+    """
+    report = _exact_fields(raw, (
+        "schema", "schema_version", "purpose", "verifier_id", "verifier_sha256",
+        "source_id", "source_sha256", "run_id", "candidate_context_digest",
+        "artifact_set_digest", "device_id", "sender_context_event_hash",
+        "command_hex", "projection", "approvals",
+    ), "sender parser report")
+    _integer(report["schema_version"], "sender parser schema version", minimum=1, maximum=1)
+    if (report["schema"], report["schema_version"], report["purpose"], report["verifier_id"], report["source_id"]) != (
+        SENDER_PARSER_SCHEMA, 1, SENDER_PARSER_PURPOSE, SENDER_PARSER_ID, SENDER_PARSER_SOURCE_ID,
+    ) or isinstance(report["schema_version"], bool):
+        _fail("sender parser observation substitutes its schema, purpose or verifier role")
+    for identity, field in ((SENDER_PARSER_ID, "verifier_sha256"), (SENDER_PARSER_SOURCE_ID, "source_sha256")):
+        trusted = policy.verifiers.get(identity)
+        if trusted is None or trusted.sha256 != _digest(report[field], f"sender parser {field}") or SENDER_PARSER_SCHEMA not in trusted.report_schemas:
+            _fail("observer policy does not admit the exact native sender parser binary and source")
+    try:
+        source_info, _ = release.stable_read_path(SENDER_PARSER_SOURCE, max_size=MAX_EVIDENCE_BYTES)
+    except (release.KagemushaEvidenceError, OSError, ValueError) as error:
+        _fail(f"cannot authenticate native sender parser source: {error}")
+    if source_info.sha256 != report["source_sha256"]:
+        _fail("native sender parser source differs from the independently pinned source")
+    expected_context = {
+        **{key: document["run"][key] for key in ("run_id", "candidate_context_digest", "artifact_set_digest")},
+        "device_id": document["endpoint"]["device_id"], "sender_context_event_hash": context["event_hash"],
+    }
+    if any(report[key] != value for key, value in expected_context.items()):
+        _fail("sender parser observation substitutes its qualified run or device context")
+    command_hex = report["command_hex"]
+    if not isinstance(command_hex, str) or not (0 < len(command_hex) <= SENDER_COMMAND_MAX_BYTES * 2):
+        _fail("sender parser command must be a bounded canonical payload")
+    try:
+        command = bytes.fromhex(command_hex)
+    except ValueError:
+        _fail("sender parser command is not canonical hexadecimal")
+    if command.hex() != command_hex:
+        _fail("sender parser command is not canonical lowercase hexadecimal")
+    projection = _exact_fields(report["projection"], SENDER_PROJECTION_FIELDS, "sender native projection")
+    for field in SENDER_PROJECTION_DIGEST_FIELDS:
+        _digest(projection[field], f"sender projection.{field}")
+    for field, maximum in (("schema_version", 1), ("operation", 12), ("protocol_version", 1), ("policy_epoch", U64_MAX), ("hardware_epoch_generation", U128_MAX), ("asset_scale", 255)):
+        _integer(projection[field], f"sender projection.{field}", maximum=maximum)
+    if projection["structural_only"] is not True:
+        _fail("sender parser output cannot grant release or finalized receipt authority")
+    a, r = attempt["data"], result["data"]
+    if a["operation_kind"] == "send_split":
+        _digest(projection["request_sha256"], "sender projection request")
+        for field in ("request_start_ms", "request_end_ms"):
+            _integer(projection[field], f"sender projection.{field}", maximum=U64_MAX)
+    if projection["payment_committed_at_ms"] is not None:
+        _integer(projection["payment_committed_at_ms"], "sender projection payment time", minimum=1, maximum=U64_MAX)
+    # This is the loaded release manifest selector, not the candidate artifact
+    # set digest. The public parser cannot establish catalog admission for it.
+    if a["operation_kind"] == "send_split":
+        if projection["artifact_manifest_digest"] is not None:
+            _fail("sender payment projection invents a manifest field absent from V1")
+    else:
+        _digest(projection["artifact_manifest_digest"], "sender redemption manifest selector")
+    expected = {
+        "schema": SENDER_PARSER_SCHEMA, "schema_version": 1, "operation": 12,
+        "protocol_version": 1, "authorization_purpose": "release",
+        "operation_kind": a["operation_kind"], "operation_id": a["operation_id"],
+        "command_sha256": _sha256(command), "preparation_id": a["preparation_sha256"],
+        "candidate_digest": a["candidate_sha256"], "certificate_sha256": r["certificate_sha256"],
+        "envelope_sha256": r["envelope_sha256"], "terminal_receipt_sha256": recovery["receipt_sha256"],
+        "hardware_authorization_sha256": recovery["release_authorization_sha256"],
+        "hardware_policy_id": document["profile"]["hardware_policy_id"],
+        "vk_digest": context["data"]["vk_digest"],
+        "commit_evidence_source": a["source"],
+        "commit_evidence_commitment": a["commit_evidence_commitment"],
+        "payment_committed_at_ms": r["decision_trusted_time_ms"] if a["operation_kind"] == "send_split" else None,
+        **{key: a[key] if a["operation_kind"] == "send_split" else None for key in ("request_sha256", "request_start_ms", "request_end_ms")},
+        **{key: credential[key] for key in (
+            "credential_id", "hardware_profile_id", "suite_id", "network_id", "lane_commitment",
+            "hardware_epoch_id", "hardware_epoch_generation", "device_key_reference", "policy_epoch",
+        )},
+        "receipt_kind": "payment_acknowledgement" if a["operation_kind"] == "send_split" else "finalized_redemption_selector",
+    }
+    if release.canonical_json_bytes({key: projection[key] for key in expected}) != release.canonical_json_bytes(expected):
+        _fail("sender native projection substitutes its exact command, receipt, authorization or retained context")
+    if projection["authorization_key_reference"] != projection["core_authorization_key_reference"]:
+        _fail("sender release authorization key differs from its decoded context")
+    approvals = _array(report["approvals"], "sender parser approvals")
+    if len(approvals) > len(policy.authorities):
+        _fail("sender parser approvals exceed the observer policy")
+    message = sender_parser_approval_message(report, policy)
+    previous = ""
+    verified = 0
+    for raw_approval in approvals:
+        approval = _exact_fields(raw_approval, ("authority_id", "signature"), "sender parser approval")
+        authority_id = _digest(approval["authority_id"], "sender parser observer")
+        if authority_id <= previous or authority_id not in policy.authorities:
+            _fail("sender parser observers must be trusted and uniquely sorted")
+        previous = authority_id
+        if not release._ed25519_verify(policy.authorities[authority_id], message, _signature(approval["signature"], "sender parser approval signature")):
+            _fail("sender parser observation has an invalid independent observer signature")
+        verified += 1
+    if verified < policy.threshold:
+        _fail("sender parser observation does not meet the independent observer threshold")
+    return projection
+
+
+def _derive_sender_checks(
+    document: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
+    state: str, counter: int, epoch: int, boot_id: str, policy: release.TrustedObserverPolicy,
+) -> tuple[str, int, int, str]:
+    """Check atomic nonmutation, bounded successes and historical exact-once recovery."""
+    segment = [event for event in events if event["kind"].startswith("sender_")]
+    context = segment[0]
+    profile, (short,) = _sender_context(context, document)
+    run = document["run"]
+    prefix = events[:context["index"]]
+    previous_time = max(run["started_at_ms"], *(event["data"].get("trusted_time_ms", 0) for event in prefix))
+    snapshot = None
+    used_operations = {event["data"]["operation_id"] for event in events if not event["kind"].startswith("sender_") and "operation_id" in event["data"]}
+    used_digests: set[str] = set()
+    committed: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    cursor = 1
+
+    def unique(value: Any, label: str) -> None:
+        digest = _digest(value, label)
+        if digest in used_digests:
+            _fail("sender evidence reuses a command, response, preparation or authority observation")
+        used_digests.add(digest)
+
+    for case in SENDER_CASES:
+        for operation in SENDER_OPERATIONS:
+            attempt, result = segment[cursor:cursor + 2]
+            cursor += 2
+            a, r = attempt["data"], result["data"]
+            credential = short
+            if a["case"] != case or a["operation_kind"] != operation or a["credential_id"] != credential["credential_id"]:
+                _fail("sender scenario substitutes its required operation, case or exact credential")
+            operation_id = _digest(a["operation_id"], "sender operation_id")
+            if operation_id in used_operations:
+                _fail("sender operation identifier is reused")
+            used_operations.add(operation_id)
+            for field in ("command_sha256", "preparation_sha256", "candidate_sha256", "reservation_sha256", "time_evidence_sha256", "commit_evidence_commitment"):
+                unique(a[field], f"sender {field}")
+            unique(r["response_sha256"], "sender response")
+            if a["boot_id"] != boot_id or r["boot_id"] != boot_id or r["operation_id"] != operation_id or r["attempt_event_hash"] != attempt["event_hash"]:
+                _fail("sender result is detached from its attempt or active hardware boot")
+            before, after = _sender_snapshot(a["before"]), _sender_snapshot(r["after"])
+            if snapshot is None:
+                if (before["state"], before["counter"], before["epoch"]) != (state, counter, epoch):
+                    _fail("sender segment is detached from the authoritative state chain")
+                if short["hardware_epoch_generation"] != epoch:
+                    _fail("sender credential does not bind the authoritative hardware epoch")
+                snapshot = before
+            if before != snapshot:
+                _fail("sender attempt does not continue the authoritative state and counters")
+            for field in ("trusted_time_ms", "lease_start_ms", "lease_end_ms", "request_start_ms", "request_end_ms", "reservation_start_ms", "reservation_end_ms"):
+                _integer(a[field], f"sender {field}", maximum=U64_MAX)
+            sample = a["trusted_time_ms"]
+            now = _integer(r["decision_trusted_time_ms"], "sender decision trusted time", minimum=1, maximum=U64_MAX)
+            if not (previous_time <= sample <= now <= result["observed_at_ms"] <= run["ended_at_ms"] and sample <= attempt["observed_at_ms"] and profile["valid_from_ms"] <= now < profile["expires_at_ms"]):
+                _fail("sender authoritative time is nonmonotonic or outside the active observed run")
+            if result["observed_at_ms"] - now > MAX_LATENCY_MS or attempt["observed_at_ms"] - sample > MAX_LATENCY_MS:
+                _fail("sender hardware time is a stale observation")
+            previous_time = now
+            if not (a["reservation_start_ms"] <= now < a["reservation_end_ms"]):
+                _fail("sender reservation must remain valid during the admission attempt")
+            _digest(a["request_sha256"], "sender request", allow_zero=operation == "redeem_split")
+            if operation == "send_split":
+                if not (a["request_start_ms"] <= now < a["request_end_ms"] and a["request_end_ms"] - a["request_start_ms"] <= 300_000):
+                    _fail("sender request must remain valid during the admission attempt")
+            elif (a["request_sha256"], a["request_start_ms"], a["request_end_ms"]) != (ZERO_DIGEST, 0, 0):
+                _fail("redemption admission must not substitute a receiver request")
+            issued, expires = short["issued_at_ms"], short["expires_at_ms"]
+            if not _sender_time_case(case, now, issued, expires):
+                _fail("sender case does not exercise its required time boundary")
+            is_lease = case.startswith("lease_")
+            expected_lease = {
+                "lease_credential_straddle": (issued, expires + 1),
+                "lease_empty": (issued, issued), "lease_zero": (0, expires),
+                "lease_before_credential": (issued - 1, expires),
+                "lease_end": (issued, expires),
+            }.get(case, (0, 0))
+            if a["source"] != ("monotonic_lease" if is_lease else "trusted_time") or (a["lease_start_ms"], a["lease_end_ms"]) != expected_lease:
+                _fail("sender case does not exercise the exact whole-lease boundary")
+            if case in {"lease_credential_straddle", "lease_before_credential", "lease_end"}:
+                if not (a["reservation_start_ms"] <= a["lease_start_ms"] < a["lease_end_ms"] <= a["reservation_end_ms"]):
+                    _fail("sender lease case must keep the entire reservation window valid")
+                if operation == "send_split" and not (a["request_start_ms"] <= a["lease_start_ms"] < a["lease_end_ms"] <= a["request_end_ms"]):
+                    _fail("sender lease case must keep the entire receiver request window valid")
+            # A valid sample inside the credential is deliberately insufficient
+            # for a lease whose complete window crosses either authenticated bound.
+            positive = case in SENDER_POSITIVE_CASES
+            if r["result"] != ("committed" if positive else "rejected"):
+                _fail("sender admission result does not match the required case")
+            for field in ("certificate_sha256", "envelope_sha256"):
+                _digest(r[field], f"sender {field}", allow_zero=not positive)
+            if positive:
+                unique(r["certificate_sha256"], "sender terminal certificate")
+                unique(r["envelope_sha256"], "sender terminal envelope")
+                for field in SENDER_SNAPSHOT_FIELDS:
+                    delta = int(field in {"counter", "authorization_counter", "journal_revision", "outbox_revision"} or (field == "lease_counter" and is_lease))
+                    if field in {"state", "outbox_digest"}:
+                        if after[field] == before[field]:
+                            _fail("sender valid commit must install one successor and terminal outbox entry")
+                    elif after[field] != before[field] + delta:
+                        _fail("sender valid commit must advance exactly its permitted counters")
+                committed.append((attempt, result))
+            elif after != before or r["certificate_sha256"] != ZERO_DIGEST or r["envelope_sha256"] != ZERO_DIGEST:
+                _fail("rejected sender commit changed authoritative state, counters or outbox")
+            _sender_signature(context, result["kind"], r, credential["device_public_key"])
+            snapshot = after
+
+    controls = {event["data"]["control_id"] for event in prefix if "control_id" in event["data"]}
+    boots = {event["data"][field] for event in prefix for field in ("boot_id", "prior_boot_id", "new_boot_id") if field in event["data"]}
+    for attempt, original in committed:
+        recovery = segment[cursor]
+        cursor += 1
+        data = recovery["data"]
+        a, r = attempt["data"], original["data"]
+        if data["operation_id"] != a["operation_id"] or data["original_result_hash"] != original["event_hash"]:
+            _fail("sender recovery substitutes its historical operation or certificate")
+        control = _digest(data["control_id"], "sender recovery control")
+        new_boot = _digest(data["boot_id"], "sender recovery boot")
+        if control in controls or new_boot in boots or data["prior_boot_id"] != boot_id:
+            _fail("sender recovery must prove a fresh restart of the active hardware boot")
+        controls.add(control)
+        boots.add(new_boot)
+        boot_id = new_boot
+        now = _integer(data["trusted_time_ms"], "sender recovery trusted time", maximum=U64_MAX)
+        if not (short["expires_at_ms"] < now < profile["expires_at_ms"] and previous_time <= now <= recovery["observed_at_ms"] <= run["ended_at_ms"] <= profile["expires_at_ms"]):
+            _fail("sender historical recovery must occur after credential expiry inside the active profile")
+        if recovery["observed_at_ms"] - now > MAX_LATENCY_MS:
+            _fail("sender historical recovery uses stale hardware time")
+        previous_time = now
+        unique(data["time_evidence_sha256"], "sender recovery time evidence")
+        before, after = _sender_snapshot(data["before"]), _sender_snapshot(data["after"])
+        if before != snapshot:
+            _fail("sender recovery does not continue the authoritative state")
+        for field in SENDER_SNAPSHOT_FIELDS:
+            if field == "outbox_digest":
+                if after[field] == before[field]:
+                    _fail("sender release must remove its retained outbox entry")
+            elif field == "state":
+                if after[field] != before[field]:
+                    _fail("sender recovery or release recommitted monetary state or authorization counters")
+            elif after[field] != before[field] + int(field in {"outbox_revision", "release_counter"}):
+                _fail("sender recovery or release recommitted monetary state or authorization counters")
+        expected_receipt = "payment_acknowledgement" if a["operation_kind"] == "send_split" else "finalized_redemption_capability"
+        if data["receipt_kind"] != expected_receipt:
+            _fail("sender release substitutes its exact operation receipt authority")
+        unique(data["receipt_sha256"], "sender release receipt")
+        unique(data["release_authorization_sha256"], "sender release authorization")
+        replies = _array(data["replies"], "sender recovery replies")
+        if len(replies) != 5:
+            _fail("sender recovery must cover operations 7, 8, 9, 10 and 12")
+        for code, reply in zip((7, 8, 9, 10, 12), replies):
+            _exact_fields(reply, ("operation", "command_sha256", "response_sha256", "certificate_sha256", "envelope_sha256", "result"), "sender recovery reply")
+            if _integer(reply["operation"], "sender recovery operation", maximum=22) != code:
+                _fail("sender recovery must cover its exact ordered operation codes")
+            for field in ("command_sha256", "response_sha256"):
+                if code == 7:
+                    expected = a[field] if field == "command_sha256" else r[field]
+                    if reply[field] != expected:
+                        _fail("sender operation-7 recovery must replay the original exact command and response")
+                else:
+                    unique(reply[field], "sender recovery reply")
+            if reply["certificate_sha256"] != r["certificate_sha256"] or reply["envelope_sha256"] != r["envelope_sha256"] or reply["result"] != ("released" if code == 12 else "recovered"):
+                _fail("sender recovery is not byte-identical to its valid historical terminal output")
+        projection = _sender_parser_report(data["native_parser_report"], document, context, attempt, original, data, short, policy)
+        if replies[-1]["command_sha256"] != projection["command_sha256"]:
+            _fail("sender operation-12 reply substitutes its parsed exact canonical command")
+        service = _exact_fields(data["service_release_observation"], (
+            "operation", "command_sha256", "authorization_purpose", "authorization_id",
+            "authorization_key_reference", "release_id", "terminal_receipt_digest",
+            "receipt_authority", "result",
+        ), "sender service release observation")
+        expected_service = {
+            **{key: projection[key] for key in (
+                "operation", "command_sha256", "authorization_purpose", "authorization_id",
+                "authorization_key_reference", "release_id", "terminal_receipt_digest",
+            )},
+            "receipt_authority": "receiver_acknowledgement_signature_verified" if a["operation_kind"] == "send_split" else "core_finalized_redemption_capability_consumed",
+            "result": "release_authorization_consumed",
+        }
+        if release.canonical_json_bytes(service) != release.canonical_json_bytes(expected_service):
+            _fail("sender service observation does not bind the exact consumed release and receipt authority")
+        _sender_signature(context, recovery["kind"], data, short["device_public_key"])
+        snapshot = after
+    assert snapshot is not None
+    return snapshot["state"], snapshot["counter"], snapshot["epoch"], boot_id
+
+
 def _expect_sequence(events: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
     kinds = [event["kind"] for event in events]
     prefix = ["run_start", "airplane_mode_enabled", "network_probe"] + ["operation_probe"] * 22
@@ -656,6 +1183,7 @@ def _expect_sequence(events: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
     ]
     suffix = [
         "thermal_end",
+        *_sender_sequence(),
         "software_fallback_probe",
         "network_probe",
         "airplane_mode_disabled",
@@ -685,11 +1213,13 @@ def _semantic_transition(data: Mapping[str, Any]) -> tuple[Any, ...]:
 
 
 def _derive_checks(
+    document: Mapping[str, Any],
     run: Mapping[str, Any],
     events: Sequence[Mapping[str, Any]],
     metrics: Sequence[tuple[int, int]],
     thermal_start: int,
     thermal_end: int,
+    policy: release.TrustedObserverPolicy,
 ) -> None:
     by_kind: dict[str, list[Mapping[str, Any]]] = {}
     for event in events:
@@ -914,6 +1444,9 @@ def _derive_checks(
     if p95_latency > MAX_LATENCY_MS:
         _fail(f"operation p95 latency exceeds {MAX_LATENCY_MS} ms")
 
+    state, counter, epoch, boot_id = _derive_sender_checks(
+        document, events, state, counter, epoch, boot_id, policy,
+    )
     software = by_kind["software_fallback_probe"][0]["data"]
     if software["observed_state"] != state:
         _fail("software fallback probe is not bound to the authoritative state")
@@ -1000,7 +1533,7 @@ def verify_document(
     run = _validate_run(top["run"])
     events, metrics = _validate_events(top["events"], run)
     thermal_start, thermal_end = _expect_sequence(events)
-    _derive_checks(run, events, metrics, thermal_start, thermal_end)
+    _derive_checks(top, run, events, metrics, thermal_start, thermal_end, policy)
     _validate_approvals(top["approvals"], top, policy)
     report = _report(profile["provider_id"], profile["policy_epoch"], run["run_id"])
     if _sha256(release.canonical_json_bytes(report)) != profile["qualification_report_digest"]:

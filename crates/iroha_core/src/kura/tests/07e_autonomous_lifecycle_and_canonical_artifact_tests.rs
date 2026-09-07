@@ -1086,9 +1086,35 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     assert!(data_path.is_file(), "lane artifact data file missing");
     assert!(index_path.is_file(), "lane artifact index file missing");
+    let incarnations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.lane_id,
+                kura.active_lane_incarnation_marker(entry)
+                    .expect("exact active marker")
+                    .0,
+            )
+        })
+        .collect();
+    let activations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| (entry.lane_id, 0))
+        .collect();
     drop(kura);
     let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen kura");
+    assert!(
+        reloaded
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .is_none(),
+        "configured secondary storage becomes active only after authoritative geometry recovery"
+    );
+    reloaded
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("restore the exact fixture catalog before reading its active secondary artifacts");
     assert_eq!(
         reloaded.read_lane_block_artifact(lane_id, lane_block_height),
         Some(artifact)
@@ -1147,7 +1173,7 @@ fn latest_lane_block_artifact_rejects_malformed_slots_at_any_scan_position() {
     );
 }
 #[test]
-fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_history_scan() {
+fn lane_block_artifact_recreation_repairs_absence_and_preserves_occupied_corruption() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -1192,6 +1218,14 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     )])
     .with_lane_payload_ownerships(vec![second_ownership.clone()]);
     second.set_execution_context(Some(second_context));
+    let signature = SignatureOf::try_from_hash(
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        second.header().hash(),
+    )
+    .expect("sign the recreated ownership-bound header");
+    second
+        .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+        .expect("install recreated carrier signature");
     let second = Arc::new(second);
     let second_artifact = LaneBlockArtifact::new(second.hash(), second_ownership.clone());
     let second_proposal = lane_block_proposal_from_ownership(&second_ownership);
@@ -1201,6 +1235,12 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         kura.store_block(Arc::clone(&first)).is_err(),
         "ownership persistence must reject an uninitialized active marker"
     );
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &lane_config,
+        &BTreeMap::from([(lane_id, first_incarnation)]),
+    );
+    kura.replace_lane_storage_entries_for_test(&lane_config);
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         first_incarnation,
@@ -1220,18 +1260,46 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         kura.read_lane_block_artifact(lane_id, lane_block_height),
         Some(first_artifact.clone())
     );
-    kura.install_lane_incarnation_marker_for_test(
-        lane_entry,
-        recreated_incarnation,
-        first_artifact.ownership.proposal_height,
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let (incarnation, activation) = kura
+            .active_lane_incarnation_marker(entry)
+            .expect("capture the exact pre-retirement geometry");
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, activation);
+    }
+    let mut recreated_incarnations = incarnations.clone();
+    recreated_incarnations.insert(lane_id, recreated_incarnation);
+    let mut recreated_activations = activations.clone();
+    recreated_activations.insert(lane_id, first_artifact.ownership.proposal_height);
+    kura.apply_lane_geometry_transition(
+        &lane_config,
+        &lane_config,
+        &incarnations,
+        &recreated_incarnations,
+        &activations,
+        &recreated_activations,
+        &BTreeSet::from([lane_id]),
     )
-    .expect("install recreated active marker");
+    .expect("archive the old namespace and create the new incarnation atomically");
+    kura.mark_lane_geometry_catalog_published(
+        &lane_config,
+        &recreated_incarnations,
+        &recreated_activations,
+        None,
+    )
+    .expect("publish the recreated fixture catalog");
     assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
         "the recreated marker must hide retired ownership bytes"
     );
-    assert!(kura.latest_lane_block_artifact(lane_id).is_err());
+    assert_eq!(
+        kura.latest_lane_block_artifact(lane_id)
+            .expect("empty recreated namespace"),
+        None
+    );
     assert!(kura.lane_block_artifacts_snapshot().is_empty());
     assert!(
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(
@@ -1264,6 +1332,16 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         "a delayed old-incarnation block replay must fail closed"
     );
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+    fs::remove_file(&data_path).expect("remove missing-pair fixture data");
+    fs::remove_file(&index_path).expect("remove missing-pair fixture index");
+    let recovered = kura
+        .recover_lane_block_payload(&second_proposal)
+        .expect("repair an absent sidecar from the exact canonical carrier");
+    assert_eq!(recovered.source.global_artifact(), Some(&second_artifact));
+    let valid_pair = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
     let mut malformed_active = second_artifact.clone();
     malformed_active.ownership.accepted_transaction_hashes[0] =
         Hash::new(b"malformed active ownership replay hash");
@@ -1284,13 +1362,24 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             .is_none(),
         "malformed active ownership bytes must fail closed"
     );
-    assert_eq!(
-        kura.recover_lane_block_payload(&second_proposal)
-            .expect("repair malformed active ownership from canonical block")
-            .source
-            .global_artifact(),
-        Some(&second_artifact),
+    let malformed_pair = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
     );
+    assert!(
+        kura.recover_lane_block_payload(&second_proposal).is_err(),
+        "canonical recovery must preserve occupied malformed evidence"
+    );
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        malformed_pair
+    );
+    // Restore the known fixture pair before the independent retired-slot case.
+    fs::write(&data_path, &valid_pair.0).unwrap();
+    fs::write(&index_path, &valid_pair.1).unwrap();
     let retired_payload = first_artifact
         .encode_framed()
         .expect("encode retired ownership artifact");
@@ -1308,15 +1397,23 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             .is_none(),
         "retired canonical bytes must not be served from the active segment"
     );
-    let repaired = kura
-        .recover_lane_block_payload(&second_proposal)
-        .expect("repair recreated ownership from its canonical block");
-    assert_eq!(repaired.source.global_artifact(), Some(&second_artifact));
-    assert_eq!(
-        kura.read_lane_block_artifact(lane_id, lane_block_height),
-        Some(second_artifact.clone()),
-        "canonical repair must replace a retired same-slot artifact"
+    let retired_pair = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
     );
+    assert!(
+        kura.recover_lane_block_payload(&second_proposal).is_err(),
+        "retired occupied bytes cannot be silently overwritten in the active namespace"
+    );
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        retired_pair
+    );
+    fs::write(&data_path, &valid_pair.0).unwrap();
+    fs::write(&index_path, &valid_pair.1).unwrap();
     for stale_height in 2..=u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
         .expect("scan budget fits u64")
         .saturating_add(1)
@@ -1352,17 +1449,17 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
     reopened
-        .install_lane_incarnation_marker_for_test(
-            lane_entry,
-            recreated_incarnation,
-            first_artifact.ownership.proposal_height,
+        .recover_lane_geometry_journal(
+            &lane_config,
+            &recreated_incarnations,
+            &recreated_activations,
         )
-        .expect("restore the isolated fixture's authoritative recreated marker");
-    reopened
-        .store_block(Arc::clone(&second))
-        .expect("restore the recreated lane association with the exact canonical block");
+        .expect("recover the exact published recreated geometry");
+    let before_retired_injection = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
     assert!(Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -1378,10 +1475,25 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             .is_none(),
         "restart repair must not serve a retired same-slot association"
     );
-    let repaired = reopened
-        .recover_lane_block_payload(&second_proposal)
-        .expect("rehydrate the recreated slot from its canonical block after restart");
-    assert_eq!(repaired.source.global_artifact(), Some(&second_artifact));
+    let reopened_retired_pair = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
+    assert!(
+        reopened
+            .recover_lane_block_payload(&second_proposal)
+            .is_err(),
+        "restart cannot turn occupied retired bytes into overwrite authority"
+    );
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        reopened_retired_pair
+    );
+    fs::write(&data_path, &before_retired_injection.0).unwrap();
+    fs::write(&index_path, &before_retired_injection.1).unwrap();
     assert_eq!(
         reopened.read_lane_block_artifact(lane_id, lane_block_height),
         Some(second_artifact.clone())

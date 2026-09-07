@@ -184,26 +184,36 @@ impl IntegerAirV1 {
     }
     /// A verifier-fixed small lookup, proved by a complete Boolean one-hot selection.
     pub(super) fn lookup(&mut self, value: Value, table: &[i64]) -> Value {
-        assert!(!table.is_empty() && table.len() < 256);
+        self.lookup_columns(value, &[table]).remove(0)
+    }
+    /// Share one complete one-hot index proof across several immutable table columns.
+    pub(super) fn lookup_columns(&mut self, value: Value, tables: &[&[i64]]) -> Vec<Value> {
+        assert!(!tables.is_empty());
+        let rows = tables[0].len();
+        assert!(rows > 0 && rows < 256 && tables.iter().all(|table| table.len() == rows));
         let mut total = Value::constant(0);
         let mut index = Value::constant(0);
-        let mut result = Value::constant(0);
-        for (i, entry) in table.iter().enumerate() {
-            let selected = self.push(Operation::EqualConstant(value, i as i64), 0, 1);
+        let mut results = vec![Value::constant(0); tables.len()];
+        for row in 0..rows {
+            let selected = self.push(Operation::EqualConstant(value, row as i64), 0, 1);
             self.constraints.push(Constraint::Boolean(selected));
             total = self.add(total, selected);
-            let weighted = self.mul_constant(selected, i as i64);
+            let weighted = self.mul_constant(selected, row as i64);
             index = self.add(index, weighted);
-            if *entry != 0 {
-                let contribution = self.mul_constant(selected, *entry);
-                result = self.add(result, contribution);
+            for (result, table) in results.iter_mut().zip(tables) {
+                if table[row] != 0 {
+                    let contribution = self.mul_constant(selected, table[row]);
+                    *result = self.add(*result, contribution);
+                }
             }
         }
         self.equate(total, Value::constant(1));
         self.equate(index, value);
-        result.low = *table.iter().min().expect("nonempty");
-        result.high = *table.iter().max().expect("nonempty");
-        result
+        for (result, table) in results.iter_mut().zip(tables) {
+            result.low = *table.iter().min().expect("nonempty");
+            result.high = *table.iter().max().expect("nonempty");
+        }
+        results
     }
     fn bit_width(maximum: i64) -> u32 {
         (64 - maximum.max(1).leading_zeros()).max(1)
@@ -285,6 +295,75 @@ impl IntegerAirV1 {
             source: Source::Next(index),
             ..value
         }
+    }
+    /// Backward-slice the executable graph, excluding constraint-only witness nodes.
+    /// Operands are [kind,value]: constant=0, fixed=1, prior node=2, input=3.
+    /// Opcodes are add/sub/mul/select/div/rem/bit/radix-four/equal-constant = 0..8.
+    pub(super) fn export_graph(&self, outputs: &[Value]) -> (Vec<Vec<i64>>, Vec<[i64; 2]>) {
+        fn visit(
+            air: &IntegerAirV1,
+            source: Source,
+            inputs: &[Option<usize>],
+            cache: &mut [Option<[i64; 2]>],
+            nodes: &mut Vec<Vec<i64>>,
+        ) -> [i64; 2] {
+            let index = match source {
+                Source::Constant(value) => return [0, value],
+                Source::Fixed(index) => return [1, index as i64],
+                Source::Next(_) => panic!("next-row value is not an executable output"),
+                Source::Column(index) => index,
+            };
+            if let Some(operand) = cache[index] {
+                return operand;
+            }
+            let operation = &air.operations[index];
+            if matches!(operation, Operation::Input) {
+                let operand = [3, inputs[index].expect("input position") as i64];
+                cache[index] = Some(operand);
+                return operand;
+            }
+            let (opcode, operands): (i64, Vec<Value>) = match *operation {
+                Operation::Input => unreachable!(),
+                Operation::Add(a, b) => (0, vec![a, b]),
+                Operation::Sub(a, b) => (1, vec![a, b]),
+                Operation::Mul(a, b) => (2, vec![a, b]),
+                Operation::Select(c, a, b) => (3, vec![c, a, b]),
+                Operation::Quotient(a, d) => (4, vec![a, Value::constant(d)]),
+                Operation::Remainder(a, d) => (5, vec![a, Value::constant(d)]),
+                Operation::Bit(a, bit) => (6, vec![a, Value::constant(i64::from(bit))]),
+                Operation::Digit(a, bit) => (7, vec![a, Value::constant(i64::from(bit))]),
+                Operation::EqualConstant(a, value) => (8, vec![a, Value::constant(value)]),
+            };
+            let mut node = vec![opcode];
+            for operand in operands {
+                node.extend(visit(air, operand.source, inputs, cache, nodes));
+            }
+            let operand = [2, nodes.len() as i64];
+            nodes.push(node);
+            cache[index] = Some(operand);
+            operand
+        }
+        let mut input = 0;
+        let inputs = self
+            .operations
+            .iter()
+            .map(|operation| {
+                if matches!(operation, Operation::Input) {
+                    let index = input;
+                    input += 1;
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut cache = vec![None; self.operations.len()];
+        let mut nodes = Vec::new();
+        let outputs = outputs
+            .iter()
+            .map(|value| visit(self, value.source, &inputs, &mut cache, &mut nodes))
+            .collect();
+        (nodes, outputs)
     }
     /// Generate one row from input state columns and public fixed values.
     pub(super) fn witness(&self, inputs: &[i64], fixed: &[i64]) -> Vec<i64> {
@@ -393,5 +472,157 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// Stage-multiplexed circuits share normal, Boolean and radix-four column banks.
+/// Only non-range equations are gated; quartic range equations remain unconditional.
+pub(super) struct PackedIntegerAirV1 {
+    programs: Vec<IntegerAirV1>,
+    mappings: Vec<Vec<usize>>,
+    normal_width: usize,
+    boolean_width: usize,
+    digit_width: usize,
+}
+impl PackedIntegerAirV1 {
+    pub(super) fn new(programs: Vec<IntegerAirV1>) -> Self {
+        let mut counts = Vec::new();
+        let mut roles = Vec::new();
+        for program in &programs {
+            let mut kind = vec![0; program.width()];
+            for constraint in &program.constraints {
+                match constraint {
+                    Constraint::Boolean(Value {
+                        source: Source::Column(i),
+                        ..
+                    }) => kind[*i] = 1,
+                    Constraint::RadixFour(Value {
+                        source: Source::Column(i),
+                        ..
+                    }) => kind[*i] = 2,
+                    _ => {}
+                }
+            }
+            let mut count = [0; 3];
+            let mapping = kind
+                .iter()
+                .map(|role| {
+                    let index = count[*role];
+                    count[*role] += 1;
+                    (*role, index)
+                })
+                .collect::<Vec<_>>();
+            counts.push(count);
+            roles.push(mapping);
+        }
+        let maximum = std::array::from_fn::<_, 3, _>(|i| {
+            counts.iter().map(|counts| counts[i]).max().unwrap_or(0)
+        });
+        let mappings = roles
+            .into_iter()
+            .map(|mapping| {
+                mapping
+                    .into_iter()
+                    .map(|(role, index)| {
+                        index
+                            + match role {
+                                0 => 0,
+                                1 => maximum[0],
+                                _ => maximum[0] + maximum[1],
+                            }
+                    })
+                    .collect()
+            })
+            .collect();
+        Self {
+            programs,
+            mappings,
+            normal_width: maximum[0],
+            boolean_width: maximum[1],
+            digit_width: maximum[2],
+        }
+    }
+    pub(super) fn width(&self) -> usize {
+        self.normal_width + self.boolean_width + self.digit_width
+    }
+    pub(super) fn constraint_count(&self) -> usize {
+        self.boolean_width
+            + self.digit_width
+            + self
+                .programs
+                .iter()
+                .map(|program| {
+                    program
+                        .constraints
+                        .iter()
+                        .filter(|constraint| {
+                            !matches!(
+                                constraint,
+                                Constraint::Boolean(_) | Constraint::RadixFour(_)
+                            )
+                        })
+                        .count()
+                })
+                .sum::<usize>()
+    }
+    pub(super) fn witness(&self, stage: usize, inputs: &[i64], fixed: &[i64]) -> Vec<i64> {
+        let logical = self.programs[stage].witness(inputs, fixed);
+        let mut row = vec![0; self.width()];
+        for (value, index) in logical.into_iter().zip(&self.mappings[stage]) {
+            row[*index] = value;
+        }
+        row
+    }
+    pub(super) fn read_integer(
+        &self,
+        stage: usize,
+        value: Value,
+        row: &[i64],
+        fixed: &[i64],
+    ) -> i64 {
+        match value.source {
+            Source::Constant(v) => v,
+            Source::Column(i) => row[self.mappings[stage][i]],
+            Source::Fixed(i) => fixed[i],
+            Source::Next(_) => panic!("stage output must be local"),
+        }
+    }
+    pub(super) fn read(&self, stage: usize, value: Value, row: &[F], fixed: &[F]) -> F {
+        match value.source {
+            Source::Constant(v) => field(v),
+            Source::Column(i) => row[self.mappings[stage][i]],
+            Source::Fixed(i) => fixed[i],
+            Source::Next(_) => panic!("stage output must be local"),
+        }
+    }
+    pub(super) fn residues(&self, row: &[F], fixed: &[F], gates: &[F]) -> Vec<F> {
+        let mut out = Vec::with_capacity(self.constraint_count());
+        for value in &row[self.normal_width..self.normal_width + self.boolean_width] {
+            out.push(value.mul(value.sub(F::ONE)));
+        }
+        for value in &row[self.normal_width + self.boolean_width..] {
+            out.push(
+                value
+                    .mul(value.sub(F::ONE))
+                    .mul(value.sub(field(2)))
+                    .mul(value.sub(field(3))),
+            );
+        }
+        for ((program, mapping), gate) in self.programs.iter().zip(&self.mappings).zip(gates) {
+            let logical = mapping.iter().map(|i| row[*i]).collect::<Vec<_>>();
+            for (residue, constraint) in program
+                .residues(&logical, &logical, fixed)
+                .into_iter()
+                .zip(&program.constraints)
+            {
+                if !matches!(
+                    constraint,
+                    Constraint::Boolean(_) | Constraint::RadixFour(_)
+                ) {
+                    out.push(gate.mul(residue));
+                }
+            }
+        }
+        out
     }
 }

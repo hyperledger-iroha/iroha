@@ -4768,11 +4768,22 @@ export interface ToriiNativeAmxParticipantLaneBlockProposal {
   payload_block_hint: null;
 }
 
+/** Seven-field nonrecursive participant control commitment in candidate order. */
+export interface ToriiNativeAmxParticipantSettlement {
+  readonly lane_id: number;
+  readonly dataspace_id: ToriiU64;
+  readonly lane_incarnation: string;
+  readonly participant_lane_block_height: ToriiU64;
+  readonly authority_context_height: ToriiU64;
+  readonly previous_native_settlement_hash: string | null;
+  readonly source_ids: ReadonlyArray<ToriiNativeAmxSourceId>;
+}
+
 export interface ToriiNativeAmxLeg {
   lane_id: number;
   dataspace_id: ToriiU64;
   participant_proposal: Readonly<ToriiNativeAmxParticipantLaneBlockProposal>;
-  participant_settlement: Readonly<ToriiLaneSettlementCommitment>;
+  participant_settlement: Readonly<ToriiNativeAmxParticipantSettlement>;
   participant_settlement_hash: string;
   prepare_qc: Readonly<ToriiNativeAmxAttestationQc>;
   commit_qc: Readonly<ToriiNativeAmxAttestationQc>;

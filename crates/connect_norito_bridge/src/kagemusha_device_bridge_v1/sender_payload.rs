@@ -671,6 +671,7 @@ impl SenderCommandV1 {
                         && authorization.operation_id == self.operation_id
                         && authorization.inputs_digest == *inputs_digest
                         && authorization.release_id == self.context.release.release_id
+                        && authorization.candidate_digest == metadata.candidate_digest
                         && authorization.outcome_id == metadata.outcome_id
                         && authorization.transition_nullifier == metadata.terminal_nullifier
                         && authorization.envelope_digest == Some(*envelope_digest)
@@ -1659,7 +1660,7 @@ fn hardware_authorization_test_key() -> Option<(SigningKey, KagemushaDevicePubli
 }
 
 #[cfg(test)]
-fn canonical_hardware_authorization_for_tests(
+pub(crate) fn canonical_hardware_authorization_for_tests(
     purpose: SenderHardwareAuthorizationPurposeV1,
     operation_id: [u8; 32],
     inputs_digest: [u8; 32],
@@ -1960,6 +1961,74 @@ mod tests {
             substituted.context.core_authorization_key_reference = [0; 32];
             assert!(substituted.canonical_digest().is_err());
         }
+    }
+
+    #[test]
+    fn sender_reservation_binding_matches_core_and_both_mobile_sdks() {
+        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/offline/kagemusha_sender_reservation_v1.json"
+        )))
+        .unwrap();
+        let bytes = |field: &str| hex::decode(fixture[field].as_str().unwrap()).unwrap();
+        let request_bytes = bytes("send_request_hex");
+        KagemushaPaymentRequestV1::decode_canonical_exact(&request_bytes).unwrap();
+        let beneficiary_bytes = bytes("redeem_beneficiary_payload_hex");
+        let beneficiary = AccountId::decode(&mut beneficiary_bytes.as_slice()).unwrap();
+        assert_eq!(beneficiary.encode(), beneficiary_bytes);
+        let cases = [
+            (
+                "send_binding_hex",
+                SenderPublicInputsV1::SendSplit {
+                    request: request_bytes.clone(),
+                },
+                KagemushaOutgoingPublicInputsV1::SendSplit {
+                    request: request_bytes.clone(),
+                },
+            ),
+            (
+                "redeem_binding_hex",
+                SenderPublicInputsV1::RedeemSplit {
+                    amount: fixture["redeem_amount_decimal"]
+                        .as_str()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    beneficiary: beneficiary.clone(),
+                },
+                KagemushaOutgoingPublicInputsV1::RedeemSplit {
+                    amount: fixture["redeem_amount_decimal"]
+                        .as_str()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    beneficiary,
+                },
+            ),
+        ];
+        for (field, bridge, core) in cases {
+            let shared = bytes(field);
+            assert_eq!(norito::encode_canonical(&bridge).unwrap(), shared);
+            assert_eq!(norito::encode_canonical(&core).unwrap(), shared);
+            assert_eq!(
+                norito::decode_canonical::<SenderPublicInputsV1>(&shared).unwrap(),
+                bridge
+            );
+            assert_eq!(
+                norito::decode_canonical::<KagemushaOutgoingPublicInputsV1>(&shared).unwrap(),
+                core
+            );
+            let mut trailing = shared.clone();
+            trailing.push(0);
+            assert!(norito::decode_canonical::<SenderPublicInputsV1>(&trailing).is_err());
+        }
+        // A reservation is a tagged input, never the old untyped request/amount concatenation.
+        assert!(norito::decode_canonical::<SenderPublicInputsV1>(&request_bytes).is_err());
+        let mut retired_redemption = 7_u128.to_le_bytes().to_vec();
+        retired_redemption.extend(bytes("redeem_beneficiary_payload_hex"));
+        assert!(norito::decode_canonical::<SenderPublicInputsV1>(&retired_redemption).is_err());
     }
 
     #[test]

@@ -28,8 +28,10 @@ A payment directly binds the request digest, amount, sender before/after
 commitments, transition nullifier, unique credit ID, ciphertext commitment,
 trusted commit evidence, commit time, encrypted credit, terminal commit
 certificate, and constant-size paired proof. The sender's hardware commit time
-must be inside the request window. A payment committed in that window remains
-stageable and foldable indefinitely.
+must be inside the request window and the authenticated sender credential and
+governed profile validity intervals. A secure lease must fit entirely inside
+the applicable intervals. A payment validly committed under those conditions
+remains stageable and foldable after their expiry.
 
 The acknowledgement binds the request digest, payment digest, credit ID,
 rollback-resistant inbox receipt, and receiver signature. It is created only
@@ -199,6 +201,39 @@ public input preimage, reserves durable outbox capacity, and prepares one
 exact-next transition. Operation 6 recovers that preparation. Core generates,
 persists, and verifies the actual recursive candidate before operation 7.
 
+Before operation 7 consumes a predecessor, the qualified hardware service must
+authenticate the exact sender compact credential and governed hardware profile
+bound to the retained preparation and the terminal Guard credential statements.
+This includes their canonical identities, governance authority, device key,
+lane, epoch, policy and release bindings. A host-selected credential or profile,
+a matching public digest, or a successful frame-codec check cannot grant this
+authority.
+
+The service must admit the positive actual trusted commit instant and any complete
+secure lease in the same atomic operation that consumes the predecessor. For trusted
+time it must enforce both
+`credential.issued_at_ms <= committed_at_ms < credential.expires_at_ms` and
+`profile.valid_from_ms <= committed_at_ms < profile.expires_at_ms`. For a lease
+`[lease_start_ms, lease_end_ms)`, the start must be positive, the interval must be
+nonempty, and the whole interval must be contained in both authenticated
+validity intervals. The exact evidence opening must be bound to the retained
+candidate and recoverable terminal certificate. A valid preparation-time sample
+does not authorize a later commit after expiry. Host wall-clock time cannot
+replace the qualified clock or secure lease authority.
+
+Failure must precede any operation-7 predecessor consumption, authorization or
+lease counter consumption, successor installation, journal advance, or terminal
+outbox publication. The previously retained preparation and reservation remain
+unchanged. Checking these conditions only while generating the terminal proof
+after an irreversible commit is insufficient. The terminal relation enforces
+these lifetime bindings in its constraints; an executable provider admission
+implementation and its physical qualification evidence are still required.
+The stock bridge remains unavailable and supplies neither.
+The physical transcript checker covers credential-expiry and full-credential
+lease cases inside the active profile. Direct physical profile activation/expiry
+and loaded-release qualification procedures remain outstanding; see the
+[physical evidence contract](kagemusha_v1_physical_evidence.md#outstanding-physical-profile-procedure).
+
 Operation 7 consumes the predecessor exactly once, installs the sole successor,
 and returns the recoverable hardware terminal certificate for the exact
 candidate and lifecycle. The hardware commit makes a peer credit irrevocable;
@@ -218,6 +253,17 @@ only: the qualified in-process service must already hold and consume the
 non-constructible, operation-indexed Core capability, so a host call or matching
 public digest cannot authorize release. Immutable replay anchors remain after
 either terminal path.
+
+An exact retry of an already committed operation must recover its original
+certificate and evidence rather than perform a new commit. Operations 8--10,
+durable acknowledgement recovery, and operation 12 acknowledgement or finalized
+redemption release continue to use the retained historical evidence and exact
+terminal bytes after credential or profile expiry. They must not consume a
+fresh commit authorization, replace the original time or lease, or reject a
+valid historical commit by comparing it with the current clock. Operation 12
+still requires its separate release authorization. A changed request or
+candidate remains a conflict; an uncommitted preparation still requires the
+operation-7 admission above.
 
 Every sender command uses canonical schema
 `iroha.kagemusha.device.v1.sender-command`; every reply uses
@@ -321,12 +367,16 @@ ASCII "iroha:kagemusha:device:v1:response-authenticator"
 || payload_length:u32
 || authenticator_length:u32 = 64
 || payload_sha256:[u8;32]
+|| canonical_command_sha256:[u8;32]
 || capability_hardware_policy_id:[u8;32]
 || capability_qualification_report_digest:[u8;32]
 ```
 
-The authenticator digest in the response header is excluded from its own
-signature message. Both capability digests must be nonzero and distinct.
+The command digest is SHA-256 over the exact canonical command body dispatched
+to the device. A same-operation, same-request-ID response cannot authenticate
+a different command target. The authenticator digest in the response header
+is excluded from its own signature message. Both capability digests must be
+nonzero and distinct.
 
 Operation 1 bootstraps response authentication only after its profile,
 credential, policy ID, qualification digest, credential governance signature,
@@ -403,9 +453,11 @@ int32_t connect_norito_kagemusha_device_execute_v1(
     size_t *output_length
 );
 
-int32_t connect_norito_kagemusha_device_response_authenticator_v1_verify(
+int32_t connect_norito_kagemusha_device_command_response_v1_verify(
     const uint8_t *response,
     size_t response_length,
+    const uint8_t *canonical_command,
+    size_t canonical_command_length,
     uint8_t expected_operation,
     const uint8_t *expected_request_id,
     size_t expected_request_id_length,
@@ -429,17 +481,17 @@ The coordinator contract call returns the written word count and pins exactly
 `[2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]`: frame version, native ABI, peer
 messages, complete wire payloads, artifact roles, relations, helper circuits,
 device operations, hardware capabilities, and the required capability mask.
-Its digest/inventory role is compatibility and tamper detection only.
+Its digest/inventory role is exact format agreement and tamper detection only.
 
 Coordinator request and response frames start with ASCII `IKGMCOR1`, followed
 by little-endian `version:u16 = 2`, `field_count:u16`, reserved zero `u32`, and
 then `field_count` repetitions of `length:u32 || bytes`. A frame has at most 16
 fields, each field at most 64 KiB, a request at most 256 KiB, and a response at
-most 128 KiB. Methods 1 through 10 are, in order: reserve operation ID, accept
+most 128 KiB. Methods 1 through 11 are, in order: reserve operation ID, accept
 qualification, accept authenticated reply, begin sender transition, prove the
 prepared sender transition, build the terminal envelope, accept the installed
 terminal, recover sender, recover the byte-identical terminal envelope, and
-release the outbox after a closed terminal receipt. The generic Kotlin Android
+release the outbox after a closed terminal receipt, and begin observation. The generic Kotlin Android
 SDK uses `org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1`
 `nativeContractV1`, `nativeOpenV1`, and `nativeInvokeV1`; the signed-app
 `KagemushaNativeCoreJniV1` exports delegate through the same native implementation.
@@ -490,6 +542,19 @@ Norito `iroha.kagemusha.device.v1.sender-public-inputs` enum as its public bindi
 Untagged request bytes or concatenated amount/account bytes are invalid. The Core
 operation journal checks canonical nested payment-request shape before reserving
 capacity. A reservation is retry material, not authenticated monetary authority.
+Read operations 1, 13, 18 and 21 are rejected by both the typed reservation boundary
+and the Core operation WAL; observations never consume durable-operation capacity.
+
+Method 11, BeginObservation, has exactly two fields: the read operation `u32` and
+its exact canonical typed command. It accepts only device operations 1, 13, 18
+and 21 and returns exactly one nonzero 32-byte native-generated challenge. The
+challenge is transient and is distinct from a caller-persisted mutation ID. The
+native owner bounds outstanding attempts, invalidates superseded challenges, and
+requires a fresh challenge after recreation. Method 3 must bind the accepted reply
+to that exact outstanding command and challenge. An already accepted observation
+cannot be republished as fresh. If a read completes durable work, its authenticated
+dependent evidence must be saved before acknowledging that work. The ten-word
+contract probe remains unchanged; the closed method inventory contains eleven codes.
 
 Method 3 has exactly ten fields: device operation `u32`, request ID, canonical
 command, canonical reply, original 64-byte low-S P-256 response authenticator,

@@ -788,6 +788,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
         'host/axt_persistent_budget_tests.rs',
+        'host/axt_unanchored_admission_tests.rs',
         'host/core_codec_and_contract_tests.rs',
         'host/core_query_execution_tests.rs',
         'host/core_query_pagination_tests.rs',
@@ -1098,6 +1099,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
         'v2_lane_work/strict_historical_read_tests.rs',
+        'v2_lane_work/strict_volatile_owner_tests.rs',
+        'v2_lane_work/strict_receipt_gate_tests.rs',
         'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
@@ -1716,6 +1719,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
     "runtime_queue_occurrence_set_matches_snapshot",
     "runtime_queue_selection_seal_projection_hash",
     "matches_scheduler_occurrence",
+    "take_lifecycle_apply_predecessor_scheduler_ownership",
     "runtime_scheduler_projection_hash",
     "current_signature_fence_identity",
     "clear_fence_retry_blocked_fifo_owners",
@@ -1731,10 +1735,10 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "a113678ffffef7c7bfae9ba827bfddff80e069dd1c1e84d9dbb5525e99138103"
     ),
     "ownership_snapshot": (
-        "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
+        "d002623b759dd1fffbac625eb7548bc5132d585152f09899225d21ee6afb47bc"
     ),
     "mint_selection_seal": (
-        "3f4a3eaaa3f1a703392d04b9c05262f2638c2bb3d4f65a9e247b83a0c1a44af8"
+        "59f22305128c3f73214ce245c4a00c1f48b39c326ceecd42a5b05fd6280e71e0"
     ),
     "contains_queue_occurrence_owner": (
         "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
@@ -1767,16 +1771,19 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
     ),
     "runtime_queue_ownership_snapshot_projection_hash": (
-        "bb6d0062be867b73c5269979c4f850bc9614e8f15c76f65c60dbc9e44d497eb9"
+        "caee9055cfaba7311c80ff277132c5a9c9745591160077ad2f54f627e112b979"
     ),
     "runtime_queue_occurrence_set_matches_snapshot": (
         "c89fd5e9e3df83fb51e201555e53799c625c9978932fb61be844476ad2c977be"
     ),
     "runtime_queue_selection_seal_projection_hash": (
-        "b9036732219388125a51d4652ce4143aaefe00574d7f9f9f359cc90b76b56368"
+        "4746160272b5e345cfb4493eb1af357e43859472bced3bfa665662b59aa9711b"
     ),
     "matches_scheduler_occurrence": (
-        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+        "2ada5ddfab7917291ad14df7c9fa937179a26f288b205bc58d25a75e666e921d"
+    ),
+    "take_lifecycle_apply_predecessor_scheduler_ownership": (
+        "85a0ccb0c757bf338fd76012430dc6d93ab414d4f9fc46975bc04c862105ae9f"
     ),
     "runtime_scheduler_projection_hash": (
         "415a47652facf9236a0205764edc92f3eb545f35e2f83b9a3562a417bf77c1ba"
@@ -1809,13 +1816,13 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "e8544136325028c614b22287649c3e7af5779669328b0b64918093edabb8302a"
     ),
     "queue_snapshot_validate_identity": (
-        "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
+        "7e416721e12641898ec94bc82b4366d87988f01158cb9ac4749937289266f03e"
     ),
     "queue_selection_validate_identity": (
-        "94d5ca84828c28e62e55af3682b290e5d02eb1db477243ae0a25ad55c39d1542"
+        "b75fb3308b71cdc0850880d5cc6354614e9600b30d5cf8c3302cc2bf5ec1919d"
     ),
     "queue_selection_kind_code": (
-        "08b07eaf05cd85228dc54c2f49a2b54071814c916a19e92cb3cff56fd5eb2518"
+        "50aa9dd2545a88137b59941c3883f50846555cb5c4f5fd69b39df9b53bd3e8b4"
     ),
     "view_blocked_authorization_struct": (
         "fec50a1d9938ec78bdf262bb973e4943802843a0d4a48c0be4bf2624dff3c0dd"
@@ -1827,10 +1834,10 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "ea80f8f1f216fe71d8219279593dd64b86ba13afec0cfb86ac1b46b6a4a1a903"
     ),
     "queue_selection_matches_scheduler_occurrence": (
-        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+        "2ada5ddfab7917291ad14df7c9fa937179a26f288b205bc58d25a75e666e921d"
     ),
     "scheduler_evidence_validate_exact": (
-        "458ee09d659891d8f30a77a2b2c49a564914ade84ee013e9be77a8aa89f59459"
+        "08313efed2e27ff279d00331782a6ae192614550de063abcc55fe6702f82339a"
     ),
     "view_blocked_authorization_new": (
         "7c4cfb17b4841105a0bc2c7e966acbd72ea4c8c232cd502918f4136c9f8717ad"
@@ -3385,7 +3392,7 @@ _RETAINED_EFFECT_PROGRESS_INGRESS_REGRESSION_SHA256 = (
 # only after those owners have drained.
 _PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256 = {
     "lifecycle_decision_apply_dispatch_available": (
-        "235710a10257053d4cd00578dae8297a42b8baa5418b8b8e35cb05d0444db5b4"
+        "426d3735d04fe801c238cf1af30535edb68b374316a514d2ccba71d01084500f"
     ),
     "prepare_lifecycle_decision_apply_executor_dispatch": (
         "e8de0ddb2e236592bcef22f353567b2d2e32013ae79def9ca10ff76a4c8762a8"

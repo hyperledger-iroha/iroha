@@ -462,7 +462,11 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     adapter
         .locally_bound_lane_proposals
         .insert(proposal.proposal_hash, protected_hint);
-    assert!(adapter.proposal_body_available(&proposal));
+    assert!(
+        adapter
+            .proposal_body_available(&proposal)
+            .expect("read exact autonomous body availability")
+    );
     // Model the live late-ingress race: the ingress precheck observed the
     // protected carrier, then a higher global transition retired that
     // in-memory witness before the durable READY boundary ran.
@@ -794,7 +798,8 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     .expect("derive exact terminal NewView body");
     assert!(
         !adapter
-            .autonomous_new_view_transition_is_current(&terminal_new_view_body, locked_round.view,),
+            .autonomous_new_view_transition_is_current(&terminal_new_view_body, locked_round.view,)
+            .expect("read current autonomous transition"),
         "an exact receipt must close the central NewView transition predicate"
     );
     let terminal_new_view_vote = crate::lane_consensus::LaneBlockNewViewVoteV1::new_signed(
@@ -870,7 +875,9 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         AutonomousPayloadDurabilityError::MissingLaneArtifact(_)
     ));
     assert!(
-        adapter.missing_autonomous_artifact_became_terminal(&proposal, &restore_error),
+        adapter
+            .missing_autonomous_artifact_became_terminal(&proposal, &restore_error)
+            .expect("read exact terminal receipt"),
         "a terminal missing-evidence race must downgrade only exact missing terminal evidence"
     );
     assert_eq!(
@@ -879,7 +886,9 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         "an exact receipt must stop READY authorization even when durable payload evidence remains"
     );
     assert!(
-        !adapter.proposal_can_progress(&proposal),
+        !adapter
+            .proposal_can_progress(&proposal)
+            .expect("read lane progress eligibility"),
         "an exact application receipt must terminally gate the retained lane session"
     );
     assert!(
@@ -965,6 +974,66 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     assert!(
         !adapter.output_guard.restart_required(),
         "terminal autonomous ingress must not stop consensus output"
+    );
+    let mut competing = proposal.clone();
+    competing.descriptor.lane_block_view = competing.descriptor.lane_block_view.saturating_add(1);
+    competing.descriptor.descriptor_hash = competing.descriptor.computed_descriptor_hash();
+    competing.proposal_hash = competing.computed_proposal_hash();
+    validate_lane_block_proposal(&competing)
+        .expect("the competing candidate is structurally valid");
+    assert!(
+        !adapter
+            .lane_application_receipt_available(&competing)
+            .expect("authenticate the occupied receipt independently of the candidate")
+    );
+    assert!(
+        !adapter
+            .proposal_can_progress(&competing)
+            .expect("a valid applied slot rejects the competing candidate")
+    );
+    assert!(
+        !adapter
+            .proposal_can_be_transported(&competing)
+            .expect("a valid applied slot rejects competing transport")
+    );
+    assert!(
+        !adapter.output_guard.restart_required(),
+        "a losing candidate cannot poison local storage"
+    );
+    let source = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(proposal.descriptor.lane_id)
+        .expect("configured lane")
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts");
+    let receipt_path = source.join("application_receipts.norito");
+    let index_path = source.join("application_receipts.index");
+    std::fs::write(
+        &receipt_path,
+        b"damaged previously authenticated application receipt",
+    )
+    .expect("damage the occupied durable receipt after its successful read");
+    let before = (
+        std::fs::read(&receipt_path).unwrap(),
+        std::fs::read(&index_path).unwrap(),
+    );
+    assert!(
+        adapter.proposal_can_progress(&competing).is_err(),
+        "a foreign candidate cannot hide corruption in the occupied local receipt"
+    );
+    assert!(adapter.output_guard.restart_required());
+    assert!(
+        adapter.lane_sessions.get(&session_key).is_some(),
+        "failure retains the certified owner"
+    );
+    assert_eq!(
+        (
+            std::fs::read(receipt_path).unwrap(),
+            std::fs::read(index_path).unwrap()
+        ),
+        before
     );
 }
 
@@ -1212,7 +1281,9 @@ fn committee_payload_replay_defers_until_decided_carrier_recovery_binds_session(
             .is_none()
     );
     assert!(
-        adapter.proposal_body_available(&proposal),
+        adapter
+            .proposal_body_available(&proposal)
+            .expect("read exact autonomous body availability"),
         "public finality exposes the carrier body but not committee-local READY authority"
     );
     assert_eq!(
@@ -1444,84 +1515,73 @@ fn canonical_decision_rebinds_quarantined_higher_view_autonomous_payload() {
 
 #[test]
 fn voting_validator_outside_lane_committee_skips_private_new_view_cursor_restore() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
-    let entrypoint = block
-        .external_entrypoints_cloned()
-        .next()
-        .expect("planned autonomous entrypoint");
-    let (payload, _) = signed_autonomous_payload_for_entrypoint(
+    let NonmemberCanonicalReplicaPreQcFixture {
+        mut adapter,
+        global_keys,
+        lane_keys,
+        proposal,
+        payload,
+        key,
+        locked_round,
+        decided,
+        ..
+    } = nonmember_canonical_replica_pre_qc_fixture();
+    let payload = attach_finalized_nonmember_public_payload(
         &adapter,
-        &keys,
         &proposal,
-        entrypoint,
-        b"outside-committee-queue-plan-admission-binding",
-        b"outside-committee-reservation-owner",
-        "deterministic autonomous producer",
-        "autonomous producer key",
-        "signed autonomous payload",
+        payload,
+        &locked_round,
+        &decided,
     );
-    let (locked_round, _) = mark_global_body_locked_for_block(&mut adapter, &block);
-    assert_ne!(
-        adapter.bind_locked_global_body(&block),
-        V2LaneIngressOutcome::Rejected,
-        "the exact protected carrier installs its lane session before READY verification"
+    let proposal = payload.origin_proposal.clone();
+    assert!(adapter.voting_enabled);
+    assert!(adapter.frozen_roster_contains(&adapter.local_peer));
+    assert!(!adapter.local_can_own_autonomous_payload(&proposal));
+    assert!(adapter.lane_sessions.contains_proposal(&proposal));
+    assert!(
+        adapter
+            .proposal_body_available(&proposal)
+            .expect("the exact protected autonomous carrier is available")
     );
-    let protected_hint = proposal
-        .payload_block_hint
-        .expect("autonomous proposal carries its candidate binding");
-    adapter
-        .locally_bound_lane_proposals
-        .insert(proposal.proposal_hash, protected_hint);
-    assert!(adapter.proposal_body_available(&proposal));
+    assert!(autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none());
+
+    // Read the same retained carrier as a real overlapping committee member.
+    // Membership requires private cursor custody even when public replica bytes exist.
+    let observer = adapter.local_peer.clone();
+    let member = lane_keys
+        .iter()
+        .find(|key| {
+            global_keys
+                .iter()
+                .any(|global| global.public_key() == key.public_key())
+        })
+        .expect("the fixture has a validator in both global and lane committees");
+    adapter.local_peer = PeerId::new(member.public_key().clone());
+    assert!(adapter.frozen_roster_contains(&adapter.local_peer));
+    assert!(adapter.local_can_own_autonomous_payload(&proposal));
     assert!(matches!(
         adapter.restore_autonomous_new_view_state(&payload, locked_round.view, Instant::now()),
         Err(AutonomousPayloadDurabilityError::MissingLaneArtifact(_))
     ));
-    let key = AutonomousLanePayloadKey::from(&proposal);
+    adapter.local_peer = observer;
     adapter
         .autonomous_new_view_started_at
         .insert(key, (proposal.descriptor.lane_block_view, Instant::now()));
-
-    let outside_committee_key = KeyPair::try_from_seed(vec![0xF1; 32], Algorithm::BlsNormal)
-        .expect("deterministic outside-committee BLS key");
-    adapter.local_peer = PeerId::new(outside_committee_key.public_key().clone());
-    assert!(adapter.voting_enabled);
-    assert_eq!(
-        adapter.local_peer.public_key().try_algorithm().ok(),
-        Some(Algorithm::BlsNormal)
-    );
-    assert!(
-        !proposal
-            .descriptor
-            .validator_set
-            .contains(&adapter.local_peer)
-    );
-    assert!(!adapter.local_can_own_autonomous_payload(&proposal));
-    assert!(
-        autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none(),
-        "a validator outside the lane committee must not own its private durable artifact"
-    );
-
     assert_eq!(
         adapter.persist_and_authorize_autonomous_payload(&payload, &proposal),
         Ok(AutonomousPayloadDurabilityOutcome::Authorized),
-        "a non-member still verifies the globally protected carrier without minting READY authority"
+        "a non-member verifies the exact protected carrier without private READY custody",
     );
     adapter
         .restore_autonomous_new_view_state(&payload, locked_round.view, Instant::now())
         .expect("a non-member has no committee-local NewView cursor to restore");
-
-    assert!(
-        !adapter.autonomous_new_view_started_at.contains_key(&key),
-        "committee removal must clear any stale local timeout"
-    );
+    assert!(!adapter.autonomous_new_view_started_at.contains_key(&key));
     assert!(
         autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none(),
-        "verification-only handling must not synthesize private committee custody"
+        "verification must not synthesize private committee custody",
     );
+    assert!(!adapter.output_guard.restart_required());
 }
-
 #[test]
 fn voting_validator_outside_lane_committee_retires_transport_only_loser_without_queue() {
     let (mut adapter, global_keys) = fixture_at_height_inner_with_kura_and_local_index(
@@ -1858,7 +1918,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
             .lane_block_application_receipt_available(&predecessor_proposal)
     );
 
-    let successor_context = successor_context_for_parent(&parent, &predecessor_block);
+    let successor_context = successor_context_for_parent(&parent, &predecessor_block, &keys);
     let validator_set = parent
         .state
         .resolve_lane_committee_at_height(
@@ -3331,7 +3391,7 @@ fn nonmember_canonical_replica_pre_qc_fixture() -> NonmemberCanonicalReplicaPreQ
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("persist canonical non-member finality");
-    let successor_context = successor_context_for_parent(&adapter, &carrier);
+    let successor_context = successor_context_for_parent(&adapter, &carrier, &global_keys);
     let committed = ValidBlock::committed_from_replay_signed_block(carrier);
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     assert_ne!(
@@ -3462,6 +3522,122 @@ fn globally_connected_lane_quorum_key<'a>(
                 .any(|global_key| global_key.public_key() == lane_key.public_key())
         })
         .expect("READY quorum includes a globally connected lane validator")
+}
+
+#[test]
+fn finalized_public_autonomous_certificate_is_served_across_disjoint_rosters() {
+    let NonmemberCanonicalReplicaPreQcFixture {
+        mut adapter,
+        global_keys: _,
+        lane_keys,
+        lane_id: _,
+        proposal,
+        payload,
+        key: _,
+        locked_round,
+        decided,
+        finality: _,
+        successor_context: _,
+    } = nonmember_canonical_replica_pre_qc_fixture();
+    let public_payload = attach_finalized_nonmember_public_payload(
+        &adapter,
+        &proposal,
+        payload,
+        &locked_round,
+        &decided,
+    );
+    let public_proposal = public_payload.origin_proposal.clone();
+    let session = CommittedLaneBlockSession {
+        proposal: public_proposal.clone(),
+        prepare_qc: finalized_nonmember_prepare_qc(&public_proposal, &public_payload, &lane_keys),
+        commit_qc: lane_qc_for_phase(&public_proposal, &lane_keys[..3], CertPhase::Commit),
+    };
+    adapter
+        .kura
+        .persist_lane_executable_payload(
+            &public_payload,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("persist committee-owned autonomous payload source");
+    let execution_input = adapter
+        .kura
+        .recover_autonomous_lane_block_payload(
+            &public_proposal,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("recover committee-owned autonomous execution input");
+    adapter
+        .kura
+        .persist_lane_block_execution_input(&execution_input)
+        .expect("persist committee-owned autonomous execution input");
+    adapter
+        .persist_autonomous_prepare_availability(&public_proposal, &session.prepare_qc)
+        .expect("persist committee-owned READY source");
+    let pops = adapter.pops_for_lane_session(&session);
+    adapter
+        .kura
+        .persist_committed_lane_block_session(&session, &pops)
+        .expect("persist finalized public autonomous certificate source");
+    adapter.effects.clear();
+    adapter.effect_keys.clear();
+
+    let requester = PeerId::new(
+        KeyPair::try_from_seed(vec![0xE8; 32], Algorithm::BlsNormal)
+            .expect("disjoint-roster requester key")
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        !adapter
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester)
+    );
+    assert!(!session.commit_qc.validator_set.contains(&requester));
+    let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+    let reply_route = routes.mint(requester.clone());
+    assert_eq!(
+        adapter.accept_lane_message(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                BlockMessage::LaneBlockProposal(public_proposal.clone()),
+                requester.clone(),
+                requester.clone(),
+                reply_route.clone(),
+            )
+            .expect("authenticated disjoint-roster recovery route"),
+            locked_round.view,
+        ),
+        V2LaneIngressOutcome::Inserted,
+        "verified public finality must authorize exact cross-roster certificate recovery"
+    );
+    assert!(matches!(
+        adapter.drain_effects(1).as_slice(),
+        [V2LaneWorkEffect::PostDurableLaneCertificate {
+            peer,
+            reply_routes: Some(emitted_routes),
+            certificate,
+            ..
+        }] if peer == &requester
+            && emitted_routes.len() == 1
+            && emitted_routes
+                .iter()
+                .any(|emitted_route| emitted_route.same_delivery(&reply_route))
+            && certificate.proposal == session.proposal
+            && certificate.prepare_qc == session.prepare_qc
+            && certificate.commit_qc == session.commit_qc
+    ));
+
+    let mut noncanonical = public_proposal;
+    noncanonical.payload_block_hint = None;
+    noncanonical.proposal_hash = noncanonical.computed_proposal_hash();
+    assert_eq!(
+        adapter.reconstruct_durable_lane_certificate(&noncanonical, &requester),
+        Ok(None),
+        "a different or unanchored proposal must not inherit public-carrier authority"
+    );
 }
 
 #[test]
@@ -4063,7 +4239,11 @@ fn restarted_nonmember_accepts_public_qcs_and_persists_only_canonical_replica() 
             .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted
     );
-    assert!(recovered.has_pending_historical_recovery());
+    assert!(
+        recovered
+            .has_pending_historical_recovery()
+            .expect("read pending historical recovery")
+    );
     assert!(matches!(
         recovered
             .service_next_historical_recovery()
@@ -4509,7 +4689,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     let current_context = adapter.context.clone();
-    let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
+    let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block, &keys);
     sidecar_only_successor.epoch = {
         let world = adapter.state.world_view();
         crate::sumeragi::epoch_for_height_from_world(
@@ -4637,7 +4817,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
             .expect("current-height alternate READY proof reuses the durable subject proof"),
         1
     );
-    let mut successor_context = successor_context_for_parent(&adapter, &block);
+    let mut successor_context = successor_context_for_parent(&adapter, &block, &keys);
     successor_context.epoch = {
         let world = adapter.state.world_view();
         crate::sumeragi::epoch_for_height_from_world(

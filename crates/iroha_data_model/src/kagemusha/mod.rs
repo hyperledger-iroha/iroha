@@ -4,11 +4,20 @@
 //! contains only aggregate-balance state, hardware-bound proofs, and pooled
 //! reserve settlement.
 
+pub mod kagemusha_device_response_v1;
 pub mod kagemusha_device_v1;
+pub mod kagemusha_enrolled_open_selector_v1;
 pub mod kagemusha_release_v1;
+pub mod kagemusha_retail_enrollment_challenge_v1;
+pub mod kagemusha_retail_enrollment_v1;
 pub mod kagemusha_v1;
 
-pub use self::{kagemusha_device_v1::*, kagemusha_release_v1::*, kagemusha_v1::*};
+pub use self::{
+    kagemusha_device_response_v1::*, kagemusha_device_v1::*,
+    kagemusha_enrolled_open_selector_v1::*, kagemusha_release_v1::*,
+    kagemusha_retail_enrollment_challenge_v1::*, kagemusha_retail_enrollment_v1::*,
+    kagemusha_v1::*,
+};
 
 /// Prefix embedded into KAGEMUSHA V1 instruction rejection messages.
 ///

@@ -28,11 +28,14 @@ files or committed documentation.
 
 ## Disposable deployment
 
-Before the first run on each native AArch64 Linux validator, install direct,
-root-owned, single-link executables at `/usr/bin/qemu-system-aarch64`,
+Before the first run on each native AArch64 Linux validator, install root-owned,
+single-link executable implementations at `/usr/bin/qemu-system-aarch64`,
 `/usr/bin/setpriv`, `/usr/bin/ldd`, `/usr/bin/bwrap`, `/usr/bin/nsenter`, and
-`/usr/bin/socat`. Then create the fixed parent and package the immutable runtime
-from the `optimizations` checkout:
+`/usr/bin/socat`. All listed entries except `socat` must be direct files.
+The packager authenticates every component of package-managed `socat`, dynamic
+loader, and library symlink chains; its published runtime contains direct files.
+Then create the fixed parent and package the immutable runtime from the
+`optimizations` checkout:
 
 ```bash
 sudo install -d -o root -g root -m 0755 /opt/iroha
@@ -258,11 +261,10 @@ signature-bound marker version; consensus consumes the authority-scoped claim
 marker atomically with successful execution, so a duplicate claim through a
 different binding, peer, generic transaction ingress, or restart must be
 treated as a deterministic rejection rather than retried as another payout.
-The marker version applies only to newly prepared transactions. On an in-place
-upgrade, keep writer MCP unavailable, quiesce legacy faucet prepare, wait for
-all legacy prepared envelopes to expire, and advance beyond the configured PoW
-anchor-age window before exposing these tools. A fresh public reset already
-satisfies this cutover condition.
+The first release uses a fresh public reset and newly prepared envelopes bound
+to that reset. Expose the writer tools only after the reset coordinator has
+validated their current authority, fee intent, and durable prepared-operation
+protocol.
 
 For a pre-signed transaction envelope, prefer
 `iroha.transactions.submit_and_wait`:

@@ -1440,8 +1440,12 @@ mod model {
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
-            /// Read one consensus-owned race.
-        FindRaceById(race::FindRaceById),
+        /// Read one consensus-owned generic game session.
+        FindGameSessionById(game::FindGameSessionById),
+        /// Read one bounded proof-verification receipt.
+        FindExecutionProofVerificationById(game::FindExecutionProofVerificationById),
+        /// Read a native one-shot exact-price NFT offer.
+        FindNftSaleOfferById(nft_market::FindNftSaleOfferById),
     }
     /// An enum of all possible singular query outputs
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
@@ -1652,8 +1656,12 @@ mod model {
         Domain(crate::domain::Domain),
         /// Non-fungible asset payload.
         Nft(crate::nft::Nft),
-            /// Native race state and terminal receipt.
-        RaceRecord(crate::race::RaceRecordV1),
+        /// Native generic game state and terminal receipt.
+        GameSessionRecord(crate::game::GameSessionRecordV1),
+        /// Compact reference to a verified execution proof in a finalized block.
+        ExecutionProofVerification(crate::execution_proofs::ExecutionProofVerificationV1),
+        /// Complete immutable NFT sale terms and terminal decision.
+        NftSaleRecord(crate::nft_market::NftSaleRecordV1),
     }
     /// The results of a single iterable query request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -4294,7 +4302,9 @@ impl_iter_queries! {
     oracle::prelude::FindDefiOracleAttestationsByKey => crate::oracle::DefiOracleAttestation,
 }
 impl_singular_queries! {
-    race::FindRaceById => crate::race::RaceRecordV1,
+    nft_market::FindNftSaleOfferById => crate::nft_market::NftSaleRecordV1,
+    game::FindGameSessionById => crate::game::GameSessionRecordV1,
+    game::FindExecutionProofVerificationById => crate::execution_proofs::ExecutionProofVerificationV1,
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
     account::prelude::FindAccountById => crate::account::Account,
@@ -4765,7 +4775,7 @@ pub mod prelude {
         CertifiedMergeTransactionInclusion, CommittedTransaction, QueryBox, QueryRequest,
         SingularQueryBox, account::prelude::*, asset::prelude::*, block::prelude::*,
         builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
-        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, musubi::prelude::*,
+        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, game::prelude::*, nft_market::prelude::*, musubi::prelude::*,
         nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
         permission::prelude::*, role::prelude::*, rwa::prelude::*, settlement::prelude::*,
         sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,

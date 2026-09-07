@@ -2,8 +2,14 @@
 //! Run with `cargo iroha-fast -- run -p iroha_core --example race_prover -- <command>`.
 
 use iroha_core::execution_proofs::*;
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{NetworkId, block::BlockHeader, execution_proofs::*};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    block::BlockHeader,
+    execution_proofs::*,
+    game::{GameAdmissionBodyV1, GameAdmissionParticipantV1, game_roster_hash_v1},
+};
 use norito::codec::{Decode, Encode};
 use std::{error::Error, fs, path::Path, time::Instant};
 
@@ -90,18 +96,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         Some("sample") if args.len()==4=>{
             let players=args[1].parse::<u8>()?;let ticks=args[2].parse::<u32>()?;
-            if ticks==0||ticks>5400||ticks%6!=0{return Err("ticks must be a positive multiple of six, at most 5400".into());}
+            if !(2..=8).contains(&players)||ticks==0||ticks>5400||ticks%6!=0{return Err("ticks must be a positive multiple of six, at most 5400".into());}
             let replay=sample_replay(RaceTrackV1::NeonTokyo,players,ticks)?;let final_state=replay_race_v1(&replay)?;
             let network_id=NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"race-prover-local-fixture-network")));
-            let request=RaceProverRequestV1{statement:RacePublicInputsV1{network_id,race_id:Hash::new(b"race-prover-local-fixture"),roster_hash:Hash::new(b"local-fixture-roster"),rules_hash:race_rules_hash_v1(),track:replay.track,transcript_root:race_transcript_root_v1(&network_id,&replay),dispute_root:Hash::new(b"local-fixture-history"),result:race_result_v1(&final_state)?},replay,checkpoint_state:None};
-            fs::write(&args[3],request.encode())?;println!("wrote local prover request {}",args[3]);
+            let manifest=iroha_data_model::game::GameManifestV1{version:1,application_id:Hash::new(b"local-racing-game"),profile_id:race_profile_id_v1(),application_parameters:replay.track.encode(),min_participants:2,max_participants:players,batch_ticks:6,max_ticks:5400,max_input_bytes:12,max_participant_data_bytes:1,access:iroha_data_model::game::GameAccessV1::Public,payout_policy:iroha_data_model::game::GamePayoutPolicyV1::NoPayout};
+            let result=race_result_v1(&final_state)?;
+            let outcome=iroha_data_model::game::GameOutcomeV1{terminal_tick:final_state.tick,winner_slots:result.winners.clone(),result:result.encode()};
+            // Public deterministic sample identities only; this command never funds a session.
+            let admission=GameAdmissionBodyV1{version:1,participants:(0..players).map(|slot| {
+                let wallet=KeyPair::try_from_seed(vec![slot+1;32],Algorithm::Ed25519).expect("fixture wallet");
+                let input=KeyPair::try_from_seed(vec![slot+65;32],Algorithm::Ed25519).expect("fixture input key");
+                GameAdmissionParticipantV1{account:AccountId::new(wallet.public_key().clone()),input_key:input.public_key().clone(),application_data:vec![slot%RACE_SKIN_COUNT_V1]}
+            }).collect(),wagers:vec![],resources:vec![]};
+            let session_id=Hash::new(b"race-prover-local-fixture");
+            let request=RaceProverRequestV1{statement:ExecutionPublicInputsV1{network_id,session_id,manifest_hash:iroha_data_model::game::game_message_hash_v1(&network_id,"session-manifest",&manifest),roster_hash:game_roster_hash_v1(&network_id,&session_id,&admission),transcript_root:race_transcript_root_v1(&network_id,&replay),dispute_root:Hash::new(b"local-fixture-history"),outcome_hash:iroha_data_model::game::game_message_hash_v1(&network_id,"session-outcome",&outcome)},manifest,admission,replay,checkpoint_state:None};
+            fs::write(&args[3],request.encode())?;println!("wrote local prover request {}: players={} ticks={}",args[3],request.replay.player_count,request.replay.frames.len());
         },
         Some("fixtures") if args.len()==2=>{
-            let mut fixtures=Vec::new();for track in [RaceTrackV1::NeonTokyo,RaceTrackV1::Harbor,RaceTrackV1::Sakura]{
-                for players in [1,2,8]{let replay=sample_replay(track,players,5400)?;let state=replay_race_v1(&replay)?;let result=race_result_v1(&state)?;fixtures.push((replay,state,result));}
-            }
+            let fixtures=export_race_parity_json_v1()?;
             if let Some(parent)=Path::new(&args[1]).parent(){fs::create_dir_all(parent)?;}
-            fs::write(&args[1],norito::json::to_json_pretty(&fixtures)?)?;println!("wrote {} native parity fixtures",fixtures.len());
+            fs::write(&args[1],norito::json::to_json_pretty(&fixtures)?)?;println!("wrote all 21 native parity fixtures");
         },
         _=>return Err("usage: race_prover prove request.nrt proof.nrt | verify proof.nrt | sample <players> <ticks> request.nrt | fixtures output.json".into()),
     }

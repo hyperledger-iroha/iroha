@@ -433,13 +433,13 @@ impl ApplyFixture {
         Self::new_with_options(false, false, true, false)
     }
     fn new_for_production_recovered_decision_apply() -> Self {
-        Self::new_with_options_and_network(false, false, false, false, true)
+        Self::new_with_options(false, false, false, false)
     }
     fn new_for_production_recovered_decision_apply_with_lane_lifecycle() -> Self {
-        Self::new_with_options_and_network(false, false, true, false, true)
+        Self::new_with_options(false, false, true, false)
     }
     fn new_for_production_recovered_decision_apply_with_native_lane_lifecycle() -> Self {
-        Self::new_with_options_and_network(false, false, true, true, true)
+        Self::new_with_options(false, false, true, true)
     }
     fn new_with_options(
         include_lane_payload: bool,
@@ -447,20 +447,20 @@ impl ApplyFixture {
         include_lane_lifecycle: bool,
         include_native_lane: bool,
     ) -> Self {
-        Self::new_with_options_and_network(
+        Self::new_with_options_and_retention(
             include_lane_payload,
             include_projection_policies,
             include_lane_lifecycle,
             include_native_lane,
-            false,
+            iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         )
     }
-    fn new_with_options_and_network(
+    fn new_with_options_and_retention(
         include_lane_payload: bool,
         include_projection_policies: bool,
         include_lane_lifecycle: bool,
         include_native_lane: bool,
-        match_context_network: bool,
+        blocks_in_memory: NonZeroUsize,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
         let mut keys = (1_u8..=4)
@@ -507,11 +507,9 @@ impl ApplyFixture {
         };
         context.validate().expect("valid fixture context");
         let kura = if include_lane_lifecycle {
-            crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(
-                iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            )
+            crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(blocks_in_memory)
         } else {
-            Kura::blank_kura_for_testing()
+            Kura::blank_kura_for_testing_with_blocks_in_memory(blocks_in_memory)
         };
         let transaction_authority = AccountId::new(transaction_key.public_key().clone());
         let custody_account = AccountId::new(custody_key.public_key().clone());
@@ -523,22 +521,13 @@ impl ApplyFixture {
             include_projection_policies,
             include_native_lane,
         );
-        let mut state = if match_context_network {
-            State::new_with_chain_and_network_id_for_testing(
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-                context.network_id,
-            )
-        } else {
-            State::new_with_chain_for_testing(
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-            )
-        };
+        let mut state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+            context.network_id,
+        );
         let validator_set_pops = keys
             .iter()
             .map(|key| {
@@ -558,10 +547,8 @@ impl ApplyFixture {
         if include_native_lane {
             install_fixture_native_lane(&mut state, &mut context);
         }
-        if match_context_network {
-            context.nexus_amx_context_hash =
-                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state);
-        }
+        context.nexus_amx_context_hash =
+            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state);
         context.execution_policy_hash =
             crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state)
                 .expect("derive apply fixture execution policy");
@@ -797,11 +784,12 @@ impl ApplyFixture {
             self.include_projection_policies,
             self.include_native_lane,
         );
-        let state = Arc::new(State::new_with_chain_for_testing(
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             world,
             Arc::clone(&self.kura),
             LiveQueryStore::start_test(),
             self.service.state.chain_id.clone(),
+            self.context.network_id,
         ));
         if self.include_projection_policies {
             install_fixture_projection_policy_baseline(
@@ -847,7 +835,25 @@ impl ApplyFixture {
             !blocks.is_empty(),
             "finality fixture chain must not be empty"
         );
-        let mut parent_commit_qc = None;
+        let first = blocks[0];
+        let mut parent_commit_qc = first
+            .header()
+            .height()
+            .get()
+            .checked_sub(1)
+            .filter(|height| *height > 0)
+            .map(|height| {
+                let artifact = self
+                    .kura
+                    .v2_finality_artifact(height)
+                    .expect("read the retained predecessor finality")
+                    .expect("a successor finality fixture requires its actual predecessor");
+                artifact
+                    .verify()
+                    .expect("verify the exact retained predecessor finality");
+                assert_eq!(first.header().prev_block_hash(), Some(artifact.block_hash));
+                artifact.commit_qc
+            });
         for block in blocks {
             let height = block.header().height().get();
             let mut context = self.context.clone();
@@ -1232,6 +1238,14 @@ fn build_successor_apply_fixture_with_autonomous_payloads(
 }
 #[test]
 fn durable_application_evidence_rejects_identity_mutations() {
+    let worker = crate::sumeragi::sumeragi_thread_builder("durable-application-evidence-test")
+        .spawn(durable_application_evidence_rejects_identity_mutations_fixture_body)
+        .expect("run Apply evidence checks on the production consensus stack");
+    if let Err(payload) = worker.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+fn durable_application_evidence_rejects_identity_mutations_fixture_body() {
     let fixture = ApplyFixture::new();
     let mut store = fixture.reopen_body_store();
     let completion = fixture
@@ -1456,10 +1470,17 @@ fn durable_application_evidence_rejects_identity_mutations() {
     altered.artifact_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"altered finality artifact identity"));
     assert!(!altered.is_exact());
+    let prospective_application = evidence
+        .application_refinement_projection()
+        .expect("retain the original authorized application projection");
     let mut altered = evidence.clone();
     altered.completion_work_id = EffectWorkId::for_test(2);
+    assert!(!altered.is_exact());
     assert!(matches!(
-        fixture.service.finish_durable_apply_completion(altered),
+        fixture.service.finish_durable_apply_completion_against(
+            altered,
+            prospective_application,
+        ),
         Err(V2ApplyError::CommittedRecoveryRequired {
             stage: "exact application evidence",
             ..
@@ -1488,6 +1509,7 @@ fn pending_merge_entry(
         epoch_id: context.epoch,
         lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
         active_lanes: Vec::new(),
+        lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
         incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
         activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
         lane_snapshots: Vec::new(),
@@ -1519,6 +1541,29 @@ fn merge_entry_with_reservation(
 ) -> (SignedBlock, MergeLedgerEntry) {
     merge_entry_with_reservations(context, vec![(entrypoint, reservation)])
 }
+// These metadata/recovery fixtures need complete, authenticated empty ordinary
+// execution results before the block hash enters a merge header or finality QC.
+// The merge lane results remain in the separately certified execution batch.
+fn complete_empty_fixture_block(mut block: SignedBlock, key: &KeyPair) -> SignedBlock {
+    assert_eq!(block.external_entrypoints_cloned().count(), 0);
+    let already_complete = block.has_results().then(|| block.clone());
+    block
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach complete empty fixture execution results");
+    if let Some(already_complete) = already_complete {
+        assert_eq!(
+            block, already_complete,
+            "an executed empty fixture must already have exactly the canonical empty results"
+        );
+    }
+    let signature = SignatureOf::try_from_hash(key.private_key(), block.header().hash())
+        .expect("sign the exact result-bearing fixture header");
+    block
+        .replace_signatures([BlockSignature::new(0, signature)].into())
+        .expect("bind the fixture signature to its complete block");
+    assert!(block.has_results());
+    block
+}
 fn merge_entry_with_reservations(
     context: &wire::HeightContext,
     members: Vec<(
@@ -1539,7 +1584,7 @@ fn merge_entry_with_reservations(
         .try_sign_with_index(parent_key.private_key(), 0)
         .expect("sign execution-carrier parent")
         .unpack(|_| {});
-    let parent = SignedBlock::from(parent);
+    let parent = complete_empty_fixture_block(SignedBlock::from(parent), &parent_key);
     let application_block_header = BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero fixture carrier height"),
         Some(parent.hash()),
@@ -2391,13 +2436,12 @@ fn commit_exact_fixture_block_metadata(state: &State, block: &SignedBlock) {
         Some(block.hash()),
         "fixture State metadata must name the exact durable Kura block"
     );
-    let mut state_block = state.block(block.header());
-    state_block.block_hashes.push_for_tests(block.hash());
-    state_block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
-    state_block
-        .commit()
+    // This fixture advances only block-index metadata. The shared constructor
+    // finalizes preseeded genesis asset incarnations before staging the first
+    // block hash, then uses the production State commit path.
+    state
+        .block(block.header())
+        .commit_empty_block_for_testing()
         .expect("commit exact fixture block metadata to State");
 }
 fn commit_exact_fixture_carrier_chain_to_state(
@@ -2756,7 +2800,8 @@ fn body_with_exact_merge_execution_header(entry: &MergeLedgerEntry) -> SignedBlo
         .with_merge_entry(CertifiedMergeLedgerReference::new(entry));
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
     builder.set_execution_context(Some(execution_context));
-    let carrier = builder.build_with_signature(0, key.private_key());
+    let carrier =
+        complete_empty_fixture_block(builder.build_with_signature(0, key.private_key()), &key);
     assert_eq!(
         crate::merge::merge_application_header_from_carrier(&carrier.header()),
         entry
@@ -2775,6 +2820,80 @@ struct DeferredCanonicalCarrierStartupFixture {
     expected_groups: Vec<crate::kura::AutonomousLifecyclePendingReservationGroupObservation>,
     outcome_paths: Vec<std::path::PathBuf>,
     _queue_root: tempfile::TempDir,
+}
+fn bind_exact_fixture_reservation_identity(
+    fixture: &ApplyFixture,
+    queue: &Queue,
+    initial: crate::queue::LaneQueueReservationKeyV1,
+    entrypoint: &TransactionEntrypoint,
+) -> crate::queue::LaneQueueReservationKeyV1 {
+    let (_, identity_entry) =
+        merge_entry_with_reservation(&fixture.context, entrypoint.clone(), initial);
+    let identity_payload = Kura::decode_autonomous_lane_merge_bundle(
+        &identity_entry
+            .execution_batch
+            .as_ref()
+            .expect("identity batch")
+            .lanes[0]
+            .source_bundle,
+        fixture.context.network_id,
+        fixture.context.epoch,
+    )
+    .expect("decode exact reservation identity payload")
+    .autonomous
+    .executable_payload;
+    let (reservation_owner_hash, proposal_identity_hash) =
+        super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+            fixture.context.network_id,
+            fixture.context.id(),
+            fixture.context.epoch,
+            &identity_payload.origin_proposal,
+            &identity_payload.producer,
+        )
+        .expect("derive the actual lifecycle reservation identity");
+    queue
+        .release_lane_reservation(&initial)
+        .expect("release the provisional reservation identity");
+    let corrected = queue
+        .reserve_transactions_for_lane(
+            fixture.state.as_ref(),
+            LaneQueueReservationScopeV1 {
+                lane_id: initial.lane_id,
+                dataspace_id: initial.dataspace_id,
+                lane_incarnation: initial.lane_incarnation,
+                proposal_height: initial.proposal_height,
+                lane_block_height: initial.lane_block_height,
+                lane_block_view: initial.lane_block_view,
+                reservation_owner_hash,
+                proposal_identity_hash,
+            },
+            NonZeroUsize::new(1).expect("one exact reservation"),
+        )
+        .expect("reserve under the authenticated lifecycle identity");
+    assert_eq!(corrected.len(), 1);
+    let exact = *corrected[0].key();
+    assert_eq!(exact.entrypoint_hash, initial.entrypoint_hash);
+    let (_, final_entry) =
+        merge_entry_with_reservation(&fixture.context, entrypoint.clone(), exact);
+    let final_payload = Kura::decode_autonomous_lane_merge_bundle(
+        &final_entry
+            .execution_batch
+            .as_ref()
+            .expect("exact identity batch")
+            .lanes[0]
+            .source_bundle,
+        fixture.context.network_id,
+        fixture.context.epoch,
+    )
+    .expect("decode the re-reserved payload")
+    .autonomous
+    .executable_payload;
+    assert_eq!(
+        final_payload.origin_proposal,
+        identity_payload.origin_proposal
+    );
+    assert_eq!(final_payload.reservation_keys.as_slice(), &[exact]);
+    exact
 }
 fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStartupFixture {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
@@ -2804,6 +2923,12 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         first_transaction,
         Hash::new(b"deferred carrier owned group"),
         Hash::new(b"deferred carrier owned proposal"),
+    );
+    let first_key = bind_exact_fixture_reservation_identity(
+        &fixture,
+        queue.as_ref(),
+        first_key,
+        &first_entrypoint,
     );
     let second_lane = install_recreatable_reservation_lane(&fixture);
     let (absent_events, _absent_receiver) = tokio::sync::broadcast::channel(8);
@@ -2840,6 +2965,12 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         second_lane.dataspace_id,
         Hash::new(b"deferred carrier absent group"),
         Hash::new(b"deferred carrier absent proposal"),
+    );
+    let second_key = bind_exact_fixture_reservation_identity(
+        &fixture,
+        &absent_queue,
+        second_key,
+        &second_entrypoint,
     );
     let (parent, mut entry) =
         merge_entry_with_reservation(&fixture.context, first_entrypoint, first_key);
@@ -2955,10 +3086,13 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
         .expect("persist deferred carrier application receipts");
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_committed_entrypoints_for_tests(
-        [first_key.entrypoint_hash, second_key.entrypoint_hash],
-        NonZeroUsize::new(2).expect("deferred carrier State height"),
-    );
+    fixture
+        .state
+        .record_committed_queue_plan_entrypoints_for_tests(
+            [first_key.entrypoint_hash, second_key.entrypoint_hash],
+            NonZeroUsize::new(2).expect("deferred carrier State height"),
+        )
+        .expect("resolve both canonical carrier QueuePlan obligations before restart");
     drop(absent_queue);
     drop(queue);
     let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));

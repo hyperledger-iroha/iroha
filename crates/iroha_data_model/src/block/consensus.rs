@@ -1401,6 +1401,192 @@ pub enum NativeAmxPhase {
     /// Participant committed its dataspace-local leg.
     Commit,
 }
+/// Exact zero-effect Native AMX participant control.
+///
+/// Only route identity, the previous Native hash and ordered transaction membership are represented.
+/// Economic settlement and recursively nested receipts have no wire field.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize))]
+pub struct NativeAmxParticipantSettlement {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    participant_lane_block_height: u64,
+    authority_context_height: u64,
+    previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>,
+    source_ids: Vec<[u8; Hash::LENGTH]>,
+}
+impl NativeAmxParticipantSettlement {
+    /// Construct one bounded, ordered participant control.
+    ///
+    /// Lane and dataspace zero are valid catalog identifiers. Both heights,
+    /// the incarnation and every source must be nonzero. Lane height one
+    /// requires no previous Native hash; later heights may be the first Native
+    /// control or link to a nonzero prior hash. State authenticates that link.
+    /// Source order is preserved exactly; it is never sorted by hash.
+    ///
+    /// # Errors
+    /// Returns a stable reason for zero authority, an empty or oversized
+    /// source group, duplicated sources, or an invalid previous Native link.
+    pub fn try_new(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        participant_lane_block_height: u64,
+        authority_context_height: u64,
+        previous_native_settlement_hash: Option<HashOf<Self>>,
+        source_ids: Vec<[u8; Hash::LENGTH]>,
+    ) -> Result<Self, &'static str> {
+        if lane_incarnation == Hash::prehashed([0; Hash::LENGTH])
+            || participant_lane_block_height == 0
+            || authority_context_height == 0
+        {
+            return Err("Native AMX participant settlement authority must be nonzero");
+        }
+        if (participant_lane_block_height == 1 && previous_native_settlement_hash.is_some())
+            || previous_native_settlement_hash
+                .is_some_and(|hash| Hash::from(hash) == Hash::prehashed([0; Hash::LENGTH]))
+        {
+            return Err("Native AMX previous settlement link is invalid");
+        }
+        if source_ids.is_empty() || source_ids.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
+            return Err("Native AMX participant source group is out of bounds");
+        }
+        if source_ids.iter().any(|source| !native_amx_nonzero(source)) {
+            return Err("Native AMX participant sources must be nonzero");
+        }
+        if source_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != source_ids.len()
+        {
+            return Err("Native AMX participant source group must be unique");
+        }
+        Ok(Self {
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            participant_lane_block_height,
+            authority_context_height,
+            previous_native_settlement_hash,
+            source_ids,
+        })
+    }
+    /// Participant lane route.
+    #[must_use]
+    pub const fn lane_id(&self) -> LaneId {
+        self.lane_id
+    }
+    /// Participant dataspace route.
+    #[must_use]
+    pub const fn dataspace_id(&self) -> DataSpaceId {
+        self.dataspace_id
+    }
+    /// Exact active participant incarnation.
+    #[must_use]
+    pub const fn lane_incarnation(&self) -> Hash {
+        self.lane_incarnation
+    }
+    /// Contiguous participant-local block height.
+    #[must_use]
+    pub const fn participant_lane_block_height(&self) -> u64 {
+        self.participant_lane_block_height
+    }
+    /// Global height owning the control's catalog and key authority.
+    #[must_use]
+    pub const fn authority_context_height(&self) -> u64 {
+        self.authority_context_height
+    }
+    /// Hash of the previous Native settlement in this route incarnation.
+    ///
+    /// `None` identifies the first Native control, which may follow ordinary
+    /// lane blocks. State authenticates this claim against retained history.
+    #[must_use]
+    pub const fn previous_native_settlement_hash(&self) -> Option<HashOf<Self>> {
+        self.previous_native_settlement_hash
+    }
+    /// Unique transaction sources in canonical candidate order.
+    #[must_use]
+    pub fn source_ids(&self) -> &[[u8; Hash::LENGTH]] {
+        &self.source_ids
+    }
+    /// Number of grouped transactions, derived from the bounded source vector.
+    #[must_use]
+    pub fn tx_count(&self) -> u64 {
+        u64::try_from(self.source_ids.len()).expect("bounded Native AMX source count fits u64")
+    }
+    /// Compute the domain-separated canonical participant-control hash.
+    ///
+    /// # Errors
+    /// Returns an error if canonical Norito encoding fails.
+    pub fn computed_hash(&self) -> Result<HashOf<Self>, norito::Error> {
+        const DOMAIN: &[u8] = b"iroha:native-amx:participant-settlement:v1";
+        let bytes = norito::encode_canonical(self)?;
+        let domain_len = u64::try_from(DOMAIN.len())
+            .expect("protocol-defined hash domain length fits u64")
+            .to_le_bytes();
+        Ok(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            &domain_len,
+            DOMAIN,
+            &bytes,
+        ])))
+    }
+}
+#[derive(Clone, Debug, Encode, Decode)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+struct NativeAmxParticipantSettlementWire {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    participant_lane_block_height: u64,
+    authority_context_height: u64,
+    #[norito(required)]
+    previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>,
+    source_ids: Vec<[u8; Hash::LENGTH]>,
+}
+impl TryFrom<NativeAmxParticipantSettlementWire> for NativeAmxParticipantSettlement {
+    type Error = &'static str;
+    fn try_from(wire: NativeAmxParticipantSettlementWire) -> Result<Self, Self::Error> {
+        Self::try_new(
+            wire.lane_id,
+            wire.dataspace_id,
+            wire.lane_incarnation,
+            wire.participant_lane_block_height,
+            wire.authority_context_height,
+            wire.previous_native_settlement_hash,
+            wire.source_ids,
+        )
+    }
+}
+impl<'de> norito::core::NoritoDeserialize<'de> for NativeAmxParticipantSettlement {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("Native AMX participant settlement wire invariant must hold")
+    }
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire = <NativeAmxParticipantSettlementWire as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast())?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_owned()))
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for NativeAmxParticipantSettlement {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let wire = <NativeAmxParticipantSettlementWire as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::try_from(wire).map_err(|error| norito::json::Error::Message(error.to_owned()))
+    }
+}
+
 /// Canonical Sumeragi v2 native AMX attestation payload.
 ///
 /// The exact frozen round and election epoch are part of the signed payload,
@@ -1487,20 +1673,18 @@ impl NativeAmxAttestationBodyV2 {
     /// this body's source exactly once.
     pub fn computed_grouped_participant_settlement(
         &self,
+        previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>,
         sources: &[[u8; 32]],
-    ) -> Result<LaneBlockCommitment, &'static str> {
-        if sources.is_empty() || sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
-            return Err("Native AMX participant source group is out of bounds");
-        }
-        if sources
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
-            != sources.len()
-        {
-            return Err("Native AMX participant source group must be unique");
-        }
+    ) -> Result<NativeAmxParticipantSettlement, &'static str> {
+        let settlement = NativeAmxParticipantSettlement::try_new(
+            self.participant_lane_id,
+            self.participant_dataspace_id,
+            self.participant_lane_incarnation,
+            self.participant_lane_block_height,
+            self.authority_context_height,
+            previous_native_settlement_hash,
+            sources.to_vec(),
+        )?;
         if sources
             .iter()
             .filter(|source| **source == self.source_id)
@@ -1509,34 +1693,7 @@ impl NativeAmxAttestationBodyV2 {
         {
             return Err("Native AMX participant source group must contain the current source once");
         }
-        let tx_count = u64::try_from(sources.len())
-            .map_err(|_| "Native AMX participant source group is out of bounds")?;
-        Ok(LaneBlockCommitment {
-            block_height: self.participant_lane_block_height,
-            lane_id: self.participant_lane_id,
-            lane_incarnation: self.participant_lane_incarnation,
-            dataspace_id: self.participant_dataspace_id,
-            tx_count,
-            total_local_amount: Quantity::zero(),
-            total_xor_due: Quantity::zero(),
-            total_xor_after_haircut: Quantity::zero(),
-            total_xor_variance: Quantity::zero(),
-            swap_metadata: None,
-            receipts: sources
-                .iter()
-                .copied()
-                .map(|source_id| LaneSettlementReceipt {
-                    source_id,
-                    local_amount: Quantity::zero(),
-                    xor_due: Quantity::zero(),
-                    xor_after_haircut: Quantity::zero(),
-                    xor_variance: Quantity::zero(),
-                    timestamp_ms: self.authority_context_height,
-                })
-                .collect(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        })
+        Ok(settlement)
     }
     /// Compute the commitment to an exact grouped participant settlement.
     ///
@@ -1546,11 +1703,14 @@ impl NativeAmxAttestationBodyV2 {
     /// [`Self::computed_grouped_participant_settlement`].
     pub fn computed_grouped_participant_settlement_commitment(
         &self,
+        previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>,
         sources: &[[u8; 32]],
     ) -> Result<Hash, &'static str> {
-        let settlement = self.computed_grouped_participant_settlement(sources)?;
+        let settlement =
+            self.computed_grouped_participant_settlement(previous_native_settlement_hash, sources)?;
         Ok(Hash::from(
-            crate::nexus::compute_settlement_hash(&settlement)
+            settlement
+                .computed_hash()
                 .expect("native AMX participant settlement must hash"),
         ))
     }
@@ -1734,9 +1894,9 @@ pub struct NativeAmxLegRecordV2 {
     /// Exact control-only participant proposal certified by both phase QCs.
     pub participant_proposal: LaneBlockProposalV1,
     /// Deterministic participant-local settlement committed by the proposal.
-    pub participant_settlement: LaneBlockCommitment,
+    pub participant_settlement: NativeAmxParticipantSettlement,
     /// Canonical hash of `participant_settlement` signed by both phase QCs.
-    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    pub participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Context-bound participant prepare QC.
     pub prepare_qc: NativeAmxAttestationQcV2,
     /// Context-bound participant commit QC.
@@ -2080,51 +2240,22 @@ fn validate_native_amx_leg_shape(
         return Err("Native AMX participant leg identity is internally inconsistent");
     }
     let settlement = &leg.participant_settlement;
-    let settlement_hash = crate::nexus::compute_settlement_hash(settlement)
+    let settlement_hash = settlement
+        .computed_hash()
         .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
     let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
-    let settlement_sources = settlement
-        .receipts
-        .iter()
-        .map(|entry| entry.source_id)
-        .collect::<Vec<_>>();
-    let settlement_sources_are_unique = settlement_sources
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
-        == settlement_sources.len();
-    let settlement_sources_match =
-        !same_route || settlement_sources.as_slice() == coordinator_sources;
-    if settlement.receipts.is_empty()
-        || settlement.receipts.len() > NATIVE_AMX_GROUP_SOURCES_MAX
-        || settlement.tx_count != u64::try_from(settlement.receipts.len()).unwrap_or(u64::MAX)
-        || settlement.block_height != body.participant_lane_block_height
-        || settlement.lane_id != leg.lane_id
-        || settlement.dataspace_id != leg.dataspace_id
-        || settlement.lane_incarnation != body.participant_lane_incarnation
-        || !settlement.total_local_amount.is_zero()
-        || !settlement.total_xor_due.is_zero()
-        || !settlement.total_xor_after_haircut.is_zero()
-        || !settlement.total_xor_variance.is_zero()
-        || settlement.swap_metadata.is_some()
-        || !settlement.nexus_fee_receipts.is_empty()
-        || !settlement.native_amx_receipts.is_empty()
-        || !settlement_sources_are_unique
-        || settlement
-            .receipts
+    let settlement_sources = settlement.source_ids();
+    if settlement.participant_lane_block_height() != body.participant_lane_block_height
+        || settlement.lane_id() != leg.lane_id
+        || settlement.dataspace_id() != leg.dataspace_id
+        || settlement.lane_incarnation() != body.participant_lane_incarnation
+        || settlement.authority_context_height() != body.authority_context_height
+        || settlement_sources
             .iter()
-            .filter(|entry| entry.source_id == receipt.source_id)
+            .filter(|source| **source == receipt.source_id)
             .count()
             != 1
-        || settlement.receipts.iter().any(|entry| {
-            !entry.local_amount.is_zero()
-                || !entry.xor_due.is_zero()
-                || !entry.xor_after_haircut.is_zero()
-                || !entry.xor_variance.is_zero()
-                || entry.timestamp_ms != body.authority_context_height
-        })
-        || !settlement_sources_match
+        || (same_route && settlement_sources != coordinator_sources)
         || settlement_hash != leg.participant_settlement_hash
         || Hash::from(settlement_hash) != body.participant_settlement_commitment
     {
@@ -2136,12 +2267,11 @@ fn validate_native_amx_leg_shape(
         .iter()
         .position(|hash| *hash == entrypoint_hash);
     if entrypoint_position.is_some_and(|position| {
-        descriptor.accepted_candidate_indices.len() != settlement.receipts.len()
-            || descriptor.accepted_transaction_hashes.len() != settlement.receipts.len()
-            || settlement
-                .receipts
+        descriptor.accepted_candidate_indices.len() != settlement_sources.len()
+            || descriptor.accepted_transaction_hashes.len() != settlement_sources.len()
+            || settlement_sources
                 .get(position)
-                .is_none_or(|entry| entry.source_id != body.source_id)
+                .is_none_or(|source| *source != body.source_id)
     }) {
         return Err("Native AMX participant proposal and grouped settlement are not aligned");
     }
@@ -3675,7 +3805,7 @@ pub struct SumeragiNativeAmxParticipantApplication {
     /// Proposal hash certified for this participant height.
     pub proposal_hash: Hash,
     /// Zero-effect participant settlement hash certified by both phase QCs.
-    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    pub settlement_hash: HashOf<NativeAmxParticipantSettlement>,
     /// Number of ordered grouped transaction sources represented by the control.
     pub source_count: u64,
     /// Canonical global carrier height, present for committed or durable evidence only.

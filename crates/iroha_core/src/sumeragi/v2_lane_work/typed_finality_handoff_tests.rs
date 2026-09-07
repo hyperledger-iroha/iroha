@@ -141,7 +141,7 @@ fn typed_finality_handoff_fences_changed_roster_after_sealing_active_writer() {
             &successor,
             reply_source_capacity,
             sidecar_limits,
-            successor_roster.len(),
+            merge_sidecar_server_stream_capacity(successor_roster.len()),
             successor_roster_digest.clone(),
             Instant::now(),
         )
@@ -349,7 +349,7 @@ fn typed_finality_handoff_preserves_same_roster_current_chunk_for_retry() {
             &successor,
             reply_source_capacity,
             sidecar_limits,
-            successor_roster.len(),
+            merge_sidecar_server_stream_capacity(successor_roster.len()),
             successor_roster_digest.clone(),
             Instant::now(),
         )
@@ -471,7 +471,7 @@ fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
         &successor,
         reply_source_capacity,
         sidecar_limits,
-        successor_roster.len(),
+        merge_sidecar_server_stream_capacity(successor_roster.len()),
         successor_roster_digest.clone(),
         Instant::now(),
     ) {
@@ -502,7 +502,7 @@ fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
         &kura.store_root(),
         reply_source_capacity,
         sidecar_limits,
-        predecessor_roster.len(),
+        merge_sidecar_server_stream_capacity(predecessor_roster.len()),
         predecessor_roster_digest.clone(),
     )
     .expect("restart reopens the complete predecessor V3 state");
@@ -524,7 +524,7 @@ fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
         &kura.store_root(),
         reply_source_capacity,
         sidecar_limits,
-        successor_roster.len(),
+        merge_sidecar_server_stream_capacity(successor_roster.len()),
         successor_roster_digest.clone(),
     )
     .expect("restart retries the terminal changed-roster transition");

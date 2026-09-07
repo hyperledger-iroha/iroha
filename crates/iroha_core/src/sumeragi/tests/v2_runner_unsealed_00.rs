@@ -519,12 +519,16 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .map(|offset| progress_dequeue + offset)
         .expect("the missing-sidecar barrier retains a typed runtime gate");
     let physical_cut = lane_branch[pacemaker_gate..]
-        .find("executor.set_ingress_physical_cut(")
+        .find(".set_ingress_physical_cut(")
         .map(|offset| pacemaker_gate + offset)
         .expect("the escape preserves the fair-ingress physical cut");
-    let pacemaker_step = lane_branch[physical_cut..]
-        .find("executor.step_pacemaker_once(")
+    let completion_cut = lane_branch[physical_cut..]
+        .find(".prepare_completion_runtime_cut(")
         .map(|offset| physical_cut + offset)
+        .expect("the escape linearizes behind the physical Completion prefix");
+    let pacemaker_step = lane_branch[completion_cut..]
+        .find("executor.step_pacemaker_after_completion_runtime_cut(")
+        .map(|offset| completion_cut + offset)
         .expect("the escape services one typed pacemaker turn");
     let retain_certified_view = lane_branch[pacemaker_step..]
         .find("lane_work.retain_merge_sidecars_for_global_view(")
@@ -534,13 +538,23 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .find("drive_merge_sidecar_recovery(")
         .map(|offset| retain_certified_view + offset)
         .expect("ordinary sidecar recovery follows certified-view reconciliation");
+    let capacity_relief = lane_branch[completion_cut..]
+        .find("executor.step_completion_capacity_relief_after_cut(")
+        .map(|offset| completion_cut + offset)
+        .expect("a full FIFO admits only the typed Completion-class relief turn");
 
     assert!(ingress_gate < progress_dequeue);
     assert!(progress_dequeue < pacemaker_gate);
     assert!(pacemaker_gate < physical_cut);
+    assert!(physical_cut < completion_cut);
     assert!(physical_cut < pacemaker_step);
     assert!(pacemaker_step < retain_certified_view);
     assert!(retain_certified_view < generic_sidecar_drive);
+    assert!(completion_cut < capacity_relief);
+    assert!(
+        !lane_branch.contains("executor.step_after_completion_runtime_cut("),
+        "the Validate-sidecar barrier must never reopen generic reducer scheduling"
+    );
 
     let predicate_start = turn_driver
         .find("fn selected_ingress_is_validate_sidecar_pacemaker_progress(")
@@ -1097,6 +1111,7 @@ fn test_successor_authority(
 }
 fn test_recovered_complete_tip_authority(
     context: &wire::HeightContext,
+    validators: &[KeyPair],
     successor_context_id: wire::HeightContextId,
     label: &[u8],
     predecessor_root: &std::path::Path,
@@ -1113,6 +1128,37 @@ fn test_recovered_complete_tip_authority(
         height: context.height,
         view: 0,
     };
+    assert_eq!(validators.len(), context.roster.len());
+    for (key, entry) in validators.iter().zip(&context.roster) {
+        assert_eq!(key.public_key(), entry.validator.public_key());
+    }
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"recovered complete-tip parent state"),
+            Hash::new(b"recovered complete-tip post state"),
+            Hash::new(b"recovered complete-tip writes"),
+            1,
+            Hash::new(b"recovered complete-tip executed block"),
+        );
+    let preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = validators[..3]
+        .iter()
+        .map(|key| {
+            Signature::new(key.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let artifact = wire::finality::V2FinalityArtifact::new(
         context.clone(),
         subject,
@@ -1121,22 +1167,25 @@ fn test_recovered_complete_tip_authority(
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment:
-                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"recovered complete-tip parent state"),
-                    Hash::new(b"recovered complete-tip post state"),
-                    Hash::new(b"recovered complete-tip writes"),
-                    1,
-                    Hash::new(b"recovered complete-tip executed block"),
-                ),
-            signers: Vec::new(),
-            aggregate_signature: Vec::new(),
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&refs)
+                .expect("aggregate exact predecessor CommitQC"),
         },
-        Vec::new(),
+        validators
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("predecessor validator proof of possession")
+            })
+            .collect(),
     );
+    artifact
+        .verify()
+        .expect("authenticated predecessor finality");
     let receipt = KuraV2CommitReceipt::for_test(&artifact);
     let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)
-        .expect("synthetic complete-tip artifact and receipt match exactly");
+        .expect("signed complete-tip artifact and receipt match exactly");
     RecoveredCompleteTipActivationAuthority::authenticate_for_lifecycle_test(
         artifact,
         receipt,
@@ -1144,7 +1193,7 @@ fn test_recovered_complete_tip_authority(
         test_successor_authority(predecessor, successor_context_id),
         predecessor_root,
     )
-    .expect("synthetic complete-tip activation matches its exact durable evidence")
+    .expect("signed complete-tip activation matches its exact durable evidence")
 }
 fn valid_ingress_probe() -> BlockMessage {
     let validator = PeerId::new(
@@ -1205,23 +1254,6 @@ fn publish_applied_runner_status(context: &wire::HeightContext) {
     });
     super::super::status::set_v2_status(status);
 }
-fn labelled_lane_qc_message(peer: PeerId, label: &[u8]) -> BlockMessage {
-    let mut message = super::super::v2_worker::tests::lane_commit_qc_block_message(peer);
-    let BlockMessage::LaneBlockQc(qc) = &mut message else {
-        unreachable!("lane-QC fixture must return a lane CommitQC")
-    };
-    qc.body.proposal_hash = Hash::new(label);
-    message
-}
-fn lane_qc_label(message: &NetworkMessage) -> Hash {
-    let NetworkMessage::SumeragiBlock(wire) = message else {
-        panic!("runner scheduler fixture emitted a non-block network message")
-    };
-    let BlockMessage::LaneBlockQc(qc) = wire.as_message() else {
-        panic!("runner scheduler fixture emitted a non-lane-QC block message")
-    };
-    qc.body.proposal_hash.clone()
-}
 fn runner_sidecar_chunk(
     local: PeerId,
     requester: PeerId,
@@ -1250,46 +1282,90 @@ fn runner_sidecar_chunk(
 }
 #[test]
 fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
-    let (mut services, keys) = super::super::v2_worker::tests::fixture();
+    let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+    let mut lane_work = fixture.adapter;
+    let mut services =
+        super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+            Arc::clone(&fixture.kura),
+            fixture.context,
+            &fixture.validators,
+            fixture.local_validator,
+        );
     services
         .set_exact_output_shared_unit_capacity_for_test(1)
         .expect("install one shared slot plus frozen-validator reservations");
-    let blocked = PeerId::new(keys[1].public_key().clone());
-    let responsive = PeerId::new(keys[2].public_key().clone());
+    let local = fixture.request.responder.clone();
+    let blocked = fixture.request.requester.clone();
+    let responsive = fixture
+        .validators
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .find(|peer| peer != &local && peer != &blocked)
+        .expect("another frozen validator owns a reserved output slot");
+    let outbound = |peer: &PeerId, sequence: u64| {
+        let mut request = fixture.request.clone();
+        request.requester = local.clone();
+        request.responder = peer.clone();
+        request.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
+            NonZeroU64::new(sequence).expect("non-zero scheduler request sequence"),
+        );
+        request.request_id = request.canonical_request_id();
+        let request_id = request.request_id;
+        (
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: peer.clone(),
+                reply_routes: None,
+                message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
+            },
+            request_id,
+        )
+    };
     let keep_blocked = Arc::new(AtomicBool::new(true));
     let keep_blocked_for_hook = Arc::clone(&keep_blocked);
     let blocked_for_hook = blocked.clone();
     let admitted = Arc::new(Mutex::new(Vec::new()));
     let admitted_for_hook = Arc::clone(&admitted);
+    let actor_reservations = Arc::new(Mutex::new(Vec::new()));
+    let actor_reservations_for_hook = Arc::clone(&actor_reservations);
     services.set_exact_output_admission_hook(move |post, ticket| {
         if post.peer_id == blocked_for_hook && keep_blocked_for_hook.load(Ordering::Acquire) {
+            let ticket = ticket.unwrap_or_else(|| {
+                let (reservation, ticket) =
+                    iroha_p2p::network::NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                actor_reservations_for_hook
+                    .lock()
+                    .expect("retain actor reservation")
+                    .push(reservation);
+                ticket
+            });
+            let rank = ticket.rank().expect("ranked blocked actor reservation");
             return Err(NetworkActorAdmissionError::Backpressured {
                 message: post,
-                ticket,
-                rank: 13,
+                ticket: Some(ticket),
+                rank,
             });
         }
+        let NetworkMessage::CertifiedMergeSidecar(message) = &post.data else {
+            panic!("scheduler fixture emitted a non-sidecar output")
+        };
+        let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
+            panic!("scheduler fixture emitted a non-request sidecar output")
+        };
+        assert_eq!(request.request_id, request.canonical_request_id());
         admitted_for_hook
             .lock()
             .expect("record admitted lane output")
-            .push((post.peer_id.clone(), lane_qc_label(&post.data)));
+            .push((post.peer_id.clone(), request.request_id));
         Ok(())
     });
-    let reserved_filler = Hash::new(b"runner reserved filler");
-    let shared_filler = Hash::new(b"runner shared filler");
-    for (label, expected) in [
-        (
-            b"runner reserved filler".as_slice(),
-            reserved_filler.clone(),
-        ),
-        (b"runner shared filler".as_slice(), shared_filler.clone()),
-    ] {
-        services
-            .post_lane_block(
-                blocked.clone(),
-                labelled_lane_qc_message(blocked.clone(), label),
-            )
-            .expect("blocked validator output remains exactly owned");
+    let mut fillers = Vec::new();
+    for sequence in [1, 2] {
+        let (effect, request_id) = outbound(&blocked, sequence);
+        assert!(matches!(
+            dispatch_lane_work_effect(&services, effect)
+                .expect("blocked validator output remains exactly owned"),
+            LaneWorkEffectDispatch::Complete
+        ));
         assert!(
             services
                 .has_pending_exact_output()
@@ -1300,52 +1376,57 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
                 .lock()
                 .expect("inspect admitted output")
                 .iter()
-                .all(|(_, actual)| actual != &expected)
+                .all(|(_, actual)| actual != &request_id)
         );
+        fillers.push(request_id);
     }
-    let blocked_label = Hash::new(b"runner blocked effect A");
-    let responsive_label = Hash::new(b"runner reserved effect B");
-    let blocked_effect = V2LaneWorkEffect::PostLaneBlock {
-        peer: blocked.clone(),
-        message: labelled_lane_qc_message(blocked.clone(), b"runner blocked effect A"),
-    };
-    let responsive_effect = V2LaneWorkEffect::PostLaneBlock {
-        peer: responsive.clone(),
-        message: labelled_lane_qc_message(responsive.clone(), b"runner reserved effect B"),
-    };
-    let (mut lane_work, _) =
-        super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+    let (blocked_effect, blocked_id) = outbound(&blocked, 3);
+    let (responsive_effect, responsive_id) = outbound(&responsive, 4);
+    assert!(
+        !services
+            .can_retain_lane_work_effect(&blocked_effect)
+            .expect("blocked slot is full")
+    );
+    assert!(
+        services
+            .can_retain_lane_work_effect(&responsive_effect)
+            .expect("other validator retains its reserve")
+    );
     assert!(lane_work.requeue_effect(blocked_effect));
     assert!(lane_work.requeue_effect(responsive_effect));
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("reserved work bypasses the unserviceable head");
     assert_eq!(lane_work.effect_count(), 1);
     match lane_work.next_effect() {
-        Some(V2LaneWorkEffect::PostLaneBlock {
+        Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer,
-            message: BlockMessage::LaneBlockQc(qc),
+            message,
+            reply_routes: None,
         }) => {
             assert_eq!(peer, blocked);
-            assert_eq!(qc.body.proposal_hash, blocked_label);
+            let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
+                panic!("blocked effect must retain its exact request")
+            };
+            assert_eq!(request.request_id, blocked_id);
         }
-        other => panic!("blocked effect A must remain the exact queued owner: {other:?}"),
+        other => panic!("blocked effect must remain the exact queued owner: {other:?}"),
     }
     {
         let admitted = admitted.lock().expect("inspect admitted output");
         assert_eq!(
             admitted
                 .iter()
-                .filter(|(peer, label)| peer == &responsive && label == &responsive_label)
+                .filter(|(peer, id)| peer == &responsive && id == &responsive_id)
                 .count(),
             1
         );
-        assert!(admitted.iter().all(|(_, label)| label != &blocked_label));
+        assert!(admitted.iter().all(|(_, id)| id != &blocked_id));
     }
     keep_blocked.store(false, Ordering::Release);
     assert!(
         !services
             .retry_pending_exact_output()
-            .expect("responsive retry drains both retained fillers")
+            .expect("responsive retry drains retained fillers")
     );
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("the retained head dispatches after capacity reopens");
@@ -1356,18 +1437,16 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
             .expect("all exact lane output is admitted")
     );
     let admitted = admitted.lock().expect("inspect final admitted output");
-    for (peer, label) in [
-        (&blocked, &reserved_filler),
-        (&blocked, &shared_filler),
-        (&blocked, &blocked_label),
-        (&responsive, &responsive_label),
+    for (peer, id) in [
+        (&blocked, fillers[0]),
+        (&blocked, fillers[1]),
+        (&blocked, blocked_id),
+        (&responsive, responsive_id),
     ] {
         assert_eq!(
             admitted
                 .iter()
-                .filter(|(actual_peer, actual_label)| {
-                    actual_peer == peer && actual_label == label
-                })
+                .filter(|(actual_peer, actual_id)| actual_peer == peer && *actual_id == id)
                 .count(),
             1,
             "each semantic output must be admitted exactly once"
@@ -1389,11 +1468,23 @@ fn finalized_rollover_drains_source_effects_after_handoff_reopens_capacity() {
     services
         .set_exact_output_shared_unit_capacity_for_test(1)
         .expect("install one shared exact-output slot");
-    services.set_exact_output_admission_hook(|post, ticket| {
+    let actor_reservations = Arc::new(Mutex::new(Vec::new()));
+    let actor_reservations_for_hook = Arc::clone(&actor_reservations);
+    services.set_exact_output_admission_hook(move |post, ticket| {
+        let ticket = ticket.unwrap_or_else(|| {
+            let (reservation, ticket) =
+                iroha_p2p::network::NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+            actor_reservations_for_hook
+                .lock()
+                .expect("retain actor reservation")
+                .push(reservation);
+            ticket
+        });
+        let rank = ticket.rank().expect("ranked predecessor actor reservation");
         Err(NetworkActorAdmissionError::Backpressured {
             message: post,
-            ticket,
-            rank: 17,
+            ticket: Some(ticket),
+            rank,
         })
     });
     let (receipt, artifact) =

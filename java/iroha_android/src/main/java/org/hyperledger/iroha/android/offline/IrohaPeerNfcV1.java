@@ -19,32 +19,20 @@ import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcStatusV1;
 
 /** Java entry point for the strict three-message KAGEMUSHA NFC state machine. */
 public final class IrohaPeerNfcV1 {
-  public static final String APPLICATION_IDENTIFIER_HEX =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;
-  public static final int APPLICATION_IDENTIFIER_SIZE =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.APPLICATION_IDENTIFIER_SIZE;
-  public static final int COMMAND_CLASS =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.COMMAND_CLASS;
-  public static final int WIRE_VERSION =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.WIRE_VERSION;
-  public static final int SESSION_ID_BYTES =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.SESSION_ID_BYTES;
-  public static final int HASH_BYTES =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.HASH_BYTES;
-  public static final int MAXIMUM_CHUNK_BYTES =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.MAXIMUM_CHUNK_BYTES;
+  public static final String APPLICATION_IDENTIFIER_HEX = "F0504B45504B524E464301";
+  public static final int COMMAND_CLASS = 0x80;
+  public static final int WIRE_VERSION = 1;
+  public static final int SESSION_ID_BYTES = 16;
+  public static final int HASH_BYTES = 32;
+  public static final int MAXIMUM_CHUNK_BYTES = 4096;
   public static final int MAXIMUM_MESSAGE_BYTES =
-      org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES;
+      IrohaPeerWireMessageV1.HEADER_LENGTH
+          + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES;
 
   private IrohaPeerNfcV1() {}
 
   public static byte[] applicationIdentifier() {
     return org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.applicationIdentifier();
-  }
-
-  public static boolean matchesApplicationIdentifier(final byte[] candidate) {
-    return org.hyperledger.iroha.sdk.offline.IrohaPeerNfcV1.matchesApplicationIdentifier(
-        copy(candidate, "candidate"));
   }
 
   public static byte[] encodeCommand(final IrohaPeerNfcCommandV1 command) {
@@ -71,34 +59,34 @@ public final class IrohaPeerNfcV1 {
         maximumMessageBytes, maximumReadChunkBytes, maximumWriteChunkBytes);
   }
 
-  /** Builds the immutable profile shared by all three IPM1 messages. */
+  /** Builds the immutable profile shared by request, payment, and acknowledgement. */
   public static IrohaPeerNfcProfilePolicyV1 profilePolicy(
       final IrohaPeerPayloadProfile profile) {
     return new IrohaPeerNfcProfilePolicyV1(sharedProfile(profile));
   }
 
   public static IrohaPeerNfcReceiverSessionV1 receiver(
-      final byte[] canonicalRequest,
       final byte[] sessionId,
+      final byte[] encodedRequest,
       final IrohaPeerNfcProfilePolicyV1 profilePolicy,
       final IrohaPeerNfcLimitsV1 limits) {
     return new IrohaPeerNfcReceiverSessionV1(
-        copy(canonicalRequest, "canonicalRequest"),
+        copy(encodedRequest, "encodedRequest"),
         copy(sessionId, "sessionId"),
         Objects.requireNonNull(profilePolicy, "profilePolicy"),
         Objects.requireNonNull(limits, "limits"));
   }
 
-  /** Builds the durable result returned after hardware stages one payment. */
+  /** Binds the exact durable acknowledgement to the staged payment callback context. */
   public static IrohaPeerNfcDurablePaymentAdmissionV1 durablePaymentAdmission(
       final IrohaPeerNfcPaymentAdmissionContextV1 context,
-      final byte[] canonicalAcknowledgement) {
+      final byte[] encodedAcknowledgement) {
     return new IrohaPeerNfcDurablePaymentAdmissionV1(
         Objects.requireNonNull(context, "context"),
-        copy(canonicalAcknowledgement, "canonicalAcknowledgement"));
+        copy(encodedAcknowledgement, "encodedAcknowledgement"));
   }
 
-  /** Runs the transport-neutral reader exchange for request, payment, and acknowledgement. */
+  /** Runs the direct request, payment, acknowledgement reader exchange. */
   public static IrohaPeerNfcReaderExchangeResultV1 runReaderExchange(
       final IrohaPeerNfcProfilePolicyV1 profilePolicy,
       final IrohaPeerNfcLimitsV1 limits,

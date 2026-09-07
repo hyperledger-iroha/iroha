@@ -11685,8 +11685,19 @@ pub struct ToolkitPackArgs {
     pub hybrid_recipient_kyber: Option<String>,
 }
 impl Run for ToolkitPackArgs {
-    #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        context.println(self.pack()?.trim_end())
+    }
+}
+impl ToolkitPackArgs {
+    /// Package local public assets without loading client configuration or custody keys.
+    pub fn run_without_client_config(self, mut output: impl std::io::Write) -> Result<()> {
+        output.write_all(self.pack()?.as_bytes())?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn pack(self) -> Result<String> {
         let ToolkitPackArgs {
             input,
             manifest_out,
@@ -11866,22 +11877,15 @@ impl Run for ToolkitPackArgs {
         if !report_string.ends_with('\n') {
             report_string.push('\n');
         }
-        let mut report_written_to_stdout = false;
-        if let Some(path) = json_out.as_ref() {
-            if path == Path::new("-") {
-                context.println(report_string.trim_end())?;
-                report_written_to_stdout = true;
-            } else {
-                ensure_parent_dir(path)?;
-                fs::write(path, report_string.as_bytes()).wrap_err_with(|| {
-                    format!("failed to write JSON report to `{}`", path.display())
-                })?;
-            }
+        if let Some(path) = json_out.as_ref()
+            && path != Path::new("-")
+        {
+            ensure_parent_dir(path)?;
+            fs::write(path, report_string.as_bytes()).wrap_err_with(|| {
+                format!("failed to write JSON report to `{}`", path.display())
+            })?;
         }
-        if !report_written_to_stdout {
-            context.println(report_string.trim_end())?;
-        }
-        Ok(())
+        Ok(report_string)
     }
 }
 const HYBRID_MANIFEST_AAD_DOMAIN: &[u8] = b"sorafs.hybrid.manifest.v1";
@@ -22368,8 +22372,9 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                 hybrid_recipient_x25519: None,
                 hybrid_recipient_kyber: None,
             };
-            let mut ctx = TestContext::new();
-            args.run(&mut ctx).expect("pack");
+            let mut stdout = Vec::new();
+            args.run_without_client_config(&mut stdout)
+                .expect("credential-free pack");
             let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
             let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
             assert_eq!(manifest.content_length, 13);
@@ -22379,6 +22384,10 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             let archive_digest_hex = hex::encode(archive_digest);
             assert_eq_compact! { manifest.car_digest => archive_digest; "manifest must bind every byte of the canonical CARv2 archive" };
             let report_bytes = fs::read(&json_path).expect("read report");
+            assert_eq!(
+                stdout, report_bytes,
+                "local pack prints the exact report without a client context"
+            );
             let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
             assert_eq_compact! { report.get("car_archive_digest_hex").and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
             assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("car_digest_hex")).and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };

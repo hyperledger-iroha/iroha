@@ -107,7 +107,7 @@ fn dispatch_canonical_executed_block_recovery_effects(
     let scan_limit = recovery.effect_count();
     let mut summary = CanonicalRecoveryEffectDispatch::default();
     for _ in 0..scan_limit.min(limit.max(1)) {
-        let Some(effect) = recovery.drain_effects(1).pop() else {
+        let Some(effect) = recovery.next_effect() else {
             break;
         };
         let is_request = matches!(
@@ -124,6 +124,7 @@ fn dispatch_canonical_executed_block_recovery_effects(
             ));
         }
         if is_request && !is_current_request {
+            let _ = require_peeked_lane_work_effect(recovery.drain_effects(1).pop())?;
             summary.handled = summary.handled.saturating_add(1);
             continue;
         }
@@ -131,28 +132,15 @@ fn dispatch_canonical_executed_block_recovery_effects(
             .can_retain_lane_work_effect(&effect)
             .map_err(V2RunnerError::Service)?
         {
-            if !recovery.requeue_effect(effect) {
-                return Err(V2RunnerError::Service(
-                    "canonical executed-block recovery could not retain a backpressured effect"
-                        .to_owned(),
-                ));
-            }
             break;
         }
         match dispatch_lane_work_effect(services, effect)? {
             LaneWorkEffectDispatch::Complete => {
+                let _ = require_peeked_lane_work_effect(recovery.drain_effects(1).pop())?;
                 summary.handled = summary.handled.saturating_add(1);
                 summary.request_dispatched |= is_current_request;
             }
-            LaneWorkEffectDispatch::SourceRetained(effect) => {
-                if !recovery.requeue_effect(effect) {
-                    return Err(V2RunnerError::Service(
-                        "canonical executed-block recovery lost a source-retained effect"
-                            .to_owned(),
-                    ));
-                }
-                break;
-            }
+            LaneWorkEffectDispatch::SourceRetained(_) => break,
         }
     }
     Ok(summary)
@@ -174,7 +162,7 @@ fn service_historical_recovery_tick(
     services: &ProductionV2Services,
 ) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
     let current_archive_targets = lane_work
-        .has_pending_historical_recovery()
+        .has_pending_historical_recovery()?
         .then(|| services.current_archive_targets())
         .unwrap_or_default();
     lane_work

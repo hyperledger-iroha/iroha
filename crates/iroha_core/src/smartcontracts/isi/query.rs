@@ -801,7 +801,15 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindAssetDefinitionById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindRaceById(q) => { Ok(SingularQueryOutputBox::from(q.execute(state)?)) }
+            SingularQueryBox::FindNftSaleOfferById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindGameSessionById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindExecutionProofVerificationById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindAssetEscrowById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -7324,12 +7332,20 @@ mod tests {
             .kura()
             .get_block(latest_height)
             .expect("latest seeded carrier");
-        let (appended, entry) =
-            crate::smartcontracts::isi::tx::tests::certified_query_carrier(&latest, 17, true);
+        let (appended, entry) = crate::smartcontracts::isi::tx::tests::certified_query_carrier(
+            &latest,
+            17,
+            true,
+            Some(&fixture.latest_lane_descriptor),
+        );
         state_view
             .kura()
             .store_block_with_merge_entry(appended, &entry)
             .expect("append carrier after query start");
+        crate::kura::tests::persist_v2_finality_chain_through(
+            state_view.kura(),
+            NonZeroUsize::new(18).expect("appended query carrier"),
+        );
         while let Some(current) = cursor {
             let next = query_handle
                 .handle_iter_continue(current, &ALICE_ID)

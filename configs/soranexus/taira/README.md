@@ -74,13 +74,26 @@ Provision the four canonical same-host identity slots before running it:
 - `iroha-inrou-2`, uid/gid `70002`
 - `iroha-inrou-3`, uid/gid `70003`
 
-Public validators run on separate hosts and use slot 0. These accounts are
-locked execution identities only; the command does not provision accounts or
-persist deployment credentials.
+Public-reset V1 supports exactly one Linux/AArch64 host running all four
+validators and the edge. Inventory admission rejects a dedicated edge or any
+validator on a different authenticated SSH host-key identity before opening
+deployment credentials or materializing artifacts. The host dispatcher applies
+the same admission before accessing guards or mutating host state. This single
+host holds the common lock and durable progress record for all mutation phase
+boundaries; distributed placement is not an admitted architecture.
+
+Provision all four locked execution identities on that host and assign distinct
+canonical slots to the validators. Each of the five role endpoints retains its
+own exact DNS alias and guarded service/state roots, uses root on SSH port 22,
+and pins the same actual ssh-ed25519 host key through its exact known-hosts line.
+Distinct DNS aliases do not establish independent hosts. Never invent host-key
+identities or copy a host private key to make separate machines appear cohosted.
+These accounts are execution identities only; the command does not provision
+accounts or persist deployment credentials.
 
 ### Prepare the fixed Inrou host runtime
 
-On each native AArch64 Linux validator, install packages that provide direct,
+On each native AArch64 Linux validator, install packages that provide
 root-owned, single-link executables at these exact paths:
 
 - `/usr/bin/qemu-system-aarch64`
@@ -90,8 +103,13 @@ root-owned, single-link executables at these exact paths:
 - `/usr/bin/nsenter`
 - `/usr/bin/socat`
 
-The QEMU and `setpriv` ELF interpreters and dynamic-library closure must also be
-root-custodied and non-writable by group/other. Create the fixed parent once,
+QEMU, `setpriv`, `ldd`, `bwrap`, and `nsenter` must be direct files. The `socat`
+entry may resolve through package-managed symlinks. The QEMU and `setpriv` ELF
+interpreters and dynamic-library closure may use merged `/usr` and alternatives
+links; every traversed link and directory must remain root-custodied, and the
+resolved files must be singly linked and non-writable by group/other. The
+packager copies their bytes to the exact paths requested by the executables;
+its output and destination contain no symlinks. Create the fixed parent once,
 then run the packager from the `optimizations` checkout as root:
 
 ```bash
@@ -336,6 +354,37 @@ four-validator corridor and each admitted host already has the trusted compiled
 dispatcher and reset guard provisioned independently of the candidate. Never
 persist those inputs in the repository, let the candidate bootstrap its own
 host authority, or introduce a Python alias or parallel V1 schema.
+
+The signed inventory requires an explicit `initial_state` on each validator
+and edge. Its canonical JSON is `{"state":"vacant","value":null}` or an object
+with `"state":"admitted_release"` and the release record in `"value"`. Both
+fields are required; vacant state accepts only `null` content. Unknown fields,
+unknown discriminators, and retired rollback shapes are rejected. There is no
+implicit predecessor or legacy rollback field. An admitted release binds its
+actual prior commit, canonical `releases/<commit>` directory, and exact artifact
+hashes. A vacant
+target still requires independent trusted dispatcher/guard provisioning,
+Linux/AArch64, and validator KVM API 12; it requires no running predecessor.
+The network's `previous_genesis_hash` remains the actual public reset anchor,
+including when the admitted Linux target namespaces are new.
+
+Vacant targets require an absent `current` selector, an empty root-owned 0700
+state directory, an empty release namespace, and the exact signed systemd
+unit loaded without drop-ins or pending reload. The edge additionally binds
+`systemd_unit_sha256` for `/etc/systemd/system/nginx.service` and requires an
+absent Taira route. The dispatcher checks inactive service/job/PID state,
+empty cgroup membership, and bounded process/file/mount-namespace references
+before accepting vacancy. Service, state, guard, and first-edge route roots
+must share the filesystem used for atomic rollback quarantine.
+
+The canonical plan starts all validators, stages and activates the edge, then
+runs public convergence, canaries, and restart proofs. First edge activation
+uses a durable start operation. A failed first installation stops its service,
+restores the exact original empty state inode, removes only its admitted
+selector, and atomically retains its candidate release/configuration in the
+private authorization rollback namespace. It never starts a fictitious prior
+release or deletes unproven state. Failure to prove ownership or shutdown
+retains the evidence and leaves rollback incomplete.
 
 The rendered validator configuration must replace the dedicated
 `REPLACE_WITH_TAIRA_CANARY_ONBOARDING_*` fields with one credential scoped to

@@ -27,8 +27,8 @@ use super::transparent_stark::{
     sample_trace_mask_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1;
-use fastpq_prover::fastpq_isi_v1::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
+use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
+use fastpq_isi::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRngCore;

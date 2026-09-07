@@ -76,9 +76,7 @@ mod recovered_sign_capacity_tests {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2072,6 +2070,15 @@ impl ProductionLifecycleOwnerV1 {
         >,
         crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
     ) {
+        assert_eq!(
+            runtime.driver().wire_context(),
+            self.verified.context(),
+            "Completion fixture runtime must use the exact owner context"
+        );
+        let recovery_authority = runtime
+            .driver()
+            .leader_wire_recovery_authority()
+            .expect("project the Completion fixture's actual replayed WAL authority");
         let body_store = self
             .body_store
             .take()
@@ -2135,6 +2142,10 @@ impl ProductionLifecycleOwnerV1 {
                 identity.clone(),
                 class_capacity,
             );
+        crate::sumeragi::v2_worker::tests::install_completion_runtime_wal_authority_for_test(
+            services,
+            recovery_authority,
+        );
         self.body_store_identity = Some(identity);
         (executor, fixture)
     }
@@ -2259,6 +2270,32 @@ impl ProductionLifecycleOwnerV1 {
             ),
             timeout_supersession_successor: None,
         }
+    }
+
+    /// Bind an empty exact-height output owner and the runtime to one ordinal source.
+    /// The caller retains the genuine runtime's recovered WAL and signed producer owners.
+    pub(in crate::sumeragi) fn empty_output_owner_with_runtime_ordinals_for_test(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        root: &std::path::Path,
+    ) -> (
+        Self,
+        crate::sumeragi::v2_lifecycle_coordinator::RuntimeLifecycleOrdinalAuthority,
+    ) {
+        let authority = super::authority::lifecycle_storage_owner_test_authority(&verified, 8, 8)
+            .expect("derive exact verified runtime output episode authority");
+        let coordinator = LifecycleCoordinator::new_with_authority(authority, 0);
+        let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
+            root.join("body"),
+            verified.context().clone(),
+        )
+        .expect("open exact output owner body store");
+        Self::ready_validate_completion_owner_for_test(
+            verified,
+            coordinator,
+            LifecycleWorkRegistryHolder::empty(),
+            body_store,
+            root,
+        )
     }
 
     /// Build one storage-owning production owner around the exact selected
