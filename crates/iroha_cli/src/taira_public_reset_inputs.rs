@@ -238,6 +238,11 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
             snapshot,
         };
         let bytes = pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?;
+        validate_validator_genesis_config(
+            &bytes,
+            Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
+            &inventory.next_genesis_hash,
+        )?;
         let text =
             std::str::from_utf8(&bytes).map_err(|_| eyre!("validator config is not UTF-8"))?;
         let table: toml::Table =

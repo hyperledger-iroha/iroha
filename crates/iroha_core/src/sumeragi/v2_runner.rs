@@ -39,6 +39,7 @@ use super::{
     v2_apply::{
         LaneReservationReconciliationPlanning, V2ReservationLifecycleError,
         apply_lane_reservation_reconciliation_plan,
+        observe_completed_lane_reservation_reconciliation,
         persist_preflighted_historical_autonomous_lane_recoveries, plan_lane_reservation_ownership,
         preflight_historical_autonomous_lane_recovery,
         validate_installed_historical_autonomous_lane_recoveries,

@@ -973,6 +973,7 @@ fn admit_forward_closure(admitted: &mut AdmittedReset) -> Result<()> {
     let pinned_artifacts = validate_artifact_files(&admitted.inventory)?;
     validate_shared_validator_closure(&admitted.inventory)?;
     validate_genesis_hash_files(&admitted.inventory, &pinned_artifacts)?;
+    validate_pinned_validator_genesis_configs(&admitted.inventory, &pinned_artifacts)?;
     admitted.pinned_artifacts = pinned_artifacts;
     Ok(())
 }
@@ -2242,6 +2243,86 @@ fn validate_artifact_files_with(
         }
     }
     Ok(pinned)
+}
+
+/// Admit the complete signed-genesis startup closure without external TOML sources.
+fn validate_validator_genesis_config(
+    bytes: &[u8],
+    signed_genesis: &Path,
+    expected_hash: &str,
+) -> Result<()> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| eyre!("validator startup config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("validator startup config is not TOML"))?;
+    let result = (|| {
+        if table.contains_key("extends") {
+            return Err(eyre!(
+                "validator startup config cannot inherit unbound TOML"
+            ));
+        }
+        let genesis = table
+            .get("genesis")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| eyre!("validator startup config omits its genesis table"))?;
+        if genesis.contains_key("manifest_json") || genesis.contains_key("expected_hash_file") {
+            return Err(eyre!(
+                "validator startup config cannot use an unbound genesis manifest or identity file"
+            ));
+        }
+        if genesis.get("file").and_then(toml::Value::as_str) != signed_genesis.to_str() {
+            return Err(eyre!(
+                "validator startup config does not select its exact signed genesis artifact"
+            ));
+        }
+        let literal = genesis
+            .get("expected_hash")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                eyre!("validator startup config requires an inline checked network identity")
+            })?;
+        let network = literal
+            .parse::<iroha::data_model::NetworkId>()
+            .map_err(|_| eyre!("validator startup network identity is not canonical"))?;
+        validate_canonical_iroha_hash("signed genesis hash", expected_hash)?;
+        let expected = hex::decode(expected_hash)?;
+        if network.to_string() != literal || network.as_bytes().as_slice() != expected.as_slice() {
+            return Err(eyre!(
+                "validator startup network identity differs from its signed genesis hash"
+            ));
+        }
+        Ok(())
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
+fn validate_pinned_validator_genesis_configs(
+    inventory: &InventoryV1,
+    pinned: &[PinnedArtifact],
+) -> Result<()> {
+    for validator in &inventory.validators {
+        let input = &pinned
+            .iter()
+            .find(|entry| entry.slug == validator.slug && entry.role == "config")
+            .ok_or_else(|| eyre!("validator startup config was not pinned"))?
+            .input;
+        let mut file = input.file.try_clone()?;
+        file.rewind()?;
+        let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+            &input.path,
+            "validator startup config",
+            file,
+            &input.snapshot,
+            1024 * 1024,
+        )?);
+        validate_validator_genesis_config(
+            &bytes,
+            Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
+            &inventory.next_genesis_hash,
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_known_hosts(inventory: &InventoryV1, path: &Path) -> Result<PinnedInput> {
@@ -7443,5 +7524,95 @@ mod executor_model {
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod signed_genesis_startup_tests {
+    use super::*;
+
+    fn fixture() -> (String, String, PathBuf) {
+        let hash = Hash::new(b"ephemeral genesis startup regression");
+        let network = iroha::data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(hash),
+        );
+        let path =
+            PathBuf::from("/srv/taira/taira-validator-1/releases/actual/genesis/genesis.json");
+        (
+            format!(
+                "[genesis]\nfile = {:?}\nexpected_hash = {:?}\n",
+                path.to_str().unwrap(),
+                network.to_string()
+            ),
+            hash.to_string(),
+            path,
+        )
+    }
+
+    #[test]
+    fn signed_genesis_startup_accepts_exact_artifact_and_checked_identity() {
+        let (config, hash, path) = fixture();
+        validate_validator_genesis_config(config.as_bytes(), &path, &hash).unwrap();
+    }
+
+    #[test]
+    fn signed_genesis_startup_rejects_unbound_manifest_identity_and_inheritance() {
+        let (config, hash, path) = fixture();
+        for field in [
+            "manifest_json = '/tmp/manifest.json'",
+            "expected_hash_file = '/tmp/network-id'",
+        ] {
+            assert!(
+                validate_validator_genesis_config(
+                    format!("{config}{field}\n").as_bytes(),
+                    &path,
+                    &hash
+                )
+                .is_err()
+            );
+        }
+        for extends in [
+            "extends = []",
+            "extends = '/tmp/base.toml'",
+            "extends = ['/tmp/base.toml']",
+        ] {
+            assert!(
+                validate_validator_genesis_config(
+                    format!("{extends}\n{config}").as_bytes(),
+                    &path,
+                    &hash
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn signed_genesis_startup_rejects_foreign_path_and_network() {
+        let (config, hash, path) = fixture();
+        assert!(
+            validate_validator_genesis_config(
+                config.as_bytes(),
+                Path::new("/tmp/genesis.nrt"),
+                &hash
+            )
+            .is_err()
+        );
+        assert!(
+            validate_validator_genesis_config(
+                config.as_bytes(),
+                &path,
+                &Hash::new(b"other network").to_string()
+            )
+            .is_err()
+        );
+        let bare = format!(
+            "[genesis]\nfile = {:?}\nexpected_hash = {:?}\n",
+            path.to_str().unwrap(),
+            hash
+        );
+        assert!(validate_validator_genesis_config(bare.as_bytes(), &path, &hash).is_err());
+        let missing = format!("[genesis]\nfile = {:?}\n", path.to_str().unwrap());
+        assert!(validate_validator_genesis_config(missing.as_bytes(), &path, &hash).is_err());
     }
 }

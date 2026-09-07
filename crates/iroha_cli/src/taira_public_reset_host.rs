@@ -6,8 +6,9 @@ use super::{
     PinnedArtifact, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome,
     TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
     ensure_authorization_current, ensure_pinned_unchanged, now_unix_ms, open_pinned_regular,
-    pin_owner_private_file, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
-    validate_owner_private_dir, verify_execution_authorization,
+    pin_owner_private_file, read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex,
+    validate_inventory, validate_owner_private_dir, validate_validator_genesis_config,
+    verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
@@ -7013,7 +7014,12 @@ fn validator_preseed_store(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
 ) -> Result<ValidatorPreseedStore> {
-    let bytes = installed_validator_config_bytes(admitted, validator)?;
+    let bytes = zeroize::Zeroizing::new(installed_validator_config_bytes(admitted, validator)?);
+    validate_validator_genesis_config(
+        &bytes,
+        Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
+        &admitted.inventory.next_genesis_hash,
+    )?;
     let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
     let config: toml::Value =
         toml::from_str(text).wrap_err("installed validator config is not valid TOML")?;
@@ -8220,15 +8226,9 @@ fn attest_validator_process(
     let stable_current = Path::new(&validator.service_root).join("current");
     let stable_executable = stable_current.join("bin/iroha3d_taira");
     let stable_config = stable_current.join("config/config.toml");
-    let stable_genesis = stable_current.join("genesis/genesis.json");
     let expected_config = release_root.join("config/config.toml");
     let expected_genesis = release_root.join("genesis/genesis.json");
-    validate_validator_argv(
-        &arguments,
-        &stable_executable,
-        &stable_config,
-        &stable_genesis,
-    )?;
+    validate_validator_argv(&arguments, &stable_executable, &stable_config)?;
     let config_hash = if fresh_state {
         &artifact(&validator.artifacts, "config")?.sha256
     } else {
@@ -8240,6 +8240,28 @@ fn attest_validator_process(
         &validator.admitted_release()?.genesis_sha256
     };
     verify_regular_hash(&expected_config, config_hash)?;
+    let (file, snapshot) = open_pinned_regular(&expected_config, "attested validator config")?;
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &expected_config,
+        "attested validator config",
+        file,
+        &snapshot,
+        1024 * 1024,
+    )?);
+    if sha256_hex(&bytes) != *config_hash {
+        return Err(eyre!(
+            "attested validator config changed after hash verification"
+        ));
+    }
+    validate_validator_genesis_config(
+        &bytes,
+        &expected_genesis,
+        if fresh_state {
+            &admitted.inventory.next_genesis_hash
+        } else {
+            &admitted.inventory.previous_genesis_hash
+        },
+    )?;
     verify_regular_hash(&expected_genesis, genesis_hash)?;
     require_root_directory(
         Path::new(&validator.state_root),
@@ -8267,18 +8289,11 @@ fn attest_validator_process(
     Ok(())
 }
 
-fn validate_validator_argv(
-    arguments: &[PathBuf],
-    executable: &Path,
-    config: &Path,
-    genesis: &Path,
-) -> Result<()> {
+fn validate_validator_argv(arguments: &[PathBuf], executable: &Path, config: &Path) -> Result<()> {
     let expected = [
         executable.to_path_buf(),
         PathBuf::from("--config"),
         config.to_path_buf(),
-        PathBuf::from("--genesis-manifest-json"),
-        genesis.to_path_buf(),
         PathBuf::from("--sora"),
     ];
     if arguments != expected {
@@ -18628,23 +18643,28 @@ mod tests {
     fn validator_argv_rejects_duplicate_last_wins_flags() {
         let executable = PathBuf::from("/srv/taira/taira-validator-1/current/bin/iroha3d_taira");
         let config = PathBuf::from("/srv/taira/taira-validator-1/current/config/config.toml");
-        let genesis = PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json");
         let exact = vec![
             executable.clone(),
             PathBuf::from("--config"),
             config.clone(),
-            PathBuf::from("--genesis-manifest-json"),
-            genesis.clone(),
             PathBuf::from("--sora"),
         ];
-        validate_validator_argv(&exact, &executable, &config, &genesis)
-            .expect("exact validator argv");
+        validate_validator_argv(&exact, &executable, &config).expect("exact validator argv");
+        let mut old_manifest = exact.clone();
+        old_manifest.splice(
+            3..3,
+            [
+                PathBuf::from("--genesis-manifest-json"),
+                PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json"),
+            ],
+        );
+        assert!(validate_validator_argv(&old_manifest, &executable, &config).is_err());
         let mut duplicate = exact;
         duplicate.extend([
             PathBuf::from("--config"),
             PathBuf::from("/tmp/attacker.toml"),
         ]);
-        let _ = validate_validator_argv(&duplicate, &executable, &config, &genesis)
+        let _ = validate_validator_argv(&duplicate, &executable, &config)
             .expect_err("duplicate last-wins config flag must fail");
     }
 
