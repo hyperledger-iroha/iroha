@@ -209,6 +209,14 @@ fn install_native_amx_evidence_fixture_at_block(
         HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     >,
 ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
+    let lane_incarnation = {
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        kura.active_lane_incarnation_marker(entry)
+            .expect(
+                "read the bound Native AMX fixture lane incarnation before evidence construction",
+            )
+            .0
+    };
     let application_block_height = block.header().height().get();
     let executed_block_wire = block
         .encode_wire()

@@ -18,6 +18,7 @@ use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
+use sha2::Digest as _;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;

@@ -1553,7 +1553,7 @@ v2_apply_test!(
         );
         assert_eq!(
             fixture.kura.merge_query_indexed_hashes_for_test(),
-            BTreeSet::from([HashOf::new(&entry)]),
+            BTreeSet::from([entry.canonical_hash()]),
             "repeated Pending/Queue/Complete checks may revisit only the exact carrier identity"
         );
         assert!(replayed_queue.live_lane_reservations().is_empty());

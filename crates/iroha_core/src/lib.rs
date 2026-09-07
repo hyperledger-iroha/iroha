@@ -141,6 +141,8 @@ pub mod query;
 /// Transaction queue and mempool logic.
 pub mod queue;
 pub(crate) mod receiver_snapshot;
+/// Shared compiled validator identity and signed genesis input validation.
+pub mod release_identity;
 mod secure_file_metadata;
 /// Unified XOR settlement engine.
 pub mod settlement;

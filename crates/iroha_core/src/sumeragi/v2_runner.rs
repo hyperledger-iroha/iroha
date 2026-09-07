@@ -2818,15 +2818,9 @@ const fn certified_merge_selection_for_npos(
 }
 fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
     let node = Hash::new(local_peer.encode());
-    let mut build_preimage = env!("CARGO_PKG_VERSION").as_bytes().to_vec();
-    build_preimage.extend_from_slice(
-        option_env!("GIT_COMMIT_HASH")
-            .unwrap_or("unknown")
-            .as_bytes(),
-    );
     AdapterFingerprints {
         node,
-        build: Hash::new(build_preimage),
+        build: crate::release_identity::build_fingerprint(),
         config: config.fingerprint(),
     }
 }

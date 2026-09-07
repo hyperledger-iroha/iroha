@@ -74,6 +74,8 @@ const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-inten
 
 #[path = "taira_public_reset_host.rs"]
 mod host;
+#[path = "taira_public_reset_inputs.rs"]
+mod inputs;
 #[path = "taira_public_reset_source.rs"]
 mod source;
 
@@ -89,6 +91,10 @@ pub(crate) struct PublicReset {
 enum PublicResetCommand {
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
     SourceManifest(PublicResetSourceManifest),
+    /// Assemble exact release inputs locally from an explicit inventory draft.
+    Assemble(inputs::Assemble),
+    /// Sign retained release inputs using an independently trusted owner key.
+    Authorize(inputs::Authorize),
     /// Verify the signed reset inventory and pinned local inputs without contacting any host.
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
@@ -252,6 +258,14 @@ impl PublicReset {
         let report = match &self.command {
             PublicResetCommand::SourceManifest(args) => {
                 source::export_manifest(&args.source_root, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::Assemble(args) => {
+                inputs::assemble(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::Authorize(args) => {
+                inputs::authorize(args)?;
                 return Ok(());
             }
             PublicResetCommand::Preflight(args) => {

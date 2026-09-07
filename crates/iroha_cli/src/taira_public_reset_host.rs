@@ -11577,10 +11577,17 @@ fn validate_validator_client_semantics(
     inputs: &[super::PinnedInput],
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    if inputs.len() != admitted.inventory.validator_clients.len() {
+    validate_validator_client_inputs(inputs, &admitted.inventory)
+}
+
+pub(super) fn validate_validator_client_inputs(
+    inputs: &[super::PinnedInput],
+    inventory: &super::InventoryV1,
+) -> Result<()> {
+    if inputs.len() != inventory.validator_clients.len() {
         return Err(eyre!("validator client semantic closure length drifted"));
     }
-    for (input, expected) in inputs.iter().zip(&admitted.inventory.validator_clients) {
+    for (input, expected) in inputs.iter().zip(&inventory.validator_clients) {
         revalidate_pinned(input, "validator client config")?;
         let config = load_client_config_from_pinned(input, "validator client config")?;
         let expected_account =
@@ -11597,7 +11604,10 @@ fn validate_validator_client_semantics(
     Ok(())
 }
 
-fn load_client_config_from_pinned(input: &super::PinnedInput, label: &str) -> Result<ClientConfig> {
+pub(super) fn load_client_config_from_pinned(
+    input: &super::PinnedInput,
+    label: &str,
+) -> Result<ClientConfig> {
     revalidate_pinned(input, label)?;
     let retained = input
         .file
@@ -11617,7 +11627,7 @@ fn load_client_config_from_pinned(input: &super::PinnedInput, label: &str) -> Re
     Ok(config)
 }
 
-fn hash_pinned_input(
+pub(super) fn hash_pinned_input(
     input: &super::PinnedInput,
     label: &str,
     deadline: Option<Instant>,
@@ -11676,7 +11686,7 @@ fn inherited_file_path(_file: &File) -> Result<PathBuf> {
     ))
 }
 
-fn validator_config_closure_sha256(
+pub(super) fn validator_config_closure_sha256(
     inputs: &[super::PinnedInput],
     deadline: Option<Instant>,
 ) -> Result<String> {
@@ -11692,7 +11702,7 @@ fn validator_config_closure_sha256(
     Ok(hex::encode(digest.finalize()))
 }
 
-fn pin_stage_tree(
+pub(super) fn pin_stage_tree(
     root: &Path,
     deadline: Option<Instant>,
 ) -> Result<(
@@ -11762,7 +11772,7 @@ fn pin_stage_tree(
     Ok((hash, bytes, files, fixed))
 }
 
-fn revalidate_stage_files(
+pub(super) fn revalidate_stage_files(
     root: &Path,
     files: &[(String, super::PinnedInput)],
     deadline: Option<Instant>,

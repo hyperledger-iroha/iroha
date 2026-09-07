@@ -363,6 +363,63 @@ target/release/iroha taira public-reset preflight \
   --known-hosts /private/runtime/taira-public-reset/known_hosts
 ```
 
+Before preflight, use the same compiled CLI to create the inventory and owner
+signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
+approved endpoints and host pins, target occupancy, previous/next genesis anchors,
+source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+It fills derived hashes, sizes, modes, source/stage identities and validator
+fingerprints from the actual files, then runs the existing admission checks.
+Generate its source manifest with `iroha taira public-reset source-manifest
+--source-root DIR` from the exact clean `optimizations` checkout. Taira's signed
+genesis must use NPoS; each supplied validator config must bind that actual genesis
+and its declared peer. Prepare the deploy-mode Inrou stage before assembly, since
+staging binds the final validator config bytes.
+
+Both commands below require the same local file arguments. Paths are illustrative;
+use the approved release's actual inputs and an existing mode-0700 output directory.
+The four client configs and four systemd units must be in validator order.
+
+```bash
+reset_local_inputs=(
+  --runtime-client-config /private/runtime/taira-public-reset/client.toml
+  --validator-client-config /private/runtime/taira-public-reset/client1.toml
+    /private/runtime/taira-public-reset/client2.toml
+    /private/runtime/taira-public-reset/client3.toml
+    /private/runtime/taira-public-reset/client4.toml
+  --onboarding-token /private/runtime/taira-public-reset/onboarding-token
+  --inrou-stage-dir /private/runtime/taira-public-reset/inrou-stage
+  --validator-unit /private/runtime/taira-public-reset/validator1.service
+    /private/runtime/taira-public-reset/validator2.service
+    /private/runtime/taira-public-reset/validator3.service
+    /private/runtime/taira-public-reset/validator4.service
+  --edge-unit /private/runtime/taira-public-reset/edge.service
+  --known-hosts /private/runtime/taira-public-reset/known_hosts
+)
+target/release/iroha taira public-reset assemble \
+  --inventory-draft /private/runtime/taira-public-reset/inventory-draft.json \
+  "${reset_local_inputs[@]}" \
+  --output /private/runtime/taira-public-reset/inventory.json
+target/release/iroha taira public-reset authorize \
+  --inventory /private/runtime/taira-public-reset/inventory.json \
+  "${reset_local_inputs[@]}" \
+  --trusted-public-key /private/runtime/taira-public-reset/trusted-public-key.json \
+  --signing-key-fd 3 \
+  --output /private/runtime/taira-public-reset/authorization.json \
+  3< /private/runtime/taira-public-reset/owner-signing-key
+```
+
+Review the assembled inventory before authorizing it. `authorize` revalidates the
+complete local inputs and signs the retained inventory file bytes; editing or
+reformatting that file invalidates the signature. The independently trusted
+`TrustedKeyV1` must match the inherited Ed25519 key. The key file must be a direct
+owner-private single-link regular file (0400 or 0600), at most 512 bytes, containing
+its Iroha private-key string with at most one trailing newline. No authority key is
+generated or returned. Outputs are created as private files without replacement;
+use fresh paths instead of overwriting prior inputs. Authorization lasts at most
+15 minutes for admission, with the separate bounded execution lease computed by
+the existing coordinator. Run preflight promptly after signing; only `apply`
+contacts hosts or mutates the public deployment.
+
 `InventoryV1` must contain `canary_onboarding_request`; it is not optional and
 has no derived-at-runtime fallback. The value must be the exact canonical
 `AccountOnboardingPlanRequestV1`: version 1, the canonical domainless

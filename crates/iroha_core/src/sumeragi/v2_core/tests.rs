@@ -48,6 +48,27 @@ fn context() -> HeightContext {
 }
 #[test]
 fn queue_plan_selection_mints_current_source_bound_witness() {
+    // Bind the production identity to the model bytes as well as the shared
+    // checker, so a model edit cannot leave matching but stale runtime literals.
+    let model_sha256 = iroha_crypto::sha256(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla"
+    )));
+    let source_identity = PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256;
+    let source_identity_bytes = [
+        source_identity.word0,
+        source_identity.word1,
+        source_identity.word2,
+        source_identity.word3,
+    ]
+    .into_iter()
+    .flat_map(u64::to_be_bytes)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        source_identity_bytes.as_slice(),
+        model_sha256.as_slice(),
+        "production witness identity must match the current TLA+ source"
+    );
     let binding_a = CanonicalIdentityProjection::from_bytes(
         IDENTITY_DOMAIN_PAYLOAD,
         IDENTITY_KIND_CANONICAL_PAYLOAD,

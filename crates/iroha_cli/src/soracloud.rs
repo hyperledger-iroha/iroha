@@ -8566,7 +8566,7 @@ impl Drop for SensitiveTairaTomlTable {
 }
 
 #[cfg(unix)]
-fn zeroize_taira_toml_table(table: &mut toml::Table) {
+pub(crate) fn zeroize_taira_toml_table(table: &mut toml::Table) {
     table
         .iter_mut()
         .for_each(|(_, value)| zeroize_taira_toml_value(value));

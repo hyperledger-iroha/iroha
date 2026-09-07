@@ -320,6 +320,7 @@ macro_rules! impl_mint_transport_circuit {
 
 macro_rules! impl_mint_authorization_transport_circuit {
     ($circuit:ty, $field:ty, $label:literal) => {
+        #[cfg(test)]
         impl $circuit {
             /// Inventory the configured Base graph without claiming whole-prover feasibility.
             pub(super) fn capacity_profile(

@@ -2631,7 +2631,9 @@ fn reservation_group_forget_prefix_replays_and_resumes_exactly_once() {
             .as_mut()
             .expect("installed reservation journal")
             .inject_append_fault_after(
-                4,
+                // Every Commit and PlanTombstoned marker precedes the first
+                // ForgetCommit; fail after syncing the second ForgetCommit.
+                keys.len() * 2 + 1,
                 ReservationJournalAppendFault::AfterSyncBeforeReplayPublication,
             );
         let error = queue
