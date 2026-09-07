@@ -4860,10 +4860,11 @@ impl GenesisDomainBuilder {
 // `NoritoSerialize`/`NoritoDeserialize`, so no explicit impls are needed here.
 // Provide Norito core serialization so `IvmPath` can participate in
 // derive(Encode, Decode) on containing types.
-impl norito::core::NoritoSerialize for IvmPath {
+impl norito::core::NoritoSerialize for IvmPath {}
+impl norito::core::SerializePayload for IvmPath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let s = self.0.to_str().expect("path contains not valid UTF-8");
-        norito::core::NoritoSerialize::serialize(&s, writer)
+        norito::core::SerializePayload::serialize(&s, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for IvmPath {

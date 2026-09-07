@@ -3616,7 +3616,7 @@ pub mod asset {
     use iroha_smart_contract::data_model::isi::{
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
     };
-    use norito::NoritoSerialize;
+    use norito::{NoritoSerialize, SerializePayload};
     fn target_account_scope(
         executor: &(impl Execute + Visit + ?Sized),
         account_id: &AccountId,
@@ -4288,7 +4288,7 @@ pub mod nft {
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
-    use norito::NoritoSerialize;
+    use norito::{NoritoSerialize, SerializePayload};
     /// Registers an NFT when the caller owns the domain or has the registration permission.
     pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
         let domain_id = isi.object().id().domain();

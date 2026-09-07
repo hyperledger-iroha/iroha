@@ -1114,7 +1114,7 @@ fn enum_field_len_add(binding: &syn::Ident, ty: &syn::Type, kind: EncodedLenKind
     let length = if u8_array_len(ty).is_some() {
         quote! { core::mem::size_of_val(#binding) }
     } else {
-        quote! { norito::core::NoritoSerialize::#method(#binding)? }
+        quote! { norito::core::SerializePayload::#method(#binding)? }
     };
     if is_self_delimiting(ty) || is_fixed_size(ty).is_some() {
         quote! {
@@ -1163,7 +1163,7 @@ fn derive_struct_len_body(
         let length = if u8_array_len(&field.field.ty).is_some() && !field.attrs.flatten {
             quote! { core::mem::size_of_val(&self.#member) }
         } else {
-            quote! { norito::core::NoritoSerialize::#method(&self.#member)? }
+            quote! { norito::core::SerializePayload::#method(&self.#member)? }
         };
         let compat_sum = if field.attrs.flatten {
             quote! { __sum = __sum.checked_add(#len_var)?; }
@@ -1249,7 +1249,7 @@ fn packed_serialize_parts(fields: &[StructField<'_>]) -> PackedSerializeParts {
             continue;
         }
         direct.push(quote! {
-            norito::core::NoritoSerialize::serialize(&self.#member, writer)?;
+            norito::core::SerializePayload::serialize(&self.#member, writer)?;
         });
         descriptors.push(quote! {
             norito::core::PackedField::Value(&self.#member)
@@ -1271,12 +1271,12 @@ fn struct_serialize_calls(
             add_bound(
                 generics,
                 &field.field.ty,
-                quote!(norito::core::NoritoSerialize),
+                quote!(norito::core::SerializePayload),
             );
             if field.attrs.flatten {
                 quote! {
                     let _flatten_guard = norito::core::SequentialOverrideGuard::enter();
-                    norito::core::NoritoSerialize::serialize(&self.#member, writer)?;
+                    norito::core::SerializePayload::serialize(&self.#member, writer)?;
                 }
             } else if u8_array_len(&field.field.ty).is_some() {
                 quote! {
@@ -1310,6 +1310,7 @@ fn derive_struct_serialize(
     fields: &Fields,
     container_attrs: &[Attribute],
     schema_name: Option<&str>,
+    framed: bool,
 ) -> TokenStream2 {
     let schema_hash_body = schema_hash_body(schema_name);
     let parsed_fields = struct_fields(fields);
@@ -1349,7 +1350,7 @@ fn derive_struct_serialize(
     let alias_generics = generic_arguments(generics);
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
     let (bitset_bytes, all_needs_false) = packed_size_headers(&parsed_fields);
-    let alias_decl = if reuse_archived_alias(container_attrs) {
+    let alias_decl = if !framed || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
         let archived_doc = format!(
@@ -1361,13 +1362,22 @@ fn derive_struct_serialize(
             pub type #archived #alias_generics = norito::core::Archived<#ident #ty_generics>;
         }
     };
+    let frame_impl = if framed {
+        quote! {
+            impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
+                #[inline]
+                fn schema_hash() -> [u8; 16] {
+                    #schema_hash_body
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
     quote! {
         #alias_decl
-        impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
-            #[inline]
-            fn schema_hash() -> [u8; 16] {
-                #schema_hash_body
-            }
+        #frame_impl
+        impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 let mut __sum: usize = 0;
@@ -2124,6 +2134,7 @@ fn derive_enum_serialize(
     data: &DataEnum,
     container_attrs: &[Attribute],
     schema_name: Option<&str>,
+    framed: bool,
 ) -> TokenStream2 {
     let schema_hash_body = schema_hash_body(schema_name);
     let mut r#gen = generics.clone();
@@ -2141,7 +2152,7 @@ fn derive_enum_serialize(
             Fields::Unit => {
                 arms.push(quote! {
                     Self::#v_ident => {
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
+                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                     }
                 });
                 hint_arms.push(quote! { Self::#v_ident => Some(4) });
@@ -2171,7 +2182,7 @@ fn derive_enum_serialize(
                             if attrs.skip {
                                 return None;
                             }
-                            add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
+                            add_bound(&mut r#gen, &f.ty, quote!(norito::core::SerializePayload));
                             let is_sd = is_self_delimiting(&f.ty);
                             let is_fixed = is_fixed_size(&f.ty).is_some();
                             let is_u8_array = u8_array_len(&f.ty).is_some();
@@ -2189,7 +2200,7 @@ fn derive_enum_serialize(
                                 } else {
                                     quote! {
                                         if __norito_packed {
-                                            norito::core::NoritoSerialize::serialize(#b, writer)?;
+                                            norito::core::SerializePayload::serialize(#b, writer)?;
                                         } else {
                                             norito::core::write_len_prefixed(writer, #b)?;
                                         }
@@ -2207,7 +2218,7 @@ fn derive_enum_serialize(
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
                         let __norito_packed = norito::core::use_packed_struct();
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
+                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                         #(#ignored_bindings)*
                         #(#serialize_calls)*
                     }
@@ -2255,7 +2266,7 @@ fn derive_enum_serialize(
                         return None;
                     }
                     let name = f.ident.as_ref().unwrap();
-                    add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
+                    add_bound(&mut r#gen, &f.ty, quote!(norito::core::SerializePayload));
                     let is_sd = is_self_delimiting(&f.ty);
                     let is_fixed = is_fixed_size(&f.ty).is_some();
                     let is_u8_array = u8_array_len(&f.ty).is_some();
@@ -2273,7 +2284,7 @@ fn derive_enum_serialize(
                         } else {
                             quote! {
                                 if __norito_packed {
-                                    norito::core::NoritoSerialize::serialize(#name, writer)?;
+                                    norito::core::SerializePayload::serialize(#name, writer)?;
                                 } else {
                                     norito::core::write_len_prefixed(writer, #name)?;
                                 }
@@ -2291,7 +2302,7 @@ fn derive_enum_serialize(
                 arms.push(quote! {
                     Self::#v_ident { #(#names),* } => {
                         let __norito_packed = norito::core::use_packed_struct();
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
+                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                         #(#ignored_names)*
                         #(#serialize_calls)*
                     }
@@ -2345,7 +2356,7 @@ fn derive_enum_serialize(
         quote! { < #( #params ),* > }
     };
     let archived = format_ident!("Archived{}", ident);
-    let alias_decl = if reuse_archived_alias(container_attrs) {
+    let alias_decl = if !framed || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
         let archived_doc = format!(
@@ -2357,13 +2368,22 @@ fn derive_enum_serialize(
             pub type #archived #alias_generics = norito::core::Archived<#ident #ty_generics>;
         }
     };
+    let frame_impl = if framed {
+        quote! {
+            impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
+                #[inline]
+                fn schema_hash() -> [u8; 16] {
+                    #schema_hash_body
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
     quote! {
         #alias_decl
-        impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
-            #[inline]
-            fn schema_hash() -> [u8; 16] {
-                #schema_hash_body
-            }
+        #frame_impl
+        impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 match self { #( #hint_arms ),* }
@@ -2698,7 +2718,16 @@ mod deserialize_codegen_tests {
 #[proc_macro_derive(NoritoSerialize, attributes(codec, norito))]
 /// Entry point for the `#[derive(NoritoSerialize)]` macro.
 pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+    expand_serialize(parse_macro_input!(input as DeriveInput), true)
+}
+
+/// Derive only object-safe bare payload serialization, without a frame identity.
+#[proc_macro_derive(SerializePayload, attributes(codec, norito))]
+pub fn derive_serialize_payload(input: TokenStream) -> TokenStream {
+    expand_serialize(parse_macro_input!(input as DeriveInput), false)
+}
+
+fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
     if let Err(error) = validate_data_field_attrs(&input.data) {
         return error.to_compile_error().into();
     }
@@ -2707,6 +2736,11 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
         Err(error) => return error.to_compile_error().into(),
     };
     let schema_name = container_attrs.schema_name.as_deref();
+    if !framed && schema_name.is_some() {
+        return syn::Error::new_spanned(&input.ident, "SerializePayload has no frame schema")
+            .to_compile_error()
+            .into();
+    }
     match &input.data {
         Data::Struct(data) => derive_struct_serialize(
             &input.ident,
@@ -2714,6 +2748,7 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
             &data.fields,
             &input.attrs,
             schema_name,
+            framed,
         )
         .into(),
         Data::Enum(data) => derive_enum_serialize(
@@ -2722,11 +2757,16 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
             data,
             &input.attrs,
             schema_name,
+            framed,
         )
         .into(),
         _ => syn::Error::new_spanned(
             &input.ident,
-            "NoritoSerialize only supports structs and enums",
+            if framed {
+                "NoritoSerialize only supports structs and enums"
+            } else {
+                "SerializePayload only supports structs and enums"
+            },
         )
         .to_compile_error()
         .into(),

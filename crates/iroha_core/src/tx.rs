@@ -7731,7 +7731,7 @@ pub mod tests {
         .sign(keypair.private_key());
         let actual_payload_len = norito::codec::Encode::encode(&signed).len();
         assert!(
-            norito::core::NoritoSerialize::encoded_len_exact(&signed).is_none(),
+            norito::core::SerializePayload::encoded_len_exact(&signed).is_none(),
             "adaptive confidential payload must not advertise an exact encoded length"
         );
         let canonical_len = norito::to_bytes(&signed)
@@ -7961,7 +7961,7 @@ pub mod tests {
             .expect("signed transaction encodes")
             .len();
         assert!(
-            norito::NoritoSerialize::encoded_len_exact(&signed).is_some(),
+            norito::SerializePayload::encoded_len_exact(&signed).is_some(),
             "representative signed transaction should have an exact encoded length"
         );
         assert_eq!(

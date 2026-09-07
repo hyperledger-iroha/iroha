@@ -617,7 +617,7 @@ pub trait Query: seal::Query + Send + Sync + 'static {
         Self: Sized + norito::core::NoritoSerialize,
     {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        norito::core::NoritoSerialize::encoded_len_exact(self)
+        norito::core::SerializePayload::encoded_len_exact(self)
     }
     /// Stream the fixed-v1 bare payload into an existing Norito encoder.
     #[doc(hidden)]
@@ -881,7 +881,8 @@ mod model {
     ///
     /// The concrete query payload is carried by [`QueryWithParams`]; this
     /// structure contains the predicate and selector applied to its item type.
-    #[derive(Decode, Encode, Constructor, IntoSchema)]
+    #[derive(Decode, Encode, Constructor, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryWithFilter")]
     pub struct QueryWithFilter<T>
     where
         T: HasProjection<PredicateMarker>
@@ -1004,7 +1005,8 @@ mod model {
             .checked_add(norito::core::len_prefix_len_with_flags(payload_len, flags))?
             .checked_add(payload_len)
     }
-    impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {
+    impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {}
+    impl norito::core::SerializePayload for QueryBox<QueryOutputBatchBox> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -2029,7 +2031,8 @@ mod model {
         Continue(ForwardCursor),
     }
     /// An enum containing either a singular or an iterable query
-    #[derive(Decode, Encode, IntoSchema)]
+    #[derive(Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::AnyQueryBox")]
     pub enum AnyQueryBox {
         /// Wrapped singular query.
         Singular(SingularQueryBox),
@@ -2089,17 +2092,20 @@ mod model {
         fn schema_hash() -> [u8; 16] {
             <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoSerialize>::schema_hash()
         }
+    }
+    #[cfg(not(feature = "ffi_import"))]
+    impl norito::core::SerializePayload for QuerySignature {
         fn encoded_len_hint(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+            norito::core::SerializePayload::encoded_len_hint(&self.0)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+            norito::core::SerializePayload::encoded_len_exact(&self.0)
         }
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
-            norito::core::NoritoSerialize::serialize(&self.0, writer)
+            norito::core::SerializePayload::serialize(&self.0, writer)
         }
     }
     #[cfg(not(feature = "ffi_import"))]
@@ -2175,6 +2181,8 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Proof context for an entrypoint/result pair ordered through a certified merge sidecar.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::CertifiedMergeTransactionInclusion")]
     pub struct CertifiedMergeTransactionInclusion {
         /// Inclusion schema version. Only version one is valid.
         pub version: u8,
@@ -2200,6 +2208,8 @@ mod model {
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Snapshot representing a transaction committed to the ledger.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::CommittedTransaction")]
     pub struct CommittedTransaction {
         /// Hash of the block containing this transaction.
         pub block_hash: HashOf<BlockHeader>,
@@ -2526,7 +2536,8 @@ impl crate::seal::SingularQuery for SingularQueryBox {}
 /// `ErasedIterQuery` allows storing queries with different concrete types in a
 /// uniform container. Consumers can later attempt to recover the underlying
 /// `QueryWithFilter` using [`iter_query_inner`].
-#[derive(Debug, Clone, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::query::ErasedIterQuery")]
 pub struct ErasedIterQuery<T>
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
@@ -2541,15 +2552,15 @@ where
     payload: Vec<u8>,
 }
 
-struct QueryFieldRef<'a>(&'a dyn norito::core::NoritoSerialize);
+struct QueryFieldRef<'a>(&'a dyn norito::core::SerializePayload);
 
-impl norito::core::NoritoSerialize for QueryFieldRef<'_> {
+impl norito::core::SerializePayload for QueryFieldRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 }
 
-fn query_field_encoded_len(value: &dyn norito::core::NoritoSerialize) -> Option<usize> {
+fn query_field_encoded_len(value: &dyn norito::core::SerializePayload) -> Option<usize> {
     value
         .encoded_len_exact()
         .or_else(|| norito::core::encoded_payload_len(&QueryFieldRef(value)).ok())
@@ -2558,15 +2569,16 @@ fn query_field_encoded_len(value: &dyn norito::core::NoritoSerialize) -> Option<
 struct ErasedIterQueryStreaming<'a, T>(&'a ErasedIterQuery<T>)
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync;
-impl<T> norito::core::NoritoSerialize for ErasedIterQueryStreaming<'_, T>
+
+impl<T> norito::core::SerializePayload for ErasedIterQueryStreaming<'_, T>
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
-            return norito::core::NoritoSerialize::serialize(self.0, writer);
+            return norito::core::SerializePayload::serialize(self.0, writer);
         }
-        let values: [&dyn norito::core::NoritoSerialize; 3] =
+        let values: [&dyn norito::core::SerializePayload; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
             norito::core::write_len_prefixed(writer, value)?;
@@ -2578,10 +2590,10 @@ where
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         if norito::core::use_packed_struct() {
-            return norito::core::NoritoSerialize::encoded_len_exact(self.0);
+            return norito::core::SerializePayload::encoded_len_exact(self.0);
         }
         let mut total = 0_usize;
-        let values: [&dyn norito::core::NoritoSerialize; 3] =
+        let values: [&dyn norito::core::SerializePayload; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
             let field_len = query_field_encoded_len(value)?;
@@ -2631,7 +2643,7 @@ where
     }
     fn dyn_encoded_len_exact(&self) -> Option<usize> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        norito::core::NoritoSerialize::encoded_len_exact(&ErasedIterQueryStreaming(self))
+        norito::core::SerializePayload::encoded_len_exact(&ErasedIterQueryStreaming(self))
     }
     fn dyn_encode_to(
         &self,
@@ -4343,7 +4355,7 @@ mod trait_object_tests {
     use norito::codec::Encode;
 
     fn try_bare_bytes_with_flags(
-        value: &dyn norito::core::NoritoSerialize,
+        value: &dyn norito::core::SerializePayload,
         flags: u8,
     ) -> Result<Vec<u8>, norito::core::Error> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
@@ -4353,7 +4365,7 @@ mod trait_object_tests {
         Ok(bytes)
     }
 
-    fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
+    fn bare_bytes_with_flags(value: &dyn norito::core::SerializePayload, flags: u8) -> Vec<u8> {
         try_bare_bytes_with_flags(value, flags).expect("encode bare value")
     }
 
@@ -4366,7 +4378,7 @@ mod trait_object_tests {
             concrete.encode(),
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&erased.selector),
+            norito::core::SerializePayload::encoded_len_exact(&erased.selector),
             None,
             "the fixture must exercise the count-first field path"
         );
@@ -4386,7 +4398,7 @@ mod trait_object_tests {
             let actual = bare_bytes_with_flags(&query, flags);
             assert_eq!(actual, bare_bytes_with_flags(&expected, flags));
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-            let exact = norito::core::NoritoSerialize::encoded_len_exact(&query);
+            let exact = norito::core::SerializePayload::encoded_len_exact(&query);
             assert_eq!(exact, Some(actual.len()));
         }
     }
@@ -4459,7 +4471,7 @@ mod trait_object_tests {
                 if message.contains("has no registered wire identifier")
         ));
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&query),
+            norito::core::SerializePayload::encoded_len_exact(&query),
             None
         );
     }
@@ -4483,7 +4495,7 @@ mod trait_object_tests {
         ));
         let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&query),
+            norito::core::SerializePayload::encoded_len_exact(&query),
             None
         );
     }
@@ -4779,3 +4791,6 @@ pub mod prelude {
     };
 }
 include!("query_tail_tests.rs");
+
+#[cfg(all(test, feature = "json"))]
+mod generic_identity_tests;

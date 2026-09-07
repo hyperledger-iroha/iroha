@@ -109,6 +109,7 @@ struct FixtureConfigLoadError;
 include!("fixtures/soranet_transport_identity_tests.rs");
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
     let config = ConfigReader::new()
+        .without_env()
         .read_toml_with_extends(fixtures_dir().join(path))
         .change_context(FixtureConfigLoadError)?
         .read_and_complete::<UserConfig>()
@@ -146,14 +147,13 @@ fn quic_datagram_buffers_default_to_one_mib() {
             >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
     );
 }
-/// This test not only asserts that the minimal set of fields is enough;
-/// it also gives an insight into every single default value
+/// Assert that minimal fixture fields suffice and snapshot the redacted debug view
+/// of the parsed configuration and its defaults, independent of process environment.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn minimal_config_snapshot() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-    // Snapshot updated to include new Sumeragi fields and other defaults
     expect_file!["fixtures/minimal_config_snapshot.txt"].assert_debug_eq(&config);
 }
 #[test]
@@ -2053,14 +2053,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
         runtime
             .get("hydration_concurrency")
             .and_then(TomlValue::as_integer),
-        Some(4),
+        Some(i64::try_from(defaults::taira::HYDRATION_CONCURRENCY).unwrap()),
         "Taira must pin the first-release artifact hydration worker bound"
     );
     assert_eq!(
         runtime
             .get("prepared_runtime_cache_capacity")
             .and_then(TomlValue::as_integer),
-        Some(4),
+        Some(i64::try_from(defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY).unwrap()),
         "Taira must pin the independent first-release prepared-runtime cache bound"
     );
     let inrou = runtime
@@ -2075,9 +2075,22 @@ fn taira_config_enables_untrusted_cid_hosting() {
     for (field, expected) in [
         ("portable_vm_uid", 70_000),
         ("portable_vm_gid", 70_000),
-        ("max_cpu_millis", 8_000),
-        ("max_memory_bytes", 8 * 1024 * 1024 * 1024),
-        ("max_storage_bytes", 64 * 1024 * 1024 * 1024),
+        (
+            "guest_image_max_bytes",
+            i64::try_from(defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES).unwrap(),
+        ),
+        (
+            "max_cpu_millis",
+            i64::from(defaults::taira::INROU_MAX_CPU_MILLIS),
+        ),
+        (
+            "max_memory_bytes",
+            i64::try_from(defaults::taira::INROU_MAX_MEMORY_BYTES).unwrap(),
+        ),
+        (
+            "max_storage_bytes",
+            i64::try_from(defaults::taira::INROU_MAX_STORAGE_BYTES).unwrap(),
+        ),
     ] {
         assert_eq!(
             inrou.get(field).and_then(TomlValue::as_integer),

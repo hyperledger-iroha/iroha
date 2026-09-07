@@ -340,12 +340,13 @@ impl From<LayerWidthBuckets> for [u64; 8] {
         value.0
     }
 }
-impl norito::core::NoritoSerialize for LayerWidthBuckets {
+impl norito::core::NoritoSerialize for LayerWidthBuckets {}
+impl norito::core::SerializePayload for LayerWidthBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for LayerWidthBuckets {

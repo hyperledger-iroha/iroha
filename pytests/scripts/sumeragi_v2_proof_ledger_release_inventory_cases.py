@@ -1,5 +1,191 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+def _release_corridor_production_inventory(
+    source: str, expected_count: int,
+) -> tuple[str, ...]:
+    """Read every literal test entry without filtering out an unfamiliar owner."""
+    marker = "required_production_liveness_tests=(\n"
+    assert source.count(marker) == 1, "production inventory declaration must be unique"
+    tail = "\n" + source.split(marker, 1)[1]
+    closing = re.search(r"(?m)^[ \t]*\)[^\n]*$", tail)
+    assert closing is not None, "production inventory must terminate"
+    assert closing.group() == ")", "production inventory closing line must be canonical"
+    inventory = tuple(
+        line.strip() for line in tail[:closing.start()].splitlines()
+        if line.strip()
+    )
+    assert all(
+        re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)+", name)
+        for name in inventory
+    ), "production inventory entries must be literal qualified Rust test names"
+    assert len(inventory) == expected_count, "production inventory count must match its seal"
+    assert len(set(inventory)) == len(inventory), "production inventory tests must be unique"
+    return inventory
+
+def test_release_corridor_inventory_parser_preserves_all_owners() -> None:
+    """The complete source inventory passes before changed-input rejection cases."""
+    module = load_checker()
+    source = (ROOT_DIR / "scripts/run_sumeragi_v2_release_gates.sh").read_text(encoding="utf-8")
+    count = module._PRODUCTION_LIVENESS_RELEASE_COUNT
+    inventory = _release_corridor_production_inventory(source, count)
+    expected = tuple(source.split("required_production_liveness_tests=(\n", 1)[1].split("\n)", 1)[0].split())
+    assert inventory == expected
+    native_tests = tuple(name for name in inventory if name.startswith("native_amx::"))
+    assert len(native_tests) == dict(
+        (owner, size) for _, owner, size in module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
+    )["native_amx::participant_application_role_tests"]
+    for name in native_tests:
+        changed = source.replace(f"  {name}\n", "", 1)
+        assert changed != source
+        with pytest.raises(AssertionError, match="^production inventory count must match its seal$"):
+            _release_corridor_production_inventory(changed, count)
+    mutations = (
+        (source.replace(f"  {native_tests[0]}\n", f"  {native_tests[1]}\n", 1), "production inventory tests must be unique"),
+        (source.replace(native_tests[0], "$(unreviewed_test)", 1), "production inventory entries must be literal qualified Rust test names"),
+        (source.replace("required_production_liveness_tests=(\n", "removed_inventory=(\n", 1), "production inventory declaration must be unique"),
+        (source + "\nrequired_production_liveness_tests=(\n)\n", "production inventory declaration must be unique"),
+        (source.replace(f"  {inventory[-1]}\n)", f"  {inventory[-1]}\n)suffix", 1), "production inventory closing line must be canonical"),
+        ("required_production_liveness_tests=(\n", "production inventory must terminate"),
+        ("required_production_liveness_tests=(\n)", "production inventory count must match its seal"),
+    )
+    for changed, diagnostic in mutations:
+        assert changed != source
+        with pytest.raises(AssertionError, match=f"^{re.escape(diagnostic)}$"):
+            _release_corridor_production_inventory(changed, count)
+    # Owner authorization belongs to the existing exact module/digest checks.
+    # An unfamiliar owner must remain visible to them instead of disappearing.
+    unfamiliar = "future_owner::tests::must_remain_visible"
+    changed = source.replace(native_tests[0], unfamiliar, 1)
+    assert changed != source
+    actual = _release_corridor_production_inventory(changed, count)
+    assert unfamiliar in actual
+    assert native_tests[0] not in actual
+    assert len(actual) == len(inventory)
+
+
+
+def _replace_late_lane_recovery_tokens(module, source: str, before: str, after: str) -> str:
+    """Replace one real code span without depending on Rust line wrapping."""
+    masked = module.mask_rust_comments_and_literals(source)
+    matches = tuple(module._RUST_TOKEN_RE.finditer(masked))
+    tokens = tuple(match.group() for match in matches)
+    required = module.rust_code_tokens(before)
+    replacement = module.rust_code_tokens(after)
+    assert required, "late-lane mutation must select real code"
+    assert required != replacement, "late-lane mutation must change code tokens"
+    starts = [
+        start for start in range(len(tokens) - len(required) + 1)
+        if tokens[start:start + len(required)] == required
+    ]
+    assert len(starts) == 1, "late-lane mutation must select exactly one real code span"
+    first = starts[0]
+    start, end = matches[first].start(), matches[first + len(required) - 1].end()
+    changed = source[:start] + after + source[end:]
+    assert changed != source
+    assert module.rust_code_tokens(changed) == (
+        tokens[:first] + replacement + tokens[first + len(required):]
+    ), "late-lane mutation must preserve surrounding code tokens"
+    return changed
+
+
+def _late_lane_recovery_runtime_mutations():
+    """Preserve the ten recovery mutations and cover fail-closed read boundaries."""
+    capacity = "late canonical lane recovery must set actual capacity one before canonical ownership arrives"
+    reconstruction = "late canonical lane recovery must distinguish global body application from lane-certificate durability while preserving reconstruction"
+    retained = "late canonical lane recovery must retain incomplete certificate progress in the active predecessor and block successor authority"
+    discovery = "late canonical lane recovery must keep one bounded exact certificate-discovery source live across a dropped round while the predecessor stays active"
+    durable = "late canonical lane recovery must release successor activation only after the exact certificate and application receipt are durable"
+    body_available = 'adapter.proposal_body_available(&proposal).expect("read exact body availability")'
+    first_persist = 'assert_eq!(adapter.persist_anchored_sessions().expect("rehydrate the late-applied canonical ownership"), 0, "no certificate exists yet to persist");'
+    prepare = 'retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);'
+    incomplete = 'adapter.durable_lane_rollover_authority(&finality_artifact).expect("inspect incomplete decided-lane authority").is_none()'
+    first_discovery = '''
+        let _ = adapter.drain_effects(usize::MAX);
+        adapter.schedule_retransmission().expect("schedule the first exact missing-certificate discovery round");
+        let first_round = adapter.drain_effects(usize::MAX);
+    '''
+    first_proposal = '''
+        first_round.iter().any(|effect| {
+            matches!(effect, V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockProposal(pending), ..
+            } if pending == &proposal)
+        })
+    '''
+    completed_persist = 'assert_eq!(adapter.persist_anchored_sessions().expect("persist recovered certificate and application receipt"), 1);'
+    receipt = 'adapter.kura.lane_block_application_receipt_available(&proposal)'
+    completed = 'adapter.durable_lane_rollover_authority(&finality_artifact).expect("build recovered decided-lane rollover authority").is_some()'
+    repeated_proposal = '''
+        adapter.drain_effects(usize::MAX).iter().any(|effect| {
+            matches!(effect, V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockProposal(pending), ..
+            } if pending == &proposal)
+        })
+    '''
+    return (
+        (body_available, '!' + body_available, reconstruction),
+        (first_persist, first_persist.replace(', 0,', ', 1,'), retained),
+        (prepare, prepare.replace('CertPhase::Prepare', 'CertPhase::Commit'), retained),
+        (incomplete, incomplete.replace('.is_none()', '.is_some()'), retained),
+        (first_discovery, first_discovery.replace('adapter.schedule_retransmission().expect("schedule the first exact missing-certificate discovery round");', 'let _ = &adapter;'), discovery),
+        (first_proposal, first_proposal.replace('BlockMessage::LaneBlockProposal', 'BlockMessage::LaneBlockVote'), discovery),
+        ('V2LaneIngressOutcome::Inserted', 'V2LaneIngressOutcome::Rejected', durable),
+        (completed_persist, completed_persist.replace(', 1);', ', 0);'), durable),
+        (receipt, receipt + ' && false', durable),
+        (completed, completed.replace('.is_some()', '.is_none()'), durable),
+        ('adapter.lane_sessions = LaneBlockSessionCache::new(1);', 'adapter.lane_sessions = LaneBlockSessionCache::new(2);', capacity),
+        (body_available, body_available.replace('.expect("read exact body availability")', '.unwrap_or(true)'), reconstruction),
+        (incomplete, incomplete.replace('.expect("inspect incomplete decided-lane authority")', '.unwrap_or(None)'), retained),
+        (repeated_proposal, repeated_proposal.replace('pending == &proposal', 'pending != &proposal'), discovery),
+    )
+
+
+def test_late_lane_recovery_contract_mutations_authenticate_actual_owner() -> None:
+    """Each real-owner mutation must break its exact contract from a passing baseline."""
+    module = load_checker()
+    path = ROOT_DIR / 'crates/iroha_core/src/sumeragi/v2_lane_work.rs'
+    source = path.read_text(encoding='utf-8')
+    name = 'globally_applied_lane_body_without_certificate_remains_recoverable'
+    items = module.rust_items(source, name)
+    assert len(items) == 1
+    item = items[0]
+
+    def contract_errors(candidate):
+        errors = []
+        module._require_late_lane_recovery_runtime_source_contracts(path, candidate, errors)
+        return errors
+
+    assert contract_errors(item) == []
+    # Rust formatting and comments are not evidence of behavior drift.
+    wrapped = item.source.replace('.proposal_body_available(&proposal)', '. /* exact read */ proposal_body_available ( &proposal )', 1)
+    assert wrapped != item.source
+    wrapped_items = module.rust_items(wrapped, name)
+    assert len(wrapped_items) == 1
+    assert contract_errors(wrapped_items[0]) == []
+    for baseline in (item.source, wrapped):
+        for before, after, diagnostic in _late_lane_recovery_runtime_mutations():
+            changed = _replace_late_lane_recovery_tokens(module, baseline, before, after)
+            changed_items = module.rust_items(changed, name)
+            assert len(changed_items) == 1
+            actual = changed_items[0]
+            assert contract_errors(actual) == [
+                f'{path}:{actual.line}: {diagnostic} must occur exactly 1 '
+                f'time(s) in the real {name} item; found 0'
+            ]
+
+    # Lookalikes inside comments/literals cannot supply an executable target.
+    original = 'fn example() { /* value.read() */ let note = r#"value.read()"#; value\n.read(); }'
+    changed = _replace_late_lane_recovery_tokens(module, original, 'value.read()', 'value.checked_read()')
+    assert changed == original.replace('value\n.read()', 'value.checked_read()')
+    for candidate, before, after, diagnostic in (
+        (original, '/* only a comment */', 'value.read()', 'late-lane mutation must select real code'),
+        (original, 'value.read()', 'value . read()', 'late-lane mutation must change code tokens'),
+        (original, 'absent.read()', 'value.read()', 'late-lane mutation must select exactly one real code span'),
+        (original.replace('value\n.read();', 'value.read(); value.read();'), 'value.read()', 'value.checked_read()', 'late-lane mutation must select exactly one real code span'),
+    ):
+        with pytest.raises(AssertionError, match=f'^{re.escape(diagnostic)}$'):
+            _replace_late_lane_recovery_tokens(module, candidate, before, after)
+
+
 def complete_ledger(module):
     ledger = copy.deepcopy(module.load_ledger())
     ledger["machine_checked_completion"] = True
@@ -1638,3 +1824,427 @@ def test_ready_validate_wal_crash_release_binding_rejects_mutations(
     path.write_text(source[:offset] + new + source[offset + len(old):], encoding="utf-8")
     errors = module._ready_validate_wal_crash_replay_source_errors(tmp_path)
     assert any(diagnostic in error for error in errors), errors
+
+
+def test_release_inventory_constants_match_current_source_seal(
+    tmp_path: Path,
+) -> None:
+    """Every release consumer binds the current production and focus seals."""
+
+    module = load_checker()
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 881
+    assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
+        "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
+    )
+    assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
+        "172cdeba0914a253cb22c9158b5c09fb08469ca74c55617655d5261b13bae5b7"
+    )
+    assert module._production_liveness_release_inventory_guard_errors(ROOT_DIR) == []
+    assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
+        "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
+    )
+    assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
+        "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
+    )
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 531
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 532
+    assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
+        "d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81"
+    )
+    assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
+        "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
+            "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
+        ),
+        "LockedPreparedFairIngressExactDequeue::commit": (
+            "abdd5434d703b75f26bb2053ac05942564deffb181ddfe040609f6583405ebe9"
+        ),
+        "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
+            "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"
+        ),
+        "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
+            "c88fcd11bd701f1a67ffc441fe1cc4bdc08f9be32e5a8270373ea83335a6131f"
+        ),
+        "dropping_locked_publication_fence_releases_producer_without_dequeue": (
+            "a31983eba320245b25089ebfcbc6fbd5a5c024fc76b81946329510cf9177e687"
+        ),
+    }
+    assert module._PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256 == {
+        "scheduler::ProductionLifecycleOwnerV1::ready_proposal_sign_preempts_bounded_producer_point": (
+            "98286d3d592024081c92afae2353f604ecbebf804c749c13e0c9daa26b17c016"
+        ),
+        "height::LifecycleReadyProposalSignPreemptionPermitV1": (
+            "6a1f9f015e100d2c21a2059b2b5ed299c58d4084375d80117f2ff2d9baf565e6"
+        ),
+        "height::LifecycleProducerClaimDispositionV1::ready_proposal_sign_preemption_permit": (
+            "9700af71a07b9b6e8c935f44e6e447c3d2087f89508733c6f124a3d4beedce51"
+        ),
+        "height::drain_lifecycle_v2_ingress": (
+            "bbd77022da85d8d4ae7a7b1114483f3d3437e8fdbce14de7cb702b5716f26ddd"
+        ),
+        "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign": (
+            "dd96ca9fb8271e423099f6a019259cbfa524d73d86f07d1afdd377aa80dc8e76"
+        ),
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption": (
+            "0fabc0723a3288b463bf55b2cc7a02638cb1627967ba717b169520b7bee3eaf2"
+        ),
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner": (
+            "f10f0a6f3b6824d8f264dc9bf30538ad1563d8121c75c14d26d37bbea30c5cb4"
+        ),
+        "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption": (
+            "bb485fa1d93cd1748cd6d8f0c7152c4afb78b7bdcbdb5423aa22eb2c55129b77"
+        ),
+        "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture": (
+            "c3b5921a9f581e7ad7bbb44e93ad42de8ec1fa6eb8bd62aaa49cdbefa70327c4"
+        ),
+        "launch_test::LaunchedProductionLifecycleV1::install_ordinary_completion_head_for_ready_sign_test": (
+            "f9f33cf99e1c38a2ebaea00d376fe5bfff7d434620dc46ce260665b7e45c2f8f"
+        ),
+        "launch_test::LaunchedProductionLifecycleV1::ordinary_completion_head_retained_for_ready_sign_test": (
+            "a5bba2319108935316c46e2402dcfce41c9e2e0ba87107dda239344b7cefe028"
+        ),
+        "launch_test::LaunchedProductionLifecycleV1::drain_ordinary_completion_head_for_ready_sign_test": (
+            "edeec434ad30fb28ddc4cb526096bafa6d6f8bd8e8df92995e5350c0f95111db"
+        ),
+        "dispatch_test::local_proposal_intent_live_wal_sign_fixture": (
+            "14ec208611139775c959d7cc44d718925d179c7d822c1cb92bea3018f6215489"
+        ),
+        "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier": (
+            "c4b40eb74bfcafcbe413991d85044ad6c857d1faf1a5294944705449a13f269b"
+        ),
+        "wal_test::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate": (
+            "97b485f11895e0f3e0273d978498d16caa02850e8bf4d9fee8e7434069865b13"
+        ),
+    }
+    assert (
+        "_production_liveness_release_inventory_guard_errors"
+        in module._production_liveness_release_inventory_errors.__code__.co_names
+    )
+    assert module._sumeragi_v2_package_layout_guard_errors(ROOT_DIR) == []
+
+    package_root = tmp_path / "package-layout"
+    package_guard = package_root / "scripts" / "check_sumeragi_v2_package_layout.sh"
+    package_verifier = package_root / "scripts" / "verify_sumeragi_v2.sh"
+    package_core_root = (
+        package_root / "crates" / "iroha_core" / "src" / "sumeragi"
+    )
+    package_guard.parent.mkdir(parents=True)
+    package_core_root.mkdir(parents=True)
+    shutil.copy2(
+        ROOT_DIR / "scripts" / "check_sumeragi_v2_package_layout.sh",
+        package_guard,
+    )
+    shutil.copy2(ROOT_DIR / "scripts" / "verify_sumeragi_v2.sh", package_verifier)
+    shutil.copy2(
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_core.rs",
+        package_core_root / "v2_core.rs",
+    )
+    shutil.copytree(
+        ROOT_DIR
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_core",
+        package_core_root / "v2_core",
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    baseline = subprocess.run(
+        [bash, str(package_guard)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+
+    refinement = package_core_root / "v2_core" / "refinement.rs"
+    refinement_source = refinement.read_text(encoding="utf-8")
+    layout_mutations = (
+        (
+            refinement_source + '\n#[path = "shadow.rs"]\nmod shadow;\n',
+            "second path attribute",
+        ),
+        (
+            refinement_source.replace(
+                '#[path = "refinement_cases.rs"]',
+                '#[path = "../refinement_cases.rs"]',
+                1,
+            ),
+            "parent-relative path attribute",
+        ),
+        (
+            refinement_source.replace(
+                '#[cfg(test)]\n#[path = "refinement_cases.rs"]',
+                '#[path = "refinement_cases.rs"]',
+                1,
+            ),
+            "non-test path attribute",
+        ),
+    )
+    for mutation, description in layout_mutations:
+        refinement.write_text(mutation, encoding="utf-8")
+        result = subprocess.run(
+            [bash, str(package_guard)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0, description
+        assert (
+            "only the reviewed package-local refinement test split and "
+            "identity-preserving nested include"
+            in result.stderr
+        )
+    refinement.write_text(refinement_source, encoding="utf-8")
+
+    refinement_cases = package_core_root / "v2_core" / "refinement_cases.rs"
+    refinement_cases_source = refinement_cases.read_text(encoding="utf-8")
+    nested_include = 'include!("refinement_cases/terminal_body_pipeline.rs");'
+    assert refinement_cases_source.count(nested_include) == 1
+    refinement_cases.write_text(
+        refinement_cases_source.replace(
+            nested_include,
+            '#[path = "refinement_cases/terminal_body_pipeline.rs"]\n'
+            "mod terminal_body_pipeline;",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    nested_result = subprocess.run(
+        [bash, str(package_guard)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert nested_result.returncode != 0, "nested module identity drift"
+    assert (
+        "only the reviewed package-local refinement test split and "
+        "identity-preserving nested include"
+        in nested_result.stderr
+    )
+    refinement_cases.write_text(refinement_cases_source, encoding="utf-8")
+
+    package_guard_source = package_guard.read_text(encoding="utf-8")
+    package_guard.write_text(
+        package_guard_source.replace("set -euo pipefail", "set +e", 1),
+        encoding="utf-8",
+    )
+    errors = module._sumeragi_v2_package_layout_guard_errors(package_root)
+    assert any(
+        "package-layout guard source SHA-256 must equal" in error
+        for error in errors
+    ), errors
+    package_guard.write_text(package_guard_source, encoding="utf-8")
+
+    invocation = 'bash "$REPO_ROOT/scripts/check_sumeragi_v2_package_layout.sh"'
+    verifier_source = package_verifier.read_text(encoding="utf-8")
+    assert verifier_source.splitlines().count(invocation) == 1
+    package_verifier.write_text(
+        verifier_source.replace(invocation, "true # skipped package-layout guard", 1),
+        encoding="utf-8",
+    )
+    errors = module._sumeragi_v2_package_layout_guard_errors(package_root)
+    assert any(
+        "must invoke the package-layout guard exactly once" in error
+        for error in errors
+    ), errors
+
+    checker_source = SCRIPT.read_text(encoding="utf-8")
+    validate_body = checker_source.split("def validate_ledger(", 1)[1].split(
+        "\ndef ",
+        1,
+    )[0]
+    assert (
+        validate_body.count(
+            "errors.extend(_sumeragi_v2_package_layout_guard_errors(ROOT_DIR))"
+        )
+        == 1
+    )
+
+    receipt_spec = importlib.util.spec_from_file_location(
+        "sumeragi_v2_release_receipt_current_inventory",
+        ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
+    )
+    assert receipt_spec is not None
+    assert receipt_spec.loader is not None
+    receipt_module = importlib.util.module_from_spec(receipt_spec)
+    sys.modules[receipt_spec.name] = receipt_module
+    receipt_spec.loader.exec_module(receipt_module)
+    assert receipt_module._PRODUCTION_TEST_COUNT == 881
+    assert receipt_module._G_UNIT_TEST_COUNT == 531
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 881
+    receipt_module_counts = {
+        module_name: count
+        for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
+    }
+    assert receipt_module_counts["kura::tests"] == 18
+    assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 42
+    assert receipt_module_counts["queue::tests"] == 1
+    assert receipt_module_counts["native_amx::participant_application_role_tests"] == 6
+    assert receipt_module_counts["sumeragi::v2::tests"] == 52
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 66
+    assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 65
+    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 65
+    assert receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"] == 13
+    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 45
+    assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
+    assert receipt_module_counts["network::tests"] == 84
+    assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 2
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 92
+    assert receipt_module_counts["block::consensus_v2::tests"] == 3
+    assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
+    assert (
+        sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
+        == 531
+    )
+
+
+def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
+    """Reject lexical test shadows and ownership drift across case components."""
+    expected_component_providers = {
+        "test_proof_ledger_tests_have_unique_reviewed_component_providers":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "test_release_inventory_checker_has_one_component_owned_provider":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "test_release_corridor_rejects_network_skips_and_zero_test_filters":
+            "sumeragi_v2_proof_ledger_corridor_acceptance_cases.py",
+        "test_release_inventory_constants_match_current_source_seal":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "_replace_late_lane_recovery_tokens":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "_late_lane_recovery_runtime_mutations":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "test_late_lane_recovery_contract_mutations_authenticate_actual_owner":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "_release_corridor_production_inventory":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "test_release_corridor_inventory_parser_preserves_all_owners":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "test_async_source_fidelity_pins_validator_progress_capacity":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_leader_wire_physical_ingress_rejects_semantic_mutations":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_local_runner_service_contract_rejects_production_loop_mutations":
+            "sumeragi_v2_proof_ledger_async_fairness_cases.py",
+        "test_async_source_fidelity_rejects_reviewed_theorem_omission":
+            "sumeragi_v2_proof_ledger_async_fairness_cases.py",
+        "test_exact_output_production_source_mutations_fail_closed":
+            "sumeragi_v2_proof_ledger_exact_output_cases.py",
+        "test_temporal_proof_promotions_require_prerequisites_and_ledger_order":
+            "sumeragi_v2_proof_ledger_trace_dependency_cases.py",
+        "test_successor_run_inner_parser_rejects_neighbor_lookalike":
+            "sumeragi_v2_proof_ledger_successor_production_cases.py",
+        "test_successor_production_source_mapping_mutations_fail_closed":
+            "sumeragi_v2_proof_ledger_successor_production_cases.py",
+        "complete_ledger": "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "write_tlaps_fixture_logs":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "build_test_evidence":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "complete_cross_tool_ledger":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "build_cross_tool_fixture":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+    }
+    def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
+        providers: dict[str, list[str]] = {}
+        for path, source in sources:
+            tree = ast.parse(source, filename=str(path))
+            for node in tree.body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if (
+                    not node.name.startswith("test_")
+                    and node.name not in expected_component_providers
+                ):
+                    continue
+                providers.setdefault(node.name, []).append(path.name)
+        errors = [
+            f"test provider {name} is not unique: {locations!r}"
+            for name, locations in sorted(providers.items())
+            if len(locations) != 1
+        ]
+        for name, expected_provider in expected_component_providers.items():
+            if providers.get(name) != [expected_provider]:
+                errors.append(
+                    f"test provider {name} must be owned by "
+                    f"{expected_provider}; found {providers.get(name)!r}"
+                )
+        return errors
+    main_path = Path(__file__)
+    canonical_sources = (
+        (main_path, main_path.read_text(encoding="utf-8")),
+        *(
+            (path, path.read_text(encoding="utf-8"))
+            for path in (
+                main_path.with_name(filename)
+                for filename in PROOF_LEDGER_TEST_COMPONENT_FILES
+            )
+        ),
+    )
+    assert provider_errors(canonical_sources) == []
+    target = "test_exact_output_production_source_mutations_fail_closed"
+    shadow = f"\n\ndef {target}():\n    pass\n"
+    mutated_sources = (
+        (canonical_sources[0][0], canonical_sources[0][1] + shadow),
+        *canonical_sources[1:],
+    )
+    errors = provider_errors(mutated_sources)
+    assert any(
+        error.startswith(f"test provider {target} is not unique:")
+        for error in errors
+    ), errors
+
+
+def test_release_inventory_checker_has_one_component_owned_provider() -> None:
+    """Reject monolithic shadows of component-owned checker providers."""
+    expected_providers = {
+        "_production_liveness_release_inventory_errors": (
+            "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
+        ),
+        "_cross_tool_kernel_views": (
+            "sumeragi_v2_proof_ledger_cross_tool_contracts.py"
+        ),
+    }
+    def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
+        providers: dict[str, list[str]] = {}
+        for path, source in sources:
+            for node in ast.parse(source, filename=str(path)).body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if node.name in expected_providers:
+                    providers.setdefault(node.name, []).append(path.name)
+        return [
+            f"checker provider {name} must be uniquely component-owned; "
+            f"found {providers.get(name)!r}"
+            for name, expected_provider in expected_providers.items()
+            if providers.get(name) != [expected_provider]
+        ]
+    canonical_sources = tuple(
+        (path, path.read_text(encoding="utf-8"))
+        for path in checker_source_paths()
+    )
+    assert provider_errors(canonical_sources) == []
+    shadows = {
+        "_production_liveness_release_inventory_errors": (
+            "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
+            "    return []\n"
+        ),
+        "_cross_tool_kernel_views": (
+            "\n\ndef _cross_tool_kernel_views(claim):\n"
+            "    return ()\n"
+        ),
+    }
+    for name, shadow in shadows.items():
+        mutated_sources = tuple(
+            (path, source + shadow if path == SCRIPT else source)
+            for path, source in canonical_sources
+        )
+        errors = provider_errors(mutated_sources)
+        assert len(errors) == 1
+        assert name in errors[0] and SCRIPT.name in errors[0], errors

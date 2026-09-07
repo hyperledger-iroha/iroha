@@ -2836,6 +2836,15 @@ impl LaneBlockSessionCache {
             order: VecDeque::new(),
         }
     }
+    /// Apply test pressure through normal eviction while retaining every protected owner.
+    #[cfg(test)]
+    pub(crate) fn set_unprotected_capacity_for_testing(
+        &mut self,
+        capacity: std::num::NonZeroUsize,
+    ) {
+        self.capacity = capacity.get();
+        self.evict();
+    }
     /// Number of cached sessions.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
@@ -9309,6 +9318,50 @@ mod tests {
                 .is_empty(),
             "proposal reconciliation must drop orphan votes whose body drifted"
         );
+    }
+    #[test]
+    fn lane_block_session_cache_capacity_reduction_preserves_protected_owners() {
+        let (keys, validator_set) = lane_block_validator_fixture(4);
+        let protected = lane_block_proposal_at_height(&validator_set, 13);
+        let old = lane_block_proposal_at_height(&validator_set, 14);
+        let recent = lane_block_proposal_at_height(&validator_set, 15);
+        let protected_key = LaneBlockSessionKey::from_proposal(&protected);
+        let old_key = LaneBlockSessionKey::from_proposal(&old);
+        let recent_key = LaneBlockSessionKey::from_proposal(&recent);
+        let mut cache = LaneBlockSessionCache::new(3);
+        assert_proposal_insert(&mut cache, protected.clone(), Inserted);
+        let prepare_body = protected.vote_body(CertPhase::Prepare);
+        let prepare_quorum =
+            usize::try_from(protected.descriptor.min_quorum).expect("fixture quorum fits usize");
+        for key in &keys[..prepare_quorum] {
+            assert_vote_insert(&mut cache, &signed_vote(&prepare_body, key), Inserted);
+        }
+        assert!(
+            cache
+                .get(&protected_key)
+                .expect("protected session")
+                .prepare_qc
+                .is_some(),
+            "Commit requires the exact Prepare quorum"
+        );
+        let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[0]);
+        assert_vote_insert(&mut cache, &commit_vote, Inserted);
+        assert_proposal_insert(&mut cache, old, Inserted);
+        assert_proposal_insert(&mut cache, recent, Inserted);
+        let protected_before = cache
+            .get(&protected_key)
+            .expect("protected session")
+            .clone();
+        let locks_before = cache.commit_vote_locks.clone();
+        cache.set_unprotected_capacity_for_testing(
+            std::num::NonZeroUsize::new(1).expect("one slot"),
+        );
+        assert_eq!(cache.capacity, 1);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&old_key).is_none());
+        assert!(cache.get(&recent_key).is_some());
+        assert_eq!(cache.get(&protected_key), Some(&protected_before));
+        assert_eq!(cache.commit_vote_locks, locks_before);
     }
     #[test]
     fn lane_block_session_cache_enforces_capacity() {

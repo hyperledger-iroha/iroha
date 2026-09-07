@@ -24,7 +24,7 @@ use iroha_data_model::{
     },
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 

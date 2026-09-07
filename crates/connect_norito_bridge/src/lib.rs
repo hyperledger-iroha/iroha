@@ -91,7 +91,7 @@ use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
 use norito::json::{Map as JsonMap, Value as JsonValue};
-use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, decode_from_bytes};
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,

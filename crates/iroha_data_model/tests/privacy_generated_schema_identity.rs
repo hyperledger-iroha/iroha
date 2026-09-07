@@ -8,7 +8,7 @@ use iroha_data_model::{
     privacy::*,
 };
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 use std::{collections::BTreeMap, fmt::Debug};

@@ -873,9 +873,14 @@ async fn collect_torii_account_history_json_payloads_fails_on_mid_route_not_foun
 #[tokio::test]
 async fn execute_account_history_single_route_preserves_index_metadata() {
     let authority = routed_read_test_account(0x91);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
+    assert!(
+        is_local_authoritative_for_route(app.as_ref(), route),
+        "the local-read fixture must be a current member of the exact committee"
+    );
     let response = execute_torii_account_history_read_for_routes(
         &app,
         vec![route],
@@ -1051,29 +1056,44 @@ async fn collect_torii_alias_json_payloads_returns_permission_denied_when_only_s
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn collect_torii_alias_json_payloads_returns_route_unavailable_when_no_routes_are_configured()
-{
-    let routes: &[RoutingDecision] = &[];
+async fn collect_torii_alias_json_payloads_returns_not_found_when_no_visible_routes_remain() {
+    let authority = routed_read_test_account(0x92);
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let (restricted_route, _) =
+        crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+    let (routes, denied_routes) =
+        torii_partition_alias_index_routes_by_permission(&app, vec![restricted_route], None, 0)
+            .expect("anonymous visibility removes the restricted route");
+    assert!(routes.is_empty());
+    assert_eq!(denied_routes, 0);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let response = collect_torii_alias_json_payloads(
-        routes,
-        0,
+        &routes,
+        denied_routes,
         "alias fanout denied",
         routed_read_test_working_set_bytes(),
         ROUTED_READ_TEST_BODY_BYTES,
-        |_route: RoutingDecision| async move {
-            crate::utils::respond_value_with_format(norito::json!({}), ResponseFormat::Json)
+        {
+            let calls = Arc::clone(&calls);
+            move |_route: RoutingDecision| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    crate::utils::respond_value_with_format(norito::json!({}), ResponseFormat::Json)
+                }
+            }
         },
     )
     .await
-    .expect_err("missing Nexus routes should surface route_unavailable");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    .expect_err("a route hidden from an anonymous lookup is no visible match");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         response
             .headers()
             .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
+        Some("not_found")
     );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1524,6 +1544,7 @@ async fn routed_contract_alias_sanitizer_rejects_forged_subject_payload() {
 async fn protected_alias_reads_ignore_unsigned_public_upstream() {
     let authority = routed_read_test_account(0x97);
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -1543,6 +1564,10 @@ async fn protected_alias_reads_ignore_unsigned_public_upstream() {
     )]));
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
+    assert!(
+        is_local_authoritative_for_route(app.as_ref(), route),
+        "the local-read fixture must be a current member of the exact committee"
+    );
     let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
         .expect("encode request");
     let response = execute_torii_read_for_route(
@@ -1644,7 +1669,8 @@ fn exact_alias_resolve_rejects_expired_authoritative_lease() {
         2,
         0,
     );
-    let mut block = app.state.block(header);
+    let observation_header = header;
+    let mut block = app.state.block(observation_header);
     let mut tx = block.transaction();
     tx.world_mut_for_testing()
         .smart_contract_state_mut_for_testing()
@@ -1656,6 +1682,9 @@ fn exact_alias_resolve_rejects_expired_authoritative_lease() {
     block
         .commit_world_overlay_for_testing()
         .expect("commit expired alias lease");
+    app.state
+        .update_latest_block_header_cache_for_tests(observation_header);
+    assert_eq!(routing::asset_alias_observation_time_ms(&app.state), 2);
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
     let response = execute_alias_resolve_local_read(
@@ -1839,19 +1868,27 @@ fn execute_alias_resolve_local_read_rejects_empty_alias() {
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
-    let err = execute_alias_resolve_local_read(
-        &app,
-        route,
-        &routing::AliasResolveRequestDto {
-            alias: "   ".to_string(),
-        },
-    )
-    .expect_err("empty aliases should be rejected before local execution");
-    match err {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        )) => assert_eq!(message, "alias must not be empty"),
-        other => panic!("unexpected error: {other:?}"),
+    for (alias, expected) in [
+        ("", "account alias must not be empty"),
+        (
+            "   ",
+            "account alias must not contain leading or trailing whitespace",
+        ),
+    ] {
+        let err = execute_alias_resolve_local_read(
+            &app,
+            route,
+            &routing::AliasResolveRequestDto {
+                alias: alias.to_owned(),
+            },
+        )
+        .expect_err("empty and whitespace aliases must be rejected before local execution");
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => assert_eq!(message, expected),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
 #[cfg(feature = "app_api")]
@@ -2453,8 +2490,10 @@ async fn merged_alias_lookup_by_account_response_deduplicates_items_and_recomput
     assert_eq!(payload.total, 2);
     assert_eq!(payload.items.len(), 2);
     assert_eq!(payload.source.as_deref(), Some("fanout"));
-    assert_eq!(payload.items[0].alias, "merchant@paynet");
-    assert_eq!(payload.items[1].alias, "merchant@banka.paynet");
+    assert_eq!(payload.items[0].alias, "merchant@banka.paynet");
+    assert!(!payload.items[0].is_primary);
+    assert_eq!(payload.items[1].alias, "merchant@paynet");
+    assert!(payload.items[1].is_primary);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]

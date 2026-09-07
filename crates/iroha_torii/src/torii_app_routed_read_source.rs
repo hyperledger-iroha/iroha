@@ -8,11 +8,11 @@ use std::marker::PhantomData;
 /// canonical frame, avoiding an unmetered deep clone before the first bounded
 /// decode.
 struct ToriiBorrowedRoutedReadStruct<'a, T, const N: usize> {
-    fields: [&'a dyn norito::core::NoritoSerialize; N],
+    fields: [&'a dyn norito::core::SerializePayload; N],
     marker: PhantomData<T>,
 }
 impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
-    const fn new(fields: [&'a dyn norito::core::NoritoSerialize; N]) -> Self {
+    const fn new(fields: [&'a dyn norito::core::SerializePayload; N]) -> Self {
         Self {
             fields,
             marker: PhantomData,
@@ -22,10 +22,15 @@ impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
 impl<T, const N: usize> norito::core::NoritoSerialize for ToriiBorrowedRoutedReadStruct<'_, T, N>
 where
     T: norito::core::NoritoSerialize,
-{
-    fn schema_hash() -> [u8; 16] {
+{fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
+}
+impl<T, const N: usize> norito::core::SerializePayload for ToriiBorrowedRoutedReadStruct<'_, T, N>
+where
+    T: norito::core::NoritoSerialize,
+{
+
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(

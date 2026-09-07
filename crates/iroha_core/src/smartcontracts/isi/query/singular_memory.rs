@@ -1,6 +1,8 @@
 //! Bounded ownership corridor for server-owned singular-query execution.
 use super::Error;
-use norito::core::{DecodeFlagsGuard, Encoder, NoritoDeserialize, NoritoSerialize};
+use norito::core::{
+    DecodeFlagsGuard, Encoder, NoritoDeserialize, NoritoSerialize, SerializePayload,
+};
 use std::{cell::Cell, marker::PhantomData, ops::Deref};
 /// Dynamic source/output ceilings for one singular query executed by a server-owned memory lane.
 ///
@@ -120,7 +122,7 @@ where
 /// lane the existing constructor is used unchanged. Inside it, the fields are
 /// encoded under `T`'s schema without first constructing an owned clone.
 pub(crate) fn own_singular_query_struct<T, const N: usize>(
-    fields: [&dyn NoritoSerialize; N],
+    fields: [&dyn SerializePayload; N],
     fallback: impl FnOnce() -> T,
 ) -> Result<T, Error>
 where
@@ -217,6 +219,8 @@ impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
     fn schema_hash() -> [u8; 16] {
         Option::<T>::schema_hash()
     }
+}
+impl<T: NoritoSerialize> SerializePayload for BorrowedSingularOption<'_, T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         match self.0 {
             Some(value) => {
@@ -243,13 +247,13 @@ impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
 }
 /// Borrowed wire-equivalent of a derived struct in declaration order.
 pub(crate) struct BorrowedSingularStruct<'a, T, const N: usize> {
-    fields: [&'a dyn NoritoSerialize; N],
+    fields: [&'a dyn SerializePayload; N],
     marker: PhantomData<T>,
 }
 impl<'a, T, const N: usize> BorrowedSingularStruct<'a, T, N> {
     /// Construct a borrowed derived-struct representation.
     #[must_use]
-    pub(crate) const fn new(fields: [&'a dyn NoritoSerialize; N]) -> Self {
+    pub(crate) const fn new(fields: [&'a dyn SerializePayload; N]) -> Self {
         Self {
             fields,
             marker: PhantomData,
@@ -263,6 +267,11 @@ where
     fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
+}
+impl<T, const N: usize> SerializePayload for BorrowedSingularStruct<'_, T, N>
+where
+    T: NoritoSerialize,
+{
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -294,6 +303,12 @@ where
     fn schema_hash() -> [u8; 16] {
         Vec::<T>::schema_hash()
     }
+}
+impl<'a, I, T> SerializePayload for BorrowedSequence<I, T>
+where
+    T: NoritoSerialize + 'a,
+    I: Clone + Iterator<Item = &'a T>,
+{
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         let count = self.values.clone().count();
         norito::core::write_seq_len(
@@ -945,9 +960,10 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for DropBeforeDecodeProbe {
+    impl NoritoSerialize for DropBeforeDecodeProbe {}
+    impl SerializePayload for DropBeforeDecodeProbe {
         fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
-            NoritoSerialize::serialize(&self.marker, encoder)
+            SerializePayload::serialize(&self.marker, encoder)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
             Some(1)
@@ -977,7 +993,8 @@ mod tests {
             ENCODE_ERROR_SOURCE_DROPPED.set(true);
         }
     }
-    impl NoritoSerialize for EncodeErrorDropProbe {
+    impl NoritoSerialize for EncodeErrorDropProbe {}
+    impl SerializePayload for EncodeErrorDropProbe {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             Err(norito::core::Error::LengthMismatch)
         }
@@ -997,9 +1014,10 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for DecodeErrorDropProbe {
+    impl NoritoSerialize for DecodeErrorDropProbe {}
+    impl SerializePayload for DecodeErrorDropProbe {
         fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
-            NoritoSerialize::serialize(&1_u8, encoder)
+            SerializePayload::serialize(&1_u8, encoder)
         }
     }
     impl<'de> NoritoDeserialize<'de> for DecodeErrorDropProbe {

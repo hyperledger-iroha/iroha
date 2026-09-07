@@ -95,13 +95,15 @@ pub struct ProviderAdvertSignaturePayloadV1 {
     pub allow_unknown_capabilities: bool,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -121,6 +123,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -165,6 +169,8 @@ impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> 
     fn schema_hash() -> [u8; 16] {
         ProviderAdvertSignaturePayloadV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for ProviderAdvertSignaturePayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1224,7 +1230,7 @@ fn preflight_provider_advert_len(
 ) -> Result<usize, AdvertValidationError> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    if let Some(found) = norito::core::NoritoSerialize::encoded_len_exact(advert)
+    if let Some(found) = norito::core::SerializePayload::encoded_len_exact(advert)
         && found > maximum
     {
         return Err(AdvertValidationError::AdvertTooLarge { found, maximum });
@@ -1648,7 +1654,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{NoritoSerialize as _, decode_from_bytes, to_bytes};
+    use norito::{NoritoSerialize as _, SerializePayload as _, decode_from_bytes, to_bytes};
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();

@@ -3374,6 +3374,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use mv::storage::StorageReadOnly as _;
     use nonzero_ext::nonzero;
+    use norito::core::SerializePayload;
     use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("query fixture key generation should succeed")
@@ -3935,7 +3936,8 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for StatefulLengthHint {
+    impl NoritoSerialize for StatefulLengthHint {}
+    impl SerializePayload for StatefulLengthHint {
         fn serialize(
             &self,
             encoder: &mut norito::core::Encoder<'_>,
@@ -3950,7 +3952,8 @@ mod tests {
         }
     }
     struct ErrorSwallowingSerializer;
-    impl NoritoSerialize for ErrorSwallowingSerializer {
+    impl NoritoSerialize for ErrorSwallowingSerializer {}
+    impl SerializePayload for ErrorSwallowingSerializer {
         fn serialize(
             &self,
             encoder: &mut norito::core::Encoder<'_>,

@@ -45,6 +45,13 @@ def test_parse_args_rejects_retired_objective_flag(
         ("scripts/tests/check_guard_test.py", True),
         ("javascript/client.test.js", True),
         ("crates/core/examples/query.rs", True),
+        ("pytests/scripts/release_corridor_cases.py", True),
+        ("pytests/scripts/shared_support.py", True),
+        ("IrohaSwift/Tests/IrohaSwiftTests/ClientTests.swift", True),
+        ("crates/core/src/lane_geometry_tests/support.rs", True),
+        ("crates/core/src/state_tests/recovery.rs", True),
+        ("scripts/pytest_tools.py", False),
+        ("crates/core/src/latest_state/recovery.rs", False),
     ],
 )
 def test_test_path_classification(path: str, expected: bool) -> None:
@@ -69,6 +76,23 @@ def test_evaluate_enforces_new_file_limits() -> None:
             "crates/core/tests/large.rs",
             "3001 lines exceeds the 3000-line test limit",
         ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "pytests/scripts/release_corridor_cases.py",
+        "IrohaSwift/Tests/IrohaSwiftTests/ClientTests.swift",
+        "crates/core/src/lane_geometry_tests/support.rs",
+    ),
+)
+def test_split_test_helpers_retain_the_test_budget(path: str) -> None:
+    """Moving assertions into a helper cannot grant the production allowance."""
+    assert MODULE.evaluate({path: 3_000}, budget()) == []
+    findings = MODULE.evaluate({path: 3_001}, budget())
+    assert [(finding.path, finding.message) for finding in findings] == [
+        (path, "3001 lines exceeds the 3000-line test limit"),
     ]
 
 
@@ -344,3 +368,28 @@ def test_collect_counts_includes_unstaged_and_untracked_sources(tmp_path: Path) 
     assert MODULE.collect_counts(
         tmp_path, MODULE.tracked_paths(tmp_path), ("vendor/",)
     ) == {"new.rs": 1, "tracked.rs": 2}
+
+
+def test_root_scratch_ignore_does_not_hide_nested_security_tests(tmp_path: Path) -> None:
+    """Repository ignore rules retain nested tests in build and budget inventories."""
+    MODULE.subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_bytes(
+        (MODULE_PATH.parents[1] / ".gitignore").read_bytes()
+    )
+    (tmp_path / "security_probe.rs").write_text("//! Scratch.\n", encoding="utf-8")
+    relative = (
+        "crates/iroha_torii/src/mcp/catalog_and_policy_tests/security_and_registry.rs"
+    )
+    source = tmp_path / relative
+    source.parent.mkdir(parents=True)
+    source.write_text("//! Measured test source.\n" * 3_001, encoding="utf-8")
+
+    paths = MODULE.tracked_paths(tmp_path)
+    assert relative in paths
+    assert "security_probe.rs" not in paths
+    counts = MODULE.collect_counts(tmp_path, paths, ())
+    assert counts == {relative: 3_001}
+    findings = MODULE.evaluate(counts, budget())
+    assert [(finding.path, finding.message) for finding in findings] == [
+        (relative, "3001 lines exceeds the 3000-line test limit"),
+    ]

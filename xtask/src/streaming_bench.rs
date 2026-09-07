@@ -1,5 +1,5 @@
 use norito::{
-    NoritoSerialize,
+    NoritoSerialize, SerializePayload,
     codec::encode_with_header_flags,
     core::Header,
     crc64_fallback, decode_from_bytes,

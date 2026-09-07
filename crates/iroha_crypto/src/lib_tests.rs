@@ -1351,7 +1351,7 @@ mod tests {
             .len()
             - norito::core::Header::SIZE;
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
+            norito::core::SerializePayload::encoded_len_exact(&pk).expect("exact public key length"),
             expected
         );
     }
@@ -1362,10 +1362,10 @@ mod tests {
             .public_key()
             .clone();
         let compact = &public_key.0;
-        let expected_hint = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
+        let expected_hint = <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_hint(
             &compact.algorithm_and_payload,
         );
-        let expected_exact = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
+        let expected_exact = <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_exact(
             &compact.algorithm_and_payload,
         );
         reset_public_key_validation_call_count();
@@ -1375,19 +1375,19 @@ mod tests {
         PublicKeyFull::validate_bytes_for_decode(algorithm, payload)
             .expect("borrowed ML-DSA decode validation");
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_hint(compact),
+            norito::core::SerializePayload::encoded_len_hint(compact),
             expected_hint
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(compact),
+            norito::core::SerializePayload::encoded_len_exact(compact),
             expected_exact
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_hint(&public_key),
+            norito::core::SerializePayload::encoded_len_hint(&public_key),
             expected_hint
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&public_key),
+            norito::core::SerializePayload::encoded_len_exact(&public_key),
             expected_exact
         );
         assert_eq!(
@@ -1460,8 +1460,8 @@ mod tests {
         let mut encoded = Vec::new();
         norito::core::serialize_to_buffer(&compact, &mut encoded)
             .expect_err("malformed compact state must fail serialization");
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_none());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_hint(&compact).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_exact(&compact).is_none());
     }
 
     #[test]
@@ -1620,8 +1620,8 @@ mod tests {
         let mut encoded = Vec::new();
         norito::core::serialize_to_buffer(&malformed, &mut encoded)
             .expect_err("malformed public-key state must fail serialization");
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_none());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_hint(&malformed).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_exact(&malformed).is_none());
     }
     #[test]
     fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {

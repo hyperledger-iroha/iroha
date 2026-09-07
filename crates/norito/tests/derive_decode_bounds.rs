@@ -20,15 +20,16 @@ enum DerivedTupleEnum {
 }
 #[derive(Debug, PartialEq, Eq)]
 struct LooseScalar(u32);
-impl norito::NoritoSerialize for LooseScalar {
+impl norito::NoritoSerialize for LooseScalar {}
+impl norito::SerializePayload for LooseScalar {
     fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
-        norito::NoritoSerialize::serialize(&self.0, encoder)
+        norito::SerializePayload::serialize(&self.0, encoder)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'a> norito::NoritoDeserialize<'a> for LooseScalar {
@@ -108,7 +109,7 @@ fn derived_tuple_enum_rejects_understated_first_field_length() {
     let flags = view.flags();
     let mut payload = view.as_bytes().to_vec();
     assert_eq!(
-        norito::core::NoritoSerialize::encoded_len_exact(&value),
+        norito::core::SerializePayload::encoded_len_exact(&value),
         Some(payload.len()),
         "skipped enum fields must not contribute to the exact payload length"
     );

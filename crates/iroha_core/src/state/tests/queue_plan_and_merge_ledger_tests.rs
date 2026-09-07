@@ -41,20 +41,20 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
     );
-    assert!(
+    assert_eq!(
         queue_plan_admission_registry_match(
             &state.view(),
             binding.entrypoint_hash.clone(),
             binding.canonical_hash(),
         )
-        .is_err(),
-        "Queue recovery must not reacquire an exact owner bound to incarnation A"
+        .expect("a Kura-only certificate is not a WSV registry owner"),
+        QueuePlanAdmissionRegistryMatch::Absent
     );
-    assert!(
+    assert_eq!(
         state
             .queue_plan_admission_binding_registry_match(&binding)
-            .is_err(),
-        "public binding acknowledgement must report a stale pending incarnation"
+            .expect("a sidecar alone cannot acknowledge a WSV owner"),
+        QueuePlanAdmissionRegistryMatch::Absent
     );
     assert!(
         !state.lane_has_drain_blocking_evidence(
@@ -155,6 +155,22 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
     );
+    assert!(
+        queue_plan_admission_registry_match(
+            &state.view(),
+            binding.entrypoint_hash.clone(),
+            binding.canonical_hash(),
+        )
+        .is_err(),
+        "Queue recovery must not reacquire an exact owner bound to incarnation A"
+    );
+    assert!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .is_err(),
+        "public binding acknowledgement must report a stale pending incarnation"
+    );
+
     let lifecycle = state.lane_consensus_lifecycle_snapshot();
     let_row! { active_lanes = lifecycle .nexus .lane_catalog .lanes() .iter() .map(|lane| MergeLaneBinding { lane_id: lane.id, dataspace_id: lane.dataspace_id, lane_config_hash: merge_lane_config_hash(lane), incarnation: lifecycle.incarnations[&lane.id], activation_height: lifecycle.activation_heights[&lane.id].saturating_add(1), }) .collect::<Vec<_>>() };
     let carrier = empty_global_block_after(Some(&parent));

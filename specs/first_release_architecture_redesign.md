@@ -368,8 +368,8 @@ that DomainId and StatePath decode charges cover observed owner allocations,
 including Punycode validation and Unicode NFC checks. Governance now owns key
 contracts for all 16 fixed-size hash identifiers and ten Parliament body labels.
 
-TODO: Qualify the remaining Core, storage and SDK consumers. Full model/Core
-runtime results above predate the key migration. Bare `--no-default-features`
+TODO: Qualify the remaining Core, storage and SDK consumers. The post-migration
+full model and selected Core results are recorded below. Bare `--no-default-features`
 checking reports 16 errors in unconditional JSON helpers; the supported minimum
 `--no-default-features --features base-codec` library check passes. The key
 migration does not claim workspace/native/release qualification.
@@ -400,8 +400,210 @@ Those local timings are diagnostic evidence, not pinned-runner performance or
 memory qualification. The merged participant settlement now owns seven private,
 validated control fields; previous-settlement linkage is a fixed-size typed
 hash, so it does not restore recursive receipt ownership or schema expansion.
-TODO: Qualify the merged settlement and codec regressions, Core/Torii callers,
-and SDK consumers from their current source inputs.
+All **35 merged-model regressions pass** with `RUST_MIN_STACK` unset, including
+schema generation, codec/hash/drop for the maximum 4,096-source group, prior-hash
+vectors, rejection of the removed recursive layout, instruction framing and
+roster validation. All 5,084 selected inputs remained unchanged through this
+run. The merged Core/Torii library check also passes with unchanged selected
+inputs; it is compilation evidence, not runtime or strict-lint qualification.
+The broader merged Core selection passes 239 tests with three failures, while
+all seven selected Torii tests pass. Those failures expose an evidence fixture
+that conflicts with State-established lane geometry and a stale model identity
+in the production transition-witness constructor. The unchanged-input result
+is retained before repairs; it is not a passing Core qualification.
+The repaired run passes **396 Core and seven Torii tests**, with all 5,090
+selected inputs unchanged. Runtime witnesses, the shared checker and the Verus
+theorem now consume one source identity checked against the actual TLA bytes;
+the fixture preserves State-established incarnation identity. Pinned Verus
+verifies the actual witness theorem with no proof escapes (one selected theorem,
+not the complete mandatory harness). The trace contracts now authenticate the
+strict readers, propagated persistence errors and exact payload/receipt checks;
+action dispatch is counted independently of the shared ActivateKura custody
+condition. One iterative function-body reader handles unparenthesized Verus
+contract branches without changing proof or TLA bytes. The previously
+unwitnessed replica Queue observation now uses the canonical node wrapper.
+All 10 Core witness, Queue and restart regressions pass after removing a second
+reservation of an already-held fixture fee and binding the replay source region
+to its function signature. The fee test compares every field of the retained
+nonzero hold. All 19 source tests and 35 subtests pass, including a complete
+snapshot authenticating 28 actions and 29 runtime bindings; all 5,104 selected
+inputs remain unchanged. The mandatory shared reducer harness passes 197 tests
+with zero ignored. Its inventory was compared against the compiled historical
+187-test source: all 187 remain, with ten additions and none removed. The full
+pinned Verus harness then verifies all 221 project obligations and 1,690 vstd
+dependency obligations with zero errors, `--rlimit 60` and `--no-cheating`;
+all 40 selected harness inputs remain unchanged. This completes the scoped
+Verus execution, not whole-candidate release qualification. All eight mandatory
+model-replay cases and eleven fast simulations also pass. The explicit
+100,000-height simulation completes 50,000 permissioned and 50,000 NPoS heights,
+with all 43 selected harness sources and fixtures unchanged. These use
+certificate-supplied reducer fixtures and do not qualify production peer
+networking. The replay run omitted fixture files from its pre-run source
+manifest; its runtime result remains development evidence. Workspace formatting
+and all four retired-codec guards pass. The source-size check still reports 237
+violations over 10,643 files, with no new violating paths or expanded exceptions.
+The receipt-source contract now follows the shared strict structural reader,
+propagates corruption/recovery errors, and authenticates lock order, exact
+observation revalidation, durable retries and post-write attestation. All six
+focused tests and 28 subtests pass with 5,105 selected inputs unchanged. The
+broader three-test source selection initially passed two tests and stopped at
+an independent retirement-progress pair inventory mismatch. The reviewed
+retirement contract now authenticates all seven artifact pairs, including the
+constant-named canonical replica, with strict durability and error propagation.
+All 15 focused receipt/retirement tests and 63 subtests pass. The shared
+retirement fixture now builds an exact four-validator committee, three signed
+Prepare/Commit votes and complete roster PoPs. Its lifecycle projection derives
+committee identity, producer and READY signers from the actual attempt binding
+and certificate. All ten retirement regressions pass, with all 5,609 selected
+inputs unchanged and no stack override. A subsequent cleanup removes the now
+unused test-only import; this scoped result is not a whole-candidate seal.
+
+The production-inventory parser retains every literal owner, so the six native
+AMX tests are included in the unchanged 881-test inventory seal. Exact guard
+checks follow the audited current source. Historical prose assertions now use
+the structured receipt selector/command contract. The canonical proof-fidelity
+selection currently collects 5,877 tests against an exact release pin of 5,507;
+that mismatch remains an explicit qualification blocker. The release count is
+not refreshed from collection alone. The recovery mutation harness now replaces
+complete code-token spans rather than matching Rust line wrapping. It retains
+all ten existing rejection checks and adds four cases covering capacity, read
+errors and exact repeated discovery. All four selected candidate source tests,
+including the complete corridor source test, pass; the applied three-test
+selection also passes with the tested afterimages and all 66 other monitored
+sources unchanged. This is source-contract evidence, not corridor execution.
+
+Metadata now projects borrowed entry views into the shared sequence writer,
+removing its separate measurement/emission implementation. All 1,655 current
+codec/derive/primitives tests pass (three ignored cases), and strict library
+Clippy passes for those packages with all 5,086 selected inputs unchanged.
+The full model suite finishes on the default stack with 3,566 passing, nine
+failing and six ignored tests; all 12 allocation/JSON-key integration checks
+pass on unchanged selected sources. The failures concern two obsolete invalid
+domain constructors, five retired Kaigi scalar captures and two registry
+inventories that predate 17 game/NFT-market instructions. Reviewed fixture
+repairs retain the exact original capture, reject each retired scalar in all
+four containers, pin new canonical private values, and preserve every existing
+wire-ID assignment. All **409 focused tests and 3,576 full-library tests pass**, with zero failures
+and six full-suite cases ignored; the complete run takes 617.69 seconds on the
+default stack. Of 5,093 selected inputs, only the concurrently edited SDK
+`client.rs` changed; this is explicitly retained as a whole-candidate
+qualification limit. Workspace formatting passes, and 48 architecture tests
+plus 31 subtests pass. The current codec
+source gate passes nine tests, including 23 diagnostic-specific mutations;
+historical helper fingerprints are preserved in the dated history record.
+Source budgets remain unchanged, and two companion historical gates still fail
+11 of 18 tests on stale manifest/lock and source assumptions.
+Five generic query owners, four concrete records and two typed-hash markers
+now declare identities from successful pre-declaration captures. Immutable
+fixtures preserve all 96 default and 116 ids-projection frames, directional
+hashes, marker composition and private decoder budgets. The default query
+suite passes 202 tests and ids-projection passes 203, with zero failures or
+ignored cases and all 5,109 selected inputs unchanged in each run. The fresh
+default model artifact also passes all eight participant-settlement regressions
+with `RUST_MIN_STACK` unset, including the maximum 4,096-source schema, codec,
+hash and drop case. These checks preserve active codec dispatch; atomic identity
+cutover and physical model extraction remain outstanding.
+
+The next ten model identity declarations preserve 68 captured generic/concrete
+frames and five FHE signing preimages. InstructionBox keeps its wire-pair root
+projection while its generic parents retain the nominal instruction name;
+TriggerId retains the captured private model scope. The borrowed FHE helper is
+encoding-only. All nine model/query identity tests pass on one rebuilt artifact,
+followed by ten participant-settlement tests and the removed recursive-layout
+rejection test, all without a stack override. Every one of the 5,613 selected
+inputs remains unchanged. An independent source review confirms the finite
+record removes the ownership cycle; this does not establish decoder allocation
+peaks, other feature coverage or complete release qualification.
+
+The source guard now applies the existing 3,000-line test limit to pytests,
+Swift Tests directories and split Rust test directories; all 50 guard tests pass.
+The release corridor's unchanged acceptance and inventory tests now live in
+their capability components, sized 1,830, 2,102 and 2,938 lines. All five focused
+candidate tests pass, including the complete corridor source test; four applied
+smoke tests pass with the exact reviewed afterimages. All 5,877 canonical test
+IDs are preserved. The current repository budget reports 242 findings and 174
+existing exceptions, with no new violating path after the split. The main test
+module's complete decomposition and the exact 5,507 release-pin discrepancy remain unresolved.
+Its provider checks now belong to the inventory component: main falls to 33,974
+lines and inventory remains below its default cap at 2,250. Only the main
+exception ratchets down, from 34,006 to 33,974. All 54 applied provider/inventory
+and source-budget checks pass, and all 5,877 collected test IDs are preserved.
+The resulting repository budget reports 241 findings with the same 174 exceptions.
+
+Seven concrete model owners and two encoding-only adapters now declare their
+captured identities. Immutable fixtures retain 52 populated root/container frames,
+a block-send projection and two reputation event-ID projections. A normal
+consumer exposed DataEvent's implicit GameSession tag shifting from 22 to 21
+without governance. Every variant now has its canonical explicit discriminant;
+Governance reserves 19 and the following common variants retain 20, 21 and 22.
+The complete default/HTTP model-library suite passes **3,593 tests**, with zero
+failures and six fixture generators ignored, in 599.93 seconds on the default
+stack. All 5,617 selected inputs remain unchanged. This includes all four new
+identity/projection/schema tests and the finite 4,096-source participant schema,
+codec, hash/drop and removed-recursive-layout regressions.
+The same three public tests also pass in a normal-dependency consumer with
+governance actually disabled: all 48 common frames, the block-send projection,
+22 available schema variants and rejection of reserved Governance frames.
+Locked/offline Cargo passes with all 5,624 selected inputs unchanged. The
+consumer's unused vendor-patch entries caused nondeterministic lockfile checks;
+removing only those unused entries preserves all 317 package records, feature
+sets and dependency edges. Root Cargo.toml/Cargo.lock and optimization settings
+remain unchanged. Three repeated locked metadata checks also pass.
+
+The two remaining companion source guards now enforce current registrations,
+retained codec assertions, emitter ownership and error propagation. All original
+historical guard bytes and fingerprints remain in the dated Norito evidence
+record; unrelated lockfile/manifest changes and module ordering no longer stand
+in for current behavior. Their 14 applied tests pass, including positive-baseline
+mutation checks. Combined with current codec and source-budget tests, all 73
+tests and 67 subtests pass. This resolves the earlier 11 stale companion failures;
+it does not qualify the outstanding source-size or complete release budgets.
+
+Bare serialization now has one object-safe `SerializePayload` owner, separate
+from the typed frame contract. Bare `Encode`, containers and borrowed adapters
+use that owner; framed writers explicitly require `NoritoSerialize`. The derive
+supports payload-only generic fields and rejects frame-schema attributes and
+unions. Tests verify actual bytes, checked lengths, writer failures and rejection
+of payload-only values at the typed frame boundary. Existing frame identities,
+layout flags and checksums remain unchanged by this trait split; the atomic
+`NoritoSchema` cutover is still pending.
+
+The frozen candidate passes **1,663 codec/derive/primitives tests** (three ignored)
+and strict library Clippy, **3,599 default/HTTP model tests** (six ignored), and
+all **nine governance-disabled normal-consumer tests**, with `RUST_MIN_STACK`
+unset. All 19,170 recorded inputs remain unchanged during those runs. The model
+suite includes the maximum 4,096-source finite participant control and rejection
+of the removed recursive layout. DataEventFilter now reserves Governance tag 23
+and retains GameSession tag 24 in both feature selections; six tests exercise
+its codec, schema and HTTP subscription aggregate. Root Cargo manifests, lockfile
+and optimization settings are unchanged.
+
+The exact reviewed integration preserves inherited dirty work and excludes
+three unrelated live edits. Subsequent downstream trait-bound/import corrections
+and eight whitespace-only lines are recorded separately from those test inputs.
+Complete downstream targets, source-size budgets and same-source release
+qualification remain open. The model transcript digest is
+`0d813689de0b81ac9ab75df05310ea92e3203824d142e35fe607f0fe4aced8f4`;
+the codec transcript digest is
+`a57030ead9bc3ae55847ca01a24a81e441495049deb88aae9077257e117bb427`.
+
+Two codec modules retain every nominal declaration and codec body in the same
+semantic owner while reducing the outbox and Governance DAG parent files to
+10,366 and 7,401 lines. Their existing exceptions ratchet downward; both remain
+above the ultimate 5,000-line production limit. All 77 applied source-budget and
+provider-ingest contract tests pass. The repository still reports 240 findings
+with the same 174 exceptions; no complete module-budget pass is claimed.
+
+The all-target build also exposed an existing Torii test source hidden by the
+global `security_*` scratch ignore. The rule is now rooted at `/security_*`, so
+normal source selection includes the original test bytes. The new regression
+uses the actual ignore policy and proves an oversized nested security test is
+still measured and rejected. All 387 Torii Rust files are now present in both
+the working tree and candidate inventories; an independent literal-path audit
+finds no remaining source omission. Complete target and runtime checks continue.
+
+TODO: Complete remaining model feature selections, full SDK and mandatory consensus qualification,
+and migrate remaining historical source assertions to current release contracts.
 Source/artifact hashes and individual logs remain under the ignored
 `target/architecture-redesign/owned-storage-identity/` directory.
 
@@ -430,7 +632,7 @@ single IVM ABI remain enforced. Existing uncommitted work must be preserved.
 
 | Area | State | Remaining acceptance |
 | --- | --- | --- |
-| Source inventory | Source state and 657 canonical Torii routes recorded; 8 inventory tests pass | Request/response and SDK consumer mapping; sealed, comparable build-memory baseline |
+| Source inventory | Current catalog records 665 canonical Torii routes after the merge; all 8 inventory and 31 dependency-budget tests pass | Request/response and SDK consumer mapping; sealed, comparable build-memory baseline |
 | Relay incentives | Extracted to `soranet_incentives`; consumers use its canonical API | 13 Rust unit tests pass; downstream checks remain |
 | SDK dependency boundary | Core, Torii, daemon, IVM, FastPQ prover and forbidden Halo2 execution features absent; direct SDK node-config dependency removed | Remove the remaining node-config path through telemetry, plus storage orchestration and telemetry implementation dependencies |
 | Service policy ownership | `iroha_service_model` owns the four canonical SoraNet policy enums and SoraFS alias-cache defaults; duplicate runtime/config definitions and reexports removed; 4 policy and 131 architecture/router tests pass | Full policy consumer checks and remaining service record extraction |

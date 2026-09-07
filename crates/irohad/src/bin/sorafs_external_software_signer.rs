@@ -26,7 +26,7 @@ mod unix_main {
         IrohaRuntimeProviderSlotV1, RuntimeProviderBrokerExecutableArgsV1,
         RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
     };
-    use norito::{NoritoDeserialize, NoritoSerialize};
+    use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
     use std::{
         env,
         ffi::{OsStr, OsString},

@@ -65,12 +65,14 @@ pub struct PotrSignatureV1 {
     pub signature: Vec<u8>,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -133,6 +135,8 @@ impl norito::core::NoritoSerialize for PotrReceiptSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         <PotrReceiptV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PotrReceiptSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }

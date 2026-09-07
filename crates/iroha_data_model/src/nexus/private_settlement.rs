@@ -245,7 +245,9 @@ fn zeroize_confidential_vec_spare_capacity<T>(values: &mut Vec<T>) {
     zeroize_value_for_confidential_discard(values.spare_capacity_mut());
 }
 
-fn encode_confidential_canonical<T: Encode>(value: &T) -> Result<ConfidentialBytes, norito::Error> {
+fn encode_confidential_canonical<T: norito::NoritoSerialize>(
+    value: &T,
+) -> Result<ConfidentialBytes, norito::Error> {
     // Consensus-facing `Encode` implementations must be deterministic. The
     // sizing pass exists only to reserve one hard-capped allocation; Norito's
     // canonical streaming pass then rejects length, checksum, or layout drift
@@ -261,7 +263,7 @@ fn encode_confidential_canonical<T: Encode>(value: &T) -> Result<ConfidentialByt
     Ok(encoded)
 }
 
-fn private_settlement_signature_preimage<T: Encode>(
+fn private_settlement_signature_preimage<T: norito::NoritoSerialize>(
     domain: &[u8],
     body: &T,
     too_large_error: &'static str,
@@ -281,7 +283,10 @@ fn private_settlement_signature_preimage<T: Encode>(
     Ok(preimage.into_vec())
 }
 
-fn canonical_hash<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
+fn canonical_hash<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Hash, norito::Error> {
     let encoded = encode_confidential_canonical(value)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("canonical payload is too large")))?;
@@ -5157,7 +5162,7 @@ pub(crate) mod tests {
         Hash::new([seed])
     }
 
-    fn legacy_signature_preimage<T: Encode>(domain: &[u8], body: &T) -> Vec<u8> {
+    fn legacy_signature_preimage<T: norito::NoritoSerialize>(domain: &[u8], body: &T) -> Vec<u8> {
         let body = norito::encode_canonical(body).expect("legacy canonical body encoding");
         let mut preimage = Vec::with_capacity(domain.len() + 8 + body.len());
         preimage.extend_from_slice(domain);
@@ -5972,7 +5977,8 @@ pub(crate) mod tests {
             calls: std::cell::Cell<usize>,
         }
 
-        impl norito::core::NoritoSerialize for FailAfterLengthPass {
+        impl norito::core::NoritoSerialize for FailAfterLengthPass {}
+        impl norito::core::SerializePayload for FailAfterLengthPass {
             fn serialize(
                 &self,
                 encoder: &mut norito::core::Encoder<'_>,

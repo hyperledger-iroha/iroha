@@ -353,15 +353,16 @@ impl FromStr for OpaqueAccountId {
         Ok(opaque)
     }
 }
-impl norito::NoritoSerialize for AccountId {
+impl norito::NoritoSerialize for AccountId {}
+impl norito::SerializePayload for AccountId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        norito::core::NoritoSerialize::serialize(&self.controller, writer)
+        norito::core::SerializePayload::serialize(&self.controller, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.controller)
+        norito::core::SerializePayload::encoded_len_hint(&self.controller)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.controller)
+        norito::core::SerializePayload::encoded_len_exact(&self.controller)
     }
 }
 impl<'de> norito::NoritoDeserialize<'de> for AccountId {

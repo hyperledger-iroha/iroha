@@ -11,7 +11,7 @@ use crate::bigint::BigInt;
 use core::{cmp::Ordering, str::FromStr};
 pub use iroha_primitives_derive::numeric;
 use norito::{
-    Archived, Error, NoritoDeserialize, NoritoSerialize,
+    Archived, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
 use num_bigint::{BigInt as UnboundedBigInt, Sign as UnboundedSign};
@@ -132,9 +132,10 @@ pub struct NumericSpec {
     /// Currently only positive scale up to 28 decimal points is supported.
     scale: Option<u32>,
 }
-impl NoritoSerialize for NumericSpec {
+impl NoritoSerialize for NumericSpec {}
+impl SerializePayload for NumericSpec {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
-        NoritoSerialize::serialize(&self.scale, writer)
+        SerializePayload::serialize(&self.scale, writer)
     }
 }
 // Bridge Norito slice-based decoding for Numeric through the same helper used
@@ -1850,7 +1851,8 @@ impl From<u128> for Quantity {
         Self(Numeric::new(BigInt::from(value), 0))
     }
 }
-impl NoritoSerialize for Quantity {
+impl NoritoSerialize for Quantity {}
+impl SerializePayload for Quantity {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
     }
@@ -2160,7 +2162,8 @@ impl From<XorQuantity> for Quantity {
         value.0
     }
 }
-impl NoritoSerialize for XorQuantity {
+impl NoritoSerialize for XorQuantity {}
+impl SerializePayload for XorQuantity {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
     }
@@ -2601,7 +2604,8 @@ impl Numeric {
         }
     }
 }
-impl NoritoSerialize for Numeric {
+impl NoritoSerialize for Numeric {}
+impl SerializePayload for Numeric {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         let helper = scale_::NumericScaleHelper {
             mantissa: self.mantissa.clone(),
@@ -2928,17 +2932,19 @@ mod scale_ {
         fn schema_hash() -> [u8; 16] {
             <crate::bigint::BigInt as norito::core::NoritoSerialize>::schema_hash()
         }
+    }
+    impl norito::core::SerializePayload for BigIntView<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
-            norito::core::NoritoSerialize::serialize(self.0, writer)
+            norito::core::SerializePayload::serialize(self.0, writer)
         }
         fn encoded_len_hint(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_hint(self.0)
+            norito::core::SerializePayload::encoded_len_hint(self.0)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_exact(self.0)
+            norito::core::SerializePayload::encoded_len_exact(self.0)
         }
     }
     #[allow(unexpected_cfgs)]

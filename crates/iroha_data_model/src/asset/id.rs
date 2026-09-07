@@ -5,7 +5,7 @@ use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 use std::{array, fmt, format, str::FromStr, string::String};
@@ -118,15 +118,16 @@ fn asset_definition_id_json_error(message: &'static str) -> norito::json::Error 
         col: 1,
     }
 }
-impl NoritoSerialize for AssetDefinitionId {
+impl NoritoSerialize for AssetDefinitionId {}
+impl SerializePayload for AssetDefinitionId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
+        <[u8; 16] as SerializePayload>::serialize(&self.aid_bytes, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <[u8; 16] as NoritoSerialize>::encoded_len_hint(&self.aid_bytes)
+        <[u8; 16] as SerializePayload>::encoded_len_hint(&self.aid_bytes)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <[u8; 16] as NoritoSerialize>::encoded_len_exact(&self.aid_bytes)
+        <[u8; 16] as SerializePayload>::encoded_len_exact(&self.aid_bytes)
     }
 }
 impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {

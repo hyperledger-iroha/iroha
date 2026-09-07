@@ -2511,7 +2511,7 @@ fn validate_installed_successor_not_ahead(
     Ok(())
 }
 
-fn canonical_len<T: Encode>(value: &T) -> Result<u64, KagemushaStateErrorV1> {
+fn canonical_len<T: norito::NoritoSerialize>(value: &T) -> Result<u64, KagemushaStateErrorV1> {
     let bytes =
         norito::encode_canonical(value).map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
     u64::try_from(bytes.len()).map_err(|_| KagemushaStateErrorV1::ArithmeticOverflow)

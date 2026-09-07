@@ -2457,7 +2457,7 @@ pub mod isi {
         )?
         .apply(state_transaction)
     }
-    fn canonical_numeric_movement_binding<T: norito::codec::Encode>(
+    fn canonical_numeric_movement_binding<T: norito::NoritoSerialize>(
         value: &T,
     ) -> Result<Vec<u8>, Error> {
         norito::encode_canonical(value).map_err(|error| {

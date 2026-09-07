@@ -3105,3 +3105,111 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
         Some("signed_query_outcome_unknown")
     );
 }
+
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn queue_plan_synced_future_authority_retries_same_request_until_quorum() {
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let (_app, mut request) =
+        incoming_proxy_submit_fixture(0xc1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let signers = (0_u8..4)
+        .map(|offset| checked_torii_test_ed25519_keypair(0xc2 + offset, "catch-up authority"))
+        .collect::<Vec<_>>();
+    let authorities = bind_queue_plan_synced_test_authorities(&mut request, &signers);
+    request.deadline_unix_ms = super::torii_proxy_now_unix_ms().unwrap() + 2_000;
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(expected.durability_threshold, 2);
+    let snapshots = (0..2)
+        .map(|index| {
+            queue_plan_synced_test_certificate_snapshot(
+                &request,
+                vec![exact_queue_plan_synced_test_receipt(
+                    &request,
+                    &signers[index],
+                    45_000 + index as u64,
+                )],
+            )
+        })
+        .collect::<Vec<_>>();
+    for snapshot in &snapshots {
+        assert_eq!(
+            super::validate_queue_plan_synced_acceptance(snapshot, &expected)
+                .expect("each recovered leaf independently authenticates the exact binding")
+                .len(),
+            1
+        );
+    }
+    let attempts = Arc::new(Mutex::new([0_usize; 2]));
+    let attempts_for_execute = Arc::clone(&attempts);
+    let request_id = request.request_id;
+    let deadline = request.deadline_unix_ms;
+    let expected_binding = expected.admission_binding.clone();
+    let attempted_authorities = authorities[..2].to_vec();
+    let response = super::execute_torii_proxy_request_across_candidates(
+        attempted_authorities
+            .iter()
+            .cloned()
+            .map(ToriiProxyCandidate::P2p)
+            .collect(),
+        route,
+        request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::from_millis(50),
+        move |candidate, attempted_request| {
+            let index = attempted_authorities
+                .iter()
+                .position(|peer| peer == candidate.peer_id())
+                .unwrap();
+            assert_eq!(attempted_request.request_id, request_id);
+            assert_eq!(attempted_request.deadline_unix_ms, deadline);
+            assert_eq!(
+                super::queue_plan_synced_acceptance_expectation(&attempted_request)
+                    .unwrap()
+                    .unwrap()
+                    .admission_binding,
+                expected_binding
+            );
+            let mut counts = attempts_for_execute.lock().unwrap();
+            counts[index] += 1;
+            let catching_up = index == 1 && counts[index] == 1;
+            let snapshot = if catching_up {
+                ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                        name: "x-iroha-reject-code".to_owned(),
+                        value: b"queue_plan_admission_context_future".to_vec(),
+                    }],
+                    body: norito::to_bytes(&ErrorEnvelope::new(
+                        "queue_plan_admission_context_future",
+                        "await applied State".to_owned(),
+                    ))
+                    .unwrap(),
+                }
+            } else {
+                snapshots[index].clone()
+            };
+            async move { Ok::<_, ToriiProxyAttemptError>(snapshot) }
+        },
+        |_request_id| async {},
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::ACCEPTED,
+        "temporary authority catch-up must use the remaining exact-request budget"
+    );
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        [1, 2],
+        "an already-attested authority is not retried"
+    );
+    let bytes = torii_body_bytes(response, "bounded quorum response").await;
+    let certificate: QueuePlanAdmissionCertificateV1 = norito::decode_from_bytes(&bytes).unwrap();
+    assert_eq!(certificate.binding, expected.admission_binding);
+    assert_eq!(certificate.attestations.len(), 2);
+    assert!(
+        certificate.attestations[0].validator_index < certificate.attestations[1].validator_index
+    );
+}

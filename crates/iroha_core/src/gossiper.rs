@@ -37,7 +37,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -144,6 +144,7 @@ fn validate_queue_plan_gossip_certificate(
             QueuePlanGossipCertificateDisposition::Applied
         }
         PendingQueuePlanAdmissionDisposition::Future
+        | PendingQueuePlanAdmissionDisposition::DeferredCarrier
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
         | PendingQueuePlanAdmissionDisposition::Stale => {
             unreachable!("non-live QueuePlan gossip dispositions returned above")
@@ -3053,7 +3054,8 @@ fn decode_transaction_gossip_payload(
         offset,
     ))
 }
-impl NoritoSerialize for TransactionGossip {
+impl NoritoSerialize for TransactionGossip {}
+impl SerializePayload for TransactionGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
         ensure_transaction_gossip_sequence_len(self.routes.len())?;
@@ -3508,7 +3510,8 @@ impl From<SignedTransaction> for GossipTransaction {
         }
     }
 }
-impl NoritoSerialize for GossipTransaction {
+impl NoritoSerialize for GossipTransaction {}
+impl SerializePayload for GossipTransaction {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
         ncore::write_len_prefixed(writer, &self.queue_plan_certificate)?;

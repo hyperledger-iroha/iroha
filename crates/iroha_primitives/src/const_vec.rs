@@ -9,7 +9,7 @@ use core::ops::Deref;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize, core as ncore};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore};
 use std::{boxed::Box, format, string::String, vec::Vec};
 ffi::ffi_item! {
     /// Stores bytes that are not supposed to change during the runtime of the
@@ -120,9 +120,10 @@ where
         Ok(ConstVec::from(values))
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
+impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {}
+impl<T: SerializePayload> SerializePayload for ConstVec<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::write_element_sequence(writer, &self.0, ncore::max_archive_len())
+        ncore::write_element_sequence::<T, _>(writer, self.0.iter(), ncore::max_archive_len())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -277,14 +278,15 @@ impl<T: Clone> ToConstVec for [T] {
 mod tests {
     use super::{ConstVec, ToConstVec, decode_const_vec_exact, ncore};
     use norito::{
-        NoritoDeserialize, NoritoSerialize,
+        NoritoDeserialize, NoritoSerialize, SerializePayload,
         codec::{self, Decode, Encode},
     };
     use std::cell::Cell;
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactBytes(Vec<u8>);
-    impl norito::NoritoSerialize for InexactBytes {
+    impl norito::NoritoSerialize for InexactBytes {}
+    impl norito::SerializePayload for InexactBytes {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
         }
@@ -299,7 +301,8 @@ mod tests {
     }
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactByte(u8);
-    impl norito::NoritoSerialize for InexactByte {
+    impl norito::NoritoSerialize for InexactByte {}
+    impl norito::SerializePayload for InexactByte {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
         }
@@ -313,7 +316,8 @@ mod tests {
     #[test]
     fn packed_serialization_rejects_a_changed_counted_payload() {
         struct Growing(Cell<usize>);
-        impl NoritoSerialize for Growing {
+        impl NoritoSerialize for Growing {}
+        impl SerializePayload for Growing {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
@@ -335,7 +339,8 @@ mod tests {
     #[test]
     fn nested_const_vec_measurement_visits_each_leaf_once_in_every_layout() {
         struct Leaf<'a>(&'a Cell<usize>);
-        impl NoritoSerialize for Leaf<'_> {
+        impl NoritoSerialize for Leaf<'_> {}
+        impl SerializePayload for Leaf<'_> {
             fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
                 self.0.set(self.0.get() + 1);
                 writer.write_all(&[0xAB])?;
@@ -353,6 +358,57 @@ mod tests {
             let mut bytes = Vec::new();
             ncore::serialize_to_buffer(&value, &mut bytes).unwrap();
             assert_eq!(measured, bytes.len());
+        }
+    }
+    #[test]
+    fn primitive_containers_accept_bare_only_children_in_every_layout() {
+        use crate::{small::SmallVec, unique_vec::UniqueVec};
+
+        // This leaf deliberately has neither a frame identity nor NoritoSerialize.
+        #[derive(PartialEq)]
+        struct BareLeaf(u16);
+        impl SerializePayload for BareLeaf {
+            fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
+                self.0.serialize(writer)
+            }
+        }
+
+        fn assert_payload(value: &dyn SerializePayload, expected: &dyn SerializePayload) {
+            let mut expected_bytes = Vec::new();
+            ncore::serialize_to_buffer(expected, &mut expected_bytes).unwrap();
+            let mut bytes = Vec::new();
+            ncore::serialize_to_buffer(value, &mut bytes).unwrap();
+            assert_eq!(bytes, expected_bytes);
+            assert_eq!(ncore::encoded_payload_len(value).unwrap(), bytes.len());
+            let mut checked_bytes = Vec::new();
+            ncore::serialize_to_writer_exact(value, &mut checked_bytes, bytes.len()).unwrap();
+            assert_eq!(checked_bytes, bytes);
+        }
+
+        for flags in (0..=ncore::supported_header_flags())
+            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = ncore::DecodeFlagsGuard::enter(flags);
+            for values in [Vec::new(), vec![0x1020_u16, 0x3040]] {
+                let constant =
+                    ConstVec::new(values.iter().copied().map(BareLeaf).collect::<Vec<_>>());
+                assert_payload(&constant, &ConstVec::new(values.clone()));
+                // ConstVec and UniqueVec retain the canonical element sequence layout.
+                assert_payload(&constant, &values);
+                let unique: UniqueVec<_> = values.iter().copied().map(BareLeaf).collect();
+                assert_payload(&unique, &values);
+                let small: SmallVec<[BareLeaf; 2]> = values.iter().copied().map(BareLeaf).collect();
+                assert_payload(&small, &SmallVec::<[u16; 2]>::from(values.clone()));
+                // SmallVec retains its distinct fixed count and field-prefix layout.
+                let mut fixed = u64::try_from(values.len()).unwrap().to_le_bytes().to_vec();
+                for value in &values {
+                    fixed.extend_from_slice(&2_u64.to_le_bytes());
+                    fixed.extend_from_slice(&value.to_le_bytes());
+                }
+                let mut small_bytes = Vec::new();
+                ncore::serialize_to_buffer(&small, &mut small_bytes).unwrap();
+                assert_eq!(small_bytes, fixed);
+            }
         }
     }
     #[test]

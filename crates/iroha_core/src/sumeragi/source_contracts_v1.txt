@@ -4744,7 +4744,7 @@ region|formal_direct|formal_first_release|at|ReleaseReservationDirect ==|before|
 region|formal_released|formal_first_release|at|AdvanceReleasedPrefix ==|before|CompleteReservationRelease ==
 region|startup|lifecycle_recovery|at|let mut recovered_attempts = 0_usize;|before|if !queue\n        .revalidate_lane_reservation_startup_reconciliation_receipt
 region|replay_enum|v2_core|at|pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {|before|fn append_first_release_identity_v1(
-region|replay_reducer|v2_core|at|pub(crate) fn check_production_in_flight_first_release_replay_step_v1(|before|/// Check and witness any of the 27 first-release production actions.
+region|replay_reducer|v2_core|at|pub(crate) fn check_production_in_flight_first_release_replay_step_v1(|before|pub(crate) fn check_production_in_flight_first_release_transition(
 region|replay_wrapper|v2_core|at|pub(crate) fn check_production_in_flight_first_release_transition(|before|fn witness_derived_first_release_transition(
 region|legacy_guard|queue|begin|-|end|-
 required|token|store_root: PathBuf|replica Kura authority lost its source-instance binding

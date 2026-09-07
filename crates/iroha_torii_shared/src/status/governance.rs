@@ -144,7 +144,8 @@ impl norito::core::NoritoSerialize for GovernanceStatus {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::GovernanceStatus")
     }
-
+}
+impl norito::core::SerializePayload for GovernanceStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.proposals,
@@ -156,7 +157,7 @@ impl norito::core::NoritoSerialize for GovernanceStatus {
             self.sealed_lane_aliases.clone(),
             self.citizens_total,
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceStatus {
@@ -239,7 +240,8 @@ impl norito::core::NoritoSerialize for GovernanceProposalCounters {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::GovernanceProposalCounters")
     }
-
+}
+impl norito::core::SerializePayload for GovernanceProposalCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.proposed,
@@ -248,7 +250,7 @@ impl norito::core::NoritoSerialize for GovernanceProposalCounters {
             self.superseded,
             self.execution_failed,
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProposalCounters {
@@ -290,10 +292,11 @@ impl norito::core::NoritoSerialize for GovernanceProtectedNamespaceCounters {
             "iroha_telemetry::metrics::GovernanceProtectedNamespaceCounters",
         )
     }
-
+}
+impl norito::core::SerializePayload for GovernanceProtectedNamespaceCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.total_checks, self.allowed, self.rejected);
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProtectedNamespaceCounters {
@@ -363,10 +366,11 @@ impl norito::core::NoritoSerialize for GovernanceManifestQuorumCounters {
             "iroha_telemetry::metrics::GovernanceManifestQuorumCounters",
         )
     }
-
+}
+impl norito::core::SerializePayload for GovernanceManifestQuorumCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.total_checks, self.satisfied, self.rejected);
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestQuorumCounters {
@@ -404,7 +408,8 @@ impl norito::core::NoritoSerialize for GovernanceManifestActivation {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::GovernanceManifestActivation")
     }
-
+}
+impl norito::core::SerializePayload for GovernanceManifestActivation {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.contract_address.clone(),
@@ -413,7 +418,7 @@ impl norito::core::NoritoSerialize for GovernanceManifestActivation {
             self.height,
             self.activated_at_ms,
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {

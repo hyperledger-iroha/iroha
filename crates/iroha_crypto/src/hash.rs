@@ -290,7 +290,8 @@ impl JsonKeyCodec for Hash {
         parse_hash_literal(encoded)
     }
 }
-impl norito::core::NoritoSerialize for Hash {
+impl norito::core::NoritoSerialize for Hash {}
+impl norito::core::SerializePayload for Hash {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.as_ref())?;
         Ok(())
@@ -412,7 +413,8 @@ impl<T: norito::NoritoSchema> norito::NoritoSchema for HashOf<T> {
         norito::schema::identity::generic_name("iroha_crypto::hash::HashOf", &[T::nominal_name()])
     }
 }
-impl<T> norito::core::NoritoSerialize for HashOf<T> {
+impl<T> norito::core::NoritoSerialize for HashOf<T> {}
+impl<T> norito::core::SerializePayload for HashOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.0.as_ref())?;
         Ok(())

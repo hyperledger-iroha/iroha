@@ -233,21 +233,22 @@ macro_rules! define_hash32_newtype {
                 f.write_str(&self.to_hex())
             }
         }
-        impl norito::core::NoritoSerialize for $name {
+        impl norito::core::NoritoSerialize for $name {}
+        impl norito::core::SerializePayload for $name {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
+                <HashWire32 as norito::core::SerializePayload>::serialize(&wire, writer)
             }
             fn encoded_len_hint(&self) -> Option<usize> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::encoded_len_hint(&wire)
+                <HashWire32 as norito::core::SerializePayload>::encoded_len_hint(&wire)
             }
             fn encoded_len_exact(&self) -> Option<usize> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::encoded_len_exact(&wire)
+                <HashWire32 as norito::core::SerializePayload>::encoded_len_exact(&wire)
             }
         }
         impl<'de> norito::core::NoritoDeserialize<'de> for $name {
@@ -898,10 +899,11 @@ pub struct GovernanceParameters {
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, IntoSchema)]
 pub struct ProposalId(pub [u8; 32]);
-impl norito::core::NoritoSerialize for ProposalId {
+impl norito::core::NoritoSerialize for ProposalId {}
+impl norito::core::SerializePayload for ProposalId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = HashWire32::new(self.0);
-        <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
+        <HashWire32 as norito::core::SerializePayload>::serialize(&wire, writer)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for ProposalId {

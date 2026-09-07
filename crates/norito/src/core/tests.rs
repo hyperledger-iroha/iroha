@@ -1,7 +1,7 @@
 //! Focused tests for the Norito core codec.
 use super::*;
 use crate::{
-    NoritoDeserialize, NoritoSerialize, codec,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, codec,
     codec::{encode_adaptive, encode_with_header_flags},
 };
 use crc64fast::Digest;
@@ -345,7 +345,8 @@ impl Drop for DropAfterLengthMismatch {
         FIELD_SLOT_DROPS.fetch_add(1, Ordering::Relaxed);
     }
 }
-impl NoritoSerialize for DropAfterLengthMismatch {
+impl NoritoSerialize for DropAfterLengthMismatch {}
+impl SerializePayload for DropAfterLengthMismatch {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[0])?;
         Ok(())
@@ -368,7 +369,8 @@ fn erased_field_slot_drops_value_after_consumption_error() {
 fn erased_field_decoder_preserves_panic_type_name() {
     #[derive(Debug)]
     struct PanicDuringFieldDecode;
-    impl NoritoSerialize for PanicDuringFieldDecode {
+    impl NoritoSerialize for PanicDuringFieldDecode {}
+    impl SerializePayload for PanicDuringFieldDecode {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
             Ok(())
         }
@@ -716,7 +718,8 @@ struct CanonicalStruct {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalStructNoRecompute(CanonicalStruct);
-impl NoritoSerialize for CanonicalStructNoRecompute {
+impl NoritoSerialize for CanonicalStructNoRecompute {}
+impl SerializePayload for CanonicalStructNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
             panic!("serialize called during canonical decode recompute");
@@ -765,7 +768,8 @@ enum CanonicalEnum {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalEnumNoRecompute(CanonicalEnum);
-impl NoritoSerialize for CanonicalEnumNoRecompute {
+impl NoritoSerialize for CanonicalEnumNoRecompute {}
+impl SerializePayload for CanonicalEnumNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
             panic!("serialize called during canonical decode recompute");
@@ -978,9 +982,10 @@ fn byte_sink_with_headroom_from_preserves_capacity() {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BadExactLen(u32);
-impl crate::NoritoSerialize for BadExactLen {
+impl crate::NoritoSerialize for BadExactLen {}
+impl crate::SerializePayload for BadExactLen {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
-        crate::NoritoSerialize::serialize(&self.0, encoder)
+        crate::SerializePayload::serialize(&self.0, encoder)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(1)
@@ -1006,7 +1011,8 @@ impl<'a> DecodeFromSlice<'a> for BadExactLen {
 const HOSTILE_GROWTH_CHUNK_BYTES: usize = 4 * 1024;
 const HOSTILE_GROWTH_WRITES: usize = 256;
 struct HostileGrowingSecondPass(std::cell::Cell<usize>);
-impl NoritoSerialize for HostileGrowingSecondPass {
+impl NoritoSerialize for HostileGrowingSecondPass {}
+impl SerializePayload for HostileGrowingSecondPass {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let pass = self.0.get();
         self.0.set(pass + 1);
@@ -1057,7 +1063,8 @@ fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
 fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
     use std::cell::Cell;
     struct CountCalls(Cell<usize>);
-    impl NoritoSerialize for CountCalls {
+    impl NoritoSerialize for CountCalls {}
+    impl SerializePayload for CountCalls {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.0.set(self.0.get() + 1);
             writer.write_all(&[0xA5])?;
@@ -1083,7 +1090,8 @@ fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
 fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
     use std::cell::Cell;
     struct GrowingSecondPass(Cell<usize>);
-    impl NoritoSerialize for GrowingSecondPass {
+    impl NoritoSerialize for GrowingSecondPass {}
+    impl SerializePayload for GrowingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
             self.0.set(pass + 1);
@@ -1103,7 +1111,8 @@ fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
 fn bounded_frame_rejects_second_pass_shrinkage() {
     use std::cell::Cell;
     struct ShrinkingSecondPass(Cell<usize>);
-    impl NoritoSerialize for ShrinkingSecondPass {
+    impl NoritoSerialize for ShrinkingSecondPass {}
+    impl SerializePayload for ShrinkingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
             self.0.set(pass + 1);
@@ -1134,7 +1143,8 @@ fn write_len_prefixed_streams_unhinted_field_without_staging() {
         bytes: &'a [u8],
         visits: std::cell::Cell<usize>,
     }
-    impl NoritoSerialize for UnhintedField<'_> {
+    impl NoritoSerialize for UnhintedField<'_> {}
+    impl SerializePayload for UnhintedField<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.visits.set(self.visits.get() + 1);
             writer.write_all(self.bytes)?;
@@ -1314,15 +1324,16 @@ fn result_uses_actual_length_prefix() {
 }
 #[derive(Clone, Copy)]
 struct RootAware(u32);
-impl crate::NoritoSerialize for RootAware {
+impl crate::NoritoSerialize for RootAware {}
+impl crate::SerializePayload for RootAware {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
-        crate::NoritoSerialize::serialize(&self.0, encoder)
+        crate::SerializePayload::serialize(&self.0, encoder)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        crate::NoritoSerialize::encoded_len_hint(&self.0)
+        crate::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        crate::NoritoSerialize::encoded_len_exact(&self.0)
+        crate::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> crate::NoritoDeserialize<'de> for RootAware {
@@ -2065,7 +2076,7 @@ fn array_and_tuple_serialization_use_compact_element_lengths() {
 fn tuple_serialization_preserves_explicit_flags_in_nested_containers() {
     type NestedTuple = (Vec<Vec<u16>>, Vec<String>);
 
-    fn serialize(value: &dyn NoritoSerialize) -> Vec<u8> {
+    fn serialize(value: &dyn SerializePayload) -> Vec<u8> {
         let mut bytes = Vec::new();
         serialize_to_buffer(value, &mut bytes).expect("serialize nested tuple fixture");
         bytes

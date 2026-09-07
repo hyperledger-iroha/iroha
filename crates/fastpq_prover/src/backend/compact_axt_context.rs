@@ -18,7 +18,7 @@
 //! and touched-balance roots do not establish finalized source-state authority.
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
-use norito::{NoritoSerialize, codec::Encode};
+use norito::{NoritoSerialize, SerializePayload, codec::Encode};
 
 use super::compact_value_domain::CompactTransferValue;
 use super::{compact_protocol::FixedAir, compact_public_transfer::PublicTransferAir};

@@ -10,6 +10,9 @@ mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
 pub(crate) mod subscriptions;
+mod transaction_wait;
+#[cfg(test)]
+mod transaction_wait_tests;
 use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
 pub use crate::query::QueryError;
 use crate::{
@@ -249,7 +252,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use url::Url;
@@ -17317,6 +17320,7 @@ impl Client {
                 Ok(Some(payload))
             }
             StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::TOO_MANY_REQUESTS => Err(transaction_wait::backpressure_response(&resp)),
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
                 status,
@@ -17444,7 +17448,9 @@ impl Client {
     ///
     /// State-resolved `Rejected` and `Expired` are fixed failure outcomes. Cached or queued
     /// terminal hints and every non-final status continue polling; callers cannot weaken this
-    /// first-release finality rule.
+    /// first-release finality rule. HTTP 429 backpressure repeats only the status read within
+    /// the original deadline, respecting Torii's delta-seconds `Retry-After` when present.
+    /// It never resubmits the transaction. Other HTTP and malformed-response errors fail.
     ///
     /// # Errors
     /// Returns an error if polling fails, the response is not bound to the requested canonical
@@ -17456,56 +17462,15 @@ impl Client {
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
         crate::blocking::reject_inside_async_runtime()?;
-        let TransactionWaitOptions {
-            timeout,
-            poll_interval,
-        } = options;
-        if poll_interval == Duration::ZERO {
-            return Err(eyre!(
-                "transaction wait poll_interval must be greater than zero"
-            ));
-        }
-        let start = Instant::now();
-        let mut attempts = 0_u64;
-        let mut last_status: Option<String> = None;
+        let mut wait = transaction_wait::PollState::new(hash, options)?;
         loop {
-            attempts = attempts.saturating_add(1);
-            if let Some(response) = self.get_transaction_status_response_global(hash)? {
-                let kind = response.status.kind.as_str();
-                last_status = Some(kind.to_owned());
-                match validate_global_pipeline_status_response(&response, hash)? {
-                    TxConfirmationStatus::Applied if response.resolved_from == "state" => {
-                        return Ok(transaction_wait_outcome(
-                            response,
-                            attempts,
-                            start.elapsed(),
-                        ));
-                    }
-                    TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
-                        if response.resolved_from == "state" =>
-                    {
-                        return Err(tx_confirmation_final_report(eyre!(
-                            "transaction {} reached state-resolved fixed terminal failure status `{kind}`; last_status={kind}",
-                            response.hash
-                        )));
-                    }
-                    TxConfirmationStatus::Applied
-                    | TxConfirmationStatus::Rejected(_)
-                    | TxConfirmationStatus::Expired
-                    | TxConfirmationStatus::Queued
-                    | TxConfirmationStatus::Approved(_)
-                    | TxConfirmationStatus::Committed => {}
-                }
+            wait.begin_poll()?;
+            if let Some(outcome) =
+                wait.observe(self.get_transaction_status_response_global(hash))?
+            {
+                return Ok(outcome);
             }
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                let last_status = last_status.unwrap_or_else(|| "not_observed".to_owned());
-                return Err(tx_confirmation_unresolved_final_report(eyre!(
-                    "transaction did not reach state-resolved Applied within {} ms; last_status={last_status}",
-                    timeout.as_millis()
-                )));
-            }
-            std::thread::sleep(poll_interval.min(timeout.saturating_sub(elapsed)));
+            std::thread::sleep(wait.next_delay()?);
         }
     }
     pub(crate) async fn wait_until_transaction_applied(
@@ -17513,56 +17478,15 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
-        let TransactionWaitOptions {
-            timeout,
-            poll_interval,
-        } = options;
-        if poll_interval == Duration::ZERO {
-            return Err(eyre!(
-                "transaction wait poll_interval must be greater than zero"
-            ));
-        }
-        let start = Instant::now();
-        let mut attempts = 0_u64;
-        let mut last_status: Option<String> = None;
+        let mut wait = transaction_wait::PollState::new(hash, options)?;
         loop {
-            attempts = attempts.saturating_add(1);
-            if let Some(response) = self.get_global_transaction_status_response(hash).await? {
-                let kind = response.status.kind.as_str();
-                last_status = Some(kind.to_owned());
-                match validate_global_pipeline_status_response(&response, hash)? {
-                    TxConfirmationStatus::Applied if response.resolved_from == "state" => {
-                        return Ok(transaction_wait_outcome(
-                            response,
-                            attempts,
-                            start.elapsed(),
-                        ));
-                    }
-                    TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
-                        if response.resolved_from == "state" =>
-                    {
-                        return Err(tx_confirmation_final_report(eyre!(
-                            "transaction {} reached state-resolved fixed terminal failure status `{kind}`; last_status={kind}",
-                            response.hash
-                        )));
-                    }
-                    TxConfirmationStatus::Applied
-                    | TxConfirmationStatus::Rejected(_)
-                    | TxConfirmationStatus::Expired
-                    | TxConfirmationStatus::Queued
-                    | TxConfirmationStatus::Approved(_)
-                    | TxConfirmationStatus::Committed => {}
-                }
+            wait.begin_poll()?;
+            if let Some(outcome) =
+                wait.observe(self.get_global_transaction_status_response(hash).await)?
+            {
+                return Ok(outcome);
             }
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                let last_status = last_status.unwrap_or_else(|| "not_observed".to_owned());
-                return Err(tx_confirmation_unresolved_final_report(eyre!(
-                    "transaction did not reach state-resolved Applied within {} ms; last_status={last_status}",
-                    timeout.as_millis()
-                )));
-            }
-            tokio::time::sleep(poll_interval.min(timeout.saturating_sub(elapsed))).await;
+            tokio::time::sleep(wait.next_delay()?).await;
         }
     }
     fn transaction_headers_without_content_type(&self) -> HashMap<String, String> {

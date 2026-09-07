@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use iroha_crypto::xof::{Shake256Prefix, shake256_into};
-use norito::NoritoSerialize;
+use norito::{NoritoSerialize, SerializePayload};
 
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1};
 

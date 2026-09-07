@@ -41,6 +41,8 @@ mod handle_update_tests {
     #[derive(Clone, Debug)]
     struct BadLengthHintPayload;
     impl ncore::NoritoSerialize for BadLengthHintPayload {
+}
+impl ncore::SerializePayload for BadLengthHintPayload {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             writer.write_all(&[1, 2, 3, 4])?;
             Ok(())
@@ -66,6 +68,8 @@ mod handle_update_tests {
     #[derive(Clone, Debug)]
     struct FailingSerializerPayload;
     impl ncore::NoritoSerialize for FailingSerializerPayload {
+}
+impl ncore::SerializePayload for FailingSerializerPayload {
         fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             Err(ncore::Error::Message(
                 "intentional actor-admission serialization failure".to_owned(),

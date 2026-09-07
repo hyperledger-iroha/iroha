@@ -13,6 +13,9 @@ mod values;
 #[path = "generated_record_inventory.rs"]
 mod inventory;
 
+#[path = "kaigi_record_identity_tests.rs"]
+mod kaigi_records;
+
 #[path = "../../tests/support/fixture_json.rs"]
 mod fixture_json;
 

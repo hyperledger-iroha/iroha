@@ -846,7 +846,7 @@ fn flat_native_amx_participant_settlement() -> NativeAmxParticipantSettlement {
 }
 #[test]
 fn native_amx_participant_settlement_has_nonrecursive_schema_and_bounded_default_stack_codec() {
-    use norito::core::NoritoSerialize as _;
+    use norito::core::SerializePayload as _;
     let schema = NativeAmxParticipantSettlement::schema();
     assert!(!schema.contains_key::<LaneBlockCommitment>());
     assert!(!schema.contains_key::<NativeAmxReceipt>());

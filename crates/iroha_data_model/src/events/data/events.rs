@@ -41,63 +41,92 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Getters)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::events::model::MetadataChanged")]
     pub struct MetadataChanged<Id> {
         pub target: Id,
         pub key: Name,
         pub value: Json,
     }
-    /// Event
+    /// Ledger data event with feature-independent wire discriminants.
+    ///
+    /// Optional capabilities reserve their discriminants even when disabled.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::events::model::DataEvent")]
     pub enum DataEvent {
         /// Peer event
+        #[codec(index = 0)]
         Peer(peer::PeerEvent),
         /// Domain event
+        #[codec(index = 1)]
         Domain(domain::DomainEvent),
         /// Account event without fabricated domain routing context.
+        #[codec(index = 2)]
         Account(account::AccountEvent),
         /// Asset event without domain routing context.
+        #[codec(index = 3)]
         Asset(asset::AssetEvent),
         /// Asset-definition event without domain routing context.
+        #[codec(index = 4)]
         AssetDefinition(asset::AssetDefinitionEvent),
         /// Trigger event
+        #[codec(index = 5)]
         Trigger(trigger::TriggerEvent),
         /// Role event
+        #[codec(index = 6)]
         Role(role::RoleEvent),
         /// Configuration event
+        #[codec(index = 7)]
         Configuration(config::ConfigurationEvent),
         /// Executor event
+        #[codec(index = 8)]
         Executor(executor::ExecutorEvent),
         /// Zero-knowledge proof verification event
+        #[codec(index = 9)]
         Proof(proof::ProofEvent),
         /// Verifying key registry lifecycle events
+        #[codec(index = 10)]
         VerifyingKey(super::verifying_keys::VerifyingKeyEvent),
         /// Runtime upgrade lifecycle events
+        #[codec(index = 11)]
         RuntimeUpgrade(super::runtime_upgrade::RuntimeUpgradeEvent),
         /// Smart contract registry events
+        #[codec(index = 12)]
         SmartContract(super::smart_contract::SmartContractEvent),
         /// Resolver attestation directory governance events
+        #[codec(index = 13)]
         Soradns(super::soradns::SoradnsDirectoryEvent),
         /// `SoraFS` gateway compliance events
+        #[codec(index = 14)]
         Sorafs(super::sorafs::SorafsGatewayEvent),
         /// Musubi package-registry and archive lifecycle events
+        #[codec(index = 15)]
         Musubi(super::musubi::MusubiEvent),
         /// Space Directory manifest lifecycle events
+        #[codec(index = 16)]
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
         /// Native asset escrow lifecycle events
+        #[codec(index = 17)]
         Escrow(super::escrow::EscrowEvent),
         /// Oracle feed aggregation lifecycle events
+        #[codec(index = 18)]
         Oracle(super::oracle::OracleEvent),
         #[cfg(feature = "governance")]
         /// Governance lifecycle events
+        #[codec(index = 19)]
         Governance(super::governance::GovernanceEvent),
         /// Viral incentive lifecycle events
+        #[codec(index = 20)]
         Social(super::social::SocialEvent),
         /// Bridge event
+        #[codec(index = 21)]
         Bridge(bridge::BridgeEvent),
         /// Native race lifecycle transition.
+        #[codec(index = 22)]
         GameSession(super::game::GameSessionEventV1),
     }
 }

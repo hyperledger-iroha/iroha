@@ -12449,7 +12449,7 @@ mod run {
                 "a remote message cannot self-promote a low topic"
             );
         }
-        fn framed_message<T: Encode>(value: &T) -> Vec<u8> {
+        fn framed_message<T: ncore::NoritoSerialize>(value: &T) -> Vec<u8> {
             ncore::to_bytes(value).expect("encode framed message")
         }
         fn encrypted_frame(plaintext: &[u8], key_byte: u8) -> Vec<u8> {

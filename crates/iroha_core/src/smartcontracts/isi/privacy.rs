@@ -1909,7 +1909,7 @@ fn validate_current_zk_x509_ca_root_v1(
         )
     })
 }
-fn preflight_x509_governance_action_v1<T: norito::codec::Encode>(
+fn preflight_x509_governance_action_v1<T: norito::NoritoSerialize>(
     instruction: &T,
     label: &str,
     state_transaction: &StateTransaction<'_, '_>,

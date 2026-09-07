@@ -11,7 +11,7 @@
 
 use fastpq_isi::FASTPQ_FINAL_V1;
 use iroha_data_model::privacy::GoldilocksDigest384V1;
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload};
 
 use super::compact_value_domain::CompactTransferValue;
 use super::{

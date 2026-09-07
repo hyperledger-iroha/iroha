@@ -8,6 +8,7 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use hex::encode;
 use iroha_crypto::{Algorithm, KeyPair, Signature, sha256};
 use norito::{
+    SerializePayload,
     core::NoritoSerialize,
     json::{Map, Value, parse_value, to_string, to_string_pretty},
 };

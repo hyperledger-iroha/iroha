@@ -1608,7 +1608,7 @@ pub struct KagemushaAuthenticatedReleaseV1 {
     approved_signers: Vec<PublicKey>,
 }
 
-fn digest_encoded<T: Encode>(
+fn digest_encoded<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaReleaseErrorV1> {

@@ -82,10 +82,12 @@ struct MusubiResolverIndexPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {fn schema_hash() -> [u8; 16] {
         <MusubiResolverIndexPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for MusubiResolverIndexPageSource<'_> {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiResolverIndexPageV1,
@@ -97,7 +99,7 @@ impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
             &self.next_cursor,
             &self.snapshot,
         ]);
-        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+        norito::core::SerializePayload::serialize(&borrowed, writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
@@ -110,7 +112,7 @@ impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
             &self.next_cursor,
             &self.snapshot,
         ]);
-        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+        norito::core::SerializePayload::encoded_len_exact(&borrowed)
     }
 }
 struct MusubiVersionPageSource<'a> {
@@ -119,23 +121,25 @@ struct MusubiVersionPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {fn schema_hash() -> [u8; 16] {
         <MusubiVersionPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for MusubiVersionPageSource<'_> {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiVersionPageV1,
             4,
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
-        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+        norito::core::SerializePayload::serialize(&borrowed, writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiVersionPageV1,
             4,
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
-        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+        norito::core::SerializePayload::encoded_len_exact(&borrowed)
     }
 }
 struct MusubiMaintainerPageSource<'a> {
@@ -144,23 +148,25 @@ struct MusubiMaintainerPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {fn schema_hash() -> [u8; 16] {
         <MusubiMaintainerPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for MusubiMaintainerPageSource<'_> {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiMaintainerPageV1,
             4,
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
-        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+        norito::core::SerializePayload::serialize(&borrowed, writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiMaintainerPageV1,
             4,
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
-        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+        norito::core::SerializePayload::encoded_len_exact(&borrowed)
     }
 }
 struct MusubiArchiveLocationPageSource<'a> {
@@ -170,10 +176,12 @@ struct MusubiArchiveLocationPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {fn schema_hash() -> [u8; 16] {
         <MusubiArchiveLocationPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for MusubiArchiveLocationPageSource<'_> {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiArchiveLocationPageV1,
@@ -185,7 +193,7 @@ impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
             &self.next_cursor,
             &self.snapshot,
         ]);
-        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+        norito::core::SerializePayload::serialize(&borrowed, writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
@@ -198,7 +206,7 @@ impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
             &self.next_cursor,
             &self.snapshot,
         ]);
-        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+        norito::core::SerializePayload::encoded_len_exact(&borrowed)
     }
 }
 struct MusubiAliasHistoryPageSource<'a> {
@@ -207,23 +215,25 @@ struct MusubiAliasHistoryPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {fn schema_hash() -> [u8; 16] {
         <MusubiAliasHistoryPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for MusubiAliasHistoryPageSource<'_> {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiAliasHistoryPageV1,
             4,
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
-        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+        norito::core::SerializePayload::serialize(&borrowed, writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiAliasHistoryPageV1,
             4,
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
-        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+        norito::core::SerializePayload::encoded_len_exact(&borrowed)
     }
 }
 struct MusubiOrderedPackagePageSource<'a> {
@@ -234,10 +244,12 @@ struct MusubiOrderedPackagePageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {fn schema_hash() -> [u8; 16] {
         <MusubiOrderedPackagePageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for MusubiOrderedPackagePageSource<'_> {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiOrderedPackagePageV1,
@@ -250,7 +262,7 @@ impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
             &self.next_cursor,
             &self.snapshot,
         ]);
-        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+        norito::core::SerializePayload::serialize(&borrowed, writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
@@ -264,7 +276,7 @@ impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
             &self.next_cursor,
             &self.snapshot,
         ]);
-        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+        norito::core::SerializePayload::encoded_len_exact(&borrowed)
     }
 }
 /// Internal typed Musubi query failure retained through the Torii telemetry boundary.

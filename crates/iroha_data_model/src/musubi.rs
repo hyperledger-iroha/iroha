@@ -459,7 +459,7 @@ impl io::Write for Blake3Writer<'_> {
         Ok(())
     }
 }
-fn domain_hash_value<T: norito::core::NoritoSerialize>(domain: &[u8], value: &T) -> [u8; 32] {
+fn domain_hash_value<T: norito::SerializePayload>(domain: &[u8], value: &T) -> [u8; 32] {
     let encoded_len = norito::codec::encode_adaptive_into(value, &mut io::sink())
         .expect("Musubi canonical hash preflight must serialize");
     let mut hasher = blake3::Hasher::new();

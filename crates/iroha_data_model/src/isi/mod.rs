@@ -57,6 +57,16 @@ pub mod ministry;
 /// ```
 #[repr(transparent)]
 pub struct InstructionBox(Box<dyn Instruction>);
+impl norito::NoritoSchema for InstructionBox {
+    fn nominal_name() -> String {
+        "iroha_data_model::isi::InstructionBox".to_owned()
+    }
+    fn frame_name() -> String {
+        // The root codec writes the registry wire ID and framed payload pair.
+        // Containers still compose the nominal instruction identity above.
+        <(String, Vec<u8>) as norito::NoritoSchema>::frame_name()
+    }
+}
 impl core::ops::Deref for InstructionBox {
     type Target = dyn Instruction;
     fn deref(&self) -> &Self::Target {
@@ -608,7 +618,15 @@ where
 }
 impl<T> Instruction for T
 where
-    T: Clone + Debug + PartialEq + PartialOrd + Encode + seal::Instruction + Send + Sync + 'static,
+    T: Clone
+        + Debug
+        + PartialEq
+        + PartialOrd
+        + norito::NoritoSerialize
+        + seal::Instruction
+        + Send
+        + Sync
+        + 'static,
 {
     fn dyn_encode(&self) -> Vec<u8> {
         self.encode()
@@ -617,11 +635,11 @@ where
         Encode::encode_to(self, out);
     }
     fn dyn_encode_capacity_hint(&self) -> Option<usize> {
-        norito::NoritoSerialize::encoded_len_exact(self)
-            .or_else(|| norito::NoritoSerialize::encoded_len_hint(self))
+        norito::SerializePayload::encoded_len_exact(self)
+            .or_else(|| norito::SerializePayload::encoded_len_hint(self))
     }
     fn dyn_encoded_len(&self) -> Option<usize> {
-        norito::NoritoSerialize::encoded_len_exact(self)
+        norito::SerializePayload::encoded_len_exact(self)
     }
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
         let mut writer = writer;
@@ -836,6 +854,8 @@ impl norito::core::NoritoSerialize for InstructionBox {
         // Match the archived layout used in `serialize`: `(wire_id, payload_with_header)`.
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
+}
+impl norito::core::SerializePayload for InstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let inner = &**self;
         let type_name = Instruction::id(inner);
@@ -2427,6 +2447,8 @@ pub mod error {
         )]
         #[display("Expected {expected:?}, actual {actual:?}")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::isi::error::model::Mismatch")]
         pub struct Mismatch<T>
         where
             T: Debug,

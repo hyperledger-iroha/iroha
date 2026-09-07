@@ -132,12 +132,12 @@ async fn resolve_torii_proof_record_for_supported_routes(
         .await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_norito_body::<ProofRecord>(response, "proof record response", &mut budget).await
@@ -545,12 +545,12 @@ async fn execute_torii_account_read_for_resolved_routes(
         .await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         match torii_json_body::<AccountReadResponse>(response, "account get response", &mut budget)
@@ -778,7 +778,7 @@ where
                 if route_succeeded {
                     return Err(with_torii_fanout_headers(response, diagnostics));
                 } else {
-                    last_not_found = Some(response);
+                    last_not_found = Some(summarize_skipped_torii_route_response(response));
                 }
                 break;
             }
@@ -787,7 +787,7 @@ where
                 if route_succeeded {
                     return Err(with_torii_fanout_headers(response, diagnostics));
                 } else {
-                    last_route_unavailable = Some(response);
+                    last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
                 }
                 break;
             }

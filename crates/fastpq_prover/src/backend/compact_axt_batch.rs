@@ -12,7 +12,7 @@
 //! before production admission. This module leaves the existing profile intact.
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
-use norito::{NoritoSerialize, codec::Encode};
+use norito::{NoritoSerialize, SerializePayload, codec::Encode};
 
 use super::compact_value_domain::CompactTransferValue;
 use super::{

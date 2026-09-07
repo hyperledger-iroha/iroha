@@ -16,7 +16,7 @@ use iroha_data_model::{
     role::RoleId,
 };
 use iroha_primitives::json::Json;
-use norito::core::NoritoSerialize;
+use norito::core::{NoritoSerialize, SerializePayload};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -43,7 +43,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 }
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
-fn serialize_into(value: &dyn NoritoSerialize, output: &mut Vec<u8>) {
+fn serialize_into(value: &dyn SerializePayload, output: &mut Vec<u8>) {
     output.clear();
     let mut encoder = norito::core::Encoder::for_buffer(output);
     value.serialize(&mut encoder).expect("serialize value");

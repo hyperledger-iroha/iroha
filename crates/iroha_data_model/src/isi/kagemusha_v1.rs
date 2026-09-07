@@ -2180,7 +2180,7 @@ fn wire_error(error: impl core::fmt::Display) -> KagemushaIsiValidationErrorV1 {
     KagemushaIsiValidationErrorV1::InvalidWire(error.to_string())
 }
 
-fn digest_encoded<T: Encode>(
+fn digest_encoded<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
