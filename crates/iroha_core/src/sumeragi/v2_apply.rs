@@ -4497,7 +4497,10 @@ impl V2ApplyService {
             // durable execution bytes, including signatures and results.
             // Complete that publication before recovery consults canonical
             // lane ownership; ordinary planning sees the post-append frontier.
-            self.kura
+            // The final publication below returns the receipt used for apply
+            // completion after WSV and metadata repair.
+            let _ = self
+                .kura
                 .store_v2_finality_artifact(artifact)
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(

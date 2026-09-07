@@ -78,9 +78,20 @@ std::thread_local! {
         std::cell::RefCell::new(Native::from_spec(&*LOADER, fq_spec().clone()));
 }
 
+mod sealed {
+    pub trait Sealed {}
+
+    impl Sealed for super::Fp {}
+    impl Sealed for super::Fq {}
+}
+
 /// Field abstraction shared by host replay/state code and the two native circuits.
-pub(crate) trait KagemushaPoseidonFieldV1:
-    snark_verifier::util::arithmetic::FieldExt
+///
+/// This public circuit bound is sealed to the two protocol-defined Pasta fields, Fp and Fq.
+/// Downstream code can name the bound but cannot substitute another field or Poseidon schedule.
+pub trait KagemushaPoseidonFieldV1:
+    sealed::Sealed
+    + snark_verifier::util::arithmetic::FieldExt
     + PrimeField
     + From<u64>
     + ScalarField
@@ -92,8 +103,11 @@ pub(crate) trait KagemushaPoseidonFieldV1:
     const IS_EQ_PARITY: bool;
     /// Borrow the exact generated field specification.
     fn kagemusha_poseidon_spec_v1() -> &'static Spec<Self>;
-    /// Execute with the thread-local native sponge.
-    fn with_kagemusha_poseidon_v1<R>(callback: impl FnOnce(&mut Native<Self>) -> R) -> R;
+    /// Hash one complete preimage using the fixed field specification and a reset native sponge.
+    ///
+    /// Callers supply any required domain and arity prefix. Cached mutable sponge state is never
+    /// exposed, so a caller cannot replace the protocol parameters or affect another hash.
+    fn kagemusha_poseidon_hash_v1(preimage: &[Self]) -> Self;
     /// Select this parity's canonical component from a paired state/replay commitment.
     fn select_component(components: KagemushaPastaStateCommitmentV1) -> [u8; 32];
 }
@@ -139,8 +153,13 @@ impl KagemushaPoseidonFieldV1 for Fp {
         fp_spec()
     }
 
-    fn with_kagemusha_poseidon_v1<R>(callback: impl FnOnce(&mut Native<Self>) -> R) -> R {
-        FP_HASHER.with(|hasher| callback(&mut hasher.borrow_mut()))
+    fn kagemusha_poseidon_hash_v1(preimage: &[Self]) -> Self {
+        FP_HASHER.with(|hasher| {
+            let mut hasher = hasher.borrow_mut();
+            hasher.clear();
+            hasher.update(preimage);
+            hasher.squeeze()
+        })
     }
 
     fn select_component(components: KagemushaPastaStateCommitmentV1) -> [u8; 32] {
@@ -154,8 +173,13 @@ impl KagemushaPoseidonFieldV1 for Fq {
         fq_spec()
     }
 
-    fn with_kagemusha_poseidon_v1<R>(callback: impl FnOnce(&mut Native<Self>) -> R) -> R {
-        FQ_HASHER.with(|hasher| callback(&mut hasher.borrow_mut()))
+    fn kagemusha_poseidon_hash_v1(preimage: &[Self]) -> Self {
+        FQ_HASHER.with(|hasher| {
+            let mut hasher = hasher.borrow_mut();
+            hasher.clear();
+            hasher.update(preimage);
+            hasher.squeeze()
+        })
     }
 
     fn select_component(components: KagemushaPastaStateCommitmentV1) -> [u8; 32] {
@@ -176,11 +200,7 @@ pub(crate) fn hash<F: KagemushaPoseidonFieldV1>(domain: u64, inputs: &[F]) -> F 
     preimage[0] = F::from(domain);
     preimage[1] = F::from(u64::try_from(inputs.len()).expect("bounded Poseidon arity fits u64"));
     preimage[2..].copy_from_slice(inputs);
-    F::with_kagemusha_poseidon_v1(|hasher| {
-        hasher.clear();
-        hasher.update(preimage);
-        hasher.squeeze()
-    })
+    F::kagemusha_poseidon_hash_v1(preimage)
 }
 
 /// Return the protocol-fixed root of the empty depth-256 consumed-credit tree.
@@ -246,11 +266,9 @@ mod tests {
             u64::try_from(inputs.len()).expect("test arity fits u64"),
         ));
         preimage.extend_from_slice(inputs);
-        F::with_kagemusha_poseidon_v1(|hasher| {
-            hasher.clear();
-            hasher.update(&preimage);
-            hasher.squeeze()
-        })
+        let mut hasher = Native::<F>::from_spec(&*LOADER, F::kagemusha_poseidon_spec_v1().clone());
+        hasher.update(&preimage);
+        hasher.squeeze()
     }
 
     #[test]
@@ -283,6 +301,24 @@ mod tests {
         assert_eq!(first_fq, hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fq));
         assert_ne!(encode(first_fp), encode(first_fq));
         assert_ne!(first_fp, hash(KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1, &inputs_fp));
+    }
+
+    #[test]
+    fn public_native_hash_resets_to_fixed_parameters_between_messages() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let preimage = [F::from(7), F::from(9)];
+            let mut reference =
+                Native::<F>::from_spec(&*LOADER, F::kagemusha_poseidon_spec_v1().clone());
+            reference.update(&preimage);
+            let expected = reference.squeeze();
+            assert_eq!(F::kagemusha_poseidon_hash_v1(&preimage), expected);
+            let _ = F::kagemusha_poseidon_hash_v1(&[F::from(11); 33]);
+            let _ = F::kagemusha_poseidon_hash_v1(&[]);
+            assert_eq!(F::kagemusha_poseidon_hash_v1(&preimage), expected);
+        }
+
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[test]

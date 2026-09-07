@@ -14942,6 +14942,7 @@ pub(crate) fn peer_has_live_consensus_key_for_lane(
         == ConsensusKeyGate::Live
 }
 /// Fetch the stored BLS proof-of-possession for a peer's live consensus key.
+#[cfg(test)]
 pub(crate) fn live_consensus_key_pop_for_peer(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
@@ -32414,6 +32415,7 @@ impl State {
         consensus_lane_dataspace_at_height(lane_id, &nexus, self.lane_authority_height()).is_some()
     }
     /// Resolve the only lane allowed to own staking storage at the committed authority height.
+    #[cfg(test)]
     pub(crate) fn staking_authority_lane(&self, lane_id: LaneId) -> Option<LaneId> {
         let nexus = self.nexus_snapshot();
         nexus_staking_authority_lane_at_height(lane_id, &nexus, self.lane_authority_height())
@@ -34851,6 +34853,7 @@ impl State {
             })
             .collect()
     }
+    #[cfg(test)]
     fn validate_queue_plan_admissions_for_carrier(
         &self,
         admissions: &[Vec<u8>],
@@ -35021,6 +35024,7 @@ impl State {
         }
         Ok((admission, lookup))
     }
+    #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
         &self,
         bytes: &[u8],
@@ -40634,6 +40638,7 @@ impl State {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn resolve_queue_plan_pending_obligation_in_storage(
         storage: &mut impl QueuePlanMarkerStorage,
         network_id_digest: Hash,
@@ -43175,6 +43180,7 @@ impl State {
     }
     /// Resolve and stage a compact certified merge reference before running
     /// deterministic start-of-block effects.
+    #[cfg(test)]
     pub(crate) fn block_with_certified_merge_reference(
         &self,
         carrier_header: BlockHeader,
@@ -43197,6 +43203,7 @@ impl State {
     /// Stage proposal-native QueuePlan certificates on the pristine carrier
     /// overlay before running deterministic start-of-block effects.
     #[inline(never)]
+    #[cfg(test)]
     pub(crate) fn block_with_queue_plan_admissions(
         &self,
         carrier_header: BlockHeader,

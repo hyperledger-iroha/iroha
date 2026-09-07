@@ -1483,6 +1483,7 @@ mod tests {
             );
         }
     }
+    #[test]
     fn jindo_compiled_profile_rejects_every_binding_and_policy_mismatch() {
         let valid = jindo_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
@@ -1866,6 +1867,7 @@ mod tests {
             Err(CompiledPrivacyProfileValidationErrorV1::ProtocolMismatch)
         );
     }
+    #[test]
     fn anonymous_pgc_compiled_bindings_are_immutable() {
         let valid = pgc_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");

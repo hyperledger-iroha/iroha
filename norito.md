@@ -115,6 +115,25 @@ copy of the encoded payload. The write pass verifies every counted length and
 fails with a length mismatch if a stateful serializer changes between passes.
 Allocation failures in temporary codec buffers are returned as errors rather
 than using infallible `Vec` growth. These rules do not change the v1 bytes.
+The field writer takes only its destination and value. Generated serializers
+and manual callers do not construct per-field scratch buffers.
+
+The length-only encoder has its own counting destination. Core field and
+container helpers measure each child once during that pass, then add its measured
+length without replaying its body. This prevents nested count/write pairs from
+doubling work at every level. Only a helper that owns the measurement may do this;
+caller-supplied lengths and optional length hints remain untrusted. Byte writers,
+checksum writers, canonical comparisons, and separately constructed nested
+buffers always receive actual bytes. Count overflow remains an error even if a
+custom serializer ignores an individual failed write.
+
+Embedded instruction frames retain the counting destination through a
+codec-owned prefix writer. A size-only pass measures the concrete payload and
+adds the fixed header/alignment overhead; it does not construct a checksum writer.
+Actual frame output still computes and checks length, checksum, and finalized
+flags across its two passes. The tuple prefix runs in the enclosing layout
+context. `ConstVec` retains individually framed byte elements and its packed
+table/payload bound; `SmallVec` retains fixed-width element length prefixes.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.

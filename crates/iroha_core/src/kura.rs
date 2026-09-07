@@ -11527,6 +11527,7 @@ impl Kura {
     /// # Errors
     /// Returns an error when the certificate or pending-control store exceeds
     /// its bounds, or when durable no-clobber publication cannot complete.
+    #[cfg(test)]
     pub(crate) fn persist_pending_queue_plan_admission_certificate(
         &self,
         canonical_certificate_bytes: &[u8],
@@ -26015,6 +26016,7 @@ impl Kura {
         }
         Ok(artifact)
     }
+    #[cfg(test)]
     fn latest_certified_lane_block_frontier_inner(
         &self,
         lane_id: LaneId,
@@ -38126,6 +38128,7 @@ impl Kura {
         }
         (read_structural()? == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
+    #[cfg(test)]
     pub(crate) fn latest_native_amx_participant_application_receipt_matching(
         &self,
         lane_id: LaneId,

@@ -1233,47 +1233,31 @@ fn generic_arguments(generics: &Generics) -> TokenStream2 {
 
 struct PackedSerializeParts {
     direct: Vec<TokenStream2>,
-    checked: Vec<TokenStream2>,
-    lengths: Vec<TokenStream2>,
+    descriptors: Vec<TokenStream2>,
 }
 
 fn packed_serialize_parts(fields: &[StructField<'_>]) -> PackedSerializeParts {
     let mut direct = Vec::new();
-    let mut checked = Vec::new();
-    let mut lengths = Vec::new();
-    for (packed_index, field) in active_struct_fields(fields).enumerate() {
+    let mut descriptors = Vec::new();
+    for field in active_struct_fields(fields) {
         let member = &field.member;
         if u8_array_len(&field.field.ty).is_some() {
             direct.push(quote! { writer.write_all(&self.#member)?; });
-            checked.push(quote! {
-                if __field_lens[#packed_index] != core::mem::size_of_val(&self.#member) {
-                    return Err(norito::core::Error::LengthMismatch);
-                }
-                writer.write_all(&self.#member)?;
-            });
-            lengths.push(quote! {
-                __field_lens.push(core::mem::size_of_val(&self.#member));
+            descriptors.push(quote! {
+                norito::core::PackedField::Bytes(&self.#member)
             });
             continue;
         }
         direct.push(quote! {
             norito::core::NoritoSerialize::serialize(&self.#member, writer)?;
         });
-        checked.push(quote! {
-            norito::core::serialize_to_writer_exact(
-                &self.#member,
-                writer,
-                __field_lens[#packed_index],
-            )?;
-        });
-        lengths.push(quote! {
-            __field_lens.push(norito::core::encoded_payload_len(&self.#member)?);
+        descriptors.push(quote! {
+            norito::core::PackedField::Value(&self.#member)
         });
     }
     PackedSerializeParts {
         direct,
-        checked,
-        lengths,
+        descriptors,
     }
 }
 
@@ -1302,41 +1286,18 @@ fn struct_serialize_calls(
                 }
             } else {
                 quote! {
-                    norito::core::write_len_prefixed(
-                        writer,
-                        &self.#member,
-                        &mut __norito_tmp,
-                    )?;
+                    norito::core::write_len_prefixed(writer, &self.#member)?;
                 }
             }
         })
         .collect()
 }
 
-fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, TokenStream2, bool) {
-    let needs = active_struct_fields(fields)
-        .map(|field| needs_packed_size_with_attrs(&field.field.ty, &field.attrs))
-        .collect::<Vec<_>>();
+fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, bool) {
     let bytes = packed_field_bitset_from(fields);
     let bitset = quote! { [ #( #bytes ),* ] };
-    let sized_indices = needs
-        .into_iter()
-        .enumerate()
-        .filter(|(_, needs_size)| *needs_size)
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
     let all_needs_false = bytes.is_empty() || bytes.iter().all(|byte| *byte == 0);
-    (
-        bitset,
-        quote! {
-            norito::core::write_packed_size_headers(
-                writer,
-                &__field_lens,
-                &[#(#sized_indices),*],
-            )?;
-        },
-        all_needs_false,
-    )
+    (bitset, all_needs_false)
 }
 
 /// Generate `NoritoSerialize` implementation for a struct.
@@ -1357,10 +1318,8 @@ fn derive_struct_serialize(
     let serialize_calls = struct_serialize_calls(&parsed_fields, &mut r#gen);
     let PackedSerializeParts {
         direct: packed_field_ser_calls,
-        checked: packed_field_checked_ser_calls,
-        lengths: packed_field_len_stmts,
+        descriptors: packed_field_descriptors,
     } = packed_serialize_parts(&parsed_fields);
-    let packed_field_count = active_struct_fields(&parsed_fields).count();
     let field_bitset_enabled = if struct_has_signature_like(&parsed_fields) {
         quote! { false }
     } else {
@@ -1389,7 +1348,7 @@ fn derive_struct_serialize(
     let archived = format_ident!("Archived{}", ident);
     let alias_generics = generic_arguments(generics);
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
-    let (bitset_bytes, write_sizes_code, all_needs_false) = packed_size_headers(&parsed_fields);
+    let (bitset_bytes, all_needs_false) = packed_size_headers(&parsed_fields);
     let alias_decl = if reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
@@ -1434,36 +1393,22 @@ fn derive_struct_serialize(
                             #( #packed_field_ser_calls )*
                             Ok(())
                         } else {
-                            // Count every field, emit the dynamic sizes, then
-                            // serialize payloads directly without field-sized copies.
-                            let mut __field_lens: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                            __field_lens.try_reserve_exact(#packed_field_count)
-                                .map_err(|_| norito::core::Error::LengthMismatch)?;
-                            #(
-                                { #packed_field_len_stmts }
-                            )*
-                            writer.write_all(&#bitset_bytes)?;
-                            {
-                                #write_sizes_code
-                            }
-                            #( #packed_field_checked_ser_calls )*
-                            Ok(())
+                            norito::core::write_packed_fields(
+                                writer,
+                                &[#(#packed_field_descriptors),*],
+                                Some(&#bitset_bytes),
+                            )
                         }
                     } else {
-                        // Compat packed-struct: emit per-field lengths (or offsets) followed by payload data.
-                        let mut __field_lens: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                        __field_lens.try_reserve_exact(#packed_field_count)
-                            .map_err(|_| norito::core::Error::LengthMismatch)?;
-                        #(
-                            { #packed_field_len_stmts }
-                        )*
-                        norito::core::write_packed_offset_table(writer, &__field_lens)?;
-                        #( #packed_field_checked_ser_calls )*
-                        Ok(())
+                        // Packed offsets and their payloads share one measurement owner.
+                        norito::core::write_packed_fields(
+                            writer,
+                            &[#(#packed_field_descriptors),*],
+                            None,
+                        )
                     }
                 } else {
                     // Count each field before streaming it into its declared frame.
-                    let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                     #(#serialize_calls)*
                     Ok(())
                 }
@@ -2246,22 +2191,14 @@ fn derive_enum_serialize(
                                         if __norito_packed {
                                             norito::core::NoritoSerialize::serialize(#b, writer)?;
                                         } else {
-                                            norito::core::write_len_prefixed(
-                                                writer,
-                                                #b,
-                                                &mut __norito_tmp,
-                                            )?;
+                                            norito::core::write_len_prefixed(writer, #b)?;
                                         }
                                     }
                                 }
                             } else {
                                 quote! {
                                     // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                    norito::core::write_len_prefixed(
-                                        writer,
-                                        #b,
-                                        &mut __norito_tmp,
-                                    )?;
+                                    norito::core::write_len_prefixed(writer, #b)?;
                                 }
                             };
                             Some(ser)
@@ -2271,7 +2208,6 @@ fn derive_enum_serialize(
                     Self::#v_ident(#(#bindings),*) => {
                         let __norito_packed = norito::core::use_packed_struct();
                         norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
-                        let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                         #(#ignored_bindings)*
                         #(#serialize_calls)*
                     }
@@ -2339,11 +2275,7 @@ fn derive_enum_serialize(
                                 if __norito_packed {
                                     norito::core::NoritoSerialize::serialize(#name, writer)?;
                                 } else {
-                                    norito::core::write_len_prefixed(
-                                        writer,
-                                        #name,
-                                        &mut __norito_tmp,
-                                    )?;
+                                    norito::core::write_len_prefixed(writer, #name)?;
                                 }
                             }
                         }
@@ -2351,11 +2283,7 @@ fn derive_enum_serialize(
                         // Non self-delimiting, non-fixed: always write an outer length header
                         // for named enum fields (both in packed and non-packed modes).
                         quote! {
-                            norito::core::write_len_prefixed(
-                                writer,
-                                #name,
-                                &mut __norito_tmp,
-                            )?;
+                            norito::core::write_len_prefixed(writer, #name)?;
                         }
                     };
                     Some(ser)
@@ -2364,7 +2292,6 @@ fn derive_enum_serialize(
                     Self::#v_ident { #(#names),* } => {
                         let __norito_packed = norito::core::use_packed_struct();
                         norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
-                        let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                         #(#ignored_names)*
                         #(#serialize_calls)*
                     }

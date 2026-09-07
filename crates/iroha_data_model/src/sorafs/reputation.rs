@@ -2698,14 +2698,13 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             &self.0.source_time_unix_ms,
             &self.0.payload,
         ];
-        let mut scratch = norito::core::DeriveSmallBuf::new();
         for field in leading_fields {
-            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, field)?;
         }
         norito::core::write_len(writer, self.0.authority_policy_digest.len() as u64)?;
         writer.write_all(&self.0.authority_policy_digest)?;
         for field in trailing_fields {
-            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, field)?;
         }
         Ok(())
     }

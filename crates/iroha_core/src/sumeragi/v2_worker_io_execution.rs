@@ -141,6 +141,7 @@ fn recv_cleanup_completion(
             mpsc::RecvTimeoutError::Disconnected => CleanupCompletionWaitError::Disconnected,
         })
 }
+#[cfg(test)]
 fn sign_consensus_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
@@ -190,6 +191,7 @@ fn sign_consensus_task_with_kagemusha_authority(
         outbound_payload,
     })
 }
+#[cfg(test)]
 fn sign_recovered_lifecycle_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,

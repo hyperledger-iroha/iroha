@@ -9,6 +9,7 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
+pub(crate) mod subscriptions;
 use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
 pub use crate::query::QueryError;
 use crate::{
@@ -35,13 +36,6 @@ use crate::{
         self, DefaultHttpTransport, DefaultRequest, DefaultRequestBuilder, WebSocketMessage,
     },
     nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
-    subscriptions::{
-        SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCreateRequest,
-        SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListParams,
-        SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
-        SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
-        SubscriptionUsageResponse,
-    },
 };
 use base64::Engine as _;
 use bytes::Bytes;
@@ -14813,9 +14807,13 @@ mod evidence_http_tests {
             0xcd, 0x2f,
         ])
         .unwrap();
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-            client.get_offline_asset_registration_json(&asset)
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(mock_transport)
+                    .get_offline_asset_registration_json(&asset)
+            });
         result.expect("bounded JSON projection");
         assert_eq!(
             snapshot.url.path(),
@@ -14839,18 +14837,26 @@ mod evidence_http_tests {
             0xcd, 0x2f,
         ])
         .unwrap();
-        let (result, _) =
-            capture_request(json_response(StatusCode::SERVICE_UNAVAILABLE, "{}"), || {
-                client.get_offline_asset_registration_json(&asset)
-            });
+        let (result, _) = capture_request(
+            json_response(StatusCode::SERVICE_UNAVAILABLE, "{}"),
+            |mock_transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(mock_transport)
+                    .get_offline_asset_registration_json(&asset)
+            },
+        );
         assert!(result.is_err());
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
             .body(b"{}".to_vec())
             .unwrap();
-        let (result, _) = capture_request(response, || {
-            client.get_offline_asset_registration_json(&asset)
+        let (result, _) = capture_request(response, |mock_transport| {
+            client
+                .clone()
+                .with_test_http_transport(mock_transport)
+                .get_offline_asset_registration_json(&asset)
         });
         assert!(result.is_err());
     }
@@ -22205,222 +22211,6 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )
     }
-    /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn create_subscription_plan(
-        &self,
-        request: &SubscriptionPlanCreateRequest,
-    ) -> Result<SubscriptionPlanCreateResponse> {
-        self.require_subscription_authority(&request.authority)?;
-        let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode subscription plan create request")?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription plan create request")?;
-        norito::json::from_value(payload)
-            .wrap_err("failed to decode subscription plan create response")
-    }
-    /// GET `/v1/subscriptions/plans` with optional query parameters.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn list_subscription_plans(
-        &self,
-        params: &SubscriptionPlanListParams,
-    ) -> Result<SubscriptionPlanListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
-        let mut req = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON);
-        if let Some(provider) = &params.provider {
-            req = req.param("provider", provider);
-        }
-        if let Some(limit) = params.limit {
-            req = req.param("limit", &limit);
-        }
-        if params.offset > 0 {
-            req = req.param("offset", &params.offset);
-        }
-        let resp = self.send_builder(req)?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription plan list request")?;
-        norito::json::from_value(payload)
-            .wrap_err("failed to decode subscription plan list response")
-    }
-    /// POST `/v1/subscriptions` with a subscription creation payload.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn create_subscription(
-        &self,
-        request: &SubscriptionCreateRequest,
-    ) -> Result<SubscriptionCreateResponse> {
-        self.require_subscription_authority(&request.authority)?;
-        let url = join_torii_url(&self.torii_url, "v1/subscriptions");
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode subscription create request")?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription create request")?;
-        norito::json::from_value(payload).wrap_err("failed to decode subscription create response")
-    }
-    /// GET `/v1/subscriptions` with optional query parameters.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn list_subscriptions(
-        &self,
-        params: &SubscriptionListParams,
-    ) -> Result<SubscriptionListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/subscriptions");
-        let mut req = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON);
-        if let Some(owner) = &params.owned_by {
-            req = req.param("owned_by", owner);
-        }
-        if let Some(provider) = &params.provider {
-            req = req.param("provider", provider);
-        }
-        if let Some(status) = &params.status {
-            req = req.param("status", status);
-        }
-        if let Some(limit) = params.limit {
-            req = req.param("limit", &limit);
-        }
-        if params.offset > 0 {
-            req = req.param("offset", &params.offset);
-        }
-        let resp = self.send_builder(req)?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription list request")?;
-        norito::json::from_value(payload).wrap_err("failed to decode subscription list response")
-    }
-    /// GET `/v1/subscriptions/{subscription_id}`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn get_subscription(&self, subscription_id: &NftId) -> Result<SubscriptionGetResponse> {
-        let path = format!("v1/subscriptions/{subscription_id}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription get request")?;
-        norito::json::from_value(payload).wrap_err("failed to decode subscription get response")
-    }
-    /// POST `/v1/subscriptions/{subscription_id}/pause`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn pause_subscription(
-        &self,
-        subscription_id: &NftId,
-        request: &SubscriptionActionRequest,
-    ) -> Result<SubscriptionActionResponse> {
-        self.post_subscription_action(subscription_id, "pause", request)
-            .wrap_err("pause subscription request failed")
-    }
-    /// POST `/v1/subscriptions/{subscription_id}/resume`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn resume_subscription(
-        &self,
-        subscription_id: &NftId,
-        request: &SubscriptionActionRequest,
-    ) -> Result<SubscriptionActionResponse> {
-        self.post_subscription_action(subscription_id, "resume", request)
-            .wrap_err("resume subscription request failed")
-    }
-    /// POST `/v1/subscriptions/{subscription_id}/cancel`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn cancel_subscription(
-        &self,
-        subscription_id: &NftId,
-        request: &SubscriptionActionRequest,
-    ) -> Result<SubscriptionActionResponse> {
-        self.post_subscription_action(subscription_id, "cancel", request)
-            .wrap_err("cancel subscription request failed")
-    }
-    /// POST `/v1/subscriptions/{subscription_id}/keep`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn keep_subscription(
-        &self,
-        subscription_id: &NftId,
-        request: &SubscriptionActionRequest,
-    ) -> Result<SubscriptionActionResponse> {
-        self.post_subscription_action(subscription_id, "keep", request)
-            .wrap_err("keep subscription request failed")
-    }
-    /// POST `/v1/subscriptions/{subscription_id}/charge-now`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn charge_subscription_now(
-        &self,
-        subscription_id: &NftId,
-        request: &SubscriptionActionRequest,
-    ) -> Result<SubscriptionActionResponse> {
-        self.post_subscription_action(subscription_id, "charge-now", request)
-            .wrap_err("charge subscription request failed")
-    }
-    /// POST `/v1/subscriptions/{subscription_id}/usage`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
-    pub fn record_subscription_usage(
-        &self,
-        subscription_id: &NftId,
-        request: &SubscriptionUsageRequest,
-    ) -> Result<SubscriptionUsageResponse> {
-        self.require_subscription_authority(&request.authority)?;
-        let path = format!("v1/subscriptions/{subscription_id}/usage");
-        let url = join_torii_url(&self.torii_url, &path);
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode subscription usage request")?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription usage request")?;
-        norito::json::from_value(payload).wrap_err("failed to decode subscription usage response")
-    }
-    fn post_subscription_action(
-        &self,
-        subscription_id: &NftId,
-        action: &str,
-        request: &SubscriptionActionRequest,
-    ) -> Result<SubscriptionActionResponse> {
-        self.require_subscription_authority(&request.authority)?;
-        let path = format!("v1/subscriptions/{subscription_id}/{action}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode subscription action request")?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let payload = Self::parse_json_ok_response(&resp, "subscription action request")?;
-        norito::json::from_value(payload).wrap_err("failed to decode subscription action response")
-    }
-    fn require_subscription_authority(&self, authority: &AccountId) -> Result<()> {
-        if authority == &self.account {
-            return Ok(());
-        }
-        Err(eyre!(
-            "subscription request authority must equal the canonically authenticated client account"
-        ))
-    }
     /// Read one current asset registration through the configured Torii and canonical account signature.
     /// The returned projection is service evidence, not an issuer certificate or native capability.
     /// # Errors
@@ -24098,9 +23888,8 @@ where
     }
 }
 #[cfg(test)]
-mod subscription_http_tests {
-    include!("client/subscription_http_tests.rs");
-}
+#[path = "client/subscription_http_tests.rs"]
+mod subscription_http_tests;
 #[cfg(test)]
 mod tx_hash_tests {
     use crate::{
@@ -30161,8 +29950,10 @@ mod tests {
             let code_b64 = base64::engine::general_purpose::STANDARD.encode(returned_artifact);
             let response =
                 json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
-            let error = with_mock_http(respond_with(&store, response), || {
+            let error = with_mock_http(respond_with(&store, response), |mock_transport| {
                 client
+                    .clone()
+                    .with_test_http_transport(mock_transport)
                     .get_contract_code_bytes(&requested_hash)
                     .expect_err("generic hashing or header substitution must fail")
             });
@@ -33638,7 +33429,11 @@ mod tests {
         }
     }
     #[test]
-    fn synchronous_queue_plan_duplicate_wire_headers_remain_ambiguous() {
+    fn queue_plan_duplicate_wire_headers_remain_ambiguous() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
         let cases = [
             (
                 "content-type",
@@ -33665,52 +33460,58 @@ mod tests {
                 "signed-transaction header is missing, duplicated, or invalid",
             ),
         ];
-        for (scenario, header_name, mut header_value, expected_diagnostic) in cases {
-            let mut client = client_with_base_url(base_url());
-            let transaction = empty_transaction(&client);
-            let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
-                .expect("client transaction must use QueuePlanSynced admission");
-            if header_value.is_empty() {
-                header_value = if header_name == TRANSACTION_ENTRYPOINT_HASH_HEADER {
-                    identity.entrypoint_hash.to_string()
-                } else {
-                    identity.signed_transaction_hash.to_string()
-                };
-            }
-            let response = raw_queue_plan_outcome_unknown_response_with_additional_headers(
-                &identity,
-                &identity.signed_transaction_hash.to_string(),
-                &[(header_name, header_value)],
-            );
-            let (url, server) = serve_one_raw_transaction_response(response);
-            client.torii_url = url;
-            client.torii_request_timeout = Duration::from_secs(2);
-            mark_data_model_compatible(&client);
+        for asynchronous in [false, true] {
+            for (scenario, header_name, mut header_value, expected_diagnostic) in cases.clone() {
+                let mut client = client_with_base_url(base_url());
+                let transaction = empty_transaction(&client);
+                let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+                    .expect("client transaction must use QueuePlanSynced admission");
+                if header_value.is_empty() {
+                    header_value = if header_name == TRANSACTION_ENTRYPOINT_HASH_HEADER {
+                        identity.entrypoint_hash.to_string()
+                    } else {
+                        identity.signed_transaction_hash.to_string()
+                    };
+                }
+                let response = raw_queue_plan_outcome_unknown_response_with_additional_headers(
+                    &identity,
+                    &identity.signed_transaction_hash.to_string(),
+                    &[(header_name, header_value)],
+                );
+                let (url, server) = serve_one_raw_transaction_response(response);
+                client.torii_url = url;
+                client.torii_request_timeout = Duration::from_secs(2);
+                mark_data_model_compatible(&client);
 
-            let (error, retried) = {
-                let error = client
-                    .submit_transaction_for_test(&transaction)
+                let (error, retried) = {
+                    let error = if asynchronous {
+                        let account = client.account_client().expect("valid account context");
+                        runtime.block_on(account.submit_transaction(&transaction))
+                    } else {
+                        client.submit_transaction_for_test(&transaction)
+                    }
                     .expect_err("duplicate QueuePlan evidence cannot be exact");
-                let retried = server.join().expect("raw transaction response server");
-                (error, retried)
-            };
-            let ambiguity = error
-                .downcast_ref::<QueuePlanOutcomeUnknownError>()
-                .expect("duplicate QueuePlan evidence must remain a structured ambiguity");
-            assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
-            assert_eq!(
-                ambiguity.signed_transaction_hash(),
-                &identity.signed_transaction_hash
-            );
-            let report = format!("{error:#}");
-            assert!(
-                report.contains("invalid evidence") && report.contains(expected_diagnostic),
-                "{scenario} duplicate was lost before singleton validation: {report}"
-            );
-            assert!(
-                !retried,
-                "synchronous {scenario} ambiguity must not auto-resubmit"
-            );
+                    let retried = server.join().expect("raw transaction response server");
+                    (error, retried)
+                };
+                let ambiguity = error
+                    .downcast_ref::<QueuePlanOutcomeUnknownError>()
+                    .expect("duplicate QueuePlan evidence must remain a structured ambiguity");
+                assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+                assert_eq!(
+                    ambiguity.signed_transaction_hash(),
+                    &identity.signed_transaction_hash
+                );
+                let report = format!("{error:#}");
+                assert!(
+                    report.contains("invalid evidence") && report.contains(expected_diagnostic),
+                    "{scenario} duplicate was lost before singleton validation: {report}"
+                );
+                assert!(
+                    !retried,
+                    "{scenario} ambiguity must not auto-resubmit (async={asynchronous})"
+                );
+            }
         }
     }
     #[test]
@@ -38458,15 +38259,16 @@ mod tests {
         for (mut witness, label) in [
             (
                 iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-                "zero expected root",
+                "reserved sibling bitmap",
             ),
             (
                 iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
                 "membership witness",
             ),
         ] {
-            if label == "zero expected root" {
-                witness.expected_shard_root = [0; 32];
+            if label == "reserved sibling bitmap" {
+                witness.sibling_bitmap[0] = 1;
+                witness.siblings.push([0x77; 32]);
             } else {
                 witness.prior_record_digest = [0xA5; 32];
             }
@@ -38510,6 +38312,24 @@ mod tests {
                 .expect_err("zero creation time")
                 .to_string()
                 .contains("positive")
+        );
+    }
+    #[test]
+    fn native_replay_witness_preflight_preserves_full_width_roots() {
+        use iroha_data_model::bridge::{SccpReplayAccumulatorError, SccpSparseMerkleWitnessV1};
+
+        let mut witness = SccpSparseMerkleWitnessV1::empty_shard();
+        let authoritative_root = witness.expected_shard_root;
+        witness.expected_shard_root = [0; 32];
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&witness).expect("encode full-width root"));
+        let decoded = decode_sccp_replay_witness_b64(&encoded)
+            .expect("zero is a possible hash value, not a root sentinel");
+        assert_eq!(decoded, witness);
+        assert_eq!(
+            decoded.verify_against_current_root([0; 32], [0; 32], authoritative_root),
+            Err(SccpReplayAccumulatorError::StaleRoot),
+            "state verification still requires the exact authoritative root"
         );
     }
     fn native_submit_fixture(

@@ -320,16 +320,6 @@ macro_rules! impl_mint_transport_circuit {
 
 macro_rules! impl_mint_authorization_transport_circuit {
     ($circuit:ty, $field:ty, $label:literal) => {
-        #[cfg(test)]
-        impl $circuit {
-            /// Inventory the configured Base graph without claiming whole-prover feasibility.
-            pub(super) fn capacity_profile(
-                &self,
-            ) -> Result<KagemushaMintTransportDeciderCapacityProfileV1, String> {
-                mint_transport_capacity_profile_v1(&self.builder)
-            }
-        }
-
         impl Circuit<$field> for $circuit {
             type Config = (
                 KagemushaMintTransportDeciderConfigV1<$field>,

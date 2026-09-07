@@ -3119,7 +3119,9 @@ mod measured_bytes_impls {
     }
     impl MeasuredBytes for DomainId {
         fn measured_bytes(&self) -> usize {
-            size_of::<DomainId>().saturating_add(self.name.measured_bytes_extra())
+            size_of::<DomainId>()
+                .saturating_add(self.name().measured_bytes_extra())
+                .saturating_add(self.dataspace().measured_bytes_extra())
         }
     }
     impl MeasuredBytes for AccountAliasDomain {

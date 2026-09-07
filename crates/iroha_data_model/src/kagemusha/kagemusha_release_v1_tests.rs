@@ -9,7 +9,7 @@ use crate::kagemusha::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use p256::ecdsa::{SigningKey, signature::Signer as _};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
 const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];

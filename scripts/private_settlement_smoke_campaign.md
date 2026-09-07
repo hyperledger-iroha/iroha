@@ -51,6 +51,16 @@ retry or count skipped networks as success. A failed command, state invariant,
 source/binary check, or evidence check ends the campaign; the failed directory
 is retained and cannot validate as a passing campaign.
 
+After scrubbing inherited test settings, each proving child receives
+`RAYON_NUM_THREADS=8` and the exact smoke invocation retains
+`--test-threads=1`. Every command receipt records the effective
+`RAYON_NUM_THREADS`, `RUST_TEST_THREADS`, `CARGO_BUILD_JOBS`, and
+`CARGO_INCREMENTAL` values; absent values are `null`. Validation requires these
+values to match the pinned invocation. Each validator keeps the test harness
+configuration of four Rayon, scheduler, and pipeline workers. The sixteen
+validators and proving process can exceed sixteen runnable workers; these
+settings do not impose a host-wide CPU cap.
+
 Each request has exactly `version`, `protocol`, `kind`, `request_id`,
 `invocation_nonce`, `commit`, `seed`, and `run`. The version is 1, protocol is
 `AtomicPrivateSettlementV1`, kind is `smoke`, and run is in `0..9`. The request ID

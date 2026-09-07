@@ -2976,8 +2976,7 @@ mod borrowed_norito {
                 Some(bytes) => {
                     writer.write_all(&[1])?;
                     let value = Vec(bytes);
-                    let mut temporary = norito::core::DeriveSmallBuf::new();
-                    norito::core::write_len_prefixed(writer, &value, &mut temporary)?;
+                    norito::core::write_len_prefixed(writer, &value)?;
                 }
                 None => writer.write_all(&[0])?,
             }

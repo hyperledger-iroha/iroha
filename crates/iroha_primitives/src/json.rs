@@ -23,6 +23,17 @@ pub const MAX_JSON_NESTING_DEPTH: usize = json::MAX_JSON_VALUE_NESTING_DEPTH;
 /// canonical rendering of a valid JSON document.
 ///
 /// Use [`Json::new`] to serialize a value and establish the canonical lexical invariant.
+///
+/// Arbitrary JSON documents are values, not typed object keys. Use a canonical
+/// scalar key type when serializing a map.
+///
+/// ```compile_fail
+/// use std::collections::BTreeMap;
+/// use iroha_primitives::json::Json;
+///
+/// let values = BTreeMap::from([(Json::new("key"), 1_u8)]);
+/// let _ = norito::json::to_json(&values);
+/// ```
 #[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq)]
 #[display("{_0}")]
 #[derive(norito::NoritoSchema)]

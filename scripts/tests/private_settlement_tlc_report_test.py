@@ -39,10 +39,10 @@ def positive_log(
     """Return a minimal complete passing TLC transcript."""
 
     return run_header() + (
+        f"{MODULE.SUCCESS_MARKER}\n"
         f"{generated} states generated, {distinct} distinct states found, "
         f"{queued} states left on queue.\n"
         f"The depth of the complete state graph search is {depth}.\n"
-        f"{MODULE.SUCCESS_MARKER}\n"
         "Finished in 1s at (2026-08-30 12:34:56)\n"
     )
 
@@ -128,6 +128,53 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             action_property.observed_outcome, "action_property_violation"
         )
         self.assertEqual(action_property.generated_states, 12)
+
+    def test_pinned_tlc_success_precedes_final_statistics(self) -> None:
+        # Result tail recorded from authenticated TLA+ tools 1.7.4 / TLC 2.19.
+        # Host paths and invocation-specific headers are supplied separately.
+        result_tail = """Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-09-07 11:35:00.
+Progress(24) at 2026-09-07 11:35:01: 4,059 states generated, 1,152 distinct states found, 0 states left on queue.
+Checking temporal properties for the complete state space with 1152 total distinct states at (2026-09-07 11:35:01)
+Finished checking temporal properties in 00s at 2026-09-07 11:35:01
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 1.8E-13
+4059 states generated, 1152 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 24.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 6 and the 95th percentile is 3).
+Finished in 00s at (2026-09-07 11:35:01)
+"""
+        stdout = run_header(workers=2) + result_tail
+        arguments = dict(
+            name="recorded-positive.cfg",
+            model="AtomicPrivateSettlementV1CommitteeFaults.tla",
+            expected_outcome="pass",
+            stderr="",
+            status=0,
+            seed=20260829,
+            fingerprint_index=0,
+            workers="2",
+            tlc_version="2.19",
+        )
+        passing = MODULE.parse_run(stdout=stdout, **arguments)
+        self.assertEqual(passing.generated_states, 4059)
+        self.assertEqual(passing.distinct_states, 1152)
+        self.assertEqual(passing.depth, 24)
+        self.assertEqual(passing.observed_outcome, "pass")
+
+        success_line = f"{MODULE.SUCCESS_MARKER}\n"
+        invalid = {
+            "duplicate-success": stdout.replace(success_line, success_line * 2),
+            "success-before-header": success_line + stdout.replace(success_line, ""),
+            "failure-diagnostic": stdout.replace(
+                success_line, "Error: unrelated TLC failure\n" + success_line
+            ),
+        }
+        for label, transcript in invalid.items():
+            with self.subTest(label=label), self.assertRaises(MODULE.ReportError):
+                MODULE.parse_run(stdout=transcript, **arguments)
 
     def test_action_property_result_contract_is_distinct_and_fail_closed(self) -> None:
         with self.assertRaisesRegex(
@@ -364,11 +411,10 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                 tlc_version="2.19",
             )
 
-        reordered = positive_log().replace(
+        reordered = positive_log().replace(f"{MODULE.SUCCESS_MARKER}\n", "").replace(
+            "The depth of the complete state graph search is 42.\n",
             "The depth of the complete state graph search is 42.\n"
             f"{MODULE.SUCCESS_MARKER}\n",
-            f"{MODULE.SUCCESS_MARKER}\n"
-            "The depth of the complete state graph search is 42.\n",
         )
         with self.assertRaisesRegex(MODULE.ReportError, "out of order"):
             MODULE.parse_run(

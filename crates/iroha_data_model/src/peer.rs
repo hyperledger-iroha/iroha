@@ -206,9 +206,11 @@ impl norito::json::JsonObjectKey for Peer {
 
     fn visit_json_key_text_checked(
         &self,
-        visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+        mut visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
     ) -> Result<(), json::BoundedJsonError> {
-        json::visit_json_display_text(self, visitor)
+        norito::json::JsonObjectKey::visit_json_key_text_checked(self.id(), &mut visitor)?;
+        visitor("@")?;
+        json::visit_json_display_text(self.address(), visitor)
     }
 }
 #[cfg(feature = "json")]
@@ -507,6 +509,51 @@ mod tests {
             json::to_json_bounded(&map, expected_map.len() - 1),
             Err(json::BoundedJsonError::BodyTooLarge)
         ));
+    }
+
+    #[test]
+    fn peer_checked_map_key_validates_id_before_streaming_address() {
+        use norito::json::JsonObjectKey;
+
+        let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+        let address = "127.0.0.1:1337"
+            .parse::<SocketAddr>()
+            .expect("valid address");
+        let valid = Peer::new(
+            address.clone(),
+            literal.parse::<PublicKey>().expect("valid key"),
+        );
+        let expected = format!("{{\"{valid}\":3}}");
+        let map = std::collections::BTreeMap::from([(valid.clone(), 3_u8)]);
+        assert_eq!(
+            json::to_json_bounded(&map, expected.len()).expect("exact checked Peer map key"),
+            expected
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
+
+        let mut calls = 0;
+        let error = JsonObjectKey::visit_json_key_text_checked(&valid, |_| {
+            calls += 1;
+            Err(json::BoundedJsonError::BodyTooLarge)
+        })
+        .expect_err("first visitor error must stop checked key output");
+        assert!(matches!(error, json::BoundedJsonError::BodyTooLarge));
+        assert_eq!(calls, 1);
+
+        let mut invalid_key = literal.parse::<PublicKey>().expect("valid key");
+        invalid_key.zeroize_for_confidential_discard();
+        let invalid = Peer::new(address, invalid_key);
+        let mut emitted = false;
+        let error = JsonObjectKey::visit_json_key_text_checked(&invalid, |_| {
+            emitted = true;
+            Ok(())
+        })
+        .expect_err("invalid peer key must fail before output");
+        assert!(matches!(error, json::BoundedJsonError::Unsupported));
+        assert!(!emitted);
     }
 
     #[test]

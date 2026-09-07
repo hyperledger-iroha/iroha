@@ -1,5 +1,5 @@
 // Source-bounded materialization for application-API routed reads.
-use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize};
+use norito::core::{DecodeFlagsGuard, Encoder, NoritoDeserialize};
 use std::marker::PhantomData;
 /// Borrowed wire-equivalent of a derived struct in declaration order.
 ///
@@ -32,9 +32,8 @@ where
                 "borrowed routed-read packed struct",
             ));
         }
-        let mut scratch = DeriveSmallBuf::new();
         for value in self.fields.iter().copied() {
-            norito::core::write_len_prefixed(writer, value, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, value)?;
         }
         Ok(())
     }

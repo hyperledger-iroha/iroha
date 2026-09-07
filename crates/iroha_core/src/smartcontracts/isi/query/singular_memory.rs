@@ -1,6 +1,6 @@
 //! Bounded ownership corridor for server-owned singular-query execution.
 use super::Error;
-use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize, NoritoSerialize};
+use norito::core::{DecodeFlagsGuard, Encoder, NoritoDeserialize, NoritoSerialize};
 use std::{cell::Cell, marker::PhantomData, ops::Deref};
 /// Dynamic source/output ceilings for one singular query executed by a server-owned memory lane.
 ///
@@ -221,8 +221,7 @@ impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
         match self.0 {
             Some(value) => {
                 writer.write_all(&[1])?;
-                let mut scratch = DeriveSmallBuf::new();
-                norito::core::write_len_prefixed(writer, value, &mut scratch)
+                norito::core::write_len_prefixed(writer, value)
             }
             None => {
                 writer.write_all(&[0])?;
@@ -270,9 +269,8 @@ where
                 "borrowed singular packed struct",
             ));
         }
-        let mut scratch = DeriveSmallBuf::new();
         for value in self.fields.iter().copied() {
-            norito::core::write_len_prefixed(writer, value, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, value)?;
         }
         Ok(())
     }
@@ -302,9 +300,8 @@ where
             writer,
             u64::try_from(count).map_err(|_| norito::core::Error::LengthMismatch)?,
         )?;
-        let mut scratch = DeriveSmallBuf::new();
         for value in self.values.clone() {
-            norito::core::write_len_prefixed(writer, value, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, value)?;
         }
         Ok(())
     }

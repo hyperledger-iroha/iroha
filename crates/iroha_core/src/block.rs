@@ -18261,7 +18261,8 @@ pub(crate) mod valid {
                 .expect("commit predecessor with exact finality authority");
             kura.store_block(Arc::new(signed))
                 .expect("store applied lane predecessor block");
-            kura.store_v2_finality_artifact(&artifact)
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
                 .expect("persist actual predecessor finality before application receipts");
             {
                 let mut state_block = state.block(committed.as_ref().header());
@@ -18490,7 +18491,8 @@ pub(crate) mod valid {
                 .latest_block()
                 .expect("committed fixture parent");
             let finality = applied_lane_predecessor_finality(&parent, &state, &keys);
-            kura.store_v2_finality_artifact(&finality)
+            let _ = kura
+                .store_v2_finality_artifact(&finality)
                 .expect("publish the exact parent finality before successor validation");
             let authority = state
                 .resolve_lane_committee_at_height(
@@ -20393,7 +20395,8 @@ pub(crate) mod valid {
                 .expect("retain exact finality authority in the committed predecessor");
             kura.store_block(Arc::new(first))
                 .expect("store first lane predecessor artifact");
-            kura.store_v2_finality_artifact(&artifact)
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
                 .expect("publish exact finality before admitting raw predecessor ownership");
             {
                 let mut state_block = state.block(committed_first.as_ref().header());

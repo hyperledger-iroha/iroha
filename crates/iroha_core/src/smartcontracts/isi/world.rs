@@ -12425,7 +12425,6 @@ pub mod isi {
     #[derive(Debug)]
     struct ValidatedSccpNativeBridgeMessageV1 {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
-        route_configuration_hash: [u8; 32],
         settlement: SccpInboundSettlementV1,
         replay_accumulator_id: iroha_data_model::bridge::SccpReplayAccumulatorIdV1,
         replay_domain: iroha_data_model::bridge::SccpReplayDomainV1,
@@ -12689,7 +12688,6 @@ pub mod isi {
         };
         Ok(ValidatedSccpNativeBridgeMessageV1 {
             admission: validated,
-            route_configuration_hash: route.route_configuration_hash,
             settlement,
             replay_accumulator_id,
             replay_domain,
@@ -37230,7 +37228,7 @@ seiyaku GovernanceLifecycle {
                 DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
             let canonical_label =
-                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+                name::canonicalize_domain_label(domain_id.name().as_ref()).expect("canonical");
             let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
                 .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
@@ -37282,7 +37280,7 @@ seiyaku GovernanceLifecycle {
             let domain_id: DomainId =
                 DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let canonical_label =
-                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+                name::canonicalize_domain_label(domain_id.name().as_ref()).expect("canonical");
             let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
                 .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
@@ -37355,7 +37353,7 @@ seiyaku GovernanceLifecycle {
                 DomainId::try_new("endorse-expired", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
             let canonical_label =
-                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+                name::canonicalize_domain_label(domain_id.name().as_ref()).expect("canonical");
             let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
                 .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());

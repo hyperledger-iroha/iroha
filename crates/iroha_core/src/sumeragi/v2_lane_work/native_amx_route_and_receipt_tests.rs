@@ -704,7 +704,7 @@ fn native_coordinator_after_applied_participant_fixture() -> (
         .kura
         .store_block(carrier.clone())
         .expect("store actual Native carrier");
-    adapter
+    let _ = adapter
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("publish actual Native manifest and complete wire authority");

@@ -554,6 +554,19 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
     /// Returns an error if canonical frame encoding fails or the destination writer rejects the
     /// frame.
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error>;
+    /// Write the registry wire identifier and framed instruction as one canonical tuple.
+    ///
+    /// The concrete instruction owns frame measurement while retaining the encoder's
+    /// destination, including length-only encoding passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns tuple-prefix, frame-measurement, or checked-output errors.
+    fn dyn_write_pair(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+        wire_id: &str,
+    ) -> Result<(), norito::core::Error>;
     /// Return the exact canonical Norito frame length without allocating.
     ///
     /// # Errors
@@ -613,6 +626,15 @@ where
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
         let mut writer = writer;
         norito::core::write_frame_to_writer(self, &mut writer)
+    }
+    fn dyn_write_pair(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+        wire_id: &str,
+    ) -> Result<(), norito::core::Error> {
+        norito::core::write_frame_with_prefix(self, writer, |writer, frame_len| {
+            write_instruction_pair_prefix(writer, wire_id, frame_len)
+        })
     }
     fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
         norito::core::encoded_frame_len(self)
@@ -684,12 +706,6 @@ impl<'a, W: std::io::Write + ?Sized> ExactInstructionFrameWriter<'a, W> {
     }
     fn is_complete(&self) -> bool {
         !self.rejected_write && self.written == self.expected
-    }
-    fn rejected_write(&self) -> bool {
-        self.rejected_write
-    }
-    fn written(&self) -> usize {
-        self.written
     }
     fn admit(&mut self, additional: usize) -> std::io::Result<()> {
         let Some(end) = self.written.checked_add(additional) else {
@@ -830,20 +846,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
         .ok_or_else(|| {
             norito::core::Error::Message("failed to encode instruction payload".to_owned())
         })?;
-        let framed_payload_len = inner.dyn_frame_len()?;
-        write_instruction_pair_prefix(&mut *writer, entry.wire_id, framed_payload_len)?;
-        let (write_result, rejected_write, written) = {
-            let mut exact = ExactInstructionFrameWriter::new(writer, framed_payload_len);
-            let write_result = inner.dyn_write_frame(&mut exact);
-            (write_result, exact.rejected_write(), exact.written())
-        };
-        if rejected_write {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        write_result?;
-        (written == framed_payload_len)
-            .then_some(())
-            .ok_or(norito::core::Error::LengthMismatch)
+        inner.dyn_write_pair(writer, entry.wire_id)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         encoded_instruction_pair_len(self).or_else(|| encoded_instruction_pair_hint(self))
@@ -2820,6 +2823,9 @@ mod test_support;
 #[cfg(test)]
 #[path = "instruction_enum_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod framing_tests;
 
 #[cfg(test)]
 mod generated_argument_identity_tests;

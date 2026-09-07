@@ -120,22 +120,27 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use self::sparse_merkle::ExactConsumedCreditIndex;
-#[cfg(test)]
-use self::sparse_merkle::authenticated_history::KagemushaHistoryOverlayUsageV1;
 #[cfg(unix)]
 pub(crate) use self::sparse_merkle::authenticated_history::disk_history_store::{
     KagemushaDiskAuthenticatedHistoryStoreV1, KagemushaHistoryDeviceCredentialsV1,
 };
-pub(crate) use self::sparse_merkle::authenticated_history::{
+pub use self::sparse_merkle::authenticated_history::{
     KagemushaAuthenticatedHistoryStoreV1, KagemushaHistoryAbortOutcomeV1,
-    KagemushaHistoryCommitOutcomeV1, KagemushaHistoryDualInsertPreparationV1,
-    KagemushaHistoryIdentityClassificationV1, KagemushaHistoryInsertPreparationV1,
-    KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryProofRootBridgeRequestV1,
-    KagemushaHistoryRecoveryOutcomeV1, KagemushaHistoryRootSelectionCertificateV1,
-    KagemushaHistoryRootSelectionSubjectV1, KagemushaHistoryRootsV1, KagemushaHistoryStoreErrorV1,
-    KagemushaHistoryTreeV1, KagemushaMemoryAuthenticatedHistoryStoreV1,
-    KagemushaPreparedHistoryCasV1, VerifiedKagemushaHistoryProofRootBridgeV1,
-    VerifiedKagemushaHistoryRootSelectionV1, classify_history_identity_v1,
+    KagemushaHistoryCommitOutcomeV1, KagemushaHistoryNodeRecordV1,
+    KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryRecoveryOutcomeV1, KagemushaHistoryRootsV1,
+    KagemushaHistoryStoreErrorV1, KagemushaHistoryTreeV1,
+    KagemushaMemoryAuthenticatedHistoryStoreV1, KagemushaPreparedHistoryCasV1,
+    VerifiedKagemushaHistoryRootSelectionV1,
+};
+#[cfg(test)]
+pub use self::sparse_merkle::authenticated_history::{
+    KagemushaCommittedRootReadV1, KagemushaHistoryOverlayUsageV1,
+};
+pub(crate) use self::sparse_merkle::authenticated_history::{
+    KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryIdentityClassificationV1,
+    KagemushaHistoryInsertPreparationV1, KagemushaHistoryProofRootBridgeRequestV1,
+    KagemushaHistoryRootSelectionCertificateV1, KagemushaHistoryRootSelectionSubjectV1,
+    VerifiedKagemushaHistoryProofRootBridgeV1, classify_history_identity_v1,
     prepare_history_identity_insert_v1, prepare_history_identity_pair_v1,
     require_history_proof_root_bridge_v1, validate_committed_history_v1,
 };

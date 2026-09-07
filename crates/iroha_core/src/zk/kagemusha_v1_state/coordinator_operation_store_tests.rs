@@ -423,7 +423,7 @@ fn operation_store_cross_sdk_sender_reservations_match_canonical_core_types() {
 
 #[test]
 fn operation_store_intent_crash_recovery_never_becomes_prepared_or_absent() {
-    let (mut machine, credential, account) = machine();
+    let (machine, credential, account) = machine();
     let (_root, path) = location();
     let mut store = machine
         .create_coordinator_operation_store(&path, CAPACITY)
@@ -632,7 +632,7 @@ fn operation_store_must_reconcile_again_when_core_advances_after_open() {
 
 #[test]
 fn operation_store_foreign_wallet_context_and_changed_epoch_fail_closed() {
-    let (mut machine, credential, account) = machine();
+    let (machine, credential, account) = machine();
     let (_root, path) = location();
     let mut store = machine
         .create_coordinator_operation_store(&path, CAPACITY)

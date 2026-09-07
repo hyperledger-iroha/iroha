@@ -42,7 +42,7 @@ use super::v2_core::{
     check_production_body_service_effective_lock_transition,
     check_production_ingress_reservation_materialization_transition,
     check_production_ingress_transition, classify_exact_body_completion_ownership,
-    select_bounded_service_class, timeout_vote_view_is_admissible,
+    select_bounded_service_class,
 };
 use super::{
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,

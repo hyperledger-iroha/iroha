@@ -1,5 +1,6 @@
 //! Native deterministic execution relations, transparent proofs and public replay verification.
 
+#[cfg(test)]
 mod checked_integer_air;
 /// Upgraded racing reference computation; its proof profile is not registered.
 pub mod classed_race_v1;

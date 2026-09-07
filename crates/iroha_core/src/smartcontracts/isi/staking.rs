@@ -2484,6 +2484,7 @@ pub(crate) fn apply_consensus_slash_to_validator(
     )
 }
 /// Apply a slash in a disposable validation transaction without external observability effects.
+#[cfg(test)]
 pub(crate) fn apply_slash_to_validator_without_observability(
     state_transaction: &mut StateTransaction<'_, '_>,
     lane_id: LaneId,

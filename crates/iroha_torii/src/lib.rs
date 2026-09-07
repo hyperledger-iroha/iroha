@@ -17946,7 +17946,7 @@ async fn handler_subscription_plans_create(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionPlanCreateDto,
+        iroha_torii_shared::subscriptions::SubscriptionPlanCreateRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     require_subscription_draft_account(&req.authority, &verified, "subscription plan draft")?;
@@ -17981,7 +17981,7 @@ async fn handler_subscriptions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::SubscriptionListParams>,
+    AxQuery(p): AxQuery<iroha_torii_shared::subscriptions::SubscriptionListParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
@@ -17999,7 +17999,7 @@ async fn handler_subscriptions_create(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionCreateDto,
+        iroha_torii_shared::subscriptions::SubscriptionCreateRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     require_subscription_draft_account(&req.authority, &verified, "subscription creation draft")?;
@@ -18055,7 +18055,7 @@ macro_rules! subscription_action_handlers {
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
                 AxPath(subscription_raw): AxPath<String>,
                 crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-                    crate::routing::SubscriptionActionDto,
+                    iroha_torii_shared::subscriptions::SubscriptionActionRequest,
                 >,
             ) -> Result<impl IntoResponse, Error> {
                 require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
@@ -18119,7 +18119,7 @@ async fn handler_subscription_usage(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionUsageRequestDto,
+        iroha_torii_shared::subscriptions::SubscriptionUsageRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     require_subscription_draft_account(&req.authority, &verified, "subscription usage draft")?;
@@ -24502,18 +24502,11 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
     }
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         const DOMAIN: &str = "torii:proxy:v1";
-        let mut scratch = norito::core::SmallBuf::<384>::new();
-        norito::core::write_len_prefixed(writer, &DOMAIN, &mut scratch)?;
-        norito::core::write_len_prefixed(writer, self.process_session_id, &mut scratch)?;
-        norito::core::write_len_prefixed(writer, self.local_peer_id, &mut scratch)?;
-        norito::core::write_len_prefixed(writer, &self.sequence, &mut scratch)?;
-        if self.request.encoded_len_exact().is_none() {
-            // The generic fallback stages the entire request field. Request-id
-            // derivation is admitted only when the request enum can use the
-            // proven direct-streaming path.
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::write_len_prefixed(writer, self.request, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, &DOMAIN)?;
+        norito::core::write_len_prefixed(writer, self.process_session_id)?;
+        norito::core::write_len_prefixed(writer, self.local_peer_id)?;
+        norito::core::write_len_prefixed(writer, &self.sequence)?;
+        norito::core::write_len_prefixed(writer, self.request)?;
         Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
@@ -25855,19 +25848,6 @@ fn decode_verified_singular_fanout_request_bounded(
 fn canonical_fanout_len_prefixed(payload_len: usize) -> Option<usize> {
     norito::core::len_prefix_len(payload_len).checked_add(payload_len)
 }
-fn write_canonical_fanout_exact_field<T>(
-    writer: &mut norito::core::Encoder<'_>,
-    value: &T,
-) -> Result<(), norito::core::Error>
-where
-    T: norito::core::NoritoSerialize,
-{
-    if value.encoded_len_exact().is_none() {
-        return Err(norito::core::Error::LengthMismatch);
-    }
-    let mut unused_fallback = norito::core::DeriveSmallBuf::new();
-    norito::core::write_len_prefixed(writer, value, &mut unused_fallback)
-}
 #[derive(Clone, Copy)]
 enum CanonicalFanoutBatchRef<'a> {
     RoleId(&'a Vec<iroha_data_model::role::RoleId>),
@@ -25925,7 +25905,7 @@ impl CanonicalFanoutBatchRef<'_> {
                 u64::try_from(values.len()).map_err(|_| norito::core::Error::LengthMismatch)?,
             )?;
             for value in values {
-                write_canonical_fanout_exact_field(writer, value)?;
+                norito::core::write_len_prefixed(writer, value)?;
             }
             Ok(())
         }
@@ -25939,7 +25919,7 @@ impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.discriminant(), writer)?;
         let values = CanonicalFanoutValuesRef(*self);
-        write_canonical_fanout_exact_field(writer, &values)
+        norito::core::write_len_prefixed(writer, &values)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -25967,7 +25947,7 @@ struct CanonicalFanoutOneColumnRef<'a>(CanonicalFanoutBatchRef<'a>);
 impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_seq_len(writer, 1)?;
-        write_canonical_fanout_exact_field(writer, &self.0)
+        norito::core::write_len_prefixed(writer, &self.0)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -25981,7 +25961,7 @@ impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {
 struct CanonicalFanoutBatchTupleRef<'a>(CanonicalFanoutBatchRef<'a>);
 impl norito::core::NoritoSerialize for CanonicalFanoutBatchTupleRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        write_canonical_fanout_exact_field(writer, &CanonicalFanoutOneColumnRef(self.0))
+        norito::core::write_len_prefixed(writer, &CanonicalFanoutOneColumnRef(self.0))
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -26000,10 +25980,10 @@ struct CanonicalFanoutOutputRef<'a> {
 }
 impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        write_canonical_fanout_exact_field(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
-        write_canonical_fanout_exact_field(writer, self.remaining_items)?;
-        write_canonical_fanout_exact_field(writer, self.has_more)?;
-        write_canonical_fanout_exact_field(writer, self.continue_cursor)
+        norito::core::write_len_prefixed(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
+        norito::core::write_len_prefixed(writer, self.remaining_items)?;
+        norito::core::write_len_prefixed(writer, self.has_more)?;
+        norito::core::write_len_prefixed(writer, self.continue_cursor)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -26081,7 +26061,7 @@ impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
         }
         // QueryResponse::Iterable is the second data-model variant.
         norito::core::NoritoSerialize::serialize(&1_u32, writer)?;
-        write_canonical_fanout_exact_field(writer, &self.output_ref())
+        norito::core::write_len_prefixed(writer, &self.output_ref())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()

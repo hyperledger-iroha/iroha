@@ -9,10 +9,10 @@ These guidelines apply to the `crates/` directory and supplement the repository 
 
 ## Development workflow
 - Keep crate-specific README files and documentation up to date.
-- Avoid modifying `Cargo.lock`.
-- Prefer internal modules over adding new dependencies. If a dependency is essential, justify it in the PR description.
+- Use focused crates for real dependency or compilation boundaries, and internal modules for cohesion within a boundary. Keep dependencies acyclic and owned by the lowest appropriate layer.
+- Update workspace membership and regenerate `Cargo.lock` coherently when changing dependencies; preserve unrelated working-tree changes and explain the ownership change in the PR description.
 - Add tests for each new or modified function. Co-locate with code via `#[cfg(test)]` or use `tests/` for black-box tests.
-- Use feature flags for optional behavior (e.g., `std`, `simd`, `cuda`) and keep deterministic fallbacks.
+- The workspace requires `std`. Use feature flags for optional hardware acceleration (e.g., `simd`, `cuda`) with deterministic fallbacks; mandatory node and IVM behavior must remain available in every supported build.
 - Run `cargo fmt --all` (edition 2024) and `cargo test --workspace` from the repository root after changes; fix any build issues.
 - Optionally run `cargo clippy --workspace --all-targets -- -D warnings` for additional lint checks.
 
