@@ -51,9 +51,9 @@ impl JsonObjectKey for crate::compute::ComputePriceRiskClass {
         mut visitor: impl FnMut(&str) -> Result<(), E>,
     ) -> Result<(), E> {
         visitor(match self {
-            Self::Low => "low",
-            Self::Balanced => "balanced",
-            Self::High => "high",
+            Self::Low => "Low",
+            Self::Balanced => "Balanced",
+            Self::High => "High",
         })
     }
 }
@@ -61,11 +61,11 @@ impl JsonObjectKey for crate::compute::ComputePriceRiskClass {
 impl JsonObjectKeyOwned for crate::compute::ComputePriceRiskClass {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         match key {
-            "low" => Ok(Self::Low),
-            "balanced" => Ok(Self::Balanced),
-            "high" => Ok(Self::High),
+            "Low" => Ok(Self::Low),
+            "Balanced" => Ok(Self::Balanced),
+            "High" => Ok(Self::High),
             _ => Err(json::Error::Message(
-                "compute price risk class key must be `low`, `balanced`, or `high`".to_owned(),
+                "compute price risk class key must be `Low`, `Balanced`, or `High`".to_owned(),
             )),
         }
     }
@@ -299,7 +299,7 @@ mod tests {
             (ComputePriceRiskClass::Balanced, 2_u8),
             (ComputePriceRiskClass::High, 3_u8),
         ]);
-        let expected = r#"{"low":1,"balanced":2,"high":3}"#;
+        let expected = r#"{"Low":1,"Balanced":2,"High":3}"#;
         assert_eq!(
             json::to_json(&map).expect("canonical risk class keys"),
             expected
@@ -326,12 +326,16 @@ mod tests {
 
         for key in [
             "",
-            "Low",
-            "Balanced",
+            "low",
+            "balanced",
+            "high",
+            "LOW",
+            "BALANCED",
             "HIGH",
-            " low",
-            "low ",
+            " Low",
+            "Low ",
             "medium",
+            "Unknown",
             "0",
             r#"{"class":"Low","value":null}"#,
         ] {

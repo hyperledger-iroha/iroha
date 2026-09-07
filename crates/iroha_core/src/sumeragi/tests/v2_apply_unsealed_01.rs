@@ -2091,6 +2091,83 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
         .replay_plan_journal(fixture.state.as_ref())
         .expect("replay strict-absence QueuePlan payloads");
     assert!(queue.lane_reservation_startup_reconciliation_pending());
+    let unchanged_snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture owners before rejected direct-release authorities");
+    let unchanged_fifo = queue.fifo_snapshot_for_test();
+    let unchanged_reservations = std::fs::read(&reservation_path)
+        .expect("read reservation journal before rejected direct-release authorities");
+    let unchanged_plans = std::fs::read(&plan_path)
+        .expect("read QueuePlan journal before rejected direct-release authorities");
+    let assert_rejected_release_unchanged = || {
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("read retained owners"),
+            unchanged_snapshot,
+            "rejected direct-release authority must preserve every reservation owner",
+        );
+        assert_eq!(queue.fifo_snapshot_for_test(), unchanged_fifo);
+        assert_eq!(
+            std::fs::read(&reservation_path).expect("read retained reservations"),
+            unchanged_reservations
+        );
+        assert_eq!(
+            std::fs::read(&plan_path).expect("read retained QueuePlan"),
+            unchanged_plans
+        );
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+        assert!(!queue.lane_reservation_durability_faulted());
+    };
+    assert!(matches!(
+        queue.release_strictly_absent_lane_reservations_in_order(&fifo_keys, Vec::new()),
+        Err(crate::queue::LaneQueueReservationError::InvalidIdentity(_)),
+    ));
+    assert_rejected_release_unchanged();
+    for mutate_identity in [false, true] {
+        let planning = plan_lane_reservation_ownership(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            &verified_context_for_fixture(&fixture, &fixture.context),
+            None,
+        )
+        .expect("mint direct-release authority from actual strict-absence recovery");
+        let LaneReservationReconciliationPlanning::Ready(plan) = planning else {
+            panic!("strictly absent canonical group must be immediately plannable");
+        };
+        assert_eq!(plan.direct_release, fifo_keys);
+        let authorizations = plan
+            .actions
+            .into_iter()
+            .map(|action| {
+                let ReservationReconciliationAction::DirectRelease { authorization, .. } = action
+                else {
+                    panic!("strict-absence fixture must mint only direct-release authorities");
+                };
+                authorization
+            })
+            .collect::<Vec<_>>();
+        assert!(!authorizations.is_empty());
+        let mut mismatched_keys = fifo_keys.clone();
+        if mutate_identity {
+            mismatched_keys[0].proposal_identity_hash =
+                Hash::new(b"wrong authorized release proposal");
+        } else {
+            mismatched_keys
+                .pop()
+                .expect("non-empty strict-absence batch");
+        }
+        assert!(matches!(
+            queue.release_strictly_absent_lane_reservations_in_order(
+                &mismatched_keys,
+                authorizations
+            ),
+            Err(crate::queue::LaneQueueReservationError::InvalidIdentity(_)
+                | crate::queue::LaneQueueReservationError::Conflict { .. }),
+        ));
+        assert_rejected_release_unchanged();
+    }
     assert_eq!(
         reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),

@@ -327,7 +327,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
             self.predecessor_request_digest,
             self.compact_through,
         );
-        let bytes = norito::to_bytes(&material)
+        let bytes = norito::encode_canonical(&material)
             .map_err(|_| ReputationFinalizedArchiveRetentionRequestErrorV1::CanonicalEncoding)?;
         Ok(domain_digest(
             REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1,
@@ -2944,6 +2944,31 @@ mod tests {
                 .expect("valid exact retention target"),
         )
         .expect("valid explicit retention request")
+    }
+    #[test]
+    fn retention_request_digest_ignores_ambient_norito_layout() {
+        let expected = retention_request(1, None, 7, 0x71);
+        let canonical = norito::encode_canonical(&expected).expect("canonical retention request");
+        let mut distinct_layout = false;
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let before = norito::to_bytes(&expected).expect("ambient retention request");
+            distinct_layout |= before != canonical;
+            assert_eq!(retention_request(1, None, 7, 0x71), expected);
+            expected.validate().expect("same digest under every layout");
+            assert_ne!(
+                retention_request(1, None, 7, 0x72).request_digest,
+                expected.request_digest
+            );
+            assert_eq!(
+                norito::to_bytes(&expected).expect("restored layout"),
+                before
+            );
+        }
+        assert!(distinct_layout);
     }
     #[test]
     fn retention_request_round_trips_canonically_and_as_custom_parameter() {

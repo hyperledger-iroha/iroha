@@ -158,6 +158,38 @@ unresolved. Separately,
 the recovery/capacity source contract now follows three current storage owners;
 33 tests and ten additional subcases pass after strengthening recovery-role ordering.
 
+The subsequent host restart cleared `/private/tmp`, including the raw artifacts
+described above. The second Apalache attempt and full source rerun lost their
+processes without retained terminal results; neither qualifies. Earlier observed
+passes are historical and cannot supply current release artifacts. All nine
+terminal Rust source/test hashes still match the stable manifest. Resumed checks
+retain source manifests, exact Python dependencies and results under ignored
+`dist/multilane-validation-20260907/`. Six new ingress source negatives pass after
+reviewing the exact old implementation and its fail-stop additions. The complete
+terminal cohort passes all 69 checks with retained logs and matching source hashes.
+The independent 18-step run is still checking the model after passing typechecking. Rust, SDK,
+network, soak, scaling and full source gates remain open.
+
+Two merge-cache seals were then reconciled against exact historical preimages:
+21 copied-source positives and 21 rehashed semantic negatives pass, followed by
+the complete eight-owner cache contract. A separate Queue audit found shipping
+raw-key release methods whose callers were all unit tests. Those methods and the
+single-key journal leaf are now test-only and crate-local; the shared production
+batch sink requires move-only strict-absence authority. The existing real-planner
+fixture gains missing/incomplete/identity-mismatch rejection with unchanged durable
+bytes, FIFO and owners before its original successful recovery. Rust test counts
+are preserved. Formatting, independent review, 14 rehashed source negatives,
+the canonical baseline, complete QueuePlan contract and both revised production
+bindings pass. All 208 original assertions remain; Rust execution is still
+pending, so `ML-AUT-01` and `ML-AUT-05` are not closed.
+
+Further formal inspection found that the fixed in-flight configuration omits its
+defined terminal-exclusivity invariant and the current abstract direct-release
+action can coexist with active Kura custody. Later Commit/application guards do
+not reject that disposition. A guided trace and the corresponding state-kernel
+and extraction contracts are under review. Earlier bounded results and the active
+18-step run do not establish this missing ownership safety obligation.
+
 ## 2026-08-19 mutable-development closure snapshot
 
 - The checkout remains an unsigned, dirty mutable-development tree. Its

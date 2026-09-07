@@ -4,6 +4,9 @@ import java.io.File
 import java.math.BigInteger
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
+import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.*
 import org.hyperledger.iroha.sdk.norito.*
@@ -130,6 +133,63 @@ class KaigiWirePayloadV1Test {
             assertFailsWith<Exception> { KaigiWirePayloadEncoderV1.decode(typed.wireName, bad) }
             val untrusted = InstructionBox.fromWirePayload(typed.wireName, bad)
             assertFailsWith<NoritoException> { NoritoJavaCodecAdapter.encodeInstructionBox(untrusted) }
+        }
+    }
+
+    @Test
+    fun `Kaigi preserves the full multisig controller through transaction encoding`() {
+        val policy = MultisigPolicyPayload.of(1, 2, listOf(
+            MultisigMemberPayload(1, 1, TestEd25519Keys.publicKey(0x11)),
+            MultisigMemberPayload(1, 2, TestEd25519Keys.publicKey(0x22)),
+        ))
+        val account = AccountAddress.fromMultisigPolicy(policy).toI105Default()
+        val instructions = listOf(
+            CreateKaigiInstruction.create(call, account),
+            JoinKaigiInstruction(call, account),
+            LeaveKaigiInstruction(call, account),
+        )
+        for (instruction in instructions) {
+            assertEquals(instruction, KaigiWirePayloadEncoderV1.decode(instruction.wireName, instruction.payloadBytes))
+        }
+        val boxes = instructions.map { it.toInstructionBox() }
+        val transaction = TransactionPayload(
+            networkId = NetworkId.fromBytes(ByteArray(32) { 1 }), authority = account,
+            creationTimeMs = 1, executable = Executable.instructions(boxes),
+            feePayment = FeePaymentIntent.authority(emptyList()),
+        )
+        val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val encoded = codec.encodeTransaction(transaction)
+        val decoded = codec.decodeTransaction(encoded)
+        assertEquals(account, decoded.authority)
+        assertEquals(boxes, (decoded.executable as Executable.Instructions).instructions)
+        assertContentEquals(encoded, codec.encodeTransaction(decoded))
+    }
+
+    @Test
+    fun `Kaigi rejects external noncanonical multisig member order and duplicate keys`() {
+        val policy = MultisigPolicyPayload.of(1, 2, listOf(
+            MultisigMemberPayload(1, 1, TestEd25519Keys.publicKey(0x11)),
+            MultisigMemberPayload(1, 2, TestEd25519Keys.publicKey(0x22)),
+        ))
+        val typed = JoinKaigiInstruction(call, AccountAddress.fromMultisigPolicy(policy).toI105Default())
+        val instructionFields = fields(typed.payloadBytes.copyOfRange(40, typed.payloadBytes.size))
+        val controller = instructionFields[1]
+        val policyFields = fields(fields(controller.copyOfRange(4, controller.size)).single())
+        val members = fields(policyFields[2].copyOfRange(8, policyFields[2].size))
+        for (changedMembers in listOf(members.reversed(), listOf(members[0], members[0]))) {
+            val count = NoritoEncoder(2).also { it.writeUInt(2, 64) }.toByteArray()
+            val changedPolicy = policyFields.take(2).fold(byteArrayOf()) { out, item -> out + field(item) } +
+                field(count + changedMembers.fold(byteArrayOf()) { out, item -> out + field(item) })
+            val malformedAccount = byteArrayOf(1, 0, 0, 0) + field(changedPolicy)
+            assertFailsWith<IllegalArgumentException> {
+                TransferWirePayloadEncoder.decodeAccountIdPayload(malformedAccount, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+            }
+            val changed = instructionFields.toMutableList().also { it[1] = malformedAccount }
+            val malformed = frame(changed.fold(byteArrayOf()) { out, item -> out + field(item) }, "JoinKaigi")
+            assertFailsWith<IllegalArgumentException> { KaigiWirePayloadEncoderV1.decode(typed.wireName, malformed) }
+            assertFailsWith<NoritoException> {
+                NoritoJavaCodecAdapter.encodeInstructionBox(InstructionBox.fromWirePayload(typed.wireName, malformed))
+            }
         }
     }
 

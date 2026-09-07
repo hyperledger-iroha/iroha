@@ -308,6 +308,12 @@ export function buildKaigiAuthorizationProofV1(options) {
   return unsupported("buildKaigiAuthorizationProofV1");
 }
 
+export function buildKaigiUsageProofV1(options) {
+  const blinding = options?.blinding;
+  if (blinding instanceof Uint8Array) Reflect.apply(clearKaigiBlindingV1, blinding, [0]);
+  return unsupported("buildKaigiUsageProofV1");
+}
+
 export function deriveConfidentialKeyset() {
   return unsupported("deriveConfidentialKeyset");
 }

@@ -379,3 +379,48 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   positive baselines. One initially surviving role mutation led to a stronger
   pre-recovery ordering check; the final full cohort passes. No model or Rust
   runtime result is inferred.
+
+## 2026-09-07 host restart and resumed qualification
+
+- A host restart cleared `/private/tmp`, including the temporary Python runtime,
+  raw formal artifacts, source-check logs and the shared unfinished Core/Apple
+  builds. Both active checker handles are missing. The second 18-step Apalache
+  attempt and the broader source rerun ended without a retained terminal result;
+  neither is a pass. Earlier reported observations remain historical results,
+  but their deleted raw artifacts cannot supply current release evidence.
+- The nine terminal production/test files still match every hash in the last
+  observed stable manifest. A new manifest and the restored Python 3.12.14 runtime
+  with exact script dependency pins live under ignored
+  `dist/multilane-validation-20260907/`. New validation records use that durable
+  directory. No Cargo process was started or interrupted by this task.
+- The ingress source seal was traced to its exact historical preimage. Current
+  ownership fail-stop, finalized proposal/body checks and restart admission are
+  now explicit ordered contracts. Six independently rehashed guard-removal or
+  inversion cases pass with positive copied-source baselines. The complete
+  terminal cohort then passes all 69 cases against the revised seal: 68
+  rehashed negatives and the independent canonical baseline. Rust execution, the
+  full source gate and all milestone/release qualification remain open.
+- Two merge-cache seals now follow exact historical-owner review, 21 passing
+  copied-source baselines and 21 rehashed semantic negatives. The final contract
+  passes all eight cache owners. It binds authenticated persisted-candidate reuse
+  to the complete round, parent, QC and durable signing bytes before reconstruction.
+- A further Queue audit found public raw-key release methods with only unit-test
+  callers. They are now crate-local test fixtures, including the single-key journal
+  leaf. Shipping direct release requires move-only strict-absence authority at the
+  shared batch sink; its fixture variant is absent from production. The existing
+  real-planner regression adds missing, incomplete and identity-mismatched authority
+  cases with unchanged journal bytes, FIFO, owners and startup gate before the
+  original successful recovery. Registered Rust test counts are unchanged. Direct
+  formatting and independent source review pass. Two Python tests pass the canonical
+  baseline and all 14 rehashed negatives; the complete QueuePlan contract and both
+  revised production bindings also pass. All 208 original assertions remain, with
+  ten added assertions in the existing fixture. Rust execution is pending. The
+  three additional Rust files have a durable ready manifest. The current four
+  retired-codec/compatibility guards pass.
+- The composed model audit found that its fixed configuration omits the defined
+  `MLTerminalDispositionExclusive` invariant. It also permits direct release while
+  Kura custody remains active; subsequent Commit/application guards do not check
+  that disposition. The current state predicate and terminal extractor require
+  further review against actual ownership. Guided counterexample confirmation and
+  a matching model/kernel repair are underway; the old 18-step run cannot close
+  this newly identified safety obligation.

@@ -36,8 +36,8 @@ consumers of Kotlin. Both migrated Java release runners pass (59 diagnostics and
 tests pass. QueuePlan's source ledger/startup controls pass 85 cases plus five
 semantic checks. Six finite TLC models, 106 multilane mutations and 22 in-flight
 mutations pass with fresh retained raw traces; five Apalache bounds pass. The
-original 18-step run ended without a terminal result at state 13. A separate
-fresh 18-step attempt has passed typechecking; that bound remains unqualified.
+original 18-step run ended without a terminal result at state 13. A host restart
+also ended its second attempt without a retained result; the bound is unqualified.
 JS/Python settlement ownership and exact TWAP checks pass 63/65 grouped tests
 and 152 related Python tests; Kotlin retains signed Numeric and bounded Quantity
 semantics. Rust completion cleanup and crash/classifier regressions await the
@@ -58,6 +58,11 @@ checks pass 84 cases, and the capacity contract passes 33 tests plus ten subcase
 The broader source check failed with 77 errors. Two obsolete hydration clauses
 now use the canonical atomic-batch contract; its positive and reordered-batch
 negative checks pass. Full source and runtime qualification remain open.
+The restart cleared temporary raw artifacts and unfinished Core/Apple builds.
+Earlier observations cannot supply current release artifacts. Nine terminal Rust
+file hashes are unchanged; resumed checks use durable ignored `dist/` outputs.
+The fresh complete terminal cohort passes all 69 source checks, including six
+new ingress negatives. The 18-step model check is active after typechecking.
 All 17 Swift wire fixture tests pass in
 an isolated source build after bounding vector allocations; the complete SDK
 gate still needs its real bridge artifact. The broad receipt/bootstrap selection
@@ -112,38 +117,22 @@ have passed together against one immutable source tree.
 ## Build and architecture qualification
 
 SoraFS goal execution is tracked in the [V1 implementation goals](specs/sorafs/v1_implementation_goals.md).
-The initial release-hardening slice fixes signing-output directory substitution,
-checks the source seal before Cargo metadata, and restores native mobile CI with
-mandatory per-task execution evidence. The combined script/contract selection
-passes 714 tests. The complete manifest library rerun passed 893 tests with no
-failures or ignored tests. The fresh captured Core security run passes all
-15 tests with no failures or ignored tests, covering permission payload binding,
-registry replay/revocation and account-bound PoP proofs. The full captured Core
-SoraFS selection reports 275 passes and 113 failures; fixture context/hash and
-canonical byte-counting corrections await the coordinated rebuild; all 17
-Norito canonical-codec regressions pass. The canonical account
-binding passes its model regression and three
-node authorization tests; Torii passes three binding, three OpenAPI and three
-query-filter tests. The validator CLI passes 56 tests, fixture generator 12 and
-Python fixture checker 30. Both Kotlin/Java-source PoP tests pass with a fresh
-native bridge and no skipped tests. Signed-manifest qualification requires independently
-authenticated source files; signed-state/receipt verification passes 11 tests,
-and seven actual CLI process checks pass over simulated signed inputs. The Python
-receipt/source/builder/checker/runner selection passes 360 tests. All 34 signer
-operation/producer/journal tests and three bounded credential-reader tests pass.
-The first four-peer repair runs exposed test-stack and host disk-budget startup
-failures. The corrected async-account/resource harness compiles, but execution
-rejects the older daemon’s different genesis policy hash and exposes a remaining
-blocking status poll inside Tokio. Matched daemon/harness rebuilds and polling
-correction are pending; ledger runtime and hardware/state adapters remain open.
-The broader changing-tree Python baseline reports 3,371 passes and 60 failures.
-Current provider/rollout source contracts pass 409 tests with three failures.
-The Apple path-resolution failure is now corrected; automation plus that guard
-passes 623 tests. Two genuine unfinished-source inventories remain, and packaging
-still rejects the changed source and bootstrap seals.
-Native CI execution,
-the source seal, HSM custody and production qualification remain open. See the
-[current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-06-execution-checkpoint).
+The post-reboot manifest library passes **896 tests**, zero failures or ignored
+tests, including canonical identities/signatures under alternate caller layouts.
+The new local result and binary/source hashes are retained in ignored
+`target/evidence/sorafs-v1/manifest-canonical-identity-result.json`.
+The retention-request model selection also passes three tests. Provider/rollout
+source contracts pass 410 checks, with two unfinished-source closure failures.
+The review corrects canonical manifest/deal/audit/replication identities, retention
+request digests, pin-accounting keys, and node billing/reputation/governance
+checkpoint and publication framing. Node and Core qualification is pending.
+The host reboot cleared previous `/tmp` SoraFS logs and interrupted native
+captures; those older observations cannot serve as retained current evidence.
+The former Core run exposed 113 failures, and its fixture/security corrections
+still require the coordinated rebuild. Matched daemon/harness four-validator
+execution, full workspace/SDK validation, source/bootstrap seals, genuine HSM
+custody and all deployment evidence remain open. See the
+[current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-07-post-reboot-checkpoint).
 
 The active acceptance policy uses enforced dependency ownership, the existing
 5,000-line production and 3,000-line test-file limits, substantive duplication

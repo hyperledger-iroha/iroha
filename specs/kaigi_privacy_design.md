@@ -20,6 +20,14 @@ with the shared six-lane Goldilocks construction. It includes every multisig
 member, weight and threshold; display prefixes, aliases, low-word projections
 and field reduction are not identity adapters.
 
+Multisig construction orders complete public keys by canonical algorithm name
+and unsigned key bytes. External I105, Norito and JSON policies must already
+carry that exact order, V1, distinct members with nonzero weights, and a
+reachable nonzero threshold. Decoders reject malformed policies instead of
+normalizing them into another identity. The canonical member-count capacity
+is 65,535 (u16); the shared `multisig-accounts-v1` fixture generator includes
+all eleven signing algorithms and a 256-member account.
+
 ## Wire and circuit catalog
 
 `KaigiParticipantCommitment` contains only `commitment` and

@@ -14,8 +14,8 @@ public struct KaigiPrivateParticipationV1: Equatable, Sendable {
 /// Decoding establishes shape and roster ownership consistency, not authenticated
 /// state, account lineage, network identity, proof validity or ledger execution.
 public struct KaigiPrivacyStateV1: Equatable, Sendable {
-  /// Local read-resource bound; not a new consensus record-size limit.
-  public static let maximumJSONBytes = 8 * 1024 * 1024
+  /// Canonical V1 retained-record JSON byte ceiling from the data model.
+  public static let maximumJSONBytes = 1024 * 1024
   public let callID: KaigiIdV1
   public let originalHost: String
   public let privacyMode: KaigiPrivacyModeV1
@@ -38,9 +38,12 @@ public struct KaigiPrivacyStateV1: Equatable, Sendable {
     // sequence spellings before Foundation's typed decoding can normalize them.
     try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
       in: data,
-      integerKeys: ["sequence", "segments_recorded", "total_duration_ms", "total_billed_gas"],
+      integerKeys: ["sequence", "segments_recorded", "total_duration_ms", "total_billed_gas", "created_at_ms", "gas_rate_per_minute"],
+      nullableIntegerKeys: ["max_participants", "scheduled_start_ms", "ended_at_ms"],
       integerArrayKeys: ["commitment", "digest", "active_commitment"],
-      integerMatrixKeys: ["usage_commitments"]
+      integerMatrixKeys: ["usage_commitments"],
+      integerValidationExcludedSubtrees: ["metadata", "participant_metadata"],
+      requireAllNumbersInteger: true
     )
     return try JSONDecoder().decode(KaigiRecordProjectionJSONV1.self, from: data).value
   }
@@ -163,22 +166,83 @@ private struct KaigiRecordProjectionJSONV1: Decodable {
     case "ZkRosterV1": privacyMode = .zkRosterV1
     default: throw KaigiV1Error.invalidValue("Unknown Kaigi privacy mode.")
     }
+    let participantLimit = try c.decodeIfPresent(UInt32.self, forKey: .init("max_participants"))
+      ?? NewKaigiV1.maxParticipantsV1
+    guard participantLimit > 0, participantLimit <= NewKaigiV1.maxParticipantsV1 else {
+      throw KaigiV1Error.invalidValue("Invalid Kaigi effective participant limit.")
+    }
+    let status = try kaigiJSONFieldsV1(c.superDecoder(forKey: .init("status")), ["status", "state"])
+    let state = try status.decode(String.self, forKey: .init("status"))
+    let created = try c.decode(UInt64.self, forKey: .init("created_at_ms"))
+    let ended = try c.decodeIfPresent(UInt64.self, forKey: .init("ended_at_ms"))
+    guard try status.decodeNil(forKey: .init("state")),
+      (state == "Active" && ended == nil) || (state == "Ended" && ended.map({ $0 >= created }) == true)
+    else { throw KaigiV1Error.invalidValue("Inconsistent Kaigi lifecycle.") }
+    let hostIdentity = try CanonicalNorito.encodeCompactAccountId(host)
+    let participants = try c.decode([String].self, forKey: .init("participants"))
+    let participantIdentities = try participants.map {
+      try CanonicalNorito.encodeCompactAccountId(kaigiCanonicalAccountID($0, field: "participants"))
+    }
+    let participantSet = Set(participantIdentities)
+    guard participants.count <= Int(participantLimit), participantSet.count == participants.count,
+      !participantSet.contains(hostIdentity) else {
+      throw KaigiV1Error.invalidValue("Invalid Kaigi transparent participant ownership.")
+    }
+    if let billing = try c.decodeIfPresent(String.self, forKey: .init("billing_account")) {
+      guard try CanonicalNorito.encodeCompactAccountId(kaigiCanonicalAccountID(billing, field: "billing_account")) == hostIdentity else {
+        throw KaigiV1Error.invalidValue("Kaigi billing must belong to the original host.")
+      }
+    }
+    let metadata = try c.decode([String: [String: ToriiJSONValue]].self, forKey: .init("participant_metadata"))
+    let metadataIdentities = try metadata.keys.map {
+      try CanonicalNorito.encodeCompactAccountId(kaigiCanonicalAccountID($0, field: "participant_metadata"))
+    }
+    guard metadata.count <= Int(participantLimit) + 1,
+      Set(metadataIdentities).count == metadata.count,
+      metadataIdentities.allSatisfy({ $0 == hostIdentity || participantSet.contains($0) }) else {
+      throw KaigiV1Error.invalidValue("Kaigi metadata has an unowned participant identity.")
+    }
     let ledger = try c.decode(KaigiParticipationLedgerJSONV1.self, forKey: .init("private_participation"))
     let roster = try c.decode([KaigiCommitmentJSONV1].self, forKey: .init("roster_commitments")).map(\.value)
     let active = Set(ledger.entries.compactMap(\.activeCommitment))
-    guard roster.count <= Int(NewKaigiV1.maxParticipantsV1),
+    guard roster.count <= Int(participantLimit),
       Set(roster.map(\.commitment)).count == roster.count,
       active == Set(roster.map(\.commitment)) else {
       throw KaigiV1Error.invalidValue("Kaigi roster and retained ownership differ.")
     }
+    let hostCommitment = try c.decodeIfPresent(KaigiCommitmentJSONV1.self, forKey: .init("host_commitment"))?.value
+    let nullifiers = try c.decode([KaigiNullifierJSONV1].self, forKey: .init("nullifier_log")).map(\.value)
+    let usage = try c.decode([KaigiScalarJSONV1].self, forKey: .init("usage_commitments")).map(\.value)
+    let segments = try c.decode(UInt32.self, forKey: .init("segments_recorded"))
+    guard nullifiers.count <= 8194, Set(nullifiers).count == nullifiers.count,
+      usage.count <= 4096, Set(usage).count == usage.count else {
+      throw KaigiV1Error.invalidValue("Duplicate or oversized Kaigi private history.")
+    }
+    if privacyMode == .transparent {
+      guard hostCommitment == nil, roster.isEmpty, ledger.entries.isEmpty,
+        nullifiers.isEmpty, usage.isEmpty else {
+        throw KaigiV1Error.invalidValue("Transparent Kaigi contains private state.")
+      }
+    } else {
+      guard let hostCommitment, !nullifiers.isEmpty, Int(segments) == usage.count,
+        participants.isEmpty,
+        state != "Active" || nullifiers.count + roster.count + 1 <= 8194,
+        !active.contains(hostCommitment.commitment),
+        try ledger.entries.allSatisfy({ entry in
+          try CanonicalNorito.encodeCompactAccountId(entry.originalAccount)
+            != hostIdentity
+        }) else {
+        throw KaigiV1Error.invalidValue("Inconsistent Kaigi host or usage ownership.")
+      }
+    }
     value = KaigiPrivacyStateV1(
       callID: callID, originalHost: host, privacyMode: privacyMode,
-      hostCommitment: try c.decodeIfPresent(KaigiCommitmentJSONV1.self, forKey: .init("host_commitment"))?.value,
+      hostCommitment: hostCommitment,
       rosterRoot: try kaigiRosterHashLiteralV1(c.decode(String.self, forKey: .init("roster_root"))),
       rosterCommitments: roster, privateParticipation: ledger.entries,
-      nullifierLog: try c.decode([KaigiNullifierJSONV1].self, forKey: .init("nullifier_log")).map(\.value),
-      usageCommitments: try c.decode([KaigiScalarJSONV1].self, forKey: .init("usage_commitments")).map(\.value),
-      segmentsRecorded: try c.decode(UInt32.self, forKey: .init("segments_recorded")),
+      nullifierLog: nullifiers,
+      usageCommitments: usage,
+      segmentsRecorded: segments,
       totalDurationMs: try c.decode(UInt64.self, forKey: .init("total_duration_ms")),
       totalBilledGas: try c.decode(UInt64.self, forKey: .init("total_billed_gas")))
   }

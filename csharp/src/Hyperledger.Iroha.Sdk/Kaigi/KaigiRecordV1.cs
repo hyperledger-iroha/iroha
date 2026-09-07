@@ -25,7 +25,7 @@ public sealed class KaigiPrivateParticipationLedgerV1
 {
     internal KaigiPrivateParticipationLedgerV1(KaigiPrivateParticipationV1[] entries)
     {
-        if (entries.Length > 4096 || entries.Select(static entry => entry.OriginalAccount).Distinct(StringComparer.Ordinal).Count() != entries.Length)
+        if (entries.Length > 4096 || entries.Select(static entry => KaigiValidationV1.AccountIdentity(entry.OriginalAccount)).Distinct(StringComparer.Ordinal).Count() != entries.Length)
             throw new ArgumentException("Duplicate or oversized Kaigi participation ledger.", nameof(entries));
         var active = entries.Where(static entry => entry.ActiveCommitment is not null).Select(static entry => entry.ActiveCommitment!).ToArray();
         if (active.Distinct().Count() != active.Length) throw new ArgumentException("Duplicate live Kaigi commitment.", nameof(entries));
@@ -54,22 +54,36 @@ public sealed class KaigiRecordV1
         Status = status; CreatedAtMs = createdAtMs; EndedAtMs = endedAtMs; TotalDurationMs = totalDurationMs;
         TotalBilledGas = totalBilledGas; SegmentsRecorded = segmentsRecorded; Participants = Array.AsReadOnly(participants);
         this.participantMetadata = participantMetadata;
+        var hostIdentity = KaigiValidationV1.AccountIdentity(Host);
+        var participantIdentities = participants.Select(KaigiValidationV1.AccountIdentity).ToHashSet(StringComparer.Ordinal);
+        var participantLimit = call.MaxParticipants ?? 4096;
+        if (rosterCommitments.Length > participantLimit || participants.Length > participantLimit
+            || participantMetadata.Count > participantLimit + 1)
+            throw new ArgumentException("Kaigi record exceeds its effective participant limit.");
+        if (participantMetadata.Keys.Select(KaigiValidationV1.AccountIdentity).Distinct(StringComparer.Ordinal).Count() != participantMetadata.Count
+            || participantMetadata.Keys.Select(KaigiValidationV1.AccountIdentity).Any(identity => identity != hostIdentity && !participantIdentities.Contains(identity)))
+            throw new ArgumentException("Kaigi metadata must belong to the original host or a current participant.");
         if (rosterCommitments.Select(static item => item.Commitment).Distinct().Count() != rosterCommitments.Length
             || nullifierLog.Select(static item => item.Digest).Distinct().Count() != nullifierLog.Length
-            || participants.Distinct(StringComparer.Ordinal).Count() != participants.Length || participants.Contains(Host, StringComparer.Ordinal))
+            || usageCommitments.Distinct().Count() != usageCommitments.Length
+            || (hostCommitment is not null && rosterCommitments.Any(item => item.Commitment.Equals(hostCommitment.Commitment)))
+            || participantIdentities.Count != participants.Length || participantIdentities.Contains(hostIdentity))
             throw new ArgumentException("Duplicate Kaigi roster/nullifier or explicit host participant.");
         var active = privateParticipation.Entries.Where(static entry => entry.ActiveCommitment is not null).Select(static entry => entry.ActiveCommitment!).ToHashSet();
         if (!active.SetEquals(rosterCommitments.Select(static item => item.Commitment)))
             throw new ArgumentException("Kaigi retained participation does not match the private roster.");
-        if (privateParticipation.Entries.Any(entry => entry.OriginalAccount == Host))
+        if (privateParticipation.Entries.Any(entry => KaigiValidationV1.AccountIdentity(entry.OriginalAccount) == hostIdentity))
             throw new ArgumentException("Kaigi host cannot be a private participant.");
         if (call.PrivacyMode == KaigiPrivacyMode.Transparent)
         {
             if (hostCommitment is not null || rosterCommitments.Length != 0 || privateParticipation.Entries.Count != 0 || nullifierLog.Length != 0 || usageCommitments.Length != 0)
                 throw new ArgumentException("Transparent Kaigi record contains private state.");
         }
-        else if (hostCommitment is null || participants.Length != 0 || usageCommitments.Length != segmentsRecorded)
+        else if (hostCommitment is null || nullifierLog.Length == 0 || participants.Length != 0 || usageCommitments.Length != segmentsRecorded)
             throw new ArgumentException("Private Kaigi record has inconsistent authorization/usage state.");
+        if (call.PrivacyMode == KaigiPrivacyMode.ZkRosterV1 && status == KaigiStatus.Active
+            && nullifierLog.Length + rosterCommitments.Length + 1 > 8194)
+            throw new ArgumentException("Kaigi history must reserve each live leave and host end.");
         if ((status == KaigiStatus.Ended) != endedAtMs.HasValue || endedAtMs < createdAtMs)
             throw new ArgumentException("Kaigi end timestamp does not match its lifecycle.");
     }

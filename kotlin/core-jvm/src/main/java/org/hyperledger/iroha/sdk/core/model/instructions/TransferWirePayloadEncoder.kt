@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
+import org.hyperledger.iroha.sdk.address.compareMultisigMemberKeys
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
@@ -446,9 +447,9 @@ object TransferWirePayloadEncoder {
         }
 
         private fun encodeMultisigMembers(encoder: NoritoEncoder, members: List<MultisigMemberPayload>) {
-            val sorted = members.sortedWith(Comparator { a, b -> compareUnsigned(canonicalSortKey(a), canonicalSortKey(b)) })
+            val sorted = members.sortedWith(::compareMultisigMemberKeys)
             for (i in 1 until sorted.size) {
-                require(!canonicalSortKey(sorted[i - 1]).contentEquals(canonicalSortKey(sorted[i]))) {
+                require(compareMultisigMemberKeys(sorted[i - 1], sorted[i]) != 0) {
                     "Duplicate multisig member"
                 }
             }
@@ -496,6 +497,11 @@ object TransferWirePayloadEncoder {
             val members = decodeSizedMultisigMembers(child)
             require(child.remaining() == 0) { "Trailing bytes after multisig policy payload" }
             validateMultisigPolicySemantics(version, threshold, members)
+            for (index in 1 until members.size) {
+                require(compareMultisigMemberKeys(members[index - 1], members[index]) < 0) {
+                    "Multisig members must be in canonical key order"
+                }
+            }
             return MultisigPolicyPayload.of(version, threshold, members)
         }
 
@@ -691,40 +697,19 @@ object TransferWirePayloadEncoder {
         require(version == MULTISIG_POLICY_VERSION) { "Invalid multisig policy: unsupported version $version" }
         require(members.isNotEmpty()) { "Invalid multisig policy: zero members" }
         var totalWeight = 0L
-        val sortKeys = mutableListOf<ByteArray>()
         for (member in members) {
             require(member.weight > 0) { "Invalid multisig policy: non-positive weight" }
             require(member.publicKey.isNotEmpty()) { "Invalid multisig policy: empty public key" }
             totalWeight += member.weight
-            sortKeys.add(canonicalSortKey(member))
         }
         require(threshold > 0) { "Invalid multisig policy: zero threshold" }
         require(totalWeight >= threshold) { "Invalid multisig policy: threshold exceeds total weight" }
-        sortKeys.sortWith(::compareUnsigned)
-        for (i in 1 until sortKeys.size) {
-            require(!sortKeys[i - 1].contentEquals(sortKeys[i])) { "Invalid multisig policy: duplicate member" }
+        val sorted = members.sortedWith(::compareMultisigMemberKeys)
+        for (index in 1 until sorted.size) {
+            require(compareMultisigMemberKeys(sorted[index - 1], sorted[index]) != 0) {
+                "Invalid multisig policy: duplicate member"
+            }
         }
-    }
-
-    private fun canonicalSortKey(member: MultisigMemberPayload): ByteArray {
-        val algorithm = algorithmForCurveId(member.curveId)
-            ?: throw IllegalArgumentException("Invalid multisig policy: unknown curve id")
-        val algorithmBytes = algorithm.toByteArray(StandardCharsets.UTF_8)
-        val keyBytes = member.publicKey
-        val sortKey = ByteArray(algorithmBytes.size + 1 + keyBytes.size)
-        System.arraycopy(algorithmBytes, 0, sortKey, 0, algorithmBytes.size)
-        sortKey[algorithmBytes.size] = 0
-        System.arraycopy(keyBytes, 0, sortKey, algorithmBytes.size + 1, keyBytes.size)
-        return sortKey
-    }
-
-    private fun compareUnsigned(a: ByteArray, b: ByteArray): Int {
-        val len = minOf(a.size, b.size)
-        for (i in 0 until len) {
-            val cmp = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
-            if (cmp != 0) return cmp
-        }
-        return a.size.compareTo(b.size)
     }
 
     private fun encodeAssetBalanceScopePayload(scope: AssetBalanceScopePayload): ByteArray {

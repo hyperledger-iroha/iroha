@@ -237,22 +237,32 @@ The final canonical Kaigi model passes 33 tests, including independent six-lane
 identity vectors, complete multisig identities, layout invariance, mandatory
 retained original-account ownership, sequence consumption and strict unmarked
 Pasta scalar bytes. Retired artifact hints are rejected. After deleting all old
-circuit and seed APIs, the final authorization/usage crate passes 20 tests in
-25.46s, including real k13/k12 IPA proofs, every changed 31/25-row public input,
-range/action/role constraints and independent C/N/A/U framing vectors. Its test
-binary SHA256 is `17e458d9ccad3c499911b378e1c852c4489acd6b64bdd24ec6c9d7bce2b75fdd`.
+circuit and seed APIs, a fresh post-restart authorization/usage run passes all
+20 tests in 44.66s, including real k13/k12 IPA proofs, every changed 31/25-row
+public input, range/action/role constraints and independent C/N/A/U framing
+vectors. The current proofs contain 3,264 authorization bytes and 3,136 usage
+bytes. The test binary SHA256 is
+`786540fdd7b9c270c5bb172862374fd3da81b1629364f1f96cac167105272ede`.
+Its log, owned-source hashes and result are retained under the ignored
+`target/privacy-release-evidence/2026-09-07-recovery/` directory.
 
 The earlier captured Core backend passes three tests in 988.65s, including both
 authorization routes and all 62 row mutations; that capture predates the final
 circuit cleanup and lifecycle cutover. Current source connects mandatory host
 authorization, on-chain leave/rejoin, final usage, storage reservations and
 retained original-account dependencies. The registered combined Core unit and
-integration targets are rebuilding; there is no final lifecycle pass yet.
+integration targets await a coherent source capture; there is no final
+lifecycle pass yet. The machine restarted before the preceding combined build
+produced an executable, and cleared its temporary logs and frozen Apple build.
+Those temporary artifacts cannot qualify the current candidate.
 
 The final wire passes 15 exact Rust/Python/Kotlin vectors and three
 modulus-negative archives. Kotlin/Java and Python focused selections pass 22 and
 51 tests respectively; the Kotlin tests include bounded decoding of malicious
-multisig member counts before allocation. The Node native generator produced a
+multisig member counts before allocation. The fresh canonical multisig-address
+and Kaigi selection passes 35 tests: full-key ordering is normalized during
+construction and malformed external ordering, duplicates and policy versions
+are rejected. The Node native generator produced a
 real authorization proof verified by Core, and its other 17 focused native
 tests pass after fixture corrections. A frozen official addon build will verify
 the final circuit/key source. Swift and C# scalar/wire integration is ongoing.

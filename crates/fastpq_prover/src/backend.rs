@@ -1961,6 +1961,7 @@ fn merkle_paths_for_leaf_indices(
 ///
 /// # Errors
 /// Returns an error if an internal node hash cannot be computed.
+#[cfg(test)]
 #[allow(clippy::unnecessary_wraps)]
 pub fn verify_merkle_path(
     root: GoldilocksDigest384V1,
@@ -3188,6 +3189,7 @@ impl Transcript {
         let tag = format!("{TRANSCRIPT_TAG_BETA_PREFIX}:{round}");
         GoldilocksFp4V1::from_digest(self.challenge_digest(&tag))
     }
+    #[cfg(test)]
     pub fn challenge_bytes(&mut self, tag: &str) -> [u8; 48] {
         self.challenge_digest(tag).to_le_bytes()
     }

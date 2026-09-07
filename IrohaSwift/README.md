@@ -2223,3 +2223,33 @@ pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 - Public Swift SDK and Connect tutorial: [docs.iroha.tech](https://docs.iroha.tech/guide/tutorials/swift.html)
 - Executable Connect examples: [`examples/ios/NoritoDemo`](../examples/ios/NoritoDemo/README.md) and [`examples/ios/NoritoDemoXcode`](../examples/ios/NoritoDemoXcode/README.md)
 - SwiftUI demo contributor guide (local Torii setup, acceleration toggles): [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md)
+
+
+## Kaigi V1
+
+`KaigiInstructionsV1.swift` owns all nine native Kaigi instruction builders.
+Private create requires the complete commitment, nullifier, roster root and
+proof bundle; private join, leave and end use the same bundle. Usage takes a
+separate scalar commitment and supplied proof. The node binds these artifacts
+to the current call, original account, action and participation sequence.
+
+`KaigiAuthorizationScalarV1` preserves all 32 little-endian Pasta Fp bytes below
+the modulus, including zero. Commitment and nullifier wrappers each contain
+one scalar field. They have no hash marker, alias tag or issuance timestamp.
+The roster root remains a separate marked Iroha hash.
+
+`KaigiPrivacyStateV1.decodeCanonicalRecordJSON` reads the full retained record,
+including original host and retained original participant accounts. It checks
+strict scalar/integer JSON, duplicate and unknown fields, effective participant
+limits, lifecycle, roster ownership and reserved leave/end history capacity.
+Arbitrary metadata keeps its own JSON values. Account comparisons retain full
+controllers, including multisig policy, independent of network display prefixes.
+The redacted Torii application view cannot supply this record. This projection
+does not authenticate a response, recompute the roster root, check canonical
+account ordering, establish rekey authority or verify an authorization proof.
+
+`KaigiFinalWireFixturesV1.swift` pins all nine transparent instruction forms,
+all five private actions and a complex private create to Rust-owned model
+bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
+qualification and four-validator execution require separate evidence. The
+canonical Swift package always requires the real ABI23 NoritoBridge artifact.

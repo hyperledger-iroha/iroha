@@ -147,9 +147,19 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             return fromCanonicalBytes(out.toByteArray())
         }
 
+        /**
+         * Constructs the Rust-compatible V1 identity by sorting complete keys without changing
+         * caller members or their weights. Duplicate keys and invalid V1 policies are rejected.
+         */
         @JvmStatic
         @Throws(AccountAddressException::class)
         fun fromMultisigPolicy(policy: MultisigPolicyPayload): AccountAddress {
+            if (policy.version != 1 || policy.threshold !in 1..0xFFFF) {
+                throw AccountAddressException(
+                    AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                    "InvalidMultisigPolicy: expected version 1 and a nonzero u16 threshold",
+                )
+            }
             val members = policy.members
             if (members.isEmpty()) {
                 throw AccountAddressException(
@@ -206,6 +216,15 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                     "InvalidMultisigPolicy: threshold exceeds total weight",
                 )
             }
+            val sortedMembers = members.sortedWith(::compareMultisigMemberKeys)
+            for (index in 1 until sortedMembers.size) {
+                if (compareMultisigMemberKeys(sortedMembers[index - 1], sortedMembers[index]) == 0) {
+                    throw AccountAddressException(
+                        AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                        "InvalidMultisigPolicy: duplicate member",
+                    )
+                }
+            }
 
             val header = encodeHeader(0, ADDRESS_CLASS_MULTISIG, 1)
             val out = ByteArrayOutputStream()
@@ -218,7 +237,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             out.write((members.size shr 8) and 0xFF)
             out.write(members.size and 0xFF)
 
-            for (member in members) {
+            for (member in sortedMembers) {
                 val curveId = member.curveId and 0xFF
                 val weight = member.weight
                 val keyBytes = member.publicKey
@@ -412,7 +431,13 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
             if (cursor + 5 > canonical.size) {
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
-            cursor++ // version
+            val version = canonical[cursor++].toInt() and 0xFF
+            if (version != 1) {
+                throw AccountAddressException(
+                    AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                    "InvalidMultisigPolicy: unsupported version $version",
+                )
+            }
             val threshold = ((canonical[cursor].toInt() and 0xFF) shl 8) or
                 (canonical[cursor + 1].toInt() and 0xFF)
             cursor += 2
@@ -426,6 +451,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                 )
             }
             var totalWeight = 0L
+            var previousMember: MultisigMemberPayload? = null
             for (i in 0 until memberCount) {
                 if (cursor + 5 > canonical.size) {
                     throw AccountAddressException(
@@ -459,7 +485,16 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                         AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length",
                     )
                 }
-                validateControllerPublicKey(curveId, canonical.copyOfRange(cursor, cursor + keyLen))
+                val key = canonical.copyOfRange(cursor, cursor + keyLen)
+                validateControllerPublicKey(curveId, key)
+                val member = MultisigMemberPayload(curveId, weight, key)
+                if (previousMember != null && compareMultisigMemberKeys(previousMember, member) >= 0) {
+                    throw AccountAddressException(
+                        AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                        "InvalidMultisigPolicy: members must be unique and in canonical key order",
+                    )
+                }
+                previousMember = member
                 cursor += keyLen
                 totalWeight += weight
             }

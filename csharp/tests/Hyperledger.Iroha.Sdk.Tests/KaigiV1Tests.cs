@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Kaigi;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Transactions;
 
@@ -111,6 +112,29 @@ public sealed class KaigiV1Tests
     }
 
     [Fact]
+    public void AllFivePrivateInstructionBoxesMatchRustVerifiedFinalScalarFixtures()
+    {
+        var maximum = (byte[])Modulus.Clone(); maximum[0]--;
+        var artifacts = new KaigiAuthorizationArtifactsV1(new(new(Enumerable.Repeat((byte)0x22, 32).ToArray())), new(new(maximum)), Root(), Encoding.UTF8.GetBytes("wire-fixture-only"));
+        TransactionInstruction[] instructions = [
+            TransactionInstruction.CreateKaigi(new NewKaigi(CallId, Accounts[0], privacyMode: KaigiPrivacyMode.ZkRosterV1), artifacts),
+            TransactionInstruction.JoinKaigi(CallId, Accounts[0], artifacts),
+            TransactionInstruction.LeaveKaigi(CallId, Accounts[0], artifacts),
+            TransactionInstruction.EndKaigi(CallId, authorization: artifacts),
+            TransactionInstruction.RecordKaigiUsage(CallId, 1, 0, new(new(maximum), Encoding.UTF8.GetBytes("wire-fixture-only")))];
+        var fixture = JsonNode.Parse(File.ReadAllBytes(RepositoryFile("csharp/tests/Hyperledger.Iroha.Sdk.Tests/Fixtures/kaigi_private_instruction_wire_v1.json")))!;
+        var vectors = fixture["vectors"]!.AsArray();
+        Assert.Equal(5, vectors.Count);
+        for (var index = 0; index < instructions.Length; index++)
+        {
+            Assert.EndsWith("::" + vectors[index]!["action"]!.GetValue<string>(), instructions[index].WireId);
+            var expected = Convert.FromBase64String(vectors[index]!["instruction_box_base64"]!.GetValue<string>());
+            Assert.Equal(vectors[index]!["sha256"]!.GetValue<string>(), Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(expected)).ToLowerInvariant());
+            Assert.Equal(expected, instructions[index].EncodeInstructionBox(Accounts[0]));
+        }
+    }
+
+    [Fact]
     public void TypedConstructionRejectsPartialPrivateModesAndInvalidConfiguration()
     {
         var artifacts = new KaigiAuthorizationArtifactsV1(new(new(new byte[32])), new(new(new byte[32])), Root(), [1]);
@@ -164,6 +188,9 @@ public sealed class KaigiV1Tests
     [InlineData("active_max_sequence")]
     [InlineData("roster_mismatch")]
     [InlineData("host_participant")]
+    [InlineData("host_commitment_in_roster")]
+    [InlineData("duplicate_usage")]
+    [InlineData("empty_private_nullifiers")]
     [InlineData("unknown_enum")]
     [InlineData("missing_enum_state")]
     [InlineData("unmarked_root")]
@@ -188,6 +215,11 @@ public sealed class KaigiV1Tests
             case "active_max_sequence": entry["sequence"] = ulong.MaxValue; break;
             case "roster_mismatch": entry["active_commitment"] = BytesNode(new byte[32]); break;
             case "host_participant": entry["original_account"] = Accounts[0]; break;
+            case "host_commitment_in_roster":
+                entry["active_commitment"] = root["host_commitment"]!["commitment"]!.DeepClone();
+                root["roster_commitments"]![0]!["commitment"] = root["host_commitment"]!["commitment"]!.DeepClone(); break;
+            case "duplicate_usage": root["usage_commitments"]!.AsArray().Add(root["usage_commitments"]![0]!.DeepClone()); root["segments_recorded"] = 2; break;
+            case "empty_private_nullifiers": root["nullifier_log"] = new JsonArray(); break;
             case "unknown_enum": root["privacy_mode"]!["mode"] = "ZkRosterV2"; break;
             case "missing_enum_state": root["privacy_mode"]!.AsObject().Remove("state"); break;
             case "unmarked_root": root["roster_root"] = new string('0', 64); break;
@@ -209,6 +241,20 @@ public sealed class KaigiV1Tests
         Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(new byte[1_048_577]));
     }
 
+    [Theory]
+    [InlineData("scalar", "3.0")]
+    [InlineData("scalar", "3e0")]
+    [InlineData("sequence", "1.0")]
+    [InlineData("sequence", "1e0")]
+    public void RetainedRecordRejectsFractionalAndExponentIntegerSpellings(string field, string replacement)
+    {
+        var text = Encoding.UTF8.GetString(RecordBytes());
+        text = field == "scalar"
+            ? text.Replace("\"usage_commitments\":[[3,", "\"usage_commitments\":[[" + replacement + ",", StringComparison.Ordinal)
+            : text.Replace("\"sequence\":1", "\"sequence\":" + replacement, StringComparison.Ordinal);
+        Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(text)));
+    }
+
     [Fact]
     public void RetainedLedgerAllowsZeroCommitmentAndInactiveExhaustedSequence()
     {
@@ -223,6 +269,84 @@ public sealed class KaigiV1Tests
         var left = KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString()));
         Assert.Null(left.PrivateParticipation.Entries[0].ActiveCommitment);
         Assert.Equal(ulong.MaxValue, left.PrivateParticipation.Entries[0].Sequence);
+    }
+
+    [Fact]
+    public void FullOriginalControllerIdentityIgnoresOnlyNetworkDisplayPrefix()
+    {
+        var subject = AccountAddress.Parse(Accounts[1]);
+        var alternate = subject.ToI105(42);
+        Assert.NotEqual(Accounts[1], alternate);
+        var root = JsonNode.Parse(RecordBytes())!;
+        var entries = root["private_participation"]!["entries"]!.AsArray();
+        var duplicate = entries[0]!.DeepClone();
+        duplicate["original_account"] = alternate; duplicate["active_commitment"] = null;
+        entries.Add(duplicate);
+        Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+        entries.RemoveAt(1);
+        entries[0]!["original_account"] = AccountAddress.Parse(Accounts[0]).ToI105(42);
+        Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+        Assert.Throws<ArgumentException>(() => new KaigiRelayManifest([
+            new(Accounts[1], [1], 1), new(alternate, [2], 1), new(Accounts[2], [3], 1)], 1));
+        Assert.Equal(AccountAddress.Parse(Accounts[0]).ToI105(42),
+            new NewKaigi(CallId, Accounts[0], billingAccount: AccountAddress.Parse(Accounts[0]).ToI105(42)).BillingAccount);
+
+        // Two valid multisig controllers with one signer but different weights
+        // are distinct original accounts. A public-key-only projection loses this.
+        var key = subject.PublicKey;
+        var controller = new byte[12 + key.Length];
+        controller[0] = 0x0a; controller[1] = 1; controller[2] = 1;
+        controller[4] = 1; controller[6] = 1; controller[7] = 1;
+        controller[9] = 1; controller[11] = checked((byte)key.Length); key.CopyTo(controller, 12);
+        var first = AccountAddress.FromCanonicalBytes(controller).ToI105();
+        controller[9] = 2;
+        var second = AccountAddress.FromCanonicalBytes(controller).ToI105();
+        entries[0]!["original_account"] = first;
+        var retained = entries[0]!.DeepClone(); retained["original_account"] = second; retained["active_commitment"] = null;
+        entries.Add(retained);
+        var record = KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString()));
+        Assert.Equal(new[] { first, second }, record.PrivateParticipation.Entries.Select(static entry => entry.OriginalAccount));
+    }
+
+    [Fact]
+    public void RecordEnforcesEffectiveCapacityMetadataOwnershipAndLifecycle()
+    {
+        foreach (var mutation in new[] { "end_missing", "active_timestamp", "ended_before_create", "orphan_metadata", "transparent_participant" })
+        {
+            var root = JsonNode.Parse(RecordBytes())!;
+            switch (mutation)
+            {
+                case "end_missing": root["status"]!["status"] = "Ended"; break;
+                case "active_timestamp": root["ended_at_ms"] = 1; break;
+                case "ended_before_create": root["status"]!["status"] = "Ended"; root["ended_at_ms"] = 0; root["created_at_ms"] = 1; break;
+                case "orphan_metadata": root["participant_metadata"]![Accounts[2]] = new JsonObject(); break;
+                case "transparent_participant": root["participants"]!.AsArray().Add(Accounts[1]); break;
+            }
+            Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+        }
+        var capacity = JsonNode.Parse(RecordBytes())!;
+        capacity["max_participants"] = 1;
+        var c = new byte[32]; c[0] = 7;
+        capacity["roster_commitments"]!.AsArray().Add(new JsonObject { ["commitment"] = BytesNode(c) });
+        capacity["private_participation"]!["entries"]!.AsArray().Add(new JsonObject {
+            ["original_account"] = Accounts[2], ["sequence"] = 1, ["active_commitment"] = BytesNode(c) });
+        Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(capacity.ToJsonString())));
+    }
+
+    [Fact]
+    public void ActivePrivateRecordReservesLiveLeaveAndHostEndInNullifierBound()
+    {
+        var root = JsonNode.Parse(RecordBytes())!;
+        var history = new JsonArray();
+        for (var index = 0; index < 8193; index++)
+        {
+            var bytes = new byte[32]; BinaryPrimitives.WriteUInt32LittleEndian(bytes, checked((uint)index));
+            history.Add(new JsonObject { ["digest"] = BytesNode(bytes) });
+        }
+        root["nullifier_log"] = history;
+        Assert.Throws<ArgumentException>(() => KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+        root["status"]!["status"] = "Ended"; root["ended_at_ms"] = root["created_at_ms"]!.DeepClone();
+        Assert.Equal(8193, KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())).NullifierLog.Count);
     }
 
     private static JsonArray BytesNode(byte[] bytes) => new(bytes.Select(static b => (JsonNode?)JsonValue.Create(b)).ToArray());

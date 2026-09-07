@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Kaigi;
@@ -132,7 +133,7 @@ public sealed class KaigiRelayManifest
     {
         ArgumentNullException.ThrowIfNull(hops);
         var copy = hops.Take(9).ToArray();
-        if (copy.Length is < 3 or > 8 || copy.Any(static hop => hop is null) || copy.Select(static hop => hop.RelayId).Distinct(StringComparer.Ordinal).Count() != copy.Length)
+        if (copy.Length is < 3 or > 8 || copy.Any(static hop => hop is null) || copy.Select(static hop => KaigiValidationV1.AccountIdentity(hop.RelayId)).Distinct(StringComparer.Ordinal).Count() != copy.Length)
             throw new ArgumentException("Kaigi manifest requires 3..8 distinct relay accounts.", nameof(hops));
         if (expiryMs == 0) throw new ArgumentOutOfRangeException(nameof(expiryMs));
         Hops = Array.AsReadOnly(copy);
@@ -159,7 +160,7 @@ public sealed class NewKaigi
         if (maxParticipants is 0 or > 4096) throw new ArgumentOutOfRangeException(nameof(maxParticipants));
         if (!Enum.IsDefined(privacyMode) || !Enum.IsDefined(roomPolicy)) throw new ArgumentException("Unknown Kaigi configuration enum.");
         BillingAccount = billingAccount is null ? null : TransactionEncodingContext.CanonicalizeAccountId(billingAccount, nameof(billingAccount));
-        if (BillingAccount is not null && BillingAccount != Host) throw new ArgumentException("V1 billing account must equal the host.", nameof(billingAccount));
+        if (BillingAccount is not null && KaigiValidationV1.AccountIdentity(BillingAccount) != KaigiValidationV1.AccountIdentity(Host)) throw new ArgumentException("V1 billing account must equal the host.", nameof(billingAccount));
         MaxParticipants = maxParticipants; GasRatePerMinute = gasRatePerMinute; ScheduledStartMs = scheduledStartMs;
         PrivacyMode = privacyMode; RoomPolicy = roomPolicy; RelayManifest = relayManifest;
         this.metadata = KaigiValidationV1.Metadata(metadata ?? new Dictionary<string, JsonNode?>());
@@ -186,6 +187,10 @@ public sealed class NewKaigi
 
 internal static class KaigiValidationV1
 {
+    // Preserve the complete controller, including multisig members, weights and threshold;
+    // network display prefixes are not part of the canonical account identity.
+    internal static string AccountIdentity(string account) => AccountAddress.Parse(account).CanonicalHex;
+
     internal const int MaximumProofBytes = 64 * 1024 * 1024;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     internal static byte[] Hash(ReadOnlySpan<byte> bytes, string name)

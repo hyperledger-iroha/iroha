@@ -3935,7 +3935,7 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "cce83b4a82be4d118cb9aed2da9192a247e09ed558a8448243eb43575f6b3973"
     ),
     "V2LaneWorkAdapter::validate_merge_candidate_for_active_round": (
-        "2e36b3c48d905c809ade68a8cd0f8a92c15cb58acf214ba07249a1917fd136b9"
+        "1e63fccfc5d909626161b2a66601b49a1ad7bec1486ecd585cd991a2299dfed5"
     ),
     "V2LaneWorkAdapter::merge_execution_candidate_validation_memo": (
         "cd51dc01cb4eff2b917d3a444a590f6ea99c0984e498a6800f420468a99f5d51"
@@ -3947,7 +3947,7 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "c69b5aac1825ce52ef7e3a07de83ad3ff6ad2da764b906c36d28ee0fff79cd90"
     ),
     "V2LaneWorkAdapter::refresh_merge_candidates": (
-        "28d3d3f0dfbdcc8fe7f1d50a101de5fc9da537779309d029dc21d2bcc3836d0e"
+        "fc88d0ad5b84dcee198c7fa0b1398d1f4a9da0d88d4d176134c8eab77a38f3c0"
     ),
 }
 
@@ -5298,7 +5298,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "f4341f1f806d10adab9e14b0c4b13c463fc7c6dae22bd7056863548d0912fb5b"
     ),
     "lane::accept_lane_message_owned": (
-        "aa4089bc8f8a3ef145430ffbf6737f7c6ce5db0e8637dccefc39aefb6b866508"
+        "9adbf291932c054e248fa2bfed4d02c9f777d41d9faad247a7cc1e3680f9b6c3"
     ),
     "effects::v2_ingress_head_can_drain": (
         "86553a8a1f1a5618a06f6c49849f1d8d5feb5e59528690e61cb597ef5c4b913c"

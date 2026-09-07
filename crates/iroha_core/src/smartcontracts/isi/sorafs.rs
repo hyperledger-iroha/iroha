@@ -231,7 +231,7 @@ fn pin_global_usage_key() -> &'static StatePath {
     })
 }
 fn pin_authority_usage_key(authority: &AccountId) -> Result<StatePath, InstructionExecutionError> {
-    let authority_bytes = norito::to_bytes(authority).map_err(|error| {
+    let authority_bytes = norito::encode_canonical(authority).map_err(|error| {
         pin_accounting_corruption(format!(
             "failed to encode authority for the accounting key: {error}"
         ))
@@ -10056,66 +10056,6 @@ mod sorafs_tests {
             "canonical helpers must restore the caller's ambient layout"
         );
     }
-    #[test]
-    fn v1_norito_decoders_reject_advertised_alternate_layouts() {
-        let provider = ProviderId::new([0x49; 32]);
-        let report = repair_report(
-            "REP-ALTERNATE-LAYOUT",
-            provider,
-            [0x4A; 32],
-            &alice(),
-            4_000,
-        );
-        let canonical = norito::encode_canonical(&report).expect("encode canonical repair report");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let alternate = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&report).expect("encode alternate-layout repair report")
-        };
-        assert_ne!(alternate, canonical);
-        assert_eq!(
-            norito::decode_from_bytes::<RepairReportV1>(&alternate)
-                .expect("ordinary Norito accepts the advertised alternate layout"),
-            report
-        );
-        let payload_error = decode_repair_payload::<RepairReportV1>(&alternate, "repair report")
-            .expect_err("admitted repair payload must reject alternate layout");
-        assert!(
-            smart_contract_error_message(&payload_error)
-                .contains("repair report is not exact canonical Norito")
-        );
-        for error in [
-            decode_repair_state::<RepairReportV1>(&alternate, "repair report")
-                .expect_err("persisted repair state must reject alternate layout"),
-            decode_stored_repair_payload::<RepairReportV1>(&alternate, "repair report")
-                .expect_err("stored repair payload must reject alternate layout"),
-        ] {
-            assert!(matches!(
-                error,
-                InstructionExecutionError::InvariantViolation(message)
-                    if message.contains("repair report is not exact canonical Norito")
-            ));
-        }
-        let mut alias = default_alias_binding();
-        let bundle = decode_alias_proof_untrusted_signers(&alias.proof)
-            .expect("decode canonical alias fixture integrity");
-        alias.proof = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&bundle).expect("encode alternate-layout alias proof")
-        };
-        let alias_error = validate_manifest_alias_binding(
-            &alias,
-            &default_digest(),
-            &default_root_cid(),
-            Some((5, default_policy().retention_epoch)),
-        )
-        .expect_err("alias proof must reject alternate layout");
-        assert!(
-            smart_contract_error_message(&alias_error).contains("not canonical Norito"),
-            "unexpected alias rejection: {alias_error:?}"
-        );
-    }
     pub(super) fn alice() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -18371,4 +18311,5 @@ mod sorafs_tests {
         );
     }
     include!("sorafs/repair_query_tail_tests.rs");
+    include!("sorafs/canonical_accounting_tests.rs");
 }

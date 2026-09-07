@@ -3963,6 +3963,7 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
   | "buildKaigiAuthorizationProofV1"
+  | "buildKaigiUsageProofV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -7334,6 +7335,32 @@ export interface KaigiAuthorizationProofOptionsV1 {
   action: "hostCreate" | "join" | "leave" | "hostEnd";
   preRosterRoot: Uint8Array;
   /** Mutable canonical nonzero Pasta Fp bytes, consumed and cleared on every call. */
+  blinding: Uint8Array;
+}
+
+/** Public outputs of the exact final V1 host usage relation. */
+export interface KaigiUsageProofV1 {
+  readonly hostCommitment: Buffer;
+  readonly usageCommitment: Buffer;
+  readonly preRosterRoot: Buffer;
+  readonly proof: Buffer;
+}
+
+export interface KaigiUsageProofOptionsV1 {
+  networkId: NetworkId;
+  callId: { domainId: string; callName: string };
+  /** Retained original host account identity. */
+  hostId: string;
+  preRosterRoot: Uint8Array;
+  /** Exact integer from zero through 2^32 - 1. */
+  segmentIndex: number;
+  /** Exact positive u64 duration. */
+  durationMs: bigint;
+  /** Exact unsigned u64 gas charge. */
+  billedGas: bigint;
+  /** Stored raw canonical host C established by HostCreate. */
+  hostCommitment: Uint8Array;
+  /** Original host opening; mutable canonical nonzero Fp bytes, consumed and cleared. */
   blinding: Uint8Array;
 }
 
@@ -12328,6 +12355,10 @@ export function verifySm2(
 export function buildKaigiAuthorizationProofV1(
   options: KaigiAuthorizationProofOptionsV1,
 ): KaigiAuthorizationProofV1;
+
+export function buildKaigiUsageProofV1(
+  options: KaigiUsageProofOptionsV1,
+): KaigiUsageProofV1;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

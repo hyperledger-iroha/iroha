@@ -15,14 +15,19 @@ use crate::{
     pack_bytes, poseidon,
 };
 use core::convert::TryFrom;
+#[cfg(test)]
+use fastpq_isi::StarkParameterSet;
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
+use fastpq_isi::poseidon::PoseidonSponge as CpuPoseidonSponge;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
 use fastpq_isi::{
     FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
-    StarkParameterSet, hash_bytes_384_v1, poseidon::PoseidonSponge as CpuPoseidonSponge,
+    hash_bytes_384_v1,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
+#[cfg(test)]
 use rayon::prelude::*;
 #[cfg(feature = "fastpq-gpu")]
 use std::sync::Mutex;
@@ -51,8 +56,10 @@ const PERMISSION_HASH_DOMAIN: &[u8] = b"fastpq:v1:permission-leaf";
 /// Canonical binary key prefix for permission-tree membership transitions.
 const PERMISSION_KEY_PREFIX: &[u8] = b"permission/";
 /// Domain tag used for column hashes.
+#[cfg(test)]
 const TRACE_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
 /// Domain tag used for Merkle interior nodes.
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_PIPELINE_STATS_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -128,6 +135,7 @@ impl PoseidonPipelinePolicy {
     pub const fn resolved(self) -> ExecutionMode {
         self.resolved
     }
+    #[cfg(test)]
     fn cpu_label(self) -> &'static str {
         if matches!(self.requested, PoseidonExecutionMode::Cpu) {
             "cpu_forced"
@@ -193,6 +201,7 @@ fn clone_observer<T: ?Sized>(
         }
     }
 }
+// Native V1 CPU proving also reports its resolved Poseidon execution policy.
 pub(crate) fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
@@ -347,6 +356,7 @@ pub struct TraceColumn {
     pub values: Vec<u64>,
 }
 /// Column digest set containing leaf hashes plus an optional precomputed first level.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 #[derive(Clone, Debug)]
 pub struct ColumnDigests {
     /// Poseidon hash for each column (leaf nodes).
@@ -354,6 +364,7 @@ pub struct ColumnDigests {
     /// Optional precomputed depth-1 parents.
     first_level_parents: Option<Vec<u64>>,
 }
+#[cfg(any(test, feature = "fastpq-gpu"))]
 impl ColumnDigests {
     /// Create a new digest set from leaves and optional parents.
     pub(crate) fn new(leaves: Vec<u64>, first_level_parents: Option<Vec<u64>>) -> Self {
@@ -364,12 +375,12 @@ impl ColumnDigests {
     }
     /// Borrow the leaf hashes.
     #[must_use]
-    pub(crate) fn leaves(&self) -> &[u64] {
+    pub fn leaves(&self) -> &[u64] {
         &self.leaves
     }
     /// Borrow the precomputed first-level parent hashes, when available.
     #[must_use]
-    pub(crate) fn first_level_parents(&self) -> Option<&[u64]> {
+    pub fn first_level_parents(&self) -> Option<&[u64]> {
         self.first_level_parents.as_deref()
     }
 
@@ -1268,6 +1279,7 @@ fn hash_with_domain(domain: &[u8], payload: &[u8]) -> Result<u64> {
     limbs.extend(payload_packed.limbs);
     Ok(poseidon::hash_field_elements_cpu(&limbs))
 }
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 fn domain_seed(domain: &[u8]) -> u64 {
     let digest = Hash::new(domain);
     let bytes = digest.as_ref();
@@ -1277,6 +1289,7 @@ fn domain_seed(domain: &[u8]) -> u64 {
     let reduced = u128::from(raw) % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits u64")
 }
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
     let mut sponge = CpuPoseidonSponge::new();
     sponge.absorb(domain_seed(domain));
@@ -1852,6 +1865,9 @@ fn field_from_i128(value: i128) -> u64 {
 }
 /// Compute column hashes for a trace suitable for Poseidon Merkle commitment.
 ///
+/// This scalar digest pipeline is a test reference; production commitments use
+/// the six-lane digests in [`crate::digest`].
+///
 /// # Errors
 ///
 /// Returns [`Error::InvalidTraceShape`] when the trace is not padded to its
@@ -1859,6 +1875,7 @@ fn field_from_i128(value: i128) -> u64 {
 /// and [`Error::VerifierLimitExceeded`] or
 /// [`Error::TraceDomainCapacityExceeded`] when its dimensions exceed the
 /// supported schema or selected parameter domain.
+#[cfg(test)]
 pub(crate) fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<ColumnDigests> {
     validate_trace_shape(trace, params)?;
     if trace.columns.is_empty() {
@@ -1872,6 +1889,7 @@ pub(crate) fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result
         PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
     ))
 }
+#[cfg(test)]
 fn validate_trace_shape(trace: &Trace, params: &StarkParameterSet) -> Result<()> {
     if trace.columns.len() > DEFAULT_MAX_TRACE_COLUMNS {
         return Err(Error::VerifierLimitExceeded {
@@ -1955,6 +1973,7 @@ pub(crate) fn trace_coefficients(
         }
     }
 }
+#[cfg(test)]
 pub(crate) fn hash_columns_from_coefficients(
     trace: &Trace,
     coefficients: &[Vec<u64>],
@@ -2041,10 +2060,12 @@ pub(crate) fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TraceP
     }
 }
 /// Compute a Poseidon Merkle root over column hashes using an optional precomputed first level.
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn merkle_root_with_first_level(leaves: &[u64], first_level: Option<&[u64]>) -> u64 {
     merkle_root_with_first_level_using(leaves, first_level, compute_merkle_level)
 }
 /// Compute a Poseidon Merkle root using the requested pipeline after any precomputed first level.
+#[cfg(test)]
 pub(crate) fn merkle_root_with_first_level_with_mode(
     leaves: &[u64],
     first_level: Option<&[u64]>,
@@ -2054,6 +2075,7 @@ pub(crate) fn merkle_root_with_first_level_with_mode(
         compute_merkle_level_with_mode(input, mode)
     })
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_root_with_first_level_using(
     leaves: &[u64],
     first_level: Option<&[u64]>,
@@ -2076,20 +2098,23 @@ fn merkle_root_with_first_level_using(
     current[0]
 }
 /// Compute the traditional Merkle root using scalar-equivalent Poseidon hashes.
+/// This helper supports tests and developer benchmarks.
 #[cfg(any(test, feature = "dev-tools"))]
 pub fn merkle_root(leaves: &[u64]) -> u64 {
     merkle_root_with_first_level(leaves, None)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn compute_merkle_level(input: &[u64]) -> Vec<u64> {
     let pairs = merkle_pairs(input);
     hash_trace_merkle_pairs_batched(&pairs)
 }
+#[cfg(test)]
 fn compute_merkle_level_with_mode(input: &[u64], mode: ExecutionMode) -> Vec<u64> {
-    #[cfg(test)]
     notify_trace_merkle_mode_observer(mode);
     let pairs = merkle_pairs(input);
     hash_trace_merkle_pairs_with_mode(&pairs, mode)
 }
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 fn merkle_pairs(input: &[u64]) -> Vec<[u64; 2]> {
     if input.is_empty() {
         return Vec::new();
@@ -2102,15 +2127,18 @@ fn merkle_pairs(input: &[u64]) -> Vec<[u64; 2]> {
     }
     pairs
 }
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 fn hash_trace_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
     pairs
         .iter()
         .map(|pair| hash_field_with_domain_cpu(TRACE_NODE_DOMAIN, pair))
         .collect()
 }
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn hash_trace_merkle_pairs_batched(pairs: &[[u64; 2]]) -> Vec<u64> {
     hash_trace_merkle_pairs_with_mode(pairs, backend::ExecutionMode::Cpu)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn hash_trace_merkle_pairs_with_mode(
     pairs: &[[u64; 2]],
     mode: backend::ExecutionMode,

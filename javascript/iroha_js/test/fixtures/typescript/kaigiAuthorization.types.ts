@@ -66,3 +66,34 @@ const retiredTimestamp: import("../../../index.js").KaigiParticipantNullifierInp
   issuedAtMs: 0,
 };
 void [retiredHint, retiredTimestamp];
+
+const usageOptions: import("../../../index.js").KaigiUsageProofOptionsV1 = {
+  networkId: options.networkId, callId: options.callId, hostId: options.hostId,
+  preRosterRoot: options.preRosterRoot, segmentIndex: 0xffffffff,
+  durationMs: 18446744073709551615n, billedGas: 18446744073709551615n,
+  hostCommitment: proof.commitment, blinding: new Uint8Array(32),
+};
+const {buildKaigiUsageProofV1} = await import("../../../index.js");
+const usage: import("../../../index.js").KaigiUsageProofV1 = buildKaigiUsageProofV1(usageOptions);
+const usageFromCrypto = (await import("../../../crypto.js")).buildKaigiUsageProofV1(usageOptions);
+const usageOutputs: Uint8Array[] = [usage.hostCommitment, usage.usageCommitment, usage.preRosterRoot, usage.proof, usageFromCrypto.proof];
+void usageOutputs;
+buildKaigiUsageProofV1({...usageOptions,
+  // @ts-expect-error Exact u64 metrics require bigint.
+  durationMs: 1,
+});
+buildKaigiUsageProofV1({...usageOptions,
+  // @ts-expect-error Exact u64 metrics require bigint.
+  billedGas: 1,
+});
+buildKaigiUsageProofV1({...usageOptions,
+  // @ts-expect-error u32 segment uses an exact integer number.
+  segmentIndex: 1n,
+});
+buildKaigiUsageProofV1({...usageOptions,
+  // @ts-expect-error Host commitment uses raw field bytes.
+  hostCommitment: "11".repeat(32),
+});
+// @ts-expect-error Stored host C is mandatory.
+buildKaigiUsageProofV1({networkId: options.networkId, callId: options.callId, hostId: options.hostId,
+  preRosterRoot: options.preRosterRoot, segmentIndex: 1, durationMs: 1n, billedGas: 0n, blinding: options.blinding});

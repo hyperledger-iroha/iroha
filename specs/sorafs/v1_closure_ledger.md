@@ -33,6 +33,50 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-07 post-reboot checkpoint
+
+The host reboot removed the earlier `/tmp` SoraFS logs and source snapshots and
+interrupted unfinished native captures. The source changes survived. Earlier
+counts below are observations with unavailable raw evidence; they do not qualify
+the current candidate. Replacement logs and result manifests now live under the
+ignored `target/evidence/sorafs-v1/` directory.
+
+The newly rebuilt full manifest library passes **896 tests, zero failures and
+zero ignored**, in 50.83 seconds after a 46.69-second build. Its binary is
+`target/debug/deps/sorafs_manifest-5333f96d02018475`, SHA-256
+`dcc36b862b01a356477d470dea98b134bc108d87c80cd573843cc3deb2c19cb3`.
+`manifest-canonical-identity-suite.log` and
+`manifest-canonical-identity-result.json` retain the output and scoped hashes.
+These are local test results, not a release seal or hardware qualification.
+
+An independent audit extended the canonical-size finding to framed identities
+and signatures: manifest/deal/audit/replication material, finalized retention
+requests, pin-accounting keys, and node reputation, billing and Governance DAG
+persistence/publication. The corrected boundaries use `encode_canonical` and
+real `canonical_frame_len` counting. Explicit bare `codec::Encode` V1 preimages
+remain unchanged. Cross-layout identity/signature and tampering regressions pass
+in the manifest suite. The focused retention-request model selection also passes
+three tests, zero failures/ignored, after an 11m08s build. Its durable result is
+`model-retention-canonical-result.json`; broader model changes owned by other
+tasks and the combined Core/node candidate still need fresh qualification.
+Checkpoint retention must choose the same minimal retained prefix under every
+admitted caller layout. No compatibility decoder or second V1 state format is
+introduced. The earlier 113 Core failures and all four-validator cases remain
+open until fresh execution proves their corrections.
+
+The full current provider/rollout source-contract selection passes 410 checks
+and fails two unfinished-source closure checks in 61.73 seconds. Its retained
+log is `canonical-final-source-contracts.log`; the earlier focused audit's
+pinned-environment context and exact offender inventory remain in
+`canonical-contract-tests/result.json` and `todo-findings.json`.
+The remaining entries concern authenticated MKHE reports,
+the SoraFS signer hardware/state and production-consumer hard cut, curated Torii
+capabilities, and bounded multi-page shard prefixes. No guard, source seal or
+dependency pin was relaxed. The global source-budget audit also fails; new
+canonical regression groups are extracted into small cohesive test files rather
+than enlarging their existing parent modules. Neither source inventories nor
+local test counts establish hardware or reference-deployment readiness.
+
 ## 2026-09-06 execution checkpoint
 
 The broader native Core checkpoint (2026-09-07) finished **275 passed, 113 failed,

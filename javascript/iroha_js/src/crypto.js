@@ -828,6 +828,68 @@ export function buildKaigiAuthorizationProofV1(options) {
   return buildKaigiAuthorizationProofV1WithRuntime(defaultNativeRuntime, options);
 }
 
+const KAIGI_USAGE_OPTION_KEYS_V1 = new Set([
+  "networkId", "callId", "hostId", "preRosterRoot", "segmentIndex", "durationMs", "billedGas", "hostCommitment", "blinding",
+]);
+
+function buildKaigiUsageProofV1WithRuntime(nativeRuntime, options) {
+  const blinding = options?.blinding;
+  if (!(blinding instanceof Uint8Array)) throw new TypeError("blinding must be a mutable 32-byte Uint8Array");
+  try {
+    if (!options || typeof options !== "object" || Array.isArray(options)) throw new TypeError("buildKaigiUsageProofV1 options must be an object");
+    for (const key of Object.keys(options)) {
+      if (!KAIGI_USAGE_OPTION_KEYS_V1.has(key)) throw new TypeError(`unknown Kaigi usage option: ${key}`);
+    }
+    if (Reflect.apply(kaigiByteLengthGetterV1, blinding, []) !== 32 ||
+        (KaigiSharedArrayBufferV1 !== undefined && Reflect.apply(kaigiBufferGetterV1, blinding, []) instanceof KaigiSharedArrayBufferV1)) {
+      throw new TypeError("blinding must be a private mutable 32-byte Uint8Array");
+    }
+    const network = networkIdBytes(options.networkId);
+    const call = options.callId;
+    if (!call || typeof call !== "object" || Array.isArray(call) ||
+        Object.keys(call).some((key) => key !== "domainId" && key !== "callName")) {
+      throw new TypeError("callId must contain exactly domainId and callName");
+    }
+    const { domainId, callName } = call;
+    const hostId = options.hostId;
+    for (const [name, value] of [["callId.domainId", domainId], ["callId.callName", callName], ["hostId", hostId]]) {
+      if (typeof value !== "string" || value.length === 0 || value.trim() !== value) throw new TypeError(`${name} must be canonical nonempty text`);
+    }
+    const segment = options.segmentIndex;
+    if (!Number.isInteger(segment) || segment < 0 || segment > 0xffff_ffff) throw new TypeError("segmentIndex must be an unsigned 32-bit integer");
+    const duration = options.durationMs;
+    const gas = options.billedGas;
+    for (const [name, value] of [["durationMs", duration], ["billedGas", gas]]) {
+      if (typeof value !== "bigint" || value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new TypeError(`${name} must be an unsigned 64-bit bigint`);
+    }
+    if (duration === 0n) throw new TypeError("durationMs must be positive");
+    const root = kaigiBytesV1(options.preRosterRoot, "preRosterRoot");
+    const hostCommitment = kaigiScalarV1(options.hostCommitment, "hostCommitment");
+    const native = resolveNativeRuntimeBinding(nativeRuntime);
+    if (typeof native.buildKaigiUsageProofV1 !== "function") throw new Error("Native binding does not expose buildKaigiUsageProofV1");
+    const raw = native.buildKaigiUsageProofV1(network, domainId, callName, hostId, root,
+      segment, duration, gas, hostCommitment, blinding);
+    const proofBytes = raw.proof;
+    const result = {
+      hostCommitment: kaigiScalarV1(raw.hostCommitment, "hostCommitment"),
+      usageCommitment: kaigiScalarV1(raw.usageCommitment, "usageCommitment"),
+      preRosterRoot: kaigiBytesV1(raw.preRosterRoot, "preRosterRoot"),
+      proof: kaigiBytesV1(proofBytes, "proof", proofBytes?.byteLength),
+    };
+    if (result.proof.length === 0 || !result.preRosterRoot.equals(root) || !result.hostCommitment.equals(hostCommitment)) {
+      throw new Error("Native Kaigi usage proof returned an empty proof, different pre-state root or different host commitment");
+    }
+    return Object.freeze(result);
+  } finally {
+    Reflect.apply(clearKaigiBlindingV1, blinding, [0]);
+  }
+}
+
+/** Prove a usage segment with the opening of stored host C; consume and clear blinding. */
+export function buildKaigiUsageProofV1(options) {
+  return buildKaigiUsageProofV1WithRuntime(defaultNativeRuntime, options);
+}
+
 /**
  * Derive the confidential key hierarchy from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
@@ -1217,6 +1279,7 @@ function sm2FixtureFromSeedWithRuntime(nativeRuntime, distid, seed, message) {
 export function _createCryptoApi(nativeRuntime) {
   return Object.freeze({
     buildKaigiAuthorizationProofV1: (options) => buildKaigiAuthorizationProofV1WithRuntime(nativeRuntime, options),
+    buildKaigiUsageProofV1: (options) => buildKaigiUsageProofV1WithRuntime(nativeRuntime, options),
     supportedCryptoAlgorithms: () =>
       supportedCryptoAlgorithmsWithRuntime(nativeRuntime),
     generateKeyPair: (options = {}) =>

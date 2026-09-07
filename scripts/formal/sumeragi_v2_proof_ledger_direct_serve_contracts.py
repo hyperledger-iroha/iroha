@@ -1374,6 +1374,7 @@ _TERMINAL_LANE_SOURCE_OWNERS = {
         ("V2LaneWorkAdapter", "drive_lane_sessions"),
         ("V2LaneWorkAdapter", "persist_anchored_sessions"),
         ("V2LaneWorkAdapter", "proposal_can_progress"),
+        ("V2LaneWorkAdapter", "accept_lane_message_owned"),
         ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey", "from"),
     ),
     "crates/iroha_core/src/lane_consensus.rs": (
@@ -1389,6 +1390,81 @@ _TERMINAL_LANE_SOURCE_OWNERS = {
 }
 
 _TERMINAL_LANE_SOURCE_CONTRACTS = (
+    ("V2LaneWorkAdapter::accept_lane_message_owned", False,
+     "lane ingress must close malformed ownership and revalidate finalized proposal and Decision bodies before dispatch while preserving restart admission closure",
+        """
+fn accept_lane_message_owned(
+    &mut self,
+    inbound: InboundBlockMessage,
+    ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
+    active_view: wire::View,
+) -> V2LaneIngressOutcome {
+    let output_guard = Arc::clone(&self.output_guard);
+    let Some(_permit) = output_guard.acquire() else {
+        return V2LaneIngressOutcome::Rejected;
+    };
+    let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+    if ingress_ownership.as_ref().is_some_and(|ownership| {
+        !ownership.validate_exact()
+            || !ownership.matches_message(&message)
+            || !ownership.matches_semantic_origin(&sender)
+            || !ownership.matches_reply_routes(reply_routes.as_ref())
+    }) {
+        self.output_guard.close_admission_for_restart();
+        return V2LaneIngressOutcome::Rejected;
+    }
+    let finalized_proposal = match &message {
+        BlockMessage::LaneBlockProposal(proposal) => Some(proposal),
+        BlockMessage::LaneExecutablePayload(payload) => Some(&payload.origin_proposal),
+        _ => None,
+    };
+    if finalized_proposal.is_some_and(|proposal| {
+        self.finalized_autonomous_ingress_payload_for_proposal_or_fail_stop(proposal)
+            .is_err()
+    }) {
+        return V2LaneIngressOutcome::Rejected;
+    }
+    if self.decision_pending()
+        && let BlockMessage::LaneBlockProposal(proposal) = &message
+        && proposal.descriptor.proposal_height >= self.context.height
+        && !self.proposal_is_bound_to_decided_carrier(proposal)
+    {
+        return V2LaneIngressOutcome::Rejected;
+    }
+    if let BlockMessage::LaneBlockProposal(proposal) = &message
+        && let Some(outcome) = self.serve_durable_lane_certificate(
+            proposal,
+            Some(&sender),
+            reply_routes,
+            ingress_ownership,
+        )
+    {
+        return outcome;
+    }
+    if self.decision_pending() {
+        let finalized_body = match &message {
+            BlockMessage::LaneBlockVote(vote) => Some(&vote.body),
+            BlockMessage::LaneBlockQc(qc) => Some(&qc.body),
+            BlockMessage::LaneBlockCertificate(certificate) => {
+                Some(&certificate.prepare_qc.body)
+            }
+            _ => None,
+        };
+        if finalized_body.is_some_and(|body| {
+            self.finalized_autonomous_ingress_payload_or_fail_stop(body)
+                .is_err()
+        }) {
+            return V2LaneIngressOutcome::Rejected;
+        }
+    }
+    if self.decision_pending() && !self.lane_message_is_allowed_after_decision(&message) {
+        return V2LaneIngressOutcome::Rejected;
+    }
+    if self.output_guard.restart_required() {
+        return V2LaneIngressOutcome::Rejected;
+    }
+    let outcome = match message {
+"""),
     ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from", True,
      "terminal retirement selection must retain the full proposal route, incarnation, and lane height",
         """

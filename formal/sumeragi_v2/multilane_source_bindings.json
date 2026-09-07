@@ -10340,12 +10340,11 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "fn",
-          "symbol": "release_lane_reservation",
+          "symbol": "release_strictly_absent_lane_reservations_in_order",
           "required_tokens": [
-            "fifo_with_released_reservations_locked",
-            "apply_lane_reservation_journal",
-            "journal.release(*key)",
-            "replace_fifo_locked"
+            "authorizations: Vec<StrictAbsenceDirectReleaseAuthorization>",
+            "release_lane_reservations_in_order_inner",
+            "LaneQueueDirectReleaseGate::StrictAbsence(authorizations)"
           ]
         },
         {
@@ -10353,6 +10352,7 @@
           "kind": "fn",
           "symbol": "release_lane_reservations_in_order_inner",
           "required_tokens": [
+            "gate: LaneQueueDirectReleaseGate",
             "entrypoint_hashes.insert",
             "authorized_hashes != entrypoint_hashes",
             "self.lane_reservation_transition_lock.lock()",

@@ -28,9 +28,11 @@ test("browser crypto bundle rejects native Kaigi authorization proof constructio
   try {
     Uint8Array.prototype.fill = () => { throw new Error("replaced fill must not run"); };
     for (const crypto of [srcBrowserCrypto, distBrowserCrypto]) {
-      const secret = Uint8Array.from(Array(32).fill(0x11));
-      assert.throws(() => crypto.buildKaigiAuthorizationProofV1({blinding: secret}), /unavailable/u);
-      assert.ok(secret.every((byte) => byte === 0));
+      for (const method of ["buildKaigiAuthorizationProofV1", "buildKaigiUsageProofV1"]) {
+        const secret = Uint8Array.from(Array(32).fill(0x11));
+        assert.throws(() => crypto[method]({blinding: secret}), /unavailable/u);
+        assert.ok(secret.every((byte) => byte === 0));
+      }
     }
   } finally {
     Uint8Array.prototype.fill = originalFill;

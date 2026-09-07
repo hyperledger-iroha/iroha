@@ -2,6 +2,28 @@
 
 
 _TERMINAL_LANE_MUTATIONS = (
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "self.output_guard.close_admission_for_restart();", "",
+     "close malformed ownership"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "BlockMessage::LaneBlockProposal(proposal) => Some(proposal),",
+     "BlockMessage::LaneBlockProposal(proposal) => None,",
+     "revalidate finalized proposal"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "self.finalized_autonomous_ingress_payload_for_proposal_or_fail_stop(proposal)\n                .is_err()",
+     "self.finalized_autonomous_ingress_payload_for_proposal_or_fail_stop(proposal)\n                .is_ok()",
+     "revalidate finalized proposal"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "if self.decision_pending() {\n            let finalized_body",
+     "if false {\n            let finalized_body",
+     "Decision bodies before dispatch"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "self.finalized_autonomous_ingress_payload_or_fail_stop(body)\n                    .is_err()",
+     "self.finalized_autonomous_ingress_payload_or_fail_stop(body)\n                    .is_ok()",
+     "Decision bodies before dispatch"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "if self.output_guard.restart_required() {", "if false {",
+     "preserving restart admission closure"),
     ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
      "dataspace_id: descriptor.dataspace_id,", "dataspace_id: DataSpaceId::UNIVERSAL,",
      "full proposal route, incarnation, and lane height"),
@@ -261,6 +283,10 @@ def test_terminal_lane_source_mutations_survive_digest_refresh(
     )
     if qualified == "V2LaneWorkAdapter::persist_anchored_sessions":
         baseline_digest = module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256[qualified]
+    if qualified == "V2LaneWorkAdapter::accept_lane_message_owned":
+        baseline_digest = module._PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256[
+            "lane::accept_lane_message_owned"
+        ]
     module._require_rust_item_token_sha256(path, item, baseline_digest, qualified, errors)
     module._require_terminal_lane_source_contracts(path, {qualified: item}, errors)
     assert not errors, errors
@@ -275,6 +301,11 @@ def test_terminal_lane_source_mutations_survive_digest_refresh(
         bindings.append((module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256, qualified))
     if qualified == "V2LaneWorkAdapter::persist_anchored_sessions":
         bindings.append((module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256, qualified))
+    if qualified == "V2LaneWorkAdapter::accept_lane_message_owned":
+        bindings.append((
+            module._PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256,
+            "lane::accept_lane_message_owned",
+        ))
     original = rebind_reviewed_rust_item_digests(module, path, name, context, tuple(bindings))
     try:
         errors = []

@@ -366,6 +366,18 @@ native prover, which verifies the generated envelope through the canonical Core
 backend before returning it. Browser calls clear a supplied mutable blinding
 and fail closed.
 
+`buildKaigiUsageProofV1()` proves billing with that same host opening. Supply the
+typed `networkId`, canonical `callId` and original `hostId`, exact current
+`preRosterRoot`, the ledger's `segmentIndex` as an integer from zero through
+`2^32 - 1`, positive `durationMs` and unsigned `billedGas` as `bigint` u64 values,
+the stored raw `hostCommitment`, and mutable `blinding` bytes. It rejects an
+opening that does not match the stored host C before proving, and returns
+`{ hostCommitment, usageCommitment, preRosterRoot, proof }` only after Core verifies
+the final 25-row usage relation. The supplied blinding is cleared on every call.
+Use `usageCommitment` and `proof` in `buildRecordKaigiUsageInstruction` with those
+same public metrics. Native authorization and usage cache only each fixed
+circuit's public proving material; caller secrets remain owned by the invocation.
+
 Pass `{ commitment: result.commitment }` and `{ digest: result.nullifier }` into
 the matching Kaigi instruction builder. These values use raw canonical Pasta
 field bytes, including in the Norito JSON byte-array representation. The signed

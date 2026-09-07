@@ -59000,6 +59000,7 @@ if ingress_ownership.as_ref().is_some_and(|ownership| {
         || !ownership.matches_semantic_origin(&sender)
         || !ownership.matches_reply_routes(reply_routes.as_ref())
 }) {
+    self.output_guard.close_admission_for_restart();
     return V2LaneIngressOutcome::Rejected;
 }
 """,

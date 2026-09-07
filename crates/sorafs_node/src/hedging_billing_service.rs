@@ -992,8 +992,8 @@ impl HedgingBillingServicePolicyV1 {
     /// Rejects invalid policy material or an encoding above the V1 policy artifact ceiling.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, HedgingBillingServiceError> {
         self.validate()?;
-        let bytes =
-            norito::to_bytes(self).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+        let bytes = norito::encode_canonical(self)
+            .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
         if bytes.is_empty() || bytes.len() > HEDGING_BILLING_SERVICE_POLICY_MAX_BYTES_V1 {
             return Err(HedgingBillingServiceError::ResourceExhausted);
         }
@@ -1256,8 +1256,8 @@ impl HedgingBillingEpochWitnessRecordV1 {
     ) -> Result<Vec<u8>, HedgingBillingServiceError> {
         self.validate(checkpoint_max_bytes)?;
         let max_record_bytes = epoch_witness_record_max_bytes(checkpoint_max_bytes)?;
-        let bytes =
-            norito::to_bytes(self).map_err(|_| HedgingBillingServiceError::InvalidEpochWitness)?;
+        let bytes = norito::encode_canonical(self)
+            .map_err(|_| HedgingBillingServiceError::InvalidEpochWitness)?;
         if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_record_bytes {
             return Err(HedgingBillingServiceError::InvalidEpochWitness);
         }
@@ -1581,7 +1581,7 @@ impl SignedGovernedBillingStatementV1 {
         let signature = Signature::from_bytes(&self.signature);
         key.verify_strict(&self.signing_digest()?, &signature)
             .map_err(|_| HedgingBillingServiceError::InvalidSignedStatement)?;
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .map_err(|_| HedgingBillingServiceError::InvalidSignedStatement)?;
         if bytes.len() > SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1 {
             return Err(HedgingBillingServiceError::ResourceExhausted);
@@ -1600,8 +1600,8 @@ impl SignedGovernedBillingStatementV1 {
         period_close: &HedgingBillingFinalizedPeriodCloseV1,
     ) -> Result<Vec<u8>, HedgingBillingServiceError> {
         self.verify(policy, feed_policy, period_close)?;
-        let bytes =
-            norito::to_bytes(self).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+        let bytes = norito::encode_canonical(self)
+            .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
         if bytes.len() > SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1 {
             return Err(HedgingBillingServiceError::ResourceExhausted);
         }
@@ -1665,8 +1665,8 @@ impl BillingStatementPublicationReceiptV1 {
         {
             return Err(HedgingBillingServiceError::InvalidPublicationReceipt);
         }
-        let signed_bytes =
-            norito::to_bytes(signed).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+        let signed_bytes = norito::encode_canonical(signed)
+            .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
         if self.signed_statement_digest != *blake3::hash(&signed_bytes).as_bytes() {
             return Err(HedgingBillingServiceError::InvalidPublicationReceipt);
         }
@@ -4979,7 +4979,7 @@ impl HedgingBillingService {
                 governed_statement: record.governed_statement.clone(),
                 signature: [0; 64],
             };
-            let candidate_bytes = norito::to_bytes(&candidate)
+            let candidate_bytes = norito::encode_canonical(&candidate)
                 .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
             if candidate_bytes.len() > SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1 {
                 return Err(HedgingBillingServiceError::ResourceExhausted);
@@ -6569,8 +6569,8 @@ fn decode_checkpoint(
         ),
     )
     .map_err(|_| HedgingBillingServiceError::InvalidCheckpoint)?;
-    let canonical =
-        norito::to_bytes(&checkpoint).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+    let canonical = norito::encode_canonical(&checkpoint)
+        .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
     if canonical != bytes {
         return Err(HedgingBillingServiceError::NonCanonicalCheckpoint);
     }
@@ -6583,15 +6583,15 @@ fn encode_checkpoint(
     feed_policy: &HedgingFeedTrustPolicyV1,
 ) -> Result<Vec<u8>, HedgingBillingServiceError> {
     checkpoint.validate(policy, feed_policy)?;
-    if let Some(length) = checkpoint.encoded_len_exact()
-        && u64::try_from(length).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes
-    {
+    let length = norito::canonical_frame_len(checkpoint)
+        .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+    if u64::try_from(length).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes {
         return Err(HedgingBillingServiceError::ResourceExhausted);
     }
-    let bytes =
-        norito::to_bytes(checkpoint).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes {
-        return Err(HedgingBillingServiceError::ResourceExhausted);
+    let bytes = norito::encode_canonical(checkpoint)
+        .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+    if bytes.len() != length {
+        return Err(HedgingBillingServiceError::EncodingFailed);
     }
     Ok(bytes)
 }
@@ -6952,7 +6952,8 @@ fn event_replay_digest(
 fn signed_statement_digest(
     signed: &SignedGovernedBillingStatementV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
-    let bytes = norito::to_bytes(signed).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+    let bytes =
+        norito::encode_canonical(signed).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
     Ok(*blake3::hash(&bytes).as_bytes())
 }
 fn verify_publisher_identity(
@@ -7115,7 +7116,8 @@ fn hash_canonical<T: NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
-    let bytes = norito::to_bytes(value).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
+    let bytes =
+        norito::encode_canonical(value).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
     let length =
         u64::try_from(bytes.len()).map_err(|_| HedgingBillingServiceError::AmountOverflow)?;
     let mut hasher = blake3::Hasher::new();
@@ -9515,50 +9517,6 @@ mod tests {
         ));
     }
     #[test]
-    fn epoch_witness_has_one_bounded_canonical_persistence_format() {
-        let root = tempfile::tempdir().expect("state root");
-        let (service, _feed_policy, reference, verifier, _publisher, _acknowledgement_authority) =
-            ready_service(root.path());
-        settle_first_period(&service, &reference);
-        let (next_policy, next_feed_policy) = rotated_policies();
-        service
-            .transition_epoch(
-                next_policy.clone(),
-                next_feed_policy,
-                vec![0xD8],
-                &TestSigner::transition(),
-            )
-            .expect("transition");
-        let record = verifier
-            .witness_records
-            .lock()
-            .expect("epoch witness state")
-            .get(&1)
-            .expect("epoch witness")
-            .clone();
-        let bytes = record
-            .to_canonical_bytes(next_policy.checkpoint_max_bytes)
-            .expect("canonical witness bytes");
-        assert_eq!(
-            HedgingBillingEpochWitnessRecordV1::from_canonical_bytes(
-                &bytes,
-                next_policy.checkpoint_max_bytes,
-            )
-            .expect("decode canonical witness"),
-            record
-        );
-        let mut substituted = record;
-        substituted.revision[0] ^= 0x80;
-        let substituted_bytes = norito::to_bytes(&substituted).expect("substituted bytes");
-        assert!(matches!(
-            HedgingBillingEpochWitnessRecordV1::from_canonical_bytes(
-                &substituted_bytes,
-                next_policy.checkpoint_max_bytes,
-            ),
-            Err(HedgingBillingServiceError::InvalidEpochWitness)
-        ));
-    }
-    #[test]
     fn epoch_witness_rejects_valid_same_epoch_non_base_checkpoint_substitution() {
         let root = tempfile::tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
@@ -10335,4 +10293,5 @@ mod tests {
             Err(HedgingBillingServiceError::AutomaticHedgeExecutionForbidden)
         ));
     }
+    include!("hedging_billing_service/canonical_boundary_tests.rs");
 }

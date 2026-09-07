@@ -663,8 +663,10 @@ enum StrictJSONDuplicateKeyRejector {
     static func rejectDuplicateObjectKeys(
         in data: Data,
         integerKeys: Set<String> = [],
+        nullableIntegerKeys: Set<String> = [],
         integerArrayKeys: Set<String> = [],
         integerMatrixKeys: Set<String> = [],
+        integerValidationExcludedSubtrees: Set<String> = [],
         requireAllNumbersInteger: Bool = false
     ) throws {
         guard let text = String(data: data, encoding: .utf8) else {
@@ -673,8 +675,10 @@ enum StrictJSONDuplicateKeyRejector {
         var parser = Parser(
             text,
             integerKeys: integerKeys,
+            nullableIntegerKeys: nullableIntegerKeys,
             integerArrayKeys: integerArrayKeys,
             integerMatrixKeys: integerMatrixKeys,
+            integerValidationExcludedSubtrees: integerValidationExcludedSubtrees,
             requireAllNumbersInteger: requireAllNumbersInteger
         )
         try parser.parse()
@@ -684,22 +688,28 @@ enum StrictJSONDuplicateKeyRejector {
         private static let maximumNestingDepth = 128
         private let text: String
         private let integerKeys: Set<String>
+        private let nullableIntegerKeys: Set<String>
         private let integerArrayKeys: Set<String>
         private let integerMatrixKeys: Set<String>
+        private let integerValidationExcludedSubtrees: Set<String>
         private let requireAllNumbersInteger: Bool
         private var index: String.Index
 
         init(
             _ text: String,
             integerKeys: Set<String>,
+            nullableIntegerKeys: Set<String>,
             integerArrayKeys: Set<String>,
             integerMatrixKeys: Set<String>,
+            integerValidationExcludedSubtrees: Set<String>,
             requireAllNumbersInteger: Bool
         ) {
             self.text = text
             self.integerKeys = integerKeys
+            self.nullableIntegerKeys = nullableIntegerKeys
             self.integerArrayKeys = integerArrayKeys
             self.integerMatrixKeys = integerMatrixKeys
+            self.integerValidationExcludedSubtrees = integerValidationExcludedSubtrees
             self.requireAllNumbersInteger = requireAllNumbersInteger
             self.index = text.startIndex
         }
@@ -716,7 +726,8 @@ enum StrictJSONDuplicateKeyRejector {
             depth: Int,
             requireInteger: Bool = false,
             requireIntegerArrayElements: Bool = false,
-            requireIntegerMatrixElements: Bool = false
+            requireIntegerMatrixElements: Bool = false,
+            excludeIntegerValidation: Bool = false
         ) throws {
             guard depth <= Self.maximumNestingDepth else {
                 throw ZkAssetMerklePathError.invalidField("json.depth")
@@ -734,17 +745,18 @@ enum StrictJSONDuplicateKeyRejector {
             }
             switch character {
             case "{":
-                try parseObject(depth: depth)
+                try parseObject(depth: depth, excludeIntegerValidation: excludeIntegerValidation)
             case "[":
                 try parseArray(
                     depth: depth,
                     requireIntegerElements: requireIntegerArrayElements,
-                    requireIntegerArrayElements: requireIntegerMatrixElements
+                    requireIntegerArrayElements: requireIntegerMatrixElements,
+                    excludeIntegerValidation: excludeIntegerValidation
                 )
             case "\"":
                 _ = try parseString()
             case "-", "0"..."9":
-                try parseNumber(requireInteger: requireInteger || requireAllNumbersInteger)
+                try parseNumber(requireInteger: requireInteger || (requireAllNumbersInteger && !excludeIntegerValidation))
             case "t":
                 try consume("true")
             case "f":
@@ -756,7 +768,7 @@ enum StrictJSONDuplicateKeyRejector {
             }
         }
 
-        private mutating func parseObject(depth: Int) throws {
+        private mutating func parseObject(depth: Int, excludeIntegerValidation: Bool) throws {
             try consume("{")
             skipWhitespace()
             var keys = Set<String>()
@@ -774,11 +786,15 @@ enum StrictJSONDuplicateKeyRejector {
                 }
                 skipWhitespace()
                 try consume(":")
+                skipWhitespace()
+                let nullableInteger = nullableIntegerKeys.contains(key) && peek() != "n"
+                let excludeChildIntegers = excludeIntegerValidation || integerValidationExcludedSubtrees.contains(key)
                 try parseValue(
                     depth: depth + 1,
-                    requireInteger: integerKeys.contains(key),
-                    requireIntegerArrayElements: integerArrayKeys.contains(key),
-                    requireIntegerMatrixElements: integerMatrixKeys.contains(key)
+                    requireInteger: !excludeChildIntegers && (integerKeys.contains(key) || nullableInteger),
+                    requireIntegerArrayElements: !excludeChildIntegers && integerArrayKeys.contains(key),
+                    requireIntegerMatrixElements: !excludeChildIntegers && integerMatrixKeys.contains(key),
+                    excludeIntegerValidation: excludeChildIntegers
                 )
                 skipWhitespace()
                 if consumeIf("}") {
@@ -791,7 +807,8 @@ enum StrictJSONDuplicateKeyRejector {
         private mutating func parseArray(
             depth: Int,
             requireIntegerElements: Bool = false,
-            requireIntegerArrayElements: Bool = false
+            requireIntegerArrayElements: Bool = false,
+            excludeIntegerValidation: Bool = false
         ) throws {
             try consume("[")
             skipWhitespace()
@@ -802,7 +819,8 @@ enum StrictJSONDuplicateKeyRejector {
                 try parseValue(
                     depth: depth + 1,
                     requireInteger: requireIntegerElements,
-                    requireIntegerArrayElements: requireIntegerArrayElements
+                    requireIntegerArrayElements: requireIntegerArrayElements,
+                    excludeIntegerValidation: excludeIntegerValidation
                 )
                 skipWhitespace()
                 if consumeIf("]") {

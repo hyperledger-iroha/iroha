@@ -143,6 +143,109 @@ final class KaigiFinalPrivacyV1Tests: XCTestCase {
     entries.append(entries[0]); ledger["entries"] = entries
     hint = original; hint["private_participation"] = ledger; try reject(hint)
     hint = original; hint["roster_commitments"] = []; try reject(hint)
+    hint = original; hint["nullifier_log"] = []; try reject(hint)
+    hint = original; hint["segments_recorded"] = 2; try reject(hint)
+    hint = original; hint["usage_commitments"] = [original["usage_commitments"] as! [Any]].flatMap { $0 + $0 }
+    hint["segments_recorded"] = 2; try reject(hint)
     hint = original; hint["roster_root"] = "hash:" + String(repeating: "0", count: 64) + "#0000"; try reject(hint)
+    XCTAssertThrowsError(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(
+      Data(repeating: 32, count: KaigiPrivacyStateV1.maximumJSONBytes + 1)))
+  }
+
+  func testRecordRetainsMetadataValuesAndRejectsFalseLifecycleAndOwners() throws {
+    let original = try JSONSerialization.jsonObject(with: KaigiFinalWireFixturesV1.recordJSON) as! [String: Any]
+    var metadata = original
+    metadata["metadata"] = ["sequence": 1.25, "usage_commitments": [[3.5]], "commitment": ["arbitrary"]]
+    metadata["participant_metadata"] = [KaigiFinalWireFixturesV1.accounts[0]: ["sequence": 1.25]]
+    XCTAssertNoThrow(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: metadata)))
+    for name in ["ended_missing", "active_timestamp", "ended_before_create", "orphan_metadata", "transparent_participant", "effective_cap"] {
+      var value = original
+      switch name {
+      case "ended_missing": value["status"] = ["status": "Ended", "state": NSNull()]
+      case "active_timestamp": value["ended_at_ms"] = 1
+      case "ended_before_create":
+        value["status"] = ["status": "Ended", "state": NSNull()]
+        value["created_at_ms"] = 1; value["ended_at_ms"] = 0
+      case "orphan_metadata": value["participant_metadata"] = [KaigiFinalWireFixturesV1.accounts[2]: [:]]
+      case "transparent_participant": value["participants"] = [KaigiFinalWireFixturesV1.accounts[1]]
+      case "effective_cap": value["max_participants"] = 0
+      default: XCTFail(name)
+      }
+      XCTAssertThrowsError(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value)), name)
+    }
+    let text = String(data: KaigiFinalWireFixturesV1.recordJSON, encoding: .utf8)!
+    for replacement in ["1.0", "1e0", "-0"] {
+      XCTAssertThrowsError(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(Data(
+        text.replacingOccurrences(of: "\"max_participants\":null", with: "\"max_participants\":\(replacement)").utf8)))
+    }
+  }
+
+  func testRetainedOwnershipUsesWholeControllerAcrossDisplayPrefixes() throws {
+    let original = try JSONSerialization.jsonObject(with: KaigiFinalWireFixturesV1.recordJSON) as! [String: Any]
+    let account = try AccountAddress.parseEncoded(KaigiFinalWireFixturesV1.accounts[1])
+    let alternate = try account.toI105(networkPrefix: 42)
+    XCTAssertNotEqual(alternate, KaigiFinalWireFixturesV1.accounts[1])
+    var value = original
+    var ledger = value["private_participation"] as! [String: Any]
+    var entries = ledger["entries"] as! [[String: Any]]
+    var duplicate = entries[0]; duplicate["original_account"] = alternate; duplicate["active_commitment"] = NSNull()
+    entries.append(duplicate); ledger["entries"] = entries; value["private_participation"] = ledger
+    XCTAssertThrowsError(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value)))
+    entries.removeLast()
+    entries[0]["original_account"] = try AccountAddress.parseEncoded(KaigiFinalWireFixturesV1.accounts[0]).toI105(networkPrefix: 42)
+    ledger["entries"] = entries; value["private_participation"] = ledger
+    XCTAssertThrowsError(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value)))
+  }
+
+  func testOriginalOwnershipRetainsMultisigPolicyAndInactiveSequenceExhaustion() throws {
+    var value = try JSONSerialization.jsonObject(with: KaigiFinalWireFixturesV1.recordJSON) as! [String: Any]
+    let single = try AccountAddress.parseEncoded(KaigiFinalWireFixturesV1.accounts[1]).canonicalBytes()
+    let key = single.suffix(32)
+    var controller = Data([0x0a, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 32]) + key
+    let first = try AccountAddress.fromCanonicalBytes(controller).toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+    controller[9] = 2
+    let second = try AccountAddress.fromCanonicalBytes(controller).toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+    var ledger = value["private_participation"] as! [String: Any]
+    var entries = ledger["entries"] as! [[String: Any]]
+    entries[0]["original_account"] = first
+    entries.append(["original_account": second, "sequence": UInt64.max, "active_commitment": NSNull()])
+    ledger["entries"] = entries; value["private_participation"] = ledger
+    let retained = try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value))
+    XCTAssertEqual(retained.privateParticipation.map(\.originalAccount), [first, second])
+    XCTAssertEqual(retained.privateParticipation[1].sequence, UInt64.max)
+    XCTAssertNil(retained.privateParticipation[1].activeCommitment)
+    entries[0]["active_commitment"] = [UInt8](repeating: 0, count: 32)
+    ledger["entries"] = entries; value["private_participation"] = ledger
+    value["roster_commitments"] = [["commitment": [UInt8](repeating: 0, count: 32)]]
+    XCTAssertEqual(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value))
+      .privateParticipation[0].activeCommitment?.bytes, Data(repeating: 0, count: 32))
+  }
+
+  func testActiveHistoryReservesEveryLiveLeaveAndHostEnd() throws {
+    var value = try JSONSerialization.jsonObject(with: KaigiFinalWireFixturesV1.recordJSON) as! [String: Any]
+    value["nullifier_log"] = (0..<8193).map { index in
+      var bytes = [UInt8](repeating: 0, count: 32)
+      bytes[0] = UInt8(index & 255); bytes[1] = UInt8(index >> 8)
+      return ["digest": bytes]
+    }
+    XCTAssertThrowsError(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value)))
+    value["status"] = ["status": "Ended", "state": NSNull()]; value["ended_at_ms"] = value["created_at_ms"]
+    XCTAssertEqual(try KaigiPrivacyStateV1.decodeCanonicalRecordJSON(JSONSerialization.data(withJSONObject: value)).nullifierLog.count, 8193)
+  }
+
+  func testStrictIntegerMatricesPreserveExistingFlatArrayValidation() throws {
+    let check: (String) throws -> Void = { text in
+      try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: Data(text.utf8),
+        nullableIntegerKeys: ["ended_at_ms"],
+        integerArrayKeys: ["directions"], integerMatrixKeys: ["usage_commitments"])
+    }
+    XCTAssertNoThrow(try check("{\"directions\":[0,1],\"usage_commitments\":[[1,2],[3]]}"))
+    XCTAssertNoThrow(try check("{\"ended_at_ms\":null}"))
+    XCTAssertNoThrow(try check("{\"ended_at_ms\":0}"))
+    for text in ["{\"ended_at_ms\":-0}", "{\"ended_at_ms\":1.0}", "{\"directions\":[[1]]}", "{\"directions\":[1.0]}",
+                 "{\"usage_commitments\":[[3.0]]}", "{\"usage_commitments\":[[3e0]]}",
+                 "{\"usage_commitments\":[[true]]}"] {
+      XCTAssertThrowsError(try check(text), text)
+    }
   }
 }

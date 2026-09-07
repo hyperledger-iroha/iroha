@@ -298,7 +298,7 @@ fn encode_two_slot_value<T: norito::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> io::Result<Vec<u8>> {
-    norito::to_bytes(value).map_err(|error| two_slot_codec_error(label, error))
+    norito::encode_canonical(value).map_err(|error| two_slot_codec_error(label, error))
 }
 fn decode_two_slot_value<T>(bytes: &[u8], label: &str) -> io::Result<T>
 where

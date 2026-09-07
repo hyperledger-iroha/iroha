@@ -1,26 +1,11 @@
 //! Native construction of the final context-bound Kaigi authorization proof.
 
-use halo2_proofs::{
-    SerdeFormat,
-    halo2curves::{ff::PrimeField as _, pasta::EqAffine},
-    plonk::{create_proof, keygen_pk, keygen_vk},
-    poly::{
-        commitment::ParamsProver,
-        ipa::{
-            commitment::{IPACommitmentScheme, ParamsIPA},
-            multiopen::ProverIPA,
-        },
-    },
-    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
-};
-use iroha_core::zk::hash_vk;
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
     kaigi::{KaigiId, authorization::KaigiAuthorizationIdentitiesV1},
     name::Name,
-    proof::{ProofBox, VerifyingKeyBox},
-    zk::{BackendTag, OpenVerifyEnvelope},
+    proof::VerifyingKeyBox,
 };
 use kaigi_zk::authorization_v1::{
     KAIGI_AUTHORIZATION_CIRCUIT_ID_V1, KAIGI_AUTHORIZATION_CIRCUIT_K_V1,
@@ -30,14 +15,27 @@ use kaigi_zk::authorization_v1::{
 };
 use napi::{
     Env,
-    bindgen_prelude::{BigInt, Buffer, JsObjectValue as _, Uint8Array, Uint8ArraySlice},
+    bindgen_prelude::{BigInt, Buffer, Uint8Array, Uint8ArraySlice},
 };
 use napi_derive::napi;
-use rand_core_06::OsRng;
-use std::str::FromStr as _;
+use std::{str::FromStr as _, sync::OnceLock};
 
-const VK_BACKEND: &str = "halo2/ipa";
-const ZK1_PREFIX: &[u8] = b"ZK1\0";
+use super::kaigi_proof_v1::{KaigiProvingMaterialV1, consume_blinding, failure, invalid, prove};
+
+static PROVING_MATERIAL: OnceLock<Result<KaigiProvingMaterialV1, String>> = OnceLock::new();
+
+fn proving_material() -> napi::Result<&'static KaigiProvingMaterialV1> {
+    PROVING_MATERIAL
+        .get_or_init(|| {
+            KaigiProvingMaterialV1::new(
+                KAIGI_AUTHORIZATION_CIRCUIT_K_V1,
+                &KaigiAuthorizationCircuitV1::default(),
+                KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
+            )
+        })
+        .as_ref()
+        .map_err(failure)
+}
 
 /// Exact field outputs and canonical proof for one Kaigi authorization action.
 #[napi(object)]
@@ -54,30 +52,8 @@ pub struct JsKaigiAuthorizationProofV1 {
     pub proof: Buffer,
 }
 
-fn invalid(message: impl ToString) -> napi::Error {
-    napi::Error::new(napi::Status::InvalidArg, message.to_string())
-}
-
-fn failure(message: impl ToString) -> napi::Error {
-    napi::Error::new(napi::Status::GenericFailure, message.to_string())
-}
-
-fn take_witness(bytes: &mut [u8]) -> napi::Result<KaigiAuthorizationWitnessV1> {
-    let mut owned = [0; 32];
-    if bytes.len() == owned.len() {
-        owned.copy_from_slice(bytes);
-    }
-    iroha_crypto::zeroize_value_for_confidential_discard(bytes);
-    if bytes.len() != owned.len() {
-        return Err(invalid(
-            "blinding must contain exactly 32 canonical Pasta Fp bytes",
-        ));
-    }
-    KaigiAuthorizationWitnessV1::take_blinding(&mut owned).map_err(invalid)
-}
-
 #[allow(clippy::too_many_arguments)] // Fixed context fields mirror the typed N-API boundary.
-fn parse_context(
+pub(super) fn parse_context(
     network: &[u8],
     domain: &str,
     call_name: &str,
@@ -137,31 +113,6 @@ fn parse_context(
     Ok(context)
 }
 
-// These are the former private candidate's ZK1 writers, now owned exclusively
-// by the final circuit. The fixed column has 31 rows; no dimension inference,
-// alternate order, field reduction, or silent writer failure is accepted.
-fn append_tlv(bytes: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) -> napi::Result<()> {
-    let length = u32::try_from(payload.len()).map_err(|_| failure("ZK1 payload exceeds u32"))?;
-    bytes.extend_from_slice(&tag);
-    bytes.extend_from_slice(&length.to_le_bytes());
-    bytes.extend_from_slice(payload);
-    Ok(())
-}
-
-fn encode_verified_envelope(
-    envelope: &OpenVerifyEnvelope,
-    key: &VerifyingKeyBox,
-) -> napi::Result<Vec<u8>> {
-    let encoded = norito::encode_canonical(envelope).map_err(failure)?;
-    let proof = ProofBox::new(VK_BACKEND.to_owned(), encoded.clone());
-    if !iroha_core::zk::verify_backend(VK_BACKEND, &proof, Some(key)) {
-        return Err(failure(
-            "generated Kaigi authorization proof failed canonical native verification",
-        ));
-    }
-    Ok(encoded)
-}
-
 fn produce(
     context: KaigiAuthorizationContextV1,
     witness: KaigiAuthorizationWitnessV1,
@@ -169,63 +120,14 @@ fn produce(
     let outputs = compute_authorization_v1(&context, &witness).map_err(invalid)?;
     let instance = KaigiAuthorizationPublicInputsV1 { context, outputs }.instance();
     let circuit = KaigiAuthorizationCircuitV1::new(context, witness).map_err(invalid)?;
-    let params: ParamsIPA<EqAffine> = ParamsIPA::new(KAIGI_AUTHORIZATION_CIRCUIT_K_V1);
-    let vk = keygen_vk(&params, &KaigiAuthorizationCircuitV1::default()).map_err(failure)?;
-    let pk =
-        keygen_pk(&params, vk.clone(), &KaigiAuthorizationCircuitV1::default()).map_err(failure)?;
-    let mut transcript = Blake2bWrite::<_, EqAffine, Challenge255<EqAffine>>::init(Vec::new());
-    create_proof::<
-        IPACommitmentScheme<EqAffine>,
-        ProverIPA<'_, EqAffine>,
-        Challenge255<EqAffine>,
-        _,
-        _,
-        _,
-    >(
-        &params,
-        &pk,
-        &[circuit],
-        &[&[&instance]],
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(failure)?;
-
-    let mut key_carrier = ZK1_PREFIX.to_vec();
-    append_tlv(
-        &mut key_carrier,
-        *b"IPAK",
-        &KAIGI_AUTHORIZATION_CIRCUIT_K_V1.to_le_bytes(),
+    let material = proving_material()?;
+    let proof = prove(
+        material,
+        circuit,
+        &instance,
+        KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
+        KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1,
     )?;
-    append_tlv(
-        &mut key_carrier,
-        *b"CID1",
-        KAIGI_AUTHORIZATION_CIRCUIT_ID_V1.as_bytes(),
-    )?;
-    append_tlv(
-        &mut key_carrier,
-        *b"H2VK",
-        &vk.to_bytes(SerdeFormat::Processed),
-    )?;
-    let key = VerifyingKeyBox::new(VK_BACKEND.to_owned(), key_carrier);
-    let mut proof = ZK1_PREFIX.to_vec();
-    append_tlv(&mut proof, *b"PROF", &transcript.finalize())?;
-    let mut instance_bytes = Vec::with_capacity(8 + instance.len() * 32);
-    instance_bytes.extend_from_slice(&1_u32.to_le_bytes());
-    instance_bytes.extend_from_slice(&31_u32.to_le_bytes());
-    for scalar in instance {
-        instance_bytes.extend_from_slice(scalar.to_repr().as_ref());
-    }
-    append_tlv(&mut proof, *b"I10P", &instance_bytes)?;
-    let envelope = OpenVerifyEnvelope {
-        backend: BackendTag::Halo2IpaPasta,
-        circuit_id: KAIGI_AUTHORIZATION_CIRCUIT_ID_V1.to_owned(),
-        vk_hash: hash_vk(&key),
-        public_inputs: KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-        proof_bytes: proof,
-        aux: Vec::new(),
-    };
-    let proof = encode_verified_envelope(&envelope, &key)?;
     let [commitment, nullifier, authorization] = outputs.canonical_bytes();
     Ok((
         JsKaigiAuthorizationProofV1 {
@@ -235,7 +137,7 @@ fn produce(
             pre_roster_root: context.pre_roster_root.to_vec().into(),
             proof: proof.into(),
         },
-        key,
+        material.key.clone(),
     ))
 }
 
@@ -257,27 +159,7 @@ pub fn build_kaigi_authorization_proof_v1(
     pre_roster_root: Uint8Array,
     mut blinding: Uint8ArraySlice<'_>,
 ) -> napi::Result<JsKaigiAuthorizationProofV1> {
-    let length =
-        u32::try_from(blinding.len()).map_err(|_| invalid("blinding exceeds JS index width"))?;
-    let mut owned = [0; 32];
-    if length == 32 {
-        owned.copy_from_slice(blinding.as_ref());
-    }
-    // This clears the native stack copy immediately. The witness owns its own
-    // zeroizing storage and is dropped even if a subsequent VM operation fails.
-    let witness = take_witness(&mut owned);
-    let zero = env.create_uint32(0)?;
-    // Use the VM's scoped typed-array writes, never an aliased mutable Rust
-    // slice into JavaScript-owned memory. No JavaScript callback is invoked.
-    for index in 0..length {
-        blinding.set_element(index, zero)?;
-    }
-    if length != 32 {
-        return Err(invalid(
-            "blinding must contain exactly 32 canonical Pasta Fp bytes",
-        ));
-    }
-    let witness = witness?;
+    let witness = consume_blinding(env, &mut blinding)?;
     let context = parse_context(
         network_id.as_ref(),
         &domain_id,
@@ -294,8 +176,14 @@ pub fn build_kaigi_authorization_proof_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kaigi_proof_v1::{VK_BACKEND, encode_verified_envelope, take_witness};
+    use iroha_core::zk::hash_vk;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::NetworkId;
+    use iroha_data_model::{
+        NetworkId,
+        proof::ProofBox,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
 
     fn account(seed: u8) -> AccountId {
         let key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -460,6 +348,10 @@ mod tests {
     #[test]
     fn final_native_proof_verifies_and_rejects_mutated_context_owner_and_outputs() {
         let context = fixture_context();
+        assert!(std::ptr::eq(
+            proving_material().unwrap(),
+            proving_material().unwrap()
+        ));
         let mut secret = [0x11; 32];
         let (artifacts, key) = produce(context, take_witness(&mut secret).unwrap()).unwrap();
         assert_eq!(secret, [0; 32]);
@@ -492,15 +384,16 @@ mod tests {
             Some(&key)
         ));
         let first_scalar = envelope.proof_bytes.len() - 31 * 32;
-        for row in [0, 4, 10, 16, 22, 23, 24, 28, 29, 30] {
+        for row in 0..31 {
             let mut changed = envelope.clone();
             let range = first_scalar + row * 32..first_scalar + (row + 1) * 32;
-            assert!(
-                changed.proof_bytes[range.clone()]
-                    .iter()
-                    .any(|&byte| byte != 0)
-            );
-            changed.proof_bytes[range].fill(0);
+            let zero = changed.proof_bytes[range.clone()]
+                .iter()
+                .all(|&byte| byte == 0);
+            changed.proof_bytes[range.clone()].fill(0);
+            if zero {
+                changed.proof_bytes[range.start] = 1;
+            }
             let proof = ProofBox::new(
                 VK_BACKEND.to_owned(),
                 norito::encode_canonical(&changed).unwrap(),

@@ -240,6 +240,29 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
 
     public override string ToString() => ToI105();
 
+    internal sealed record MultisigMember(CurveId Curve, ushort Weight, byte[] PublicKey);
+    internal sealed record MultisigPolicy(byte Version, ushort Threshold, IReadOnlyList<MultisigMember> Members);
+
+    /// <summary>Return the complete already-validated controller for canonical transaction encoding.</summary>
+    internal MultisigPolicy? GetMultisigPolicy()
+    {
+        if (AddressClass != AddressClass.MultiSig) return null;
+        var cursor = 2;
+        var version = canonicalBytes[cursor++];
+        var threshold = ReadUInt16(canonicalBytes, ref cursor);
+        var count = ReadUInt16(canonicalBytes, ref cursor);
+        var members = new MultisigMember[count];
+        for (var index = 0; index < count; index++)
+        {
+            var curve = (CurveId)canonicalBytes[cursor++];
+            var weight = ReadUInt16(canonicalBytes, ref cursor);
+            var keyLength = ReadUInt16(canonicalBytes, ref cursor);
+            members[index] = new MultisigMember(curve, weight, canonicalBytes.AsSpan(cursor, keyLength).ToArray());
+            cursor += keyLength;
+        }
+        return new MultisigPolicy(version, threshold, Array.AsReadOnly(members));
+    }
+
     private static AccountAddress ParseMultisig(byte[] canonicalBytes, byte headerVersion, byte normalizationVersion)
     {
         if (canonicalBytes.Length < 8)
@@ -265,6 +288,7 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
             throw NewError(AccountAddressErrorCode.InvalidLength, "invalid multisig threshold or member count");
         }
         var totalWeight = 0UL;
+        byte[]? previousSortKey = null;
         for (var index = 0; index < memberCount; index++)
         {
             if (cursor >= canonicalBytes.Length)
@@ -285,6 +309,13 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
             ValidateControllerPublicKey(
                 (CurveId)curveRaw,
                 canonicalBytes.AsSpan(cursor, keyLength));
+            var algorithm = Encoding.ASCII.GetBytes(CurveIdToAlgorithm((CurveId)curveRaw));
+            var sortKey = new byte[algorithm.Length + 1 + keyLength];
+            algorithm.CopyTo(sortKey, 0);
+            canonicalBytes.AsSpan(cursor, keyLength).CopyTo(sortKey.AsSpan(algorithm.Length + 1));
+            if (previousSortKey is not null && previousSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
+                throw NewError(AccountAddressErrorCode.InvalidLength, "multisig members must be unique and canonically ordered by algorithm and public key");
+            previousSortKey = sortKey;
             cursor += keyLength;
             totalWeight += weight;
         }
