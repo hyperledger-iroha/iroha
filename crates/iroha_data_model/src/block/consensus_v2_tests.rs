@@ -1045,20 +1045,14 @@ mod tests {
             DualQuorum::from_roster(&empty.roster),
             Err(ValidationError::EmptyRoster)
         );
-        assert_eq!(
-            empty.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
-        );
+        assert_eq!(empty.validate(), Err(ValidationError::EmptyRoster));
         let mut too_small = context(&[1, 1, 1, 1]);
         too_small.roster.truncate(MIN_VALIDATORS_PER_HEIGHT - 1);
         assert_eq!(
             DualQuorum::from_roster(&too_small.roster),
             Err(ValidationError::RosterTooSmall)
         );
-        assert_eq!(
-            too_small.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
-        );
+        assert_eq!(too_small.validate(), Err(ValidationError::RosterTooSmall));
         let mut invalid_geometry = context(&[1, 1, 1, 1]);
         invalid_geometry.roster.push(ValidatorPower {
             validator: peer(0xFE),
@@ -1071,7 +1065,7 @@ mod tests {
         );
         assert_eq!(
             invalid_geometry.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+            Err(ValidationError::InvalidCommitteeGeometry)
         );
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.roster[1].validator = invalid.roster[0].validator.clone();
@@ -1079,8 +1073,14 @@ mod tests {
             DualQuorum::from_roster(&invalid.roster),
             Err(ValidationError::DuplicateValidator)
         );
+        assert_eq!(invalid.validate(), Err(ValidationError::DuplicateValidator));
+        let mut invalid_mint_roster = context(&[1, 1, 1, 1]);
+        invalid_mint_roster
+            .kagemusha_mint_finality_epoch_roster
+            .validators
+            .clear();
         assert_eq!(
-            invalid.validate(),
+            invalid_mint_roster.validate(),
             Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
         );
         let mut invalid = context(&[1, 1, 1, 1]);
@@ -1098,10 +1098,7 @@ mod tests {
             DualQuorum::from_roster(&oversized.roster),
             Err(ValidationError::RosterTooLarge)
         );
-        assert_eq!(
-            oversized.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
-        );
+        assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
         let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
         assert_eq!(largest.validate(), Ok(()));
         let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);

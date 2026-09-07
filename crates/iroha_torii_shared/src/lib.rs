@@ -36,6 +36,8 @@ pub mod sorafs_hedging_billing_api;
 pub mod sorafs_moderation_api;
 /// Canonical node status response and capability snapshots.
 pub mod status;
+/// Canonical subscription preparation, query and draft records.
+pub mod subscriptions;
 /// Canonical response envelopes for the Sumeragi evidence audit API.
 pub mod sumeragi_evidence_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.

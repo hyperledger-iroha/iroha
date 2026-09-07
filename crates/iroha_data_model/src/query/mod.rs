@@ -2554,11 +2554,10 @@ where
         if norito::core::use_packed_struct() {
             return norito::core::NoritoSerialize::serialize(self.0, writer);
         }
-        let mut field = norito::core::DeriveSmallBuf::new();
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            norito::core::write_len_prefixed(writer, value, &mut field)?;
+            norito::core::write_len_prefixed(writer, value)?;
         }
         Ok(())
     }

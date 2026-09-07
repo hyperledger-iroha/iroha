@@ -31,9 +31,19 @@ use std::{
 };
 mod encoder;
 pub use encoder::Encoder;
+mod encode_fields;
+mod encode_frames;
 mod encode_writers;
+#[doc(hidden)]
+pub use encode_fields::{PackedField, write_packed_fields};
+use encode_frames::write_frame_to_writer_with_flags;
+#[doc(hidden)]
+pub use encode_frames::write_frame_with_prefix;
 pub(crate) use encode_writers::ExactSliceWriter;
-use encode_writers::{CountingWriter, ExactLengthWriter, LengthCountingWriter};
+use encode_writers::{ExactLengthWriter, LengthCountingWriter};
+#[cfg(test)]
+#[path = "core/counting_tests.rs"]
+mod counting_tests;
 pub mod heuristics;
 pub mod hw;
 pub mod simd_crc64;
@@ -119,7 +129,7 @@ impl DecodeLimits {
         self.max_nesting_depth
     }
 }
-fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
+fn serialize_owned<T: NoritoSerialize>(writer: &mut Encoder<'_>, value: &T) -> Result<(), Error> {
     let _flags_guard = if decode_flags_active() {
         None
     } else {
@@ -129,15 +139,13 @@ fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Re
     // Count a real serialization pass instead of trusting an optional length
     // hint or retaining a second payload-sized `Vec`. The counted write below
     // also detects a stateful serializer that changes between passes.
-    let mut counter = LengthCountingWriter::default();
-    serialize_to_writer(value, &mut counter)?;
-    let exact_len = counter.len;
+    let exact_len = encoded_payload_len(value)?;
     let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
-    write_len_with_flags(&mut writer, len, flags)?;
+    write_len_with_flags(writer, len, flags)?;
     // An error from this point leaves the prefix and at most `exact_len`
     // payload bytes in `writer`; the caller propagates it and discards the
     // incomplete enclosing serialization.
-    serialize_to_writer_exact(value, &mut writer, exact_len)
+    write_counted_payload(value, writer, exact_len)
 }
 #[cfg(test)]
 mod serialize_owned_tests {
@@ -2238,25 +2246,39 @@ pub fn write_len_to_vec_with_flags(out: &mut Vec<u8>, value: u64, flags: u8) {
 }
 /// Count a value, then write its length prefix and serialize it directly.
 ///
-/// The historical implementation materialized every field in `buf`, whose heap spill used
-/// infallible `Vec` growth. Counting into a sink first keeps the wire length authoritative without
-/// retaining a second field-sized copy or risking an allocator abort under memory pressure.
+/// The helper measures the actual payload before emitting its length. An output destination
+/// receives the checked payload directly, while a counting destination consumes the measured
+/// size without traversing the payload again. No field-sized staging buffer is retained.
 ///
 /// A stateful second-pass mismatch returns [`Error::LengthMismatch`]. The prefix and an admitted
 /// payload prefix may already have been emitted, but a payload overrun cannot grow the destination
 /// beyond the declared length. Callers must discard the incomplete destination after any error.
-pub fn write_len_prefixed<W: Write, const N: usize>(
-    writer: &mut W,
+pub fn write_len_prefixed(
+    writer: &mut Encoder<'_>,
     value: &dyn NoritoSerialize,
-    _buf: &mut SmallBuf<N>,
 ) -> Result<(), Error> {
     let flags = effective_layout_flags();
-    let mut counter = LengthCountingWriter::default();
-    serialize_to_writer(value, &mut counter)?;
-    let exact_len = counter.len;
+    let exact_len = encoded_payload_len(value)?;
     let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
     write_len_with_flags(writer, len, flags)?;
-    serialize_to_writer_exact(value, writer, exact_len)
+    write_counted_payload(value, writer, exact_len)
+}
+/// Measure and write a payload with a fixed-width u64 length prefix.
+///
+/// The payload retains the active layout; only its containing length uses fixed width.
+/// This is used by containers whose canonical wire format requires that prefix.
+///
+/// # Errors
+///
+/// Returns measurement or write errors, including a changed second-pass length.
+#[doc(hidden)]
+pub fn write_fixed_len_prefixed(
+    writer: &mut Encoder<'_>,
+    value: &dyn NoritoSerialize,
+) -> Result<(), Error> {
+    let length = encoded_payload_len(value)?;
+    writer.write_u64::<LittleEndian>(u64::try_from(length).map_err(|_| Error::LengthMismatch)?)?;
+    write_counted_payload(value, writer, length)
 }
 /// Write a compact varint length prefix regardless of layout flags.
 pub fn write_varint_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
@@ -2323,7 +2345,7 @@ where
     let mut expected_lengths = lengths.iter().copied();
     for item in iter {
         let expected_len = expected_lengths.next().ok_or(Error::LengthMismatch)?;
-        serialize_to_writer_exact(item, writer, expected_len)?;
+        write_counted_payload(item, writer, expected_len)?;
         count += 1;
     }
     if count != lengths.len() || expected_lengths.next().is_some() {
@@ -2332,6 +2354,18 @@ where
     Ok(())
 }
 fn encode_seq_payloads<'a, T, I>(writer: &mut Encoder<'_>, len: usize, iter: I) -> Result<(), Error>
+where
+    T: NoritoSerialize + 'a,
+    I: IntoIterator<Item = &'a T> + Clone,
+{
+    encode_seq_payloads_with_limit(writer, len, iter, None)
+}
+fn encode_seq_payloads_with_limit<'a, T, I>(
+    writer: &mut Encoder<'_>,
+    len: usize,
+    iter: I,
+    packed_byte_limit: Option<u64>,
+) -> Result<(), Error>
 where
     T: NoritoSerialize + 'a,
     I: IntoIterator<Item = &'a T> + Clone,
@@ -2353,13 +2387,35 @@ where
                 u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
                 flags,
             )?;
-            serialize_to_writer_exact(item, writer, encoded_len)?;
+            write_counted_payload(item, writer, encoded_len)?;
             count += 1;
         }
         return (count == len).then_some(()).ok_or(Error::LengthMismatch);
     }
-    note_fixed_offsets_emitted();
+    // The offset table alone may exceed the packed bound (including for
+    // zero-sized elements). Reject that before allocating a length table or
+    // invoking any element serializer.
+    let table_bytes = len
+        .checked_add(1)
+        .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+        .ok_or(Error::LengthMismatch)?;
+    if let Some(limit) = packed_byte_limit {
+        let length = u64::try_from(table_bytes).map_err(|_| Error::LengthMismatch)?;
+        if length > limit {
+            return Err(Error::ArchiveLengthExceeded { length, limit });
+        }
+    }
     let lengths = collect_payload_lengths(len, iter.clone())?;
+    if let Some(limit) = packed_byte_limit {
+        let total = lengths.iter().try_fold(table_bytes, |total, &length| {
+            total.checked_add(length).ok_or(Error::LengthMismatch)
+        })?;
+        let length = u64::try_from(total).map_err(|_| Error::LengthMismatch)?;
+        if length > limit {
+            return Err(Error::ArchiveLengthExceeded { length, limit });
+        }
+    }
+    note_fixed_offsets_emitted();
     write_fixed_offsets(writer, &lengths)?;
     write_payloads_with_lengths(writer, iter, &lengths)
 }
@@ -2368,6 +2424,26 @@ where
     T: NoritoSerialize,
 {
     encode_seq_payloads(writer, slice.len(), slice.iter())
+}
+/// Write an element sequence, bounding its packed offset table and payload.
+///
+/// Each element uses its own serialization, including u8 elements; this does not use
+/// the raw-byte `Vec<u8>` specialization. The sequence count is fixed-width, and the
+/// active flags select length-prefixed elements or packed offsets. In packed mode,
+/// `packed_byte_limit` covers the offset table plus element payloads, excluding the
+/// sequence count. Measurement and emission have one codec owner.
+///
+/// # Errors
+///
+/// Returns serialization/allocation errors, a changed second-pass length, or
+/// [`Error::ArchiveLengthExceeded`] before writing an oversized packed table.
+#[doc(hidden)]
+pub fn write_element_sequence<T: NoritoSerialize>(
+    writer: &mut Encoder<'_>,
+    slice: &[T],
+    packed_byte_limit: u64,
+) -> Result<(), Error> {
+    encode_seq_payloads_with_limit(writer, slice.len(), slice.iter(), Some(packed_byte_limit))
 }
 fn sequence_encoded_len_hint<'a, T, I>(len: usize, items: I) -> Option<usize>
 where
@@ -2504,17 +2580,13 @@ where
                 return Err(Error::LengthMismatch);
             }
             for item in [key as &dyn NoritoSerialize, value as &dyn NoritoSerialize] {
-                let encoded_len = {
-                    let mut counter = LengthCountingWriter::default();
-                    serialize_to_writer(item, &mut counter)?;
-                    counter.len
-                };
+                let encoded_len = encoded_payload_len(item)?;
                 write_len_with_flags(
                     writer,
                     u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
                     flags,
                 )?;
-                serialize_to_writer_exact(item, writer, encoded_len)?;
+                write_counted_payload(item, writer, encoded_len)?;
             }
             count += 1;
         }
@@ -2598,23 +2670,6 @@ mod encode_seq_payloads_tests {
 /// back to a fixed 8-byte little-endian `u64` header.
 pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     write_len(writer, value)
-}
-/// Write selected packed-struct field lengths after its bitset.
-#[doc(hidden)]
-#[inline(never)]
-pub fn write_packed_size_headers(
-    writer: &mut Encoder<'_>,
-    field_lengths: &[usize],
-    sized_field_indices: &[usize],
-) -> Result<(), Error> {
-    for &index in sized_field_indices {
-        let length = *field_lengths.get(index).ok_or(Error::LengthMismatch)?;
-        write_len_header(
-            writer,
-            u64::try_from(length).map_err(|_| Error::LengthMismatch)?,
-        )?;
-    }
-    Ok(())
 }
 /// Write the canonical zero-based cumulative offset table for a packed struct.
 #[doc(hidden)]
@@ -3781,98 +3836,6 @@ impl<'a> DecodeFromSlice<'a> for Cow<'a, str> {
             .map(|(s, used)| (Cow::Borrowed(s), used))
     }
 }
-/// Small, stack-backed write buffer to avoid heap allocations for small fields.
-///
-/// This buffer writes into a fixed-size stack array first and spills over to a
-/// heap `Vec<u8>` only if needed. It is intended for short-lived, per-field
-/// serialization to compute length-prefixed payloads in a single pass without
-/// extra allocations for common, small cases.
-pub struct SmallBuf<const N: usize = 256> {
-    stack: [u8; N],
-    len: usize,
-    spill: Vec<u8>,
-    spilled: bool,
-}
-#[allow(clippy::new_without_default)]
-impl<const N: usize> SmallBuf<N> {
-    /// Create a new empty buffer.
-    pub fn new() -> Self {
-        Self {
-            stack: [0; N],
-            len: 0,
-            spill: Vec::new(),
-            spilled: false,
-        }
-    }
-    /// Reset to empty without freeing spill capacity.
-    pub fn clear(&mut self) {
-        self.len = 0;
-        if self.spilled {
-            self.spill.clear();
-            self.spilled = false;
-        }
-    }
-    /// Current length in bytes.
-    pub fn len(&self) -> usize {
-        if self.spilled {
-            self.spill.len()
-        } else {
-            self.len
-        }
-    }
-    /// True if empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-    /// Get a read-only view of the written bytes.
-    pub fn as_slice(&self) -> &[u8] {
-        if self.spilled {
-            &self.spill
-        } else {
-            &self.stack[..self.len]
-        }
-    }
-}
-impl<const N: usize> std::io::Write for SmallBuf<N> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if !self.spilled {
-            let avail = N.saturating_sub(self.len);
-            if buf.len() <= avail {
-                // write fits in stack
-                self.stack[self.len..self.len + buf.len()].copy_from_slice(buf);
-                self.len += buf.len();
-                return Ok(buf.len());
-            }
-            // spill to heap: move existing stack content
-            self.spilled = true;
-            let needed = self
-                .len
-                .checked_add(buf.len())
-                .ok_or_else(|| std::io::Error::other("Norito small-buffer length overflow"))?;
-            self.spill
-                .try_reserve_exact(needed)
-                .map_err(|_| std::io::Error::other("Norito small-buffer allocation failed"))?;
-            self.spill.extend_from_slice(&self.stack[..self.len]);
-        }
-        // write to spill vec
-        let additional = buf.len();
-        self.spill
-            .try_reserve(additional)
-            .map_err(|_| std::io::Error::other("Norito small-buffer allocation failed"))?;
-        self.spill.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-/// Preferred small temporary buffer size for derive-generated serializers.
-///
-/// This size balances stack usage and the goal of avoiding heap spills for
-/// common small and medium fields. Adjust via benchmarks as needed.
-pub const DERIVE_SMALLBUF_SIZE: usize = 384;
-/// Type alias used by proc-macro derives for their per-field temporary buffer.
-pub type DeriveSmallBuf = SmallBuf<{ DERIVE_SMALLBUF_SIZE }>;
 /// Magic bytes that identify a Norito archive.
 pub const MAGIC: [u8; 4] = *b"NRT0";
 /// Current major version of the format.
@@ -4323,6 +4286,20 @@ pub fn serialize_to_writer_exact<W: Write>(
     (exact.written_len() == expected_len)
         .then_some(())
         .ok_or(Error::LengthMismatch)
+}
+// Call only after this codec path has measured this same value. The public
+// serialize_to_writer_exact seam deliberately always validates actual bytes:
+// its caller-supplied expected_len is not evidence for a counting destination.
+fn write_counted_payload(
+    value: &dyn NoritoSerialize,
+    writer: &mut Encoder<'_>,
+    measured_len: usize,
+) -> Result<(), Error> {
+    if writer.count_measured_bytes(measured_len)? {
+        Ok(())
+    } else {
+        serialize_to_writer_exact(value, writer, measured_len)
+    }
 }
 /// Serialize a value by appending directly to a byte vector.
 ///
@@ -5434,11 +5411,10 @@ impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {
 }
 impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
         match self {
             Some(value) => {
                 writer.write_all(&[1])?;
-                write_len_prefixed(writer, value, &mut tmp)?;
+                write_len_prefixed(writer, value)?;
             }
             None => {
                 writer.write_all(&[0])?;
@@ -5512,15 +5488,14 @@ where
 }
 impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
         match self {
             Ok(value) => {
                 writer.write_all(&[0])?;
-                write_len_prefixed(writer, value, &mut tmp)?;
+                write_len_prefixed(writer, value)?;
             }
             Err(err) => {
                 writer.write_all(&[1])?;
-                write_len_prefixed(writer, err, &mut tmp)?;
+                write_len_prefixed(writer, err)?;
             }
         }
         Ok(())
@@ -5625,7 +5600,7 @@ impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
                 u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
                 flags,
             )?;
-            serialize_to_writer_exact(item, writer, encoded_len)?;
+            write_counted_payload(item, writer, encoded_len)?;
         }
         Ok(())
     }
@@ -6447,9 +6422,7 @@ macro_rules! impl_tuple {
                 // like `Vec<u8>` consistent with the decoder's expectations.
                 let __merged = tuple_serialization_flags();
                 let __guard = DecodeFlagsGuard::enter(__merged);
-                // The shared count-first helper emits each field directly;
-                // its compatibility scratch parameter never retains payloads.
-                let mut __buf = DeriveSmallBuf::new();
+                // Measure each field before streaming it directly to the destination.
                 #[cfg(debug_assertions)]
                 if crate::debug_trace_enabled() {
                     eprintln!(
@@ -6458,11 +6431,7 @@ macro_rules! impl_tuple {
                     );
                 }
                 $(
-                    write_len_prefixed(
-                        writer,
-                        &self.$idx,
-                        &mut __buf,
-                    )?;
+                    write_len_prefixed(writer, &self.$idx)?;
                 )+
                 Ok(())
             }
@@ -6709,25 +6678,23 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 /// This deliberately counts a real serialization pass instead of trusting
 /// [`NoritoSerialize::encoded_len_exact`], because that method is only an optimization hint and an
 /// incorrect implementation must not understate a resource-admission bound.
+/// Length-only destinations count each nested child once, then account for those measured bytes
+/// without traversing the same child again. Actual byte destinations still perform a checked write.
 ///
 /// # Errors
 ///
 /// Returns the underlying serialization error.
-pub fn encoded_payload_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+pub fn encoded_payload_len(value: &dyn NoritoSerialize) -> Result<usize, Error> {
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(flags)?;
-    let mut sink = std::io::sink();
-    let mut counted = CountingWriter {
-        inner: &mut sink,
-        len: 0,
-    };
+    let mut counted = LengthCountingWriter::default();
     {
         let _guard = DecodeFlagsGuard::enter(flags);
-        let mut encoder = Encoder::new(&mut counted);
+        let mut encoder = Encoder::for_counting(&mut counted);
         value.serialize(&mut encoder)?;
     }
-    let payload_len = counted.len;
+    let payload_len = counted.finish()?;
     drop(encode_guard);
     Ok(payload_len)
 }
@@ -6980,86 +6947,7 @@ where
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     write_frame_to_writer_with_flags(value, writer, base_flags)
 }
-fn write_frame_to_writer_with_flags<T, W>(
-    value: &T,
-    writer: &mut W,
-    base_flags: u8,
-) -> Result<(), Error>
-where
-    T: NoritoSerialize,
-    W: Write + ?Sized,
-{
-    validate_header_flags(base_flags)?;
-    let first_guard = EncodeContextGuard::enter();
-    let mut discard = std::io::sink();
-    let mut first_payload = FramedPayloadWriter {
-        inner: &mut discard,
-        len: 0,
-        digest: crc64fast::Digest::new(),
-    };
-    {
-        let _flags = DecodeFlagsGuard::enter(base_flags);
-        let mut encoder = Encoder::new(&mut first_payload);
-        value.serialize(&mut encoder)?;
-    }
-    let payload_len = first_payload.len;
-    let payload_len_u64 = u64::try_from(payload_len).map_err(|_| Error::LengthMismatch)?;
-    let first_checksum = first_payload.digest.sum64();
-    let first_flags = finalized_encode_flags(
-        base_flags,
-        fixed_offsets_used(),
-        field_bitset_used(),
-        compact_len_used(),
-    );
-    drop(first_guard);
-    let mut header = Header::new(T::schema_hash(), payload_len_u64, first_checksum);
-    header.flags |= first_flags;
-    header.write(&mut *writer)?;
-    let mut padding = payload_alignment_padding_for::<T>();
-    const ZEROS: [u8; 64] = [0; 64];
-    while padding != 0 {
-        let chunk = padding.min(ZEROS.len());
-        writer.write_all(&ZEROS[..chunk])?;
-        padding -= chunk;
-    }
-    let second_guard = EncodeContextGuard::enter();
-    let mut second_payload = FramedPayloadWriter {
-        inner: writer,
-        len: 0,
-        digest: crc64fast::Digest::new(),
-    };
-    let (serialize_result, written_len, rejected_write) = {
-        let mut exact = ExactLengthWriter::new(&mut second_payload, payload_len);
-        let result = {
-            let _flags = DecodeFlagsGuard::enter(base_flags);
-            let mut encoder = Encoder::new(&mut exact);
-            value.serialize(&mut encoder)
-        };
-        (result, exact.written_len(), exact.rejected_write())
-    };
-    let second_checksum = second_payload.digest.sum64();
-    let second_flags = finalized_encode_flags(
-        base_flags,
-        fixed_offsets_used(),
-        field_bitset_used(),
-        compact_len_used(),
-    );
-    drop(second_guard);
-    if rejected_write {
-        return Err(Error::LengthMismatch);
-    }
-    serialize_result?;
-    if written_len != payload_len || second_payload.len != payload_len {
-        return Err(Error::LengthMismatch);
-    }
-    if second_checksum != first_checksum {
-        return Err(Error::ChecksumMismatch);
-    }
-    if second_flags != first_flags {
-        return Err(Error::NonCanonicalEncoding);
-    }
-    Ok(())
-}
+
 #[cfg(test)]
 mod write_canonical_tests {
     include!("core/write_canonical_tests.rs");
@@ -7209,23 +7097,6 @@ mod bytesink_tests {
         let mut s = ByteSink::with_headroom(4, Header::SIZE);
         s.write_all(&[1, 2, 3, 4, 5]).unwrap();
         assert_eq!(s.checksum(), crc64(&[1, 2, 3, 4, 5]));
-    }
-    #[test]
-    fn smallbuf_clear_returns_short_writes_to_stack_storage() {
-        use std::io::Write as _;
-        let mut buf = SmallBuf::<4>::new();
-        buf.write_all(&[1, 2, 3, 4, 5]).unwrap();
-        assert!(buf.spilled);
-        assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5]);
-        buf.clear();
-        assert!(!buf.spilled);
-        assert!(buf.is_empty());
-        buf.write_all(&[9, 8]).unwrap();
-        assert!(!buf.spilled);
-        assert_eq!(buf.as_slice(), &[9, 8]);
-        buf.write_all(&[7, 6, 5]).unwrap();
-        assert!(buf.spilled);
-        assert_eq!(buf.as_slice(), &[9, 8, 7, 6, 5]);
     }
     #[test]
     fn bytesink_typed_writes_le() {

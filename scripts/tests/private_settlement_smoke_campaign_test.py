@@ -484,11 +484,47 @@ class DriverBoundaryTests(unittest.TestCase):
         injected = {"PATH": "/test/toolchain", "HOME": "/test/home", "IROHA_TEST_REQUIRE_NETWORK": "0",
             "APS_REAL_PROCESS_REQUEST": "/stale", "RUSTFLAGS": "bad", "RUSTC_WRAPPER": "bad",
             "DYLD_INSERT_LIBRARIES": "bad", "LD_PRELOAD": "bad", "GIT_INDEX_FILE": "/stale",
-            "IROHA_RELEASE_SOURCE_MANIFEST_SHA256": "stale", "TEST_NETWORK_BIN_IROHAD": "/wrong"}
+            "IROHA_RELEASE_SOURCE_MANIFEST_SHA256": "stale", "TEST_NETWORK_BIN_IROHAD": "/wrong",
+            "RAYON_NUM_THREADS": "128", "RUST_TEST_THREADS": "128",
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "128"}
         with mock.patch.dict(os.environ, injected, clear=True):
             environment = M.sanitized_environment()
         self.assertEqual(environment["PATH"], "/test/toolchain")
         self.assertTrue((set(injected) - {"PATH", "HOME"}).isdisjoint(environment))
+
+    def test_proving_child_receives_pinned_workers_and_receipt_records_effective_environment(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="synthetic-smoke-workers-") as temporary:
+            root = Path(temporary).resolve()
+            request_path = root / "request.json"
+            M.write_json(request_path, request(0))
+            injected = {"RAYON_NUM_THREADS": "128", "RUST_TEST_THREADS": "128",
+                        "CARGO_BUILD_JOBS": "128", "CARGO_INCREMENTAL": "1"}
+            with mock.patch.dict(os.environ, injected):
+                environment = M.invocation_environment(request_path, root / "evidence", root / "result.json",
+                                                       {"path": "/synthetic/validator", "sha256": "a" * 64})
+                arguments = [M.sys.executable, "-c", "import os; "
+                    "print(os.environ.get('RAYON_NUM_THREADS')); print(os.environ.get('RUST_TEST_THREADS')); "
+                    "print(os.environ.get('CARGO_BUILD_JOBS')); print(os.environ.get('CARGO_INCREMENTAL'))"]
+                receipt = M.command(arguments, root, environment, root, "workers")
+            self.assertEqual(M.read_bytes(root / "workers.log"), b"8\nNone\n4\n0\n")
+            expected = {"RAYON_NUM_THREADS": "8", "RUST_TEST_THREADS": None,
+                        "CARGO_BUILD_JOBS": "4", "CARGO_INCREMENTAL": "0"}
+            self.assertEqual(receipt["worker_environment"], expected)
+            self.assertEqual(M.read_json(root / "workers.json"), receipt)
+            self.assertEqual(M.validate_command_record(root / "workers.json", arguments, proving=True), receipt)
+            for key, value in (("RAYON_NUM_THREADS", "1"), ("RUST_TEST_THREADS", "8"),
+                               ("CARGO_BUILD_JOBS", "128"), ("CARGO_INCREMENTAL", "1")):
+                with self.subTest(key=key):
+                    changed = copy.deepcopy(receipt)
+                    changed["worker_environment"][key] = value
+                    put(root / "workers.json", changed)
+                    with self.assertRaisesRegex(M.CampaignError, "worker environment"):
+                        M.validate_command_record(root / "workers.json", arguments, proving=True)
+            changed = copy.deepcopy(receipt)
+            del changed["worker_environment"]
+            put(root / "workers.json", changed)
+            with self.assertRaises(M.release_runner.RunnerError):
+                M.validate_command_record(root / "workers.json", arguments, proving=True)
 
     def test_source_checker_loads_from_checkout_not_ambient_module(self) -> None:
         with mock.patch.dict(M.sys.modules, {"compute_workspace_source_manifest": mock.Mock()}):
@@ -672,6 +708,9 @@ class SerialCampaignTests(unittest.TestCase):
             self.assertEqual(environment["IROHA_TEST_REQUIRE_NETWORK"], "1")
             self.assertEqual(environment["IROHA_TEST_NETWORK_START_ATTEMPTS"], "1")
             self.assertEqual(environment["IROHA_TEST_SKIP_BUILD"], "1")
+            self.assertEqual(environment["RAYON_NUM_THREADS"], "8")
+            self.assertNotIn("RUST_TEST_THREADS", environment)
+            self.assertIn("--test-threads=1", arguments)
             self.assertEqual(environment["APS_REAL_PROCESS_REQUEST_SHA256"], M.sha((directory/"request.json").read_bytes()))
             self.assertEqual(list((directory/"evidence").iterdir()), [])
             M.owner_path(directory/"evidence", directory=True)
@@ -690,7 +729,8 @@ class SerialCampaignTests(unittest.TestCase):
         M.write_new(directory / f"{name}.log", output.encode())
         self.clock += 10
         record = {"version": 1, "command": arguments, "exit_code": exit_code, "started_ns": self.clock,
-                  "finished_ns": self.clock + 1, "log": f"{name}.log", "log_sha256": M.sha(output.encode())}
+                  "finished_ns": self.clock + 1, "log": f"{name}.log", "log_sha256": M.sha(output.encode()),
+                  "worker_environment": {key: environment.get(key) for key in M.WORKER_ENVIRONMENT_KEYS}}
         M.write_json(directory / f"{name}.json", record)
         if check:
             M.require(exit_code == 0, "synthetic failed command")

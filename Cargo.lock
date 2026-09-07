@@ -5880,6 +5880,7 @@ dependencies = [
  "hkdf",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_primitives",
  "iroha_schema",
  "norito",
  "rand 0.9.4",

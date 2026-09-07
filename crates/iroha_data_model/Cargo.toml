@@ -170,3 +170,8 @@ path = "tests/block_signature_serialization_allocations.rs"
 [[test]]
 name = "metadata_serialization_allocations"
 path = "tests/metadata_serialization_allocations.rs"
+
+[[test]]
+name = "json_object_key_contract"
+path = "tests/json_object_key_contract.rs"
+required-features = ["json"]

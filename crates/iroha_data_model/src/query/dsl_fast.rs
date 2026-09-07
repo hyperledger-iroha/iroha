@@ -554,7 +554,6 @@ impl CompoundPredicateWireRef<'_> {
 }
 impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let mut field = norito::core::DeriveSmallBuf::new();
         match self {
             Self::Pass => norito::core::NoritoSerialize::serialize(&0_u32, writer),
             Self::Json(raw) => {
@@ -562,12 +561,12 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
                 if norito::core::use_packed_struct() {
                     norito::core::NoritoSerialize::serialize(raw, writer)
                 } else {
-                    norito::core::write_len_prefixed(writer, raw, &mut field)
+                    norito::core::write_len_prefixed(writer, raw)
                 }
             }
             Self::TxPredicate(tree) => {
                 norito::core::NoritoSerialize::serialize(&2_u32, writer)?;
-                norito::core::write_len_prefixed(writer, *tree, &mut field)
+                norito::core::write_len_prefixed(writer, *tree)
             }
         }
     }

@@ -226,8 +226,7 @@ impl norito::core::NoritoSerialize for RepoInstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (tag, payload) = self.tag_and_payload();
         norito::core::NoritoSerialize::serialize(&tag, writer)?;
-        let mut buffer = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(writer, payload, &mut buffer)
+        norito::core::write_len_prefixed(writer, payload)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let (_, payload) = self.tag_and_payload();

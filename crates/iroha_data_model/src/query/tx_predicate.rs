@@ -1996,12 +1996,8 @@ mod wire {
         writer: &mut norito::core::Encoder<'_>,
     ) -> Result<(), Error> {
         index.serialize(writer)?;
-        let mut field_buffer = norito::core::DeriveSmallBuf::new();
         for field in fields {
-            if field.encoded_len_exact().is_none() {
-                return Err(Error::LengthMismatch);
-            }
-            norito::core::write_len_prefixed(writer, *field, &mut field_buffer)?;
+            norito::core::write_len_prefixed(writer, *field)?;
         }
         Ok(())
     }

@@ -14,7 +14,6 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-use std::io::Write;
 const MAX_BACKEND_FIELD_BYTES: usize = 4 * 1024;
 const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
 /// Maximum canonical encoded size of a [`ProofBox`] nested in a proof attachment.
@@ -1648,17 +1647,9 @@ impl norito::json::JsonDeserialize for ProofAttachment {
 }
 impl norito::NoritoSerialize for ProofAttachment {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        fn write_prefixed<W: Write, T: norito::NoritoSerialize>(
-            writer: &mut W,
-            value: &T,
-            scratch: &mut ncore::DeriveSmallBuf,
-        ) -> Result<(), ncore::Error> {
-            ncore::write_len_prefixed(writer, value, scratch)
-        }
-        let mut scratch = ncore::DeriveSmallBuf::new();
-        write_prefixed(writer, &self.backend, &mut scratch)?;
-        write_prefixed(writer, &self.proof, &mut scratch)?;
-        write_prefixed(writer, &self.vk_ref, &mut scratch)?;
+        ncore::write_len_prefixed(writer, &self.backend)?;
+        ncore::write_len_prefixed(writer, &self.proof)?;
+        ncore::write_len_prefixed(writer, &self.vk_ref)?;
         // Omit trailing default fields to keep payloads compact and deterministic.
         let tail = if self.lane_privacy.is_some() {
             3
@@ -1668,13 +1659,13 @@ impl norito::NoritoSerialize for ProofAttachment {
             i32::from(self.vk_commitment.is_some())
         };
         if tail >= 1 {
-            write_prefixed(writer, &self.vk_commitment, &mut scratch)?;
+            ncore::write_len_prefixed(writer, &self.vk_commitment)?;
         }
         if tail >= 2 {
-            write_prefixed(writer, &self.envelope_hash, &mut scratch)?;
+            ncore::write_len_prefixed(writer, &self.envelope_hash)?;
         }
         if tail >= 3 {
-            write_prefixed(writer, &self.lane_privacy, &mut scratch)?;
+            ncore::write_len_prefixed(writer, &self.lane_privacy)?;
         }
         Ok(())
     }

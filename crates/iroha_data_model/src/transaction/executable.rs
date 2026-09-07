@@ -877,6 +877,13 @@ mod tests {
         fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
             Err(norito::core::Error::LengthMismatch)
         }
+        fn dyn_write_pair(
+            &self,
+            _writer: &mut norito::core::Encoder<'_>,
+            _wire_id: &str,
+        ) -> Result<(), norito::core::Error> {
+            Err(norito::core::Error::LengthMismatch)
+        }
         fn as_any(&self) -> &dyn Any {
             self
         }

@@ -349,12 +349,54 @@ reports 129 model diagnostics. Their complete logs are retained under
 `target/architecture-redesign/owned-storage-identity/`; neither run qualifies
 strict model or workspace linting.
 
-TODO: Correct the independently discovered numeric JSON map-key writer
-asymmetry. Numeric key decoding exists, but the current BTreeMap writer emits
-unquoted key tokens. A reviewed draft remains unapplied: its infallible path
-would turn unsupported-key errors into panics. The correction must retain
-string-key bytes, bounded writes and typed failures on fallible entry points;
-neither the storage fixture's string keys nor the draft qualify that behavior.
+The numeric JSON map-key writer now uses explicit `JsonObjectKey` and
+`JsonObjectKeyOwned` contracts. Maps own quoting and escaping; unsupported
+composites fail at compile time. Checked key visitors retain conversion errors
+through references, enforce output bounds, and stop after the first sink error.
+The complete Norito test selection passes 1,258 tests (one fixture generator
+ignored), three compile-fail documentation cases pass, and strict library
+Clippy passes. Two isolated allocation tests prove oversized string/byte-array
+keys reject before allocation and successful hexadecimal keys allocate only
+their output. These results retain unchanged selected kernel inputs.
+
+The owner JSON selection passes **506 tests**: model 435, crypto 23 and
+primitives 48, with no failures or ignored tests and matching hashes for all
+1,041 selected inputs before and after the run. Six dedicated model contracts
+cover named/numeric identifiers, compute risk classes, scoped assets, account
+decode-budget errors and escaped proof backends. Their allocator probe verifies
+that DomainId and StatePath decode charges cover observed owner allocations,
+including Punycode validation and Unicode NFC checks. Governance now owns key
+contracts for all 16 fixed-size hash identifiers and ten Parliament body labels.
+
+TODO: Qualify the remaining Core, storage and SDK consumers. Full model/Core
+runtime results above predate the key migration. Bare `--no-default-features`
+checking reports 16 errors in unconditional JSON helpers; the supported minimum
+`--no-default-features --features base-codec` library check passes. The key
+migration does not claim workspace/native/release qualification.
+
+Norito now keeps length counting in the destination through fields, collections
+and embedded instruction frames. A measuring helper visits each child once;
+only that helper can add the measured length without replay. Byte output still
+checks lengths, checksums and finalized layout flags. The canonical field writer
+takes a destination and value; unused scratch types, generated buffers, wrapper
+functions and optional-hint gates have been removed from all callers.
+All **1,642 codec, derive and primitives tests pass** after this removal (three
+ignored cases), and strict library Clippy passes for those three packages.
+The new runtime test proves the original payload slice reaches the destination
+directly; generated-code tests reject reintroduced scratch storage.
+
+Before scratch removal, the complete rebuilt SDK passed **706 tests** on the
+default stack, with all 1,194 selected inputs unchanged. The original Musubi
+boundary case completed in 98.02 seconds, compared with 464.74 seconds at the
+earlier counting checkpoint. Those local timings are diagnostic evidence, not a
+pinned-runner performance or memory qualification. The model run completed with
+3,463 passes, one stale roster-error expectation and six ignored generators;
+all six allocation contracts passed. The stale expectation is now corrected
+without changing production validation, and a separate mint-roster rejection
+assertion preserves coverage of both validation layers. TODO: Finish the complete
+model/SDK reruns and Core/Torii caller qualification after scratch removal.
+Source/artifact hashes and individual logs remain under the ignored
+`target/architecture-redesign/owned-storage-identity/` directory.
 
 ## Accepted design
 

@@ -111,9 +111,8 @@ impl norito::core::NoritoSerialize for SemanticReleaseSource<'_> {
             &self.0.metadata,
             &self.0.verification_lock_digest,
         ];
-        let mut scratch = norito::core::DeriveSmallBuf::new();
         for field in fields {
-            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, field)?;
         }
         Ok(())
     }

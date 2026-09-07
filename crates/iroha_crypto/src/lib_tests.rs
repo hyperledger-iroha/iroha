@@ -1993,6 +1993,135 @@ mod tests {
         ));
     }
     #[test]
+    fn public_key_json_canonical_decoders_reject_prefixes_before_payload_allocation() {
+        use norito::json::{self, JsonDeserialize as _, JsonObjectKeyOwned as _};
+
+        type Map = std::collections::BTreeMap<PublicKey, u8>;
+        let literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let zero_budget =
+            || norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        for prefix in ["ed25519", "secp256k1"] {
+            let alias = format!("{prefix}:{literal}");
+            let value = json::Value::String(alias.clone());
+            let (direct, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+                PublicKey::from_canonical_str_for_decode(&alias)
+            });
+            assert!(matches!(
+                direct,
+                Err(norito::core::Error::Message(message)) if message == "invalid public key"
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let (from_value, usage) =
+                norito::core::with_decode_limits_measured(zero_budget(), || {
+                    PublicKey::json_from_value(&value)
+                });
+            assert!(matches!(
+                from_value,
+                Err(json::Error::Message(message)) if message == "invalid public key"
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let (from_key, usage) =
+                norito::core::with_decode_limits_measured(zero_budget(), || {
+                    PublicKey::from_json_key_text(&alias)
+                });
+            assert!(matches!(
+                from_key,
+                Err(json::Error::Message(message)) if message == "invalid public key"
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let scalar = format!("\"{alias}\"");
+            assert!(json::from_str::<PublicKey>(&scalar).is_err());
+            let map = format!("{{\"{alias}\":7}}");
+            assert!(json::from_str::<Map>(&map).is_err());
+        }
+
+        // A canonical key reaches payload admission on every borrowed path.
+        let value = json::Value::String(literal.to_owned());
+        let (direct, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+            PublicKey::from_canonical_str_for_decode(literal)
+        });
+        assert!(
+            direct
+                .expect_err("zero payload budget")
+                .is_decode_resource_limit()
+        );
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let (from_value, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+            PublicKey::json_from_value(&value)
+        });
+        assert!(matches!(from_value, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let (from_key, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+            PublicKey::from_json_key_text(literal)
+        });
+        assert!(matches!(from_key, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let public_key: PublicKey = literal.parse().expect("canonical public key fixture");
+        let scalar = format!("\"{literal}\"");
+        assert_eq!(
+            json::from_str::<PublicKey>(&scalar).expect("canonical scalar"),
+            public_key
+        );
+        let map = format!("{{\"{literal}\":7}}");
+        assert_eq!(
+            json::from_str::<Map>(&map).expect("canonical map"),
+            Map::from([(public_key, 7)])
+        );
+    }
+    #[test]
+    fn public_key_json_object_key_map_contract_is_canonical_and_bounded() {
+        use norito::json;
+        type Map = std::collections::BTreeMap<PublicKey, u8>;
+        let literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let public_key: PublicKey = literal.parse().expect("canonical public key fixture");
+        let map = Map::from([(public_key, 7)]);
+        let expected = format!("{{\"{literal}\":7}}");
+        assert_eq!(json::to_json(&map).expect("public-key map"), expected);
+        assert_eq!(
+            json::from_str::<Map>(&expected).expect("public-key map roundtrip"),
+            map
+        );
+        assert_eq!(
+            json::to_json_bounded(&map, expected.len()).expect("exact map bound"),
+            expected
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
+        let escaped_key = format!("\\u0065{}", &literal[1..]);
+        let escaped = format!("{{\"{escaped_key}\":7}}");
+        assert_eq!(
+            json::from_str::<Map>(&escaped).expect("escaped canonical public key"),
+            map
+        );
+        for key in [
+            format!("ed25519:{literal}"),
+            literal.to_lowercase(),
+            literal.to_uppercase(),
+            format!(" {literal}"),
+        ] {
+            let encoded = format!("{{\"{key}\":7}}");
+            assert!(
+                json::from_str::<Map>(&encoded).is_err(),
+                "noncanonical public-key map key must fail: {encoded}"
+            );
+        }
+        for second_key in [literal.to_owned(), escaped_key] {
+            let duplicate = format!("{{\"{literal}\":7,\"{second_key}\":8}}");
+            assert!(
+                json::from_str::<Map>(&duplicate).is_err(),
+                "duplicate decoded public key must fail: {duplicate}"
+            );
+        }
+    }
+    #[test]
     fn public_key_json_rejects_above_protocol_literal_before_hex_decode() {
         let encoded = format!(
             "\"{}\"",

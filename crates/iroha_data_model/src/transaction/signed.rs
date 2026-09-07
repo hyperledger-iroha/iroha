@@ -2134,8 +2134,7 @@ struct ExternalEntrypointRef<'a>(&'a SignedTransaction);
 impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&0_u32, writer)?;
-        let mut tmp = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(writer, self.0.payload(), &mut tmp)?;
+        norito::core::write_len_prefixed(writer, self.0.payload())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {

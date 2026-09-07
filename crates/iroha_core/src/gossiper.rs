@@ -3058,11 +3058,10 @@ impl NoritoSerialize for TransactionGossip {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
         ensure_transaction_gossip_sequence_len(self.routes.len())?;
         ensure_transaction_gossip_sequence_len(self.plans.len())?;
-        let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(writer, &self.txs, &mut tmp)?;
-        ncore::write_len_prefixed(writer, &self.routes, &mut tmp)?;
-        ncore::write_len_prefixed(writer, &self.plans, &mut tmp)?;
-        ncore::write_len_prefixed(writer, &self.plane, &mut tmp)?;
+        ncore::write_len_prefixed(writer, &self.txs)?;
+        ncore::write_len_prefixed(writer, &self.routes)?;
+        ncore::write_len_prefixed(writer, &self.plans)?;
+        ncore::write_len_prefixed(writer, &self.plane)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -3512,8 +3511,7 @@ impl From<SignedTransaction> for GossipTransaction {
 impl NoritoSerialize for GossipTransaction {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
-        let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(writer, &self.queue_plan_certificate, &mut tmp)?;
+        ncore::write_len_prefixed(writer, &self.queue_plan_certificate)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
