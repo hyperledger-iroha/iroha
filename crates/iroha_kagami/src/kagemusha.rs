@@ -1,4 +1,7 @@
-//! Fail-closed authentication for the sole KAGEMUSHA V1 proof release.
+//! Fail-closed KAGEMUSHA V1 release authentication and public authority provisioning.
+
+#[cfg(unix)]
+mod derive_mint_finality_next_epoch_v1;
 
 use crate::{Outcome, RunArgs, json_macros::JsonDeserialize};
 use clap::{Args as ClapArgs, Subcommand};
@@ -100,7 +103,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
-/// Authenticate the sole first-release KAGEMUSHA release format.
+/// Authenticate the first-release format or derive a public next-epoch authority parameter.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
@@ -112,6 +115,10 @@ enum Command {
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
+    /// Derive the typed next-epoch parameter from four inherited private seed blocks.
+    #[cfg(unix)]
+    #[command(name = "derive-mint-finality-next-epoch-v1")]
+    DeriveMintFinalityNextEpochV1(derive_mint_finality_next_epoch_v1::Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -155,6 +162,10 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer),
+            #[cfg(unix)]
+            Command::DeriveMintFinalityNextEpochV1(args) => {
+                derive_mint_finality_next_epoch_v1::run(args, writer)
+            }
         }
     }
 }
@@ -1289,7 +1300,7 @@ mod tests {
 
     #[test]
     fn provider_issuer_signature_projection_requires_exact_raw_tuple_width() {
-        let raw = norito::json!({ "issuer_signature": [vec![1_u8; 64]] });
+        let raw = norito::json!({ "issuer_signature": (vec![vec![1_u8; 64]]) });
         let normalized = normalize_release_projection_value(raw).unwrap();
         assert_eq!(
             normalized
@@ -1298,8 +1309,8 @@ mod tests {
             Some("01".repeat(64).as_str())
         );
         for value in [
-            norito::json!({ "issuer_signature": [vec![1_u8; 63]] }),
-            norito::json!({ "issuer_signature": [vec![1_u8; 65]] }),
+            norito::json!({ "issuer_signature": (vec![vec![1_u8; 63]]) }),
+            norito::json!({ "issuer_signature": (vec![vec![1_u8; 65]]) }),
             norito::json!({ "issuer_signature": [] }),
             norito::json!({ "issuer_signature": [[1_u8], [1_u8]] }),
         ] {

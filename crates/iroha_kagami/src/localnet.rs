@@ -76,7 +76,8 @@ use iroha_executor_data_model::permission::{
         CanEnrollFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain,
     },
-    query::CanReadRestrictedDataspace,
+    parameter::{CanSetHijiriParameters, CanSetParameters},
+    query::{CanReadAllLedgerData, CanReadRestrictedDataspace},
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
@@ -85,9 +86,8 @@ use iroha_genesis::{
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, Quantity};
-use iroha_test_samples::ALICE_ID;
 #[cfg(test)]
-use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
+use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use rand::{TryRngCore as _, rngs::OsRng};
 use std::{
     collections::BTreeSet,
@@ -429,6 +429,8 @@ fn taira_runtime_signer_policy_digest() -> [u8; 32] {
 pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
 const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-transport:v1|";
 const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-identity:v1|";
+const MINT_FINALITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:mint-finality-private:v1|";
+const MINT_FINALITY_SEED_DIRECTORY: &str = "mint-finality-signers";
 /// Serialized reducer command queue capacity for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync outer-ingress capacity for generated localnets.
@@ -645,7 +647,7 @@ const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
 const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland.universal";
 const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
-const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
+const LOCALNET_GAS_ACCOUNT_DOMAIN: &[u8] = b"iroha:localnet:gas-custody:v1";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
 const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
 /// Target faucet reserve restored by the startup wrapper when the floor is crossed.
@@ -1096,8 +1098,8 @@ impl<T: Write> RunArgs<T> for Args {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
                 alias: None,
-                owned_by: ALICE_ID.clone(),
-                mint_to: ALICE_ID.clone(),
+                owned_by: localnet_client_account_id(),
+                mint_to: localnet_client_account_id(),
                 quantity: 100,
             }]
         } else {
@@ -1135,6 +1137,7 @@ struct Peer {
     bls_pop: Vec<u8>,
     runtime_signer_public_key: iroha_crypto::PublicKey,
     runtime_signer_private_key: iroha_crypto::ExposedPrivateKey,
+    mint_finality_seed: Zeroizing<[u8; 32]>,
     api_port: u16,
     p2p_port: u16,
 }
@@ -1263,17 +1266,13 @@ struct LocalnetTxGossipOverrides {
     period_ms: u64,
     resend_ticks: u32,
 }
-fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Result<AccountId> {
-    let gas_key_pair = iroha_crypto::KeyPair::try_from_seed(
-        genesis_public_key
-            .to_string()
-            .bytes()
-            .chain(LOCALNET_GAS_ACCOUNT_SEED.iter().copied())
-            .collect(),
-        iroha_crypto::Algorithm::default(),
-    )
-    .wrap_err("failed to derive localnet gas account key pair")?;
-    Ok(AccountId::new(gas_key_pair.public_key().clone()))
+/// Protocol-owned custody has no signing scalar, including when genesis is public.
+fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> AccountId {
+    let genesis_identity = genesis_public_key.to_string();
+    AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
+        LOCALNET_GAS_ACCOUNT_DOMAIN,
+        &[genesis_identity.as_bytes()],
+    ))
 }
 fn account_id_raw_string(account_id: &AccountId) -> String {
     account_id.to_string()
@@ -1316,6 +1315,9 @@ fn generate_localnet_inner<T: Write>(
             "the canonical Taira chain requires exactly four NPoS validators and the Nexus Sora profile"
         ));
     }
+    if taira {
+        require_taira_private_output_outside_git(&opts.out_dir)?;
+    }
     crate::shell::quote_path(&opts.out_dir)
         .wrap_err("validate requested localnet output path for shell handoff commands")?;
     // No output path is created until every request-level invariant has been
@@ -1349,6 +1351,7 @@ fn generate_localnet_inner<T: Write>(
         write_localnet_runtime_bundle(&out_dir, &client_identity, &onboarding_identity)?;
     if taira {
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
+        write_mint_finality_seeds(&out_dir, &peers)?;
     }
     let sumeragi_body_bytes = localnet_sumeragi_body_bytes(peers.len())?;
     tui::status("Generating genesis manifest");
@@ -1382,7 +1385,7 @@ fn generate_localnet_inner<T: Write>(
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let assets = effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id);
     let gas_account_id = if npos_bootstrap {
-        Some(localnet_gas_account_id(&genesis_public_key)?)
+        Some(localnet_gas_account_id(&genesis_public_key))
     } else {
         None
     };
@@ -1791,6 +1794,7 @@ fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) ->
                 bls_pop: pop,
                 runtime_signer_public_key,
                 runtime_signer_private_key,
+                mint_finality_seed: generate_mint_finality_seed(seed, nth)?,
                 api_port: base_api + nth,
                 p2p_port: base_p2p + nth,
             })
@@ -3330,23 +3334,15 @@ fn generate_raw_genesis(
 fn localnet_kagemusha_mint_finality_genesis_parameters(
     peers: &[Peer],
 ) -> Result<KagemushaMintFinalityGenesisParametersV1> {
-    let mut validators = peers
-        .iter()
-        .map(|peer| PeerId::new(peer.public_key.clone()))
-        .collect::<Vec<_>>();
-    validators.sort();
-    let validators = validators
+    let mut peers = peers.iter().collect::<Vec<_>>();
+    peers.sort_by_key(|peer| PeerId::new(peer.public_key.clone()));
+    let validators = peers
         .into_iter()
-        .enumerate()
-        .map(|(index, validator)| {
-            let seed: [u8; 32] = Hash::new(format!(
-                "iroha:kagami:localnet:kagemusha-mint-finality:v1:epoch-0:{index}:{validator}"
-            ))
-            .into();
+        .map(|peer| {
             iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &seed,
+                &peer.mint_finality_seed,
                 0,
-                validator,
+                PeerId::new(peer.public_key.clone()),
             )
             .map_err(|error| eyre!("derive localnet KAGEMUSHA mint-finality keys: {error}"))
         })
@@ -3409,6 +3405,14 @@ fn extend_genesis(
             let alias = alias_literal
                 .parse::<AssetDefinitionAlias>()
                 .wrap_err("invalid asset definition alias")?;
+            // Alias binding resolves its namespace during genesis execution.
+            // Materialize only the explicitly requested namespace before binding.
+            if let Some(domain_name) = alias.domain_segment() {
+                let domain = DomainId::try_new(domain_name, alias.dataspace_segment())?;
+                if registrations.domains.insert(domain.clone()) {
+                    builder = builder.append_instruction(Register::domain(Domain::new(domain)));
+                }
+            }
             builder = builder.append_instruction(SetAssetDefinitionAlias::bind(
                 asset_def.clone(),
                 alias,
@@ -3873,14 +3877,19 @@ fn append_localnet_contract_permissions_for_client(
             grants.push((permission, destination));
         }
     };
-    push_unique(enact_governance, ALICE_ID.clone());
+    push_unique(enact_governance, client_account_id.clone());
+    push_unique(CanSetParameters.into(), client_account_id.clone());
+    push_unique(CanSetHijiriParameters.into(), client_account_id.clone());
+    push_unique(CanReadAllLedgerData.into(), client_account_id.clone());
+    push_unique(
+        Permission::new("CanManageSoracloud".into(), Json::new(())),
+        client_account_id.clone(),
+    );
     push_unique(manage_verifying_keys.clone(), genesis_account_id.clone());
     push_unique(manage_verifying_keys, client_account_id.clone());
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
-    if *client_account_id != *ALICE_ID {
-        push_unique(manage_kagemusha_reserve, client_account_id.clone());
-    }
+    push_unique(manage_kagemusha_reserve, client_account_id.clone());
     let mut builder = genesis.into_builder();
     for (permission, destination) in grants {
         builder = builder.append_instruction(Grant::account_permission(permission, destination));
@@ -4587,6 +4596,46 @@ fn generate_bls_key_pair(
     let (public_key, private_key) = kp.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key), pop))
 }
+fn require_taira_private_output_outside_git(path: &Path) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    };
+    for ancestor in absolute.ancestors() {
+        match fs::symlink_metadata(ancestor.join(".git")) {
+            Ok(_) => {
+                return Err(eyre!(
+                    "Taira private runtime output must be outside a Git checkout"
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).wrap_err("inspect private runtime output ancestry"),
+        }
+    }
+    Ok(())
+}
+
+fn generate_mint_finality_seed(
+    base_seed: Option<&[u8]>,
+    peer_index: u16,
+) -> Result<Zeroizing<[u8; 32]>> {
+    let mut seed = Zeroizing::new([0_u8; 32]);
+    if let Some(base_seed) = base_seed {
+        let mut material = Zeroizing::new(Vec::new());
+        material.extend_from_slice(MINT_FINALITY_SEED_DOMAIN);
+        material.extend_from_slice(&u64::try_from(base_seed.len())?.to_be_bytes());
+        material.extend_from_slice(base_seed);
+        material.extend_from_slice(&peer_index.to_be_bytes());
+        *seed = Hash::new(material.as_slice()).into();
+    } else {
+        OsRng
+            .try_fill_bytes(seed.as_mut())
+            .map_err(|_| eyre!("operating-system entropy unavailable for mint-finality seed"))?;
+    }
+    Ok(seed)
+}
+
 fn generate_soranet_transport_key_pair(
     base_seed: Option<&[u8]>,
     peer_index: &[u8],
@@ -4697,6 +4746,218 @@ done
     )?;
     Ok(())
 }
+
+const TAIRA_RUNTIME_LAUNCH_PY: &str = r#"
+def _taira_file_identity(metadata):
+    return tuple(getattr(metadata, field) for field in (
+        "st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"))
+
+def _require_taira_fd_vacant(descriptor):
+    try:
+        os.fstat(descriptor)
+    except OSError as error:
+        if error.errno == errno.EBADF:
+            return
+        raise
+    raise RuntimeError("refusing occupied Taira runtime descriptor {}".format(descriptor))
+
+def _reserve_taira_fds(reserved):
+    for descriptor in (198, 199):
+        _require_taira_fd_vacant(descriptor)
+    placeholder = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+    if placeholder in (198, 199):
+        reserved.add(placeholder)
+    try:
+        for descriptor in (198, 199):
+            if descriptor not in reserved:
+                _require_taira_fd_vacant(descriptor)
+                os.dup2(placeholder, descriptor, inheritable=False)
+                reserved.add(descriptor)
+    finally:
+        if placeholder not in reserved:
+            os.close(placeholder)
+
+def _preflight_taira_seed_paths(records):
+    if len(records) != 2 or tuple(record[3] for record in records) != (198, 199):
+        raise RuntimeError("Taira requires exactly the fixed runtime descriptors")
+    paths = [path for source, launch, _size, _descriptor in records for path in (source, launch)]
+    if len(set(os.path.realpath(path) for path in paths)) != 4:
+        raise RuntimeError("Taira retained sources and launch paths must be distinct")
+    identities = set()
+    retained = []
+    stale = []
+    try:
+        for source, launch, size, descriptor in records:
+            if (descriptor, size) not in ((198, 71), (199, 32)):
+                raise RuntimeError("Taira private record length does not match its fixed descriptor")
+            source_fd = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            retained.append((source_fd, None, launch, size, descriptor))
+            before = os.fstat(source_fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1 or before.st_size != size):
+                raise RuntimeError("untrusted persistent Taira runtime signer file")
+            retained[-1] = (source_fd, before, launch, size, descriptor)
+            identity = (before.st_dev, before.st_ino)
+            if identity in identities:
+                raise RuntimeError("Taira private paths alias one inode")
+            identities.add(identity)
+            try:
+                previous = os.lstat(launch)
+            except FileNotFoundError:
+                previous = None
+            if previous is not None:
+                if (not stat.S_ISREG(previous.st_mode) or previous.st_uid != os.geteuid()
+                        or stat.S_IMODE(previous.st_mode) != 0o600 or previous.st_nlink != 1
+                        or previous.st_size not in (0, size)):
+                    raise RuntimeError("untrusted stale Taira runtime launch file")
+                identity = (previous.st_dev, previous.st_ino)
+                if identity in identities:
+                    raise RuntimeError("Taira private paths alias one inode")
+                identities.add(identity)
+                stale.append((launch, previous))
+        for launch, previous in stale:
+            if _taira_file_identity(os.lstat(launch)) != _taira_file_identity(previous):
+                raise RuntimeError("Taira stale launch file changed before replacement")
+        return retained, stale
+    except BaseException:
+        for source_fd, _before, _launch, _size, _descriptor in retained:
+            os.close(source_fd)
+        raise
+
+def _stage_taira_seed(record, owned):
+    source_fd, before, launch, size, descriptor = record
+    launch_fd = os.open(launch, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    try:
+        created = os.fstat(launch_fd)
+    except BaseException:
+        os.close(launch_fd)
+        raise
+    owned.append((launch_fd, launch, created.st_dev, created.st_ino, size))
+    secret = bytearray(size)
+    view = memoryview(secret)
+    try:
+        offset = 0
+        while offset < size:
+            count = os.readv(source_fd, [view[offset:]])
+            if count <= 0:
+                raise RuntimeError("short Taira runtime signer source")
+            offset += count
+        if _taira_file_identity(os.fstat(source_fd)) != _taira_file_identity(before):
+            raise RuntimeError("Taira runtime signer source changed while staging")
+        offset = 0
+        while offset < size:
+            count = os.write(launch_fd, view[offset:])
+            if count <= 0:
+                raise RuntimeError("short Taira runtime launch write")
+            offset += count
+        os.fsync(launch_fd)
+        os.lseek(launch_fd, 0, os.SEEK_SET)
+        ready = os.fstat(launch_fd)
+        if (not stat.S_ISREG(ready.st_mode) or ready.st_uid != os.geteuid()
+                or stat.S_IMODE(ready.st_mode) != 0o600 or ready.st_nlink != 1 or ready.st_size != size
+                or (ready.st_dev, ready.st_ino) != (created.st_dev, created.st_ino)):
+            raise RuntimeError("untrusted Taira runtime launch file")
+        os.dup2(launch_fd, descriptor, inheritable=True)
+    finally:
+        for index in range(size):
+            secret[index] = 0
+        view.release()
+
+def _erase_owned_taira_launch(record):
+    descriptor, path, device, inode, size = record
+    failures = []
+    try:
+        current = os.fstat(descriptor)
+        if (current.st_dev, current.st_ino) != (device, inode):
+            raise RuntimeError("owned Taira launch descriptor identity changed")
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            zeros = bytes(size)
+            offset = 0
+            while offset < size:
+                count = os.write(descriptor, zeros[offset:])
+                if count <= 0:
+                    raise RuntimeError("short Taira launch erasure")
+                offset += count
+            os.fsync(descriptor)
+        except BaseException as error:
+            failures.append(error)
+        try:
+            os.ftruncate(descriptor, 0)
+            os.fsync(descriptor)
+        except BaseException as error:
+            failures.append(error)
+        try:
+            named = os.lstat(path)
+        except FileNotFoundError:
+            named = None
+        if named is not None and stat.S_ISREG(named.st_mode) and (named.st_dev, named.st_ino) == (device, inode):
+            os.unlink(path)
+    finally:
+        os.close(descriptor)
+    if failures:
+        raise RuntimeError("Taira owned launch erasure encountered an I/O failure") from failures[0]
+
+def launch_taira_process(cmd, env, records):
+    reserved, retained, owned = set(), [], []
+    started = False
+    process = None
+    try:
+        _reserve_taira_fds(reserved)
+        retained, stale = _preflight_taira_seed_paths(records)
+        for launch, previous in stale:
+            if _taira_file_identity(os.lstat(launch)) != _taira_file_identity(previous):
+                raise RuntimeError("Taira stale launch file changed before replacement")
+            os.unlink(launch)
+        for record in retained:
+            _stage_taira_seed(record, owned)
+        pass_fds = (198, 199)
+        with open(env["IROHA_PEER_LOG"], "ab", buffering=0) as log:
+            process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env,
+                close_fds=True, pass_fds=pass_fds, start_new_session=True)
+        capture_taira_start(process.pid, env["IROHA_PEER_PROCESS_RECORD"], int(env["IROHA_PEER_INDEX"]), cmd)
+        started = True
+        return process
+    finally:
+        failures = []
+        child_reaped = process is None
+        if process is not None and not started:
+            try:
+                # This unreaped Popen child remains ours even if identity capture failed.
+                # Reap it before erasing the launch records or returning a failed start.
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5.0)
+                else:
+                    process.wait(timeout=0)
+                child_reaped = True
+            except BaseException as error:
+                failures.append(error)
+        for descriptor in reserved:
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                failures.append(error)
+        for descriptor, _before, _launch, _size, _target in retained:
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                failures.append(error)
+        for record in owned:
+            try:
+                if started or not child_reaped:
+                    os.close(record[0])
+                else:
+                    _erase_owned_taira_launch(record)
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise RuntimeError("Taira runtime descriptor cleanup failed") from failures[0]
+"#;
 
 const TAIRA_PROCESS_IDENTITY_PY: &str = r#"
 import errno
@@ -5297,116 +5558,30 @@ fn write_start_script(
             "preflight_taira_start(env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), cmd)"
         )?;
     }
-    writeln!(start_file, "pass_fds = ()")?;
-    writeln!(start_file, "if env.get(\"IROHA_TAIRA_MODE\") == \"1\":")?;
-    writeln!(
-        start_file,
-        "    source_path = os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{TAIRA_RUNTIME_SIGNER_DIRECTORY}\", \"peer{{}}.private_key\".format(env[\"IROHA_PEER_INDEX\"]))"
-    )?;
-    writeln!(
-        start_file,
-        "    launch_path = os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{TAIRA_RUNTIME_SIGNER_DIRECTORY}\", \"peer{{}}.fd198\".format(env[\"IROHA_PEER_INDEX\"]))"
-    )?;
-    writeln!(start_file, "    nofollow = getattr(os, \"O_NOFOLLOW\", 0)")?;
-    writeln!(
-        start_file,
-        "    source_fd = os.open(source_path, os.O_RDONLY | getattr(os, \"O_CLOEXEC\", 0) | nofollow)"
-    )?;
-    writeln!(start_file, "    launch_fd = None")?;
-    writeln!(start_file, "    launch_ready = False")?;
-    writeln!(start_file, "    secret = bytearray(71)")?;
-    writeln!(start_file, "    secret_view = memoryview(secret)")?;
-    writeln!(start_file, "    try:")?;
-    writeln!(start_file, "        source_before = os.fstat(source_fd)")?;
-    writeln!(
-        start_file,
-        "        if not stat.S_ISREG(source_before.st_mode) or source_before.st_uid != os.geteuid() or source_before.st_mode & 0o7777 != 0o600 or source_before.st_nlink != 1 or source_before.st_size != 71: raise RuntimeError(\"untrusted persistent Taira runtime signer file\")"
-    )?;
-    writeln!(start_file, "        try:")?;
-    writeln!(start_file, "            stale = os.lstat(launch_path)")?;
-    writeln!(start_file, "        except FileNotFoundError:")?;
-    writeln!(start_file, "            stale = None")?;
-    writeln!(start_file, "        if stale is not None:")?;
-    writeln!(
-        start_file,
-        "            if not stat.S_ISREG(stale.st_mode) or stale.st_uid != os.geteuid() or stale.st_mode & 0o7777 != 0o600 or stale.st_nlink != 1 or stale.st_size not in (0, 71): raise RuntimeError(\"untrusted stale Taira FD198 launch file\")"
-    )?;
-    writeln!(start_file, "            os.unlink(launch_path)")?;
-    writeln!(
-        start_file,
-        "        launch_fd = os.open(launch_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, \"O_CLOEXEC\", 0) | nofollow, 0o600)"
-    )?;
-    writeln!(start_file, "        offset = 0")?;
-    writeln!(start_file, "        while offset < len(secret):")?;
-    writeln!(
-        start_file,
-        "            count = os.readv(source_fd, [secret_view[offset:]])"
-    )?;
-    writeln!(
-        start_file,
-        "            if count == 0: raise RuntimeError(\"short Taira runtime signer source\")"
-    )?;
-    writeln!(start_file, "            offset += count")?;
-    writeln!(start_file, "        source_after = os.fstat(source_fd)")?;
-    writeln!(
-        start_file,
-        "        stable_fields = (\"st_dev\", \"st_ino\", \"st_uid\", \"st_mode\", \"st_nlink\", \"st_size\", \"st_mtime_ns\", \"st_ctime_ns\")"
-    )?;
-    writeln!(
-        start_file,
-        "        if any(getattr(source_before, field) != getattr(source_after, field) for field in stable_fields): raise RuntimeError(\"Taira runtime signer source changed while staging\")"
-    )?;
-    writeln!(start_file, "        offset = 0")?;
-    writeln!(start_file, "        while offset < len(secret):")?;
-    writeln!(
-        start_file,
-        "            count = os.write(launch_fd, secret_view[offset:])"
-    )?;
-    writeln!(
-        start_file,
-        "            if count == 0: raise RuntimeError(\"short Taira FD198 launch write\")"
-    )?;
-    writeln!(start_file, "            offset += count")?;
-    writeln!(start_file, "        os.fsync(launch_fd)")?;
-    writeln!(start_file, "        os.lseek(launch_fd, 0, os.SEEK_SET)")?;
-    writeln!(start_file, "        launch_stat = os.fstat(launch_fd)")?;
-    writeln!(
-        start_file,
-        "        if not stat.S_ISREG(launch_stat.st_mode) or launch_stat.st_uid != os.geteuid() or launch_stat.st_mode & 0o7777 != 0o600 or launch_stat.st_nlink != 1 or launch_stat.st_size != 71: raise RuntimeError(\"untrusted Taira FD198 launch file\")"
-    )?;
-    writeln!(
-        start_file,
-        "        os.dup2(launch_fd, 198, inheritable=True)"
-    )?;
-    writeln!(start_file, "        launch_ready = True")?;
-    writeln!(start_file, "    finally:")?;
-    writeln!(
-        start_file,
-        "        for index in range(len(secret)): secret[index] = 0"
-    )?;
-    writeln!(start_file, "        secret_view.release()")?;
-    writeln!(start_file, "        os.close(source_fd)")?;
-    writeln!(
-        start_file,
-        "        if launch_fd is not None and launch_fd != 198: os.close(launch_fd)"
-    )?;
-    writeln!(start_file, "        if not launch_ready:")?;
-    writeln!(start_file, "            try: os.unlink(launch_path)")?;
-    writeln!(start_file, "            except FileNotFoundError: pass")?;
-    writeln!(start_file, "    pass_fds = (198,)")?;
-    writeln!(
-        start_file,
-        "log = open(env[\"IROHA_PEER_LOG\"], \"ab\", buffering=0)"
-    )?;
-    writeln!(
-        start_file,
-        "process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, pass_fds=pass_fds, start_new_session=True)"
-    )?;
-    writeln!(start_file, "if pass_fds: os.close(198)")?;
     if taira {
+        start_file.write_all(TAIRA_RUNTIME_LAUNCH_PY.as_bytes())?;
+        writeln!(start_file, "records = [")?;
         writeln!(
             start_file,
-            "capture_taira_start(process.pid, env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), cmd)"
+            "    (os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{TAIRA_RUNTIME_SIGNER_DIRECTORY}\", \"peer{{}}.private_key\".format(env[\"IROHA_PEER_INDEX\"])), os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{TAIRA_RUNTIME_SIGNER_DIRECTORY}\", \"peer{{}}.fd198\".format(env[\"IROHA_PEER_INDEX\"])), 71, 198),"
+        )?;
+        writeln!(
+            start_file,
+            "    (os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{MINT_FINALITY_SEED_DIRECTORY}\", \"peer{{}}.seed\".format(env[\"IROHA_PEER_INDEX\"])), os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{MINT_FINALITY_SEED_DIRECTORY}\", \"peer{{}}.fd199\".format(env[\"IROHA_PEER_INDEX\"])), 32, 199),"
+        )?;
+        writeln!(start_file, "]")?;
+        writeln!(
+            start_file,
+            "process = launch_taira_process(cmd, env, records)"
+        )?;
+    } else {
+        writeln!(
+            start_file,
+            "log = open(env[\"IROHA_PEER_LOG\"], \"ab\", buffering=0)"
+        )?;
+        writeln!(
+            start_file,
+            "process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, start_new_session=True)"
         )?;
     }
     writeln!(start_file, "print(process.pid)")?;
@@ -5775,6 +5950,18 @@ fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()>
     }
     Ok(())
 }
+fn write_mint_finality_seeds(out_dir: &Path, peers: &[Peer]) -> Result<()> {
+    let directory = out_dir.join("runtime").join(MINT_FINALITY_SEED_DIRECTORY);
+    let directory = crate::secure_fs::prepare_empty_private_directory(&directory)
+        .wrap_err("prepare private mint-finality signer directory")?;
+    for (peer_index, peer) in peers.iter().enumerate() {
+        let path = directory.join(format!("peer{peer_index}.seed"));
+        crate::secure_fs::write_private_file_atomic(&path, peer.mint_finality_seed.as_ref())
+            .wrap_err("write private mint-finality seed")?;
+    }
+    Ok(())
+}
+
 fn write_localnet_gitignore(out_dir: &Path) -> Result<()> {
     let path = out_dir.join(".gitignore");
     fs::write(
@@ -6120,6 +6307,61 @@ mod tests {
             account_intent.alias.canonical_text(),
             TAIRA_LOCALNET_OPERATOR_ALIAS
         );
+        let fixture_accounts = [
+            ALICE_ID.clone(),
+            iroha_test_samples::CARPENTER_ID.clone(),
+            localnet_client_account_id(),
+        ];
+        let mut registered_domains = BTreeSet::new();
+        for instruction in manifest.instructions() {
+            if let Some(RegisterBox::Account(register)) =
+                instruction.as_any().downcast_ref::<RegisterBox>()
+            {
+                assert!(
+                    !fixture_accounts.contains(register.object().id()),
+                    "public fixture account entered Taira genesis"
+                );
+            }
+            if let Some(GrantBox::Permission(grant)) =
+                instruction.as_any().downcast_ref::<GrantBox>()
+            {
+                assert!(
+                    !fixture_accounts.contains(grant.destination()),
+                    "public fixture received a Taira permission"
+                );
+            }
+            if let Some(RegisterBox::Domain(register)) =
+                instruction.as_any().downcast_ref::<RegisterBox>()
+            {
+                assert!(
+                    registered_domains.insert(register.object().id().clone()),
+                    "duplicate genesis domain"
+                );
+            }
+            if let Some(binding) = instruction
+                .as_any()
+                .downcast_ref::<SetAssetDefinitionAlias>()
+            {
+                if let Some(alias) = binding.alias.as_ref() {
+                    if let Some(domain_name) = alias.domain_segment() {
+                        let domain = DomainId::try_new(domain_name, alias.dataspace_segment())
+                            .expect("alias domain");
+                        assert!(
+                            registered_domains.contains(&domain),
+                            "alias namespace must precede its binding"
+                        );
+                    }
+                }
+            }
+        }
+        for permission in [
+            Permission::from(CanSetParameters),
+            Permission::from(CanSetHijiriParameters),
+            Permission::from(CanReadAllLedgerData),
+            Permission::from(CanEnactGovernance),
+        ] {
+            assert_eq!(manifest.instructions().filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>()).filter(|grant| matches!(grant, GrantBox::Permission(grant) if grant.destination() == &operator_identity.account_id && grant.object() == &permission)).count(), 1, "actual runtime operator must receive each required permission once");
+        }
         let validator_records = manifest
             .instructions()
             .filter_map(|instruction| {
@@ -6134,7 +6376,11 @@ mod tests {
         let start_script = fs::read_to_string(temp.path().join("start.sh"))
             .expect("read generated Taira start script");
         assert!(start_script.contains("peer{}.fd198"));
-        assert!(start_script.contains("os.dup2(launch_fd, 198, inheritable=True)"));
+        assert!(start_script.contains("peer{}.fd199"));
+        assert!(start_script.contains("os.dup2(launch_fd, descriptor, inheritable=True)"));
+        assert!(start_script.contains("pass_fds = (198, 199)"));
+        assert!(start_script.contains("_reserve_taira_fds(reserved)"));
+        assert!(start_script.contains("_erase_owned_taira_launch(record)"));
         assert!(!start_script.contains("os.dup2(source_fd, 198, inheritable=True)"));
         assert!(start_script.contains("Taira runtime signer source changed while staging"));
         assert!(start_script.contains("iroha3d_taira"));
@@ -6211,6 +6457,26 @@ mod tests {
                 assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
                 assert_eq!(metadata.nlink(), 1);
             }
+            let seed_path = temp
+                .path()
+                .join("runtime")
+                .join(MINT_FINALITY_SEED_DIRECTORY)
+                .join(format!("peer{peer_index}.seed"));
+            let seed = fs::read(&seed_path).expect("read private mint-finality seed");
+            assert_eq!(seed.as_slice(), peer.mint_finality_seed.as_ref());
+            assert_eq!(seed.len(), 32);
+            let seed_metadata = fs::metadata(&seed_path).expect("inspect mint-finality seed");
+            #[cfg(unix)]
+            {
+                assert_eq!(seed_metadata.permissions().mode() & 0o7777, 0o600);
+                assert_eq!(seed_metadata.nlink(), 1);
+            }
+            assert!(!start_script.contains(&hex::encode(&seed)));
+            assert!(
+                !fs::read_to_string(temp.path().join("genesis.json"))
+                    .expect("public genesis manifest")
+                    .contains(&hex::encode(&seed))
+            );
             let config = fs::read_to_string(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read rendered Taira config");
             assert!(!config.contains(key_record.trim_end()));
@@ -6389,8 +6655,7 @@ mod tests {
         genesis = append_peer_pop(genesis, &peers)
             .expect("append generated localnet fixture topology and proofs of possession");
         if npos_bootstrap {
-            let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-                .expect("test localnet gas account derivation should succeed");
+            let gas_account_id = localnet_gas_account_id(&genesis_public_key);
             let stake_amount = localnet_npos_stake_amount(
                 &genesis
                     .effective_parameters()
@@ -6661,8 +6926,7 @@ mod tests {
             generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED)
                 .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key);
-        let expected_explicit_manage_kagemusha_reserve_grants =
-            usize::from(client_account_id != *ALICE_ID);
+        let expected_explicit_manage_kagemusha_reserve_grants = 1;
         let expected_mint_destination =
             AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
         let has_definition = manifest.instructions().any(|instruction| {
@@ -6826,8 +7090,7 @@ mod tests {
         };
         let manifest = localnet_genesis_for_opts(&opts);
         let client_account_id = localnet_client_account_id();
-        let expected_explicit_manage_kagemusha_reserve_grants =
-            usize::from(client_account_id != *ALICE_ID);
+        let expected_explicit_manage_kagemusha_reserve_grants = 1;
         let kagemusha_reserve_grants = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
@@ -6842,7 +7105,7 @@ mod tests {
             .count();
         assert_eq!(
             kagemusha_reserve_grants, expected_explicit_manage_kagemusha_reserve_grants,
-            "permissioned localnet genesis must not duplicate the KAGEMUSHA reserve manager grant and must skip the redundant Alice bootstrap grant"
+            "permissioned localnet genesis must grant the actual runtime operator exactly one KAGEMUSHA reserve permission"
         );
     }
     #[test]
@@ -10347,8 +10610,7 @@ mod tests {
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-            .expect("test localnet gas account derivation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -10449,12 +10711,69 @@ mod tests {
     }
     include!("localnet/private_fee_and_account_tests.rs");
     #[test]
+    fn localnet_gas_custody_derivation_is_deterministic() {
+        let genesis = KeyPair::try_from_seed(
+            b"localnet-gas-custody-genesis-v1".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("fixture genesis key");
+        let custody = localnet_gas_account_id(genesis.public_key());
+        assert_eq!(custody, localnet_gas_account_id(genesis.public_key()));
+        assert_ne!(custody, AccountId::new(genesis.public_key().clone()));
+    }
+    #[test]
+    fn localnet_gas_custody_is_bound_to_genesis_identity() {
+        let first = KeyPair::try_from_seed(
+            b"localnet-gas-custody-first-genesis-v1".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("first fixture genesis key");
+        let second = KeyPair::try_from_seed(
+            b"localnet-gas-custody-second-genesis-v1".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("second fixture genesis key");
+        assert_ne!(
+            localnet_gas_account_id(first.public_key()),
+            localnet_gas_account_id(second.public_key())
+        );
+    }
+    #[test]
+    fn localnet_gas_custody_rejects_the_public_seed_signer() {
+        let genesis = KeyPair::try_from_seed(
+            b"localnet-gas-custody-public-seed-attack-v1".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("fixture genesis key");
+        // Reproduce the exposed signer using only public genesis material.
+        let public_seed = genesis
+            .public_key()
+            .to_string()
+            .bytes()
+            .chain(b"localnet-gas-account".iter().copied())
+            .collect();
+        let exposed = KeyPair::try_from_seed(public_seed, iroha_crypto::Algorithm::Ed25519)
+            .expect("public seed derives its exposed signer");
+        let custody = localnet_gas_account_id(genesis.public_key());
+        assert_ne!(custody, AccountId::new(exposed.public_key().clone()));
+        let payload = b"ordinary transfer attempting to drain protocol custody";
+        let signature = iroha_crypto::Signature::new(exposed.private_key(), payload);
+        signature
+            .verify(exposed.public_key(), payload)
+            .expect("control signature must verify for the exposed account");
+        assert!(
+            signature
+                .verify(custody.expect_single_signatory(), payload)
+                .is_err(),
+            "publicly derived signing material must not authorize custody debits"
+        );
+    }
+    #[test]
     fn account_id_runtime_literal_uses_encoded_literal() {
         let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-            .expect("test localnet gas account derivation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
         let literal = account_id_runtime_literal(&gas_account_id, None);
         assert_eq!(literal, gas_account_id.to_string());
     }
@@ -10463,8 +10782,7 @@ mod tests {
         let seed_bytes = Some(b"localnet-gas-runtime-taira".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-            .expect("test localnet gas account derivation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
         let literal = account_id_runtime_literal(&gas_account_id, Some(369));
         assert!(
             literal.starts_with("test"),
@@ -10547,5 +10865,77 @@ mod tests {
         let mode =
             resolve_requested_consensus_mode(None, Some(LocalnetPerfProfile::Throughput10kNpos));
         assert_eq!(mode, SumeragiConsensusMode::Npos);
+    }
+    #[test]
+    fn mint_finality_seed_uses_private_entropy_unless_development_seed_is_explicit() {
+        let first = generate_mint_finality_seed(None, 0).expect("OS entropy");
+        let second = generate_mint_finality_seed(None, 0).expect("independent OS entropy");
+        assert_ne!(first.as_ref(), second.as_ref());
+        let development = generate_mint_finality_seed(Some(b"explicit-development-only"), 0)
+            .expect("explicit development seed");
+        let repeat = generate_mint_finality_seed(Some(b"explicit-development-only"), 0)
+            .expect("repeat development seed");
+        assert_eq!(development.as_ref(), repeat.as_ref());
+        assert_ne!(
+            development.as_ref(),
+            generate_mint_finality_seed(Some(b"explicit-development-only"), 1)
+                .expect("different peer")
+                .as_ref()
+        );
+        assert_ne!(
+            development.as_ref(),
+            generate_mint_finality_seed(Some(b"another-development-seed"), 0)
+                .expect("different seed")
+                .as_ref()
+        );
+    }
+
+    #[test]
+    fn mint_finality_genesis_keys_match_private_peer_seeds_and_not_public_derivation() {
+        let peers =
+            build_peers(4, Some(b"explicit-development-only"), 8080, 1337).expect("four peers");
+        let parameters = localnet_kagemusha_mint_finality_genesis_parameters(&peers)
+            .expect("public genesis roster");
+        let mut ordered = peers.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|peer| PeerId::new(peer.public_key.clone()));
+        for (index, (peer, actual)) in ordered
+            .iter()
+            .zip(parameters.epoch_roster.validators.iter())
+            .enumerate()
+        {
+            let validator = PeerId::new(peer.public_key.clone());
+            let expected = iroha_core::zk::kagemusha_v1_recursion::
+                derive_kagemusha_mint_finality_validator_keys_v1(
+                    &peer.mint_finality_seed, 0, validator.clone()).expect("private key derivation");
+            assert_eq!(*actual, expected);
+            // Reproduce the exposed old construction to prove it no longer controls any seat.
+            let public_seed: [u8; 32] = Hash::new(format!(
+                "iroha:kagami:localnet:kagemusha-mint-finality:v1:epoch-0:{index}:{validator}"
+            ))
+            .into();
+            let exposed = iroha_core::zk::kagemusha_v1_recursion::
+                derive_kagemusha_mint_finality_validator_keys_v1(
+                    &public_seed, 0, validator).expect("old public derivation");
+            assert_ne!(*actual, exposed);
+        }
+    }
+    #[test]
+    fn mint_finality_private_output_rejects_git_directory_and_worktree_pointer() {
+        let root = tempfile::tempdir().expect("private output test");
+        let output = root.path().join("future/runtime/output");
+        require_taira_private_output_outside_git(&output).expect("outside checkout");
+        fs::create_dir(root.path().join(".git")).expect("repository marker");
+        assert!(require_taira_private_output_outside_git(&output).is_err());
+        fs::remove_dir(root.path().join(".git")).expect("remove directory marker");
+        fs::write(
+            root.path().join(".git"),
+            "gitdir: /unused/worktree/metadata",
+        )
+        .expect("worktree pointer marker");
+        assert!(require_taira_private_output_outside_git(&output).is_err());
+        assert!(
+            !output.exists(),
+            "rejected request must not create runtime output"
+        );
     }
 }

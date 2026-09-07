@@ -77,10 +77,8 @@ mod tests {
     }
     #[test]
     fn ignores_unrelated_set_parameter() {
-        let mut builder = crate::verify::configured_test_genesis_builder(
-            GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from(".")),
-            Vec::new(),
-        );
+        let mut builder =
+            GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from("."));
         let grant = Grant::account_permission(
             iroha_executor_data_model::permission::parameter::CanSetParameters,
             ALICE_ID.clone(),

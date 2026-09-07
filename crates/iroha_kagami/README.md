@@ -98,6 +98,23 @@ into the output directory.
   output directory
 - Defaults the output to the canonical OS temporary directory so owner-only
   custody checks do not traverse platform temporary-directory symlinks
+- Default genesis has no public test accounts or sample assets. Bootstrap grants
+  belong to the supplied genesis authority; localnet operator grants and optional
+  sample assets belong to the generated runtime operator. Gas custody uses a
+  protocol-derived non-signing account.
+- Taira generation requires runtime output outside a Git checkout. Each validator
+  has an independent private mint-finality seed, retained in an owner-only runtime
+  sidecar. The launcher stages consumed descriptor 199 alongside the Soracloud
+  signer at descriptor 198; the daemon binds it to the authenticated genesis and
+  matching epoch rosters. Private signing material never belongs in source or
+  public artifacts.
+- `kagemusha derive-mint-finality-next-epoch-v1` derives a public next-epoch
+  parameter from exactly four sorted BLS voter identities and independent seeds
+  supplied through an inherited pipe. It does not establish election eligibility
+  or submit the parameter. The caller must commit the selected roster before
+  the current epoch's final height: for final height B, it must be committed by
+  B-1. The next epoch starts at B+1; do not stage its successor until the current
+  boundary has finalized and the transition is observed.
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
 - Generic generated stop scripts validate pidfiles against the expected peer

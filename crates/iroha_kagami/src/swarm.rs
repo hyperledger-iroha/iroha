@@ -3940,13 +3940,9 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let authority_topology = topology.iter().map(|entry| entry.peer.clone()).collect();
-        let manifest = crate::verify::configured_test_genesis_builder(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("resultless-prepared-bundle"),
-                PathBuf::from("."),
-            ),
-            authority_topology,
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("resultless-prepared-bundle"),
+            PathBuf::from("."),
         )
         .set_topology_for_test(topology)
         .build_raw()
@@ -4193,12 +4189,9 @@ api_port = 9000
         fs::write(path, genesis_json).expect("write minimal genesis");
     }
     fn write_npos_genesis_without_parameters(path: &Path) {
-        let manifest = crate::verify::configured_test_genesis_builder(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("npos-without-parameters"),
-                PathBuf::from("."),
-            ),
-            Vec::new(),
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("npos-without-parameters"),
+            PathBuf::from("."),
         )
         .complete_for_test()
         .build_raw()

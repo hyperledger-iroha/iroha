@@ -6,7 +6,7 @@ use crate::{
     dev::MockProver,
     plonk::{keygen_pk, keygen_vk, verifier::verify_proof},
     poly::{
-        Rotation,
+        Rotation, VerificationStrategy as _,
         commitment::ParamsProver,
         ipa::{
             commitment::{IPACommitmentScheme, ParamsIPA},

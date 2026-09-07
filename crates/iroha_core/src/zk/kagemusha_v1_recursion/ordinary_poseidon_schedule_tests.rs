@@ -79,7 +79,7 @@ where
         let mut builder = BaseCircuitBuilder::<C::ScalarExt>::new(false)
             .use_k(k)
             .use_instance_columns(2);
-        let gate = builder.range_chip().gate().clone();
+        let gate = halo2_base::gates::GateChip::default();
         let x = builder.main(0).load_witness(C::ScalarExt::from(11));
         let y = builder.main(0).load_witness(C::ScalarExt::from(12));
         let z = gate.add(builder.main(0), x, y);

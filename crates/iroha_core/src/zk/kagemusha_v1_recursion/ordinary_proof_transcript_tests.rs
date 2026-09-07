@@ -200,7 +200,7 @@ where
     let mut builder = BaseCircuitBuilder::<C::ScalarExt>::new(false)
         .use_k(k)
         .use_instance_columns(3);
-    let gate = builder.range_chip().gate().clone();
+    let gate = halo2_base::gates::GateChip::default();
     let x = builder.main(0).load_witness(C::ScalarExt::from(11));
     let _ = gate.add(builder.main(0), x, x);
     builder.assigned_instances = instances
@@ -280,6 +280,7 @@ where
         halo2curves::CurveExt as _,
         plonk::{create_proof, keygen_pk, verify_proof},
         poly::{
+            VerificationStrategy as _,
             commitment::Params as _,
             ipa::{
                 commitment::IPACommitmentScheme,
@@ -294,7 +295,7 @@ where
     let mut builder = BaseCircuitBuilder::<C::ScalarExt>::new(false)
         .use_k(k)
         .use_instance_columns(1);
-    let gate = builder.range_chip().gate().clone();
+    let gate = halo2_base::gates::GateChip::default();
     let x = builder.main(0).load_witness(C::ScalarExt::from(11));
     let y = builder.main(0).load_witness(C::ScalarExt::from(12));
     let z = gate.add(builder.main(0), x, y);

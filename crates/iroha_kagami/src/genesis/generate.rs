@@ -33,7 +33,9 @@ use iroha_genesis::{
     GenesisBuilder, ManifestCrypto, RawGenesisTransaction, validate_genesis_manifest_json,
 };
 use iroha_primitives::json::Json;
-use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
+#[cfg(test)]
+use iroha_test_samples::ALICE_ID;
+use iroha_test_samples::gen_account_in;
 use std::{
     fs,
     io::{BufWriter, Write},
@@ -663,67 +665,20 @@ pub fn generate_default(
     profile_vrf_seed: Option<[u8; 32]>,
 ) -> color_eyre::Result<RawGenesisTransaction> {
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
-    let meta = Metadata::default();
-    let wonderland_name: Name = "wonderland".parse()?;
-    let universal_dataspace: Name = "universal".parse()?;
-    let wonderland_domain =
-        DomainId::try_new(wonderland_name.as_ref(), universal_dataspace.as_ref())?;
-    let garden_of_live_flowers_name: Name = "garden_of_live_flowers".parse()?;
-    let garden_of_live_flowers_domain = DomainId::try_new(
-        garden_of_live_flowers_name.as_ref(),
-        universal_dataspace.as_ref(),
-    )?;
-    let rose_asset_definition_id =
-        AssetDefinitionId::derive_from_components(wonderland_domain.clone(), "rose".parse()?);
-    let cabbage_asset_definition_id = AssetDefinitionId::derive_from_components(
-        garden_of_live_flowers_domain.clone(),
-        "cabbage".parse()?,
-    );
-    let mut wonderland = builder.domain_with_metadata(wonderland_domain.clone(), meta.clone());
-    if genesis_account_id != *ALICE_ID {
-        wonderland = wonderland
-            .account_with_metadata(ALICE_ID.expect_single_signatory().clone(), meta.clone());
-    }
-    let mut builder = wonderland
-        .asset("rose".parse()?, NumericSpec::default())
-        .finish_domain()
-        .domain(garden_of_live_flowers_domain.clone())
-        .account(CARPENTER_ID.expect_single_signatory().clone())
-        .asset("cabbage".parse()?, NumericSpec::default())
-        .finish_domain();
-    let mint = Mint::asset_quantity(
-        13u32,
-        AssetId::new(rose_asset_definition_id.clone(), ALICE_ID.clone()),
-    );
-    let mint_cabbage = Mint::asset_quantity(
-        44u32,
-        AssetId::new(cabbage_asset_definition_id, ALICE_ID.clone()),
-    );
-    let register_account_permission = Permission::new(
-        <CanRegisterAccount as iroha_executor_data_model::permission::Permission>::name(),
-        Json::from_raw_json(format!("{{\"domain\":\"{}\"}}", wonderland_domain))?,
-    );
-    let grant_permission_to_set_parameters =
-        Grant::account_permission(CanSetParameters, ALICE_ID.clone());
-    let grant_permission_to_set_hijiri_parameters =
-        Grant::account_permission(CanSetHijiriParameters, ALICE_ID.clone());
-    let grant_permission_to_read_all_ledger_data =
-        Grant::account_permission(CanReadAllLedgerData, ALICE_ID.clone());
-    let grant_permission_to_manage_soracloud = Grant::account_permission(
+    // Default genesis contains only operator-owned bootstrap state. Public test
+    // identities and sample assets belong in explicitly synthetic fixtures.
+    let bootstrap_domain = DomainId::parse_fully_qualified("universal.universal")?;
+    let mut builder = builder.domain(bootstrap_domain.clone()).finish_domain();
+    let bootstrap_permissions = [
+        Permission::from(CanSetParameters),
+        Permission::from(CanSetHijiriParameters),
+        Permission::from(CanReadAllLedgerData),
         Permission::new("CanManageSoracloud".into(), Json::new(())),
-        ALICE_ID.clone(),
-    );
-    let grant_permission_to_manage_verifying_keys = Grant::account_permission(
         Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
-        genesis_account_id.clone(),
-    );
-    let grant_permission_to_register_accounts =
-        Grant::account_permission(register_account_permission, ALICE_ID.clone());
-    let transfer_rose_ownership = Transfer::asset_definition(
-        genesis_account_id.clone(),
-        rose_asset_definition_id,
-        ALICE_ID.clone(),
-    );
+        Permission::from(CanRegisterAccount {
+            domain: bootstrap_domain,
+        }),
+    ];
     let mut parameters = Parameters::default();
     parameters.set_parameter(Parameter::Custom(
         HijiriParametersV1::first_release_genesis().into_custom_parameter(),
@@ -752,21 +707,15 @@ pub fn generate_default(
     }
     // Persist overrides via structured parameters so manifests stay canonical.
     builder = builder.append_parameter(Parameter::Custom(gas_param));
-    builder = builder
-        .next_transaction()
-        .append_instruction(grant_permission_to_manage_verifying_keys);
-    // Use transaction-oriented API: separate initial registrations from
-    // subsequent state updates.
-    builder = builder
-        .next_transaction()
-        .append_instruction(mint)
-        .append_instruction(mint_cabbage)
-        .append_instruction(transfer_rose_ownership)
-        .append_instruction(grant_permission_to_set_parameters)
-        .append_instruction(grant_permission_to_set_hijiri_parameters)
-        .append_instruction(grant_permission_to_read_all_ledger_data)
-        .append_instruction(grant_permission_to_manage_soracloud)
-        .append_instruction(grant_permission_to_register_accounts);
+    // The daemon pre-seeds this explicit genesis authority. Grant privileges
+    // only after the domain registration, without registering a second owner.
+    builder = builder.next_transaction();
+    for permission in bootstrap_permissions {
+        builder = builder.append_instruction(Grant::account_permission(
+            permission,
+            genesis_account_id.clone(),
+        ));
+    }
     // Enrich with consensus metadata and fingerprint for operator visibility.
     let manifest = builder
         .build_raw()?
@@ -1033,7 +982,7 @@ mod consensus_manifest_tests {
         );
     }
     #[test]
-    fn generated_default_grants_global_reader_to_bootstrap_alice() {
+    fn generated_default_grants_privileges_only_to_supplied_authority() {
         let manifest = generate_default(
             GenesisBuilder::new_without_executor(
                 ChainId::from("default-global-reader"),
@@ -1048,8 +997,29 @@ mod consensus_manifest_tests {
         )
         .expect("generate default genesis");
         assert!(
-            grants_global_reader_to(&manifest, &ALICE_ID),
-            "the bootstrap operator must receive the immutable global query root"
+            grants_global_reader_to(
+                &manifest,
+                &AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()),
+            ),
+            "the supplied bootstrap operator must receive the immutable global query root"
+        );
+        let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let grants = account_permission_grants(&manifest);
+        assert_eq!(grants.len(), 6);
+        assert!(grants.iter().all(|(account, _)| account == &authority));
+        assert!(
+            !manifest.instructions().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| {
+                        matches!(
+                            register,
+                            RegisterBox::Account(_) | RegisterBox::AssetDefinition(_)
+                        )
+                    })
+            }),
+            "default genesis must not inject fixture accounts or assets"
         );
         assert_first_release_hijiri_bootstrap(&manifest, "generated default genesis");
     }

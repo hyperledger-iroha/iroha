@@ -480,6 +480,37 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
         Ok(Self { epoch, signer })
     }
 
+    /// Rebind the held private seed to this validator in an authenticated epoch roster.
+    ///
+    /// The caller must obtain `epoch` from its verified height context. Network identity and
+    /// local validator identity remain fixed; every epoch's published keys must exactly match
+    /// private derivation. Historical contexts remain usable for authenticated recovery.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another network, an absent local validator, malformed roster, or changed keys.
+    pub fn signer_for_epoch(
+        &self,
+        epoch: &KagemushaMintFinalityEpochRosterV1,
+    ) -> Result<KagemushaMintFinalitySignerV1, KagemushaMintFinalityErrorV1> {
+        if epoch.network_id != self.signer.network_id {
+            return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+                "epoch does not belong to the signer's admitted network".to_owned(),
+            ));
+        }
+        let index = epoch
+            .validators
+            .iter()
+            .position(|entry| entry.validator == self.signer.validator)
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or_else(|| {
+                KagemushaMintFinalityErrorV1::InvalidSigner(
+                    "local validator is absent from the authenticated epoch roster".to_owned(),
+                )
+            })?;
+        KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new(*self.signer.seed), index, epoch)
+    }
+
     /// Borrow the mandatory epoch authority.
     #[must_use]
     pub fn epoch(&self) -> &KagemushaMintFinalityEpochRosterV1 {
@@ -1289,6 +1320,94 @@ mod tests {
             derive_kagemusha_mint_finality_validator_keys_v1(&seed, 7, peer(2))
                 .expect("derive for another validator")
         );
+    }
+
+    fn runtime_epoch_fixture(epoch: u64) -> KagemushaMintFinalityEpochRosterV1 {
+        let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
+        validators.sort();
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"runtime epoch fixture")),
+            ),
+            epoch,
+            validators: validators
+                .into_iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    derive_kagemusha_mint_finality_validator_keys_v1(
+                        &[0xB0 + u8::try_from(index).expect("four validators"); 32],
+                        epoch,
+                        validator,
+                    )
+                    .expect("derive exact epoch fixture")
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn runtime_authority_rebinds_private_seed_to_each_exact_epoch_roster() {
+        let epoch_zero = runtime_epoch_fixture(0);
+        let authority = KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(epoch_zero.clone()),
+            Zeroizing::new([0xB1; 32]),
+            1,
+        )
+        .expect("bind epoch zero");
+        let epoch_one = runtime_epoch_fixture(1);
+        let signer = authority
+            .signer_for_epoch(&epoch_one)
+            .expect("bind authenticated next epoch");
+        assert_eq!(signer.validator_index(), 1);
+        assert_eq!(signer.validator, epoch_zero.validators[1].validator);
+        assert_eq!(signer.epoch, 1);
+        assert_eq!(
+            signer.finality_epoch_id,
+            epoch_one.finality_epoch_id().expect("epoch id")
+        );
+        assert!(
+            authority.signer_for_epoch(&epoch_zero).is_ok(),
+            "exact recovery context remains valid"
+        );
+    }
+
+    #[test]
+    fn runtime_epoch_rebinding_rejects_network_keys_epoch_and_missing_validator() {
+        let epoch_zero = runtime_epoch_fixture(0);
+        let authority = KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(epoch_zero.clone()),
+            Zeroizing::new([0xB1; 32]),
+            1,
+        )
+        .expect("bind epoch zero");
+        let mut foreign = runtime_epoch_fixture(1);
+        foreign.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign runtime epoch")),
+        );
+        assert!(authority.signer_for_epoch(&foreign).is_err());
+        let mut wrong_epoch = epoch_zero.clone();
+        wrong_epoch.epoch = 1;
+        assert!(authority.signer_for_epoch(&wrong_epoch).is_err());
+        let mut wrong_key = runtime_epoch_fixture(1);
+        wrong_key.validators[1] = derive_kagemusha_mint_finality_validator_keys_v1(
+            &[0xDD; 32],
+            1,
+            wrong_key.validators[1].validator.clone(),
+        )
+        .expect("wrong seed keys");
+        assert!(authority.signer_for_epoch(&wrong_key).is_err());
+        let mut absent = runtime_epoch_fixture(1);
+        absent.validators[1] =
+            derive_kagemusha_mint_finality_validator_keys_v1(&[0xDD; 32], 1, peer(99))
+                .expect("replacement validator keys");
+        absent
+            .validators
+            .sort_by(|left, right| left.validator.cmp(&right.validator));
+        absent
+            .validate()
+            .expect("valid roster without local validator");
+        assert!(authority.signer_for_epoch(&absent).is_err());
     }
 
     #[test]
