@@ -7,9 +7,7 @@
 use super::*;
 use crate::zk::pasta_sha256::PastaSha256ByteV1;
 use snark_verifier::{
-    loader::EcPointLoader as _,
-    system::halo2::transcript::halo2::TranscriptObject,
-    util::{msm::Msm, transcript::TranscriptRead as _},
+    loader::EcPointLoader as _, system::halo2::transcript::halo2::TranscriptObject, util::msm::Msm,
     verifier::plonk::PlonkProof,
 };
 
@@ -108,6 +106,10 @@ where
     ///
     /// This is a constrained, constant-size commitment to the protocol transcript
     /// initial state, every public-instance commitment, and every proof-read object.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Constrained scalar and compressed-point encodings in exact proof-read order.
     pub(in crate::zk::kagemusha_v1_recursion) canonical_bytes: Vec<PastaSha256ByteV1<C::ScalarExt>>,
@@ -129,11 +131,23 @@ where
     pub(in crate::zk::kagemusha_v1_recursion) accumulator: DeferredAccumulator<'chip, C>,
     /// Final transcript squeeze after both instance commitments and every
     /// hybrid-proof object have been absorbed.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Proof-read commitment claimed as the canonical wide-carrier commitment.
     /// The reciprocal dense ICK relation must substantiate that claim.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) carrier_commitment: DeferredEcPoint<'chip, C>,
     /// Exact proof-read objects, including the hybrid carrier commitment.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) loaded_stream: DeferredProofStreamV1<'chip, C>,
 }
 
@@ -154,6 +168,10 @@ where
     /// hybrid-proof object have been absorbed.
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Proof-read commitments for instance columns one and two, in that order.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) carrier_commitments: [DeferredEcPoint<'chip, C>; 2],
     /// Exact proof-read objects, including both hybrid carrier commitments.
     pub(in crate::zk::kagemusha_v1_recursion) loaded_stream: DeferredProofStreamV1<'chip, C>,

@@ -7,7 +7,6 @@ use iroha::{
     client::{
         SccpBridgeSubmitResponse, SccpCapabilities, SccpDestinationProofSubmitRequest,
         SccpNativeMessageSubmitRequest, SccpRecentMessages, SccpRecentMessagesQuery,
-        SccpRegistryLimits, SccpResourceLimits,
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
@@ -811,6 +810,7 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
 mod tests {
     use super::*;
     use clap::Parser as _;
+    use iroha::client::{SccpRegistryLimits, SccpResourceLimits};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use std::{cell::Cell, path::PathBuf};
     use tempfile::tempdir;
@@ -854,6 +854,8 @@ mod tests {
             "submit-native-message",
             "--proof",
             "proof.norito",
+            "--replay-witness",
+            "replay-witness.norito",
         ])
         .expect("unsigned preparation must remain directly expressible");
         assert!(matches!(
@@ -887,6 +889,15 @@ mod tests {
                 "submit-native-message",
                 "--proof",
                 "proof.norito",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-native-message",
+                "--proof",
+                "proof.norito",
+                "--replay-witness",
+                "replay-witness.norito",
                 "--transaction-payload-b64-file",
                 "payload.b64",
                 "--creation-time-ms",
@@ -898,6 +909,8 @@ mod tests {
                 "submit-native-message",
                 "--proof",
                 "proof.norito",
+                "--replay-witness",
+                "replay-witness.norito",
                 "--signature-b64-file",
                 "signature.b64",
                 "--creation-time-ms",
@@ -936,6 +949,8 @@ mod tests {
                 "submit-native-message",
                 "--proof",
                 "proof.norito",
+                "--replay-witness",
+                "replay-witness.norito",
                 "--creation-time-ms=not-a-number",
             ],
             vec![
@@ -944,6 +959,8 @@ mod tests {
                 "submit-native-message",
                 "--proof",
                 "proof.norito",
+                "--replay-witness",
+                "replay-witness.norito",
                 "--transaction-payload-b64-file",
                 "payload.b64",
                 "--signature-b64-file",

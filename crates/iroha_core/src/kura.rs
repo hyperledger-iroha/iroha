@@ -7880,6 +7880,10 @@ impl Kura {
         }
         Ok(BoundProgressPair::Present(bound))
     }
+    #[expect(
+        dead_code,
+        reason = "retained by the proof-ledger structural sidecar source contract"
+    )]
     fn open_bound_progress_sidecar(
         &self,
         data_path: &Path,

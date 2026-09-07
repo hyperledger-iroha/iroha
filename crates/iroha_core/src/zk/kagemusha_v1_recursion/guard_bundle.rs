@@ -1454,6 +1454,13 @@ where
 
 /// Discover the paired PlatformCredential claim audits while retaining no complete Base graph.
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg_attr(
+    not(any(test, feature = "kagemusha-real-proof-harness")),
+    expect(
+        dead_code,
+        reason = "Paired credential audit discovery is consumed by the guarded proof qualification harness"
+    )
+)]
 pub(crate) fn discover_kagemusha_platform_credential_audits_v1(
     eq_params: &ParamsIPA<EqAffine>,
     ep_params: &ParamsIPA<EpAffine>,
@@ -1516,6 +1523,13 @@ pub(crate) fn discover_kagemusha_platform_credential_audits_v1(
 
 /// Build the exact Eq PlatformCredential producer from detached reciprocal audit material.
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg_attr(
+    not(any(test, feature = "kagemusha-real-proof-harness")),
+    expect(
+        dead_code,
+        reason = "Credential circuit construction is consumed by the guarded proof qualification harness"
+    )
+)]
 pub(crate) fn build_kagemusha_platform_credential_eq_v1(
     eq_params: &ParamsIPA<EqAffine>,
     witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
@@ -1536,14 +1550,15 @@ pub(crate) fn build_kagemusha_platform_credential_eq_v1(
         witness.ep_claim_protocol_digest,
         witness.eq_shard_protocol_digest,
         witness.ep_shard_protocol_digest,
-        discovery.eq_digest,
-        discovery.ep_digest,
+        discovery.eq_digest(),
+        discovery.ep_digest(),
         witness.eq.successor_history,
         witness.ep.successor_history,
         witness.eq,
         provider_policy_root,
     )?;
-    if assigned_platform_credential_digest_v1(&output.audit_digest_limbs)? != discovery.eq_digest {
+    if assigned_platform_credential_digest_v1(&output.audit_digest_limbs)? != discovery.eq_digest()
+    {
         return Err("Kagemusha Eq PlatformCredential audit changed after discovery".to_owned());
     }
     for (actual, expected) in
@@ -1580,6 +1595,13 @@ pub(crate) fn build_kagemusha_platform_credential_eq_v1(
 
 /// Build the exact Ep PlatformCredential producer from detached reciprocal audit material.
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg_attr(
+    not(any(test, feature = "kagemusha-real-proof-harness")),
+    expect(
+        dead_code,
+        reason = "Credential circuit construction is consumed by the guarded proof qualification harness"
+    )
+)]
 pub(crate) fn build_kagemusha_platform_credential_ep_v1(
     ep_params: &ParamsIPA<EpAffine>,
     witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
@@ -1600,14 +1622,15 @@ pub(crate) fn build_kagemusha_platform_credential_ep_v1(
         witness.ep_claim_protocol_digest,
         witness.eq_shard_protocol_digest,
         witness.ep_shard_protocol_digest,
-        discovery.eq_digest,
-        discovery.ep_digest,
+        discovery.eq_digest(),
+        discovery.ep_digest(),
         witness.eq.successor_history,
         witness.ep.successor_history,
         witness.ep,
         provider_policy_root,
     )?;
-    if assigned_platform_credential_digest_v1(&output.audit_digest_limbs)? != discovery.ep_digest {
+    if assigned_platform_credential_digest_v1(&output.audit_digest_limbs)? != discovery.ep_digest()
+    {
         return Err("Kagemusha Ep PlatformCredential audit changed after discovery".to_owned());
     }
     for (actual, expected) in
@@ -2658,6 +2681,13 @@ impl_guard_bundle_circuit!(
 
 /// Build the two mutually audited GuardBundle circuits.
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg_attr(
+    not(any(test, feature = "kagemusha-real-proof-harness")),
+    expect(
+        dead_code,
+        reason = "Paired GuardBundle construction is consumed by the guarded proof qualification harness"
+    )
+)]
 pub(crate) fn build_kagemusha_guard_bundle_pair_v1(
     eq_svk: &IpaSuccinctVerifyingKey<EqAffine>,
     ep_svk: &IpaSuccinctVerifyingKey<EpAffine>,

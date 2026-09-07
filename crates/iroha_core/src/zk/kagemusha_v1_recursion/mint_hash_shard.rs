@@ -32,9 +32,10 @@ use halo2_proofs::{
 use sha2::{compress256, digest::generic_array::GenericArray};
 
 use super::{DigestV1, KagemushaPastaParityV1};
+#[cfg(test)]
+use crate::zk::pasta_sha256::PastaSha256JobsV1;
 use crate::zk::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
-    pasta_sha256::PastaSha256JobsV1,
     pasta_sha256_table8::{
         AssignedBits, AssignedBlockWord, BLOCK_BYTE_SIZE, BLOCK_SIZE, DIGEST_SIZE, IV,
         Sha256Instructions as _, TABLE8_COMPRESSION_ROWS_ESTIMATE_UNMEASURED, Table8Chip,
@@ -149,6 +150,7 @@ pub(crate) struct KagemushaMintHashPlanV1 {
 
 impl KagemushaMintHashPlanV1 {
     /// Derive leaves from the exact messages already queued by the typed monetary relation.
+    #[cfg(test)]
     pub(crate) fn from_sha_jobs<F: KagemushaPoseidonFieldV1>(
         release_id: DigestV1,
         parity: KagemushaPastaParityV1,

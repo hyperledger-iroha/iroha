@@ -9485,8 +9485,16 @@ pub struct WorldView<'world> {
         ParliamentAttemptStateV1,
     >,
     /// Exact derived Parliament attempt counts by lifecycle status and stage.
+    #[expect(
+        dead_code,
+        reason = "retains read guards for the complete World snapshot"
+    )]
     pub(crate) parliament_attempt_counts: CellView<'world, ParliamentAttemptCountsV1>,
     /// Derived distinct-attempt reference counts for each Parliament member account.
+    #[expect(
+        dead_code,
+        reason = "retains read guards for the complete World snapshot"
+    )]
     pub(crate) parliament_member_reference_counts:
         StorageView<'world, AccountId, ParliamentMemberReferenceCountsV1>,
     /// Active hidden-ballot phase windows eligible for compact casting snapshots.
@@ -9496,6 +9504,10 @@ pub struct WorldView<'world> {
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Certified governance attempts keyed by their exact enactment height.
+    #[expect(
+        dead_code,
+        reason = "retains read guards for the complete World snapshot"
+    )]
     pub(crate) parliament_certified_enactments:
         StorageView<'world, u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
@@ -14800,13 +14812,6 @@ pub(crate) enum ConsensusKeyGate {
     Expired,
     Disabled,
 }
-pub(crate) fn peer_consensus_key_gate(
-    snapshot: &impl WorldReadOnly,
-    peer_id: &PeerId,
-    block_height: u64,
-) -> ConsensusKeyGate {
-    peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, None)
-}
 /// Resolve the lifecycle gate for one peer and one exact consensus-key role.
 pub(crate) fn peer_consensus_key_gate_for_role(
     snapshot: &impl WorldReadOnly,
@@ -14907,17 +14912,6 @@ fn peer_consensus_key_gate_matching_role(
         }
     }
     gate
-}
-/// Check whether a peer has a live consensus key at the provided block height.
-pub(crate) fn peer_has_live_consensus_key(
-    snapshot: &impl WorldReadOnly,
-    peer_id: &PeerId,
-    block_height: u64,
-) -> bool {
-    matches!(
-        peer_consensus_key_gate(snapshot, peer_id, block_height),
-        ConsensusKeyGate::Live
-    )
 }
 /// Check whether a peer has a live key for one exact consensus role.
 pub(crate) fn peer_has_live_consensus_key_for_role(

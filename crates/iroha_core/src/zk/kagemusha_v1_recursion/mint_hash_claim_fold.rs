@@ -1131,6 +1131,7 @@ impl KagemushaMintHashClaimPlanV1 {
     ///
     /// The monetary consumer uses this form after it has committed its own canonical padded
     /// message words in-circuit. A host-provided message root alone is not monetary authority.
+    #[cfg(test)]
     pub(crate) fn from_job_terminals_and_message_root<F: KagemushaPoseidonFieldV1>(
         release_id: DigestV1,
         total_stages: u64,
@@ -2859,6 +2860,10 @@ fn validate_claim_pair_witness_v1(
 /// The returned circuits are not independently authoritative. Their ordinary proof openings and
 /// the returned carried histories must still be terminally decided by the mint-authority caller.
 #[allow(clippy::too_many_lines)]
+#[expect(
+    dead_code,
+    reason = "Retain paired construction for circuit qualification; production builds one parity at a time"
+)]
 pub(crate) fn build_kagemusha_mint_hash_claim_pair_v1(
     eq_carrier_params: &ParamsIPA<EqAffine>,
     ep_carrier_params: &ParamsIPA<EpAffine>,

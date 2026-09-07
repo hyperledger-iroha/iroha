@@ -224,7 +224,7 @@ impl<F: Field> Assignment<F> for OwnershipCapture<F> {
 }
 
 fn capture<F: Field, P: FloorPlanner>(circuit: &CellOnlyCircuit<F>) -> OwnershipCapture<F> {
-    let mut meta = ConstraintSystem::default();
+    let mut meta = ConstraintSystem::<F>::default();
     let config = CellOnlyCircuit::configure(&mut meta);
     let mut assignment = OwnershipCapture {
         advice: (0..meta.num_advice_columns())

@@ -100,6 +100,7 @@ impl IntegerAirV1 {
     pub(super) fn width(&self) -> usize {
         self.operations.len()
     }
+    #[cfg(test)]
     pub(super) fn constraint_count(&self) -> usize {
         self.constraints.len()
     }

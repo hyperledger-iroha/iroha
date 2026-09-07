@@ -12,7 +12,7 @@ use halo2_proofs::{
     circuit::{Layouter, V1},
     dev::MockProver,
     halo2curves::{
-        group::{Curve as _, prime::PrimeCurveAffine as _},
+        group::Curve as _,
         pasta::{EpAffine, EqAffine},
     },
     plonk::{Circuit, ConstraintSystem, Error as Halo2Error, keygen_vk},
@@ -93,7 +93,7 @@ where
     marker: std::marker::PhantomData<&'chip C>,
 }
 
-impl<'chip, C, T> RecordingTranscript<'chip, C, T>
+impl<C, T> RecordingTranscript<'_, C, T>
 where
     C: CurveAffineExt,
     C::Base: BigPrimeField,
@@ -200,6 +200,7 @@ where
     let mut builder = BaseCircuitBuilder::<C::ScalarExt>::new(false)
         .use_k(k)
         .use_instance_columns(3);
+    // The fixture only assigns arithmetic gates and has no lookup table.
     let gate = halo2_base::gates::GateChip::default();
     let x = builder.main(0).load_witness(C::ScalarExt::from(11));
     let _ = gate.add(builder.main(0), x, x);
@@ -281,7 +282,6 @@ where
         plonk::{create_proof, keygen_pk, verify_proof},
         poly::{
             VerificationStrategy as _,
-            commitment::Params as _,
             ipa::{
                 commitment::IPACommitmentScheme,
                 multiopen::{ProverIPA, VerifierIPA},
@@ -295,6 +295,7 @@ where
     let mut builder = BaseCircuitBuilder::<C::ScalarExt>::new(false)
         .use_k(k)
         .use_instance_columns(1);
+    // The fixture only assigns arithmetic gates and has no lookup table.
     let gate = halo2_base::gates::GateChip::default();
     let x = builder.main(0).load_witness(C::ScalarExt::from(11));
     let y = builder.main(0).load_witness(C::ScalarExt::from(12));

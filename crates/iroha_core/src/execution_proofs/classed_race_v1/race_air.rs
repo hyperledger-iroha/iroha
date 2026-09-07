@@ -6,7 +6,9 @@
 //! TODO: integrate the narrow proof schedule, profile, history verifier and browser exporter;
 //! arithmetic witness/residue tests alone do not qualify a cryptographic execution profile.
 
-use super::super::integer_air::{IntegerAirV1, Source, Value};
+#[cfg(test)]
+use super::super::integer_air::Source;
+use super::super::integer_air::{IntegerAirV1, Value};
 use super::{
     environment, environment_air,
     reference::{
@@ -386,6 +388,7 @@ impl ClassedRaceAirV1 {
         Ok(fixed)
     }
 
+    #[cfg(test)]
     pub(super) fn next_inputs(&self, row: &[i64]) -> Vec<i64> {
         self.outputs
             .iter()
