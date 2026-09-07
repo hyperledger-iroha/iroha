@@ -4433,7 +4433,7 @@ where
     T: norito::NoritoSerialize,
 {
     let max = bytes.len().max(1);
-    let value = norito::decode_from_bytes_with_limits(
+    norito::decode_canonical_with_limits(
         bytes,
         DecodeLimits::new(
             MAX_REPUTATION_TRUST_EDGES,
@@ -4443,16 +4443,12 @@ where
             128,
         ),
     )
-    .map_err(|err| GovernanceDagServiceError::Source(format!("{label} decode failed: {err}")))?;
-    let canonical = norito::encode_canonical(&value).map_err(|err| {
-        GovernanceDagServiceError::Source(format!("{label} encode failed: {err}"))
-    })?;
-    if canonical != bytes {
-        return Err(GovernanceDagServiceError::Source(format!(
-            "{label} is not canonical Norito"
-        )));
-    }
-    Ok(value)
+    .map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => {
+            GovernanceDagServiceError::Source(format!("{label} is not canonical Norito"))
+        }
+        error => GovernanceDagServiceError::Source(format!("{label} decode failed: {error}")),
+    })
 }
 fn required_json_string(map: &JsonMap, field: &str) -> Result<String, GovernanceDagServiceError> {
     map.get(field)

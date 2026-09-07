@@ -692,7 +692,7 @@ height-context state are not migrated in place.
   the closure ledger. `tla_counterexample` entries cover every and only the 106
   production-refinement `_bug.cfg` files.
   The 106-case runner and the separate in-flight runner (one fixed positive
-  and twenty-two mutations) retain fresh private invocation directories under
+  and twenty-five mutations) retain fresh private invocation directories under
   `SUMERAGI_V2_FORMAL_EVIDENCE_DIR`, or the system temp directory for local
   runs. Each prints its retained path on entry and exit, including failures.
   `sumeragi_v2_tlc_artifacts.py` copies the exact executed module/config and
@@ -722,7 +722,15 @@ height-context state are not migrated in place.
   accepted payload schema V1 in `LaneExecutablePayloadV1`, QueuePlan journal
   V1, reservation journal V1, the 4096 entry ceiling, exact queue durability
   order, and Kura execution-input persistence/recovery to
-  `SumeragiV2InFlightFirstRelease.tla` and its twenty-two mutation controls. Its
+  `SumeragiV2InFlightFirstRelease.tla` and its twenty-five mutation controls.
+  The fixed configuration checks twenty invariants, including active-Kura
+  absence for nonretired direct release and Commit/WSV exclusion for all release
+  dispositions. The original twenty-two controls remain ordered; three added
+  controls cover direct release with active Kura, its later Commit conflict,
+  and Kura activation without authenticated payload binding. Kura activation
+  publishes the actor's exact binding atomically with custody, and the existing
+  carrier-ownership invariant covers every durable, READY and decision actor.
+  This is the current registered contract, not a claim of executed evidence. Its
   three-validator TLA+ instance requires authenticated custody by its selected
   producer and uses the canonical 3-of-3 strict count quorum; it does not infer
   all-peer preimage knowledge. The fixed-width Rust/Verus relation deliberately
@@ -791,6 +799,11 @@ height-context state are not migrated in place.
   | Kura replica retention | `kura_replica_retention_fixed.cfg` | 8 |
   | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |
 
+  The in-flight length remains 18. It does not reach the 19-step terminal
+  conflict exposed by the direct-release mutation. Complete TLC exploration
+  and the named terminal-disposition counterexample are required; an earlier
+  model's bounded result does not qualify this repaired candidate.
+
   Twenty-two runner-contract negative controls reject tool-version or checksum
   drift, source-binding bypass, unauthenticated workspace-manifest authority,
   invalid workspace-digest grammar, omission or substitution of either
@@ -800,7 +813,7 @@ height-context state are not migrated in place.
   mutation substitution, a reduced in-flight bound or in-flight mutation
   substitution, a weakened success marker, and a length override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  seventy-three exact refinement-kernel TLC mutation witnesses and the twenty-two
+  seventy-three exact refinement-kernel TLC mutation witnesses and the twenty-five
   exact in-flight layout mutation witnesses. Its default thirteen-config TLC
   matrix includes `kura_replica_retention_fixed.cfg` and applies the same exact
   successful-transcript contract as the other fixed positive kernels.

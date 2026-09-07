@@ -749,6 +749,56 @@ fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restar
     );
 }
 #[test]
+fn runtime_dag_decoder_rejects_compression_before_allocation() {
+    let (value, _) = sample_settlement();
+    let canonical = norito::encode_canonical(&value).unwrap();
+    assert_eq!(
+        decode_canonical_runtime_dag::<DealSettlementV1>(&canonical, "settlement").unwrap(),
+        value
+    );
+    let compressed =
+        norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default())).unwrap();
+    assert_eq!(
+        norito::decode_from_bytes::<DealSettlementV1>(&compressed).unwrap(),
+        value
+    );
+    let mut tagged = canonical.clone();
+    let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+    let compression_offset = header.magic.len() + 2 + header.schema.len();
+    tagged[compression_offset] = norito::Compression::Zstd as u8;
+    let mut oversized_header = tagged[..norito::core::Header::SIZE].to_vec();
+    oversized_header[compression_offset + 1..compression_offset + 9]
+        .copy_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(
+        norito::core::Header::read(tagged.as_slice())
+            .unwrap()
+            .compression,
+        norito::Compression::Zstd
+    );
+    let oversized = norito::core::Header::read(oversized_header.as_slice()).unwrap();
+    assert_eq!(oversized.compression, norito::Compression::Zstd);
+    assert_eq!(oversized.length, u64::MAX);
+    let no_allocation = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    for flags in governance_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        for bytes in [&compressed, &tagged, &oversized_header] {
+            let error = norito::with_decode_limits_scope(no_allocation, || {
+                decode_canonical_runtime_dag::<DealSettlementV1>(bytes, "settlement")
+            })
+            .expect_err("reject forbidden compression before charging payload allocation");
+            assert!(matches!(error, GovernancePublishError::Other(ref message)
+                if message == "settlement bytes are noncanonical"));
+        }
+        let error = norito::with_decode_limits_scope(no_allocation, || {
+            decode_canonical_runtime_dag::<DealSettlementV1>(&canonical, "settlement")
+        })
+        .expect_err("control frame must encounter the active zero allocation limit");
+        assert!(matches!(error, GovernancePublishError::Other(ref message)
+            if message.contains("allocation") && message.contains("decode failed")));
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+}
+#[test]
 fn runtime_dag_payload_preflight_and_bytes_ignore_caller_layout() {
     let (mut settlement, _) = sample_settlement();
     settlement.audit_notes = Some("canonical runtime source".to_owned());

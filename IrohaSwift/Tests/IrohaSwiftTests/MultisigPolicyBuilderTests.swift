@@ -45,7 +45,7 @@ final class MultisigPolicyBuilderTests: XCTestCase {
             .setThreshold(1)
             .addMember(algorithm: .secp256k1,
                        weight: 1,
-                       publicKey: Data(repeating: 0xAA, count: Secp256k1Keypair.publicKeyLength))
+                       publicKey: Data(hexString: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")!)
             .build()
 
         XCTAssertEqual(policy.members.first?.algorithm, .secp256k1)

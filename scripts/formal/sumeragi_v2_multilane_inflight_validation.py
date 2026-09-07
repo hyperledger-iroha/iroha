@@ -89,7 +89,7 @@ def _validate_inflight_layout_contract(
     if tuple(actual_mutations) != INFLIGHT_LAYOUT_MUTATIONS:
         errors.append(
             "in-flight layout mutation mapping differs from the exact reviewed "
-            "twenty-two-control corpus"
+            "twenty-five-control corpus"
         )
 
     production_symbols = contract.get("production_symbols")
@@ -340,6 +340,23 @@ def _validate_inflight_layout_contract(
             continue
         config_source = config_path.read_text(encoding="utf-8")
         mutation_sources.append((config_path, config_source))
+        modes = re.findall(r'(?m)^  Mode = "([A-Za-z0-9_]+)"$', config_source)
+        if config in {
+            "inflight_first_release_direct_release_with_active_kura_bug.cfg",
+            "inflight_first_release_direct_release_commit_conflict_bug.cfg",
+        } and modes != ["DirectReleaseWithActiveKura"]:
+            errors.append(
+                f"{config_path}: direct-release mutation must bypass only the "
+                "active-Kura absence guard"
+            )
+        if (
+            config == "inflight_first_release_kura_without_payload_binding_bug.cfg"
+            and modes != ["KuraWithoutPayloadBinding"]
+        ):
+            errors.append(
+                f"{config_path}: Kura binding mutation must omit only "
+                "authenticated payload binding publication"
+            )
         config_invariants = tuple(
             re.findall(r"(?m)^INVARIANT ([A-Za-z0-9_]+)$", config_source)
         )
@@ -368,7 +385,7 @@ def _validate_inflight_layout_contract(
         if runner_calls != INFLIGHT_LAYOUT_MUTATIONS:
             errors.append(
                 f"{runner_path}: mutation calls differ from the exact reviewed "
-                "twenty-two-control corpus"
+                "twenty-five-control corpus"
             )
         compact_runner_source = " ".join(
             runner_source.replace("\\\n", " ").split()
@@ -411,7 +428,7 @@ def _validate_inflight_layout_contract(
             "READY signature",
             "atomic WSV carrier application",
             "four-stage release",
-            "twenty-two `_bug.cfg`",
+            "twenty-five `_bug.cfg`",
             "`composed_state_action_relation_with_source_bound_trace_extraction`",
             "fixed-width composed state/action relation",
             "production trace-extraction theorem",
@@ -440,7 +457,7 @@ def _validate_inflight_layout_contract(
             "`composed_state_action_relation_with_source_bound_trace_extraction`",
             "fixed-width composed transition relation is implemented",
             "production trace-extraction certificate",
-            "twenty-two exact TLC mutation witnesses",
+            "twenty-five exact TLC mutation witnesses",
         ):
             if token not in closure_source:
                 errors.append(

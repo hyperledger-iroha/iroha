@@ -3,12 +3,12 @@
 mod tests {
     use super::{
         ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
-        TWO_SLOT_ZERO_DIGEST, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
-        TwoSlotInitializationWaitV1, TwoSlotSnapshotV1, TwoSlotStageV1, TwoSlotStoreConfigV1,
-        TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value, encode_two_slot_value,
-        initialize_two_slot_stage, open_existing_two_slot_store, read_exact_file_region,
-        two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
-        write_exact_file_region, write_two_slot_record_unlocked,
+        TWO_SLOT_ZERO_DIGEST, TwoSlotBindingMaterialV1, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
+        TwoSlotInitializationWaitV1, TwoSlotRecordHeaderV1, TwoSlotSnapshotV1, TwoSlotStageV1,
+        TwoSlotStoreConfigV1, TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value,
+        encode_two_slot_value, initialize_two_slot_stage, open_existing_two_slot_store,
+        read_exact_file_region, two_slot_init_lock_name, two_slot_lost_found_name,
+        two_slot_stage_prefix, write_exact_file_region, write_two_slot_record_unlocked,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::cell::Cell;
@@ -87,7 +87,7 @@ mod tests {
         hash.update(&material_bytes);
         let expected_binding_digest = *hash.finalize().as_bytes();
         let payload = b"exact two-slot payload";
-        let header = super::TwoSlotRecordHeaderV1 {
+        let header = TwoSlotRecordHeaderV1 {
             format_version: super::TWO_SLOT_FORMAT_VERSION_V1,
             binding_digest: expected_binding_digest,
             slot_id: 1,
@@ -122,28 +122,23 @@ mod tests {
                 header_bytes
             );
             assert_eq!(
-                decode_two_slot_value::<super::TwoSlotBindingMaterialV1>(
-                    &material_bytes,
-                    "binding"
-                )
-                .unwrap(),
+                decode_two_slot_value::<TwoSlotBindingMaterialV1>(&material_bytes, "binding")
+                    .unwrap(),
                 material
             );
             assert_eq!(
-                decode_two_slot_value::<super::TwoSlotRecordHeaderV1>(&header_bytes, "record")
-                    .unwrap(),
+                decode_two_slot_value::<TwoSlotRecordHeaderV1>(&header_bytes, "record").unwrap(),
                 header
             );
             let alternate = norito::core::to_bytes(&material).unwrap();
             if alternate != material_bytes {
                 alternate_frames += 1;
                 assert_eq!(
-                    norito::decode_from_bytes::<super::TwoSlotBindingMaterialV1>(&alternate)
-                        .unwrap(),
+                    norito::decode_from_bytes::<TwoSlotBindingMaterialV1>(&alternate).unwrap(),
                     material
                 );
                 let error =
-                    decode_two_slot_value::<super::TwoSlotBindingMaterialV1>(&alternate, "binding")
+                    decode_two_slot_value::<TwoSlotBindingMaterialV1>(&alternate, "binding")
                         .expect_err(
                             "matching caller flags cannot authorize alternate binding bytes",
                         );
@@ -152,12 +147,11 @@ mod tests {
             let alternate = norito::core::to_bytes(&header).unwrap();
             if alternate != header_bytes {
                 assert_eq!(
-                    norito::decode_from_bytes::<super::TwoSlotRecordHeaderV1>(&alternate).unwrap(),
+                    norito::decode_from_bytes::<TwoSlotRecordHeaderV1>(&alternate).unwrap(),
                     header
                 );
                 assert!(
-                    decode_two_slot_value::<super::TwoSlotRecordHeaderV1>(&alternate, "record")
-                        .is_err()
+                    decode_two_slot_value::<TwoSlotRecordHeaderV1>(&alternate, "record").is_err()
                 );
             }
             let mut substituted = header.clone();
@@ -214,7 +208,7 @@ mod tests {
                 reader
                     .load_existing_two_slot_store_v1(config.clone())
                     .unwrap(),
-                Some(initial.clone())
+                initial.clone()
             );
             let material = super::two_slot_binding_material(
                 &config,

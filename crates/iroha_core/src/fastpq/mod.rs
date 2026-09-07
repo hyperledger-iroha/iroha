@@ -20,7 +20,7 @@ use iroha_data_model::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
         TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
-        transfer_asset_scales,
+        transfer_asset_scales, transfer_balance_key as balance_key,
     },
     role::{Role, RoleId},
 };
@@ -112,8 +112,8 @@ pub enum TranscriptBatchError {
         /// Quantity that fell outside the FASTPQ prover's supported range.
         value: Quantity,
     },
-    /// Norito serialization of transcript metadata failed.
-    #[error("failed to encode transfer transcripts for gadget metadata")]
+    /// Norito serialization of a canonical balance key or transcript metadata failed.
+    #[error("failed to encode canonical transfer identity or transcript metadata")]
     MetadataEncoding {
         /// Underlying Norito error.
         #[from]
@@ -845,8 +845,8 @@ fn push_transfer_delta(
     delta: &TransferDeltaTranscript,
     target_scale: u32,
 ) -> Result<(), TranscriptBatchError> {
-    let from_key = balance_key(&delta.asset_definition, &delta.from_account);
-    let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+    let from_key = balance_key(&delta.asset_definition, &delta.from_account)?;
+    let to_key = balance_key(&delta.asset_definition, &delta.to_account)?;
     let from_pre = encode_numeric_le(&delta.from_balance_before, target_scale)?;
     let from_post = encode_numeric_le(&delta.from_balance_after, target_scale)?;
     let to_pre = encode_numeric_le(&delta.to_balance_before, target_scale)?;
@@ -864,9 +864,6 @@ fn push_transfer_delta(
         OperationKind::Transfer,
     ));
     Ok(())
-}
-fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-    format!("asset/{asset}/{account}").into_bytes()
 }
 fn encode_numeric_le(value: &Quantity, target_scale: u32) -> Result<Vec<u8>, TranscriptBatchError> {
     let integer = normalized_numeric_to_u64(value.as_numeric(), target_scale).ok_or_else(|| {
@@ -1508,12 +1505,14 @@ mod tests {
         .unwrap();
         assert_eq!(batch.transitions.len(), 2);
         let delta = &transcript.deltas[0];
-        let sender_key = format!("asset/{}/{}", delta.asset_definition, delta.from_account);
-        let receiver_key = format!("asset/{}/{}", delta.asset_definition, delta.to_account);
+        let sender_key =
+            balance_key(&delta.asset_definition, &delta.from_account).expect("sender key");
+        let receiver_key =
+            balance_key(&delta.asset_definition, &delta.to_account).expect("receiver key");
         let sender_row = batch
             .transitions
             .iter()
-            .find(|row| row.key == sender_key.as_bytes())
+            .find(|row| row.key == sender_key.as_slice())
             .expect("sender row present");
         assert_eq!(sender_row.operation_rank(), OperationKind::Transfer.rank());
         assert_eq!(decode_le(&sender_row.pre_value), 200);
@@ -1521,10 +1520,31 @@ mod tests {
         let receiver_row = batch
             .transitions
             .iter()
-            .find(|row| row.key == receiver_key.as_bytes())
+            .find(|row| row.key == receiver_key.as_slice())
             .expect("receiver row present");
         assert_eq!(decode_le(&receiver_row.pre_value), 1);
         assert_eq!(decode_le(&receiver_row.post_value), 43);
+    }
+    #[test]
+    fn balance_key_batches_ignore_account_display_discriminant() {
+        use iroha_data_model::account::address::ChainDiscriminantGuard;
+        let transcript = sample_transcript();
+        let expected = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap();
+        for discriminant in [0, 369, 753, 65_535] {
+            let _display = ChainDiscriminantGuard::enter(discriminant);
+            let actual = batch_from_transcripts(
+                FASTPQ_CANONICAL_PARAMETER_SET,
+                sample_public_inputs(),
+                [&transcript],
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
     }
     #[test]
     fn batch_from_transcripts_rejects_empty_transcript_in_mixed_input() {
@@ -1710,7 +1730,8 @@ mod tests {
                 .expect("non-negative FASTPQ quantity")
         );
 
-        let sender_key = balance_key(&second_delta.asset_definition, &second_delta.from_account);
+        let sender_key = balance_key(&second_delta.asset_definition, &second_delta.from_account)
+            .expect("canonical balance key");
         let sender_rows = batch
             .transitions
             .iter()
@@ -1756,6 +1777,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].from_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("sender row");
         let receiver_row = batch
@@ -1767,6 +1789,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].to_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("receiver row");
         assert_eq!(decode_le(&sender_row.pre_value), 10);
@@ -1799,6 +1822,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].from_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("sender row");
         let receiver_row = batch
@@ -1810,6 +1834,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].to_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("receiver row");
         assert_eq!(decode_le(&sender_row.pre_value), 120_000_000);

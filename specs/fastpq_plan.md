@@ -23,7 +23,11 @@ records the calculation and blockers.
   touched-balance-tree update witnesses. An empty batch is accepted only when
   `old_root == new_root`.
 - Transfer rows use exactly eight little-endian bytes for both values and exact
-  `asset/<asset-id>/<account>` keys with three non-empty slash-free components.
+  canonical `FastpqBalanceKeyV1` Norito frames containing the typed asset definition
+  and complete domainless account controller. `iroha_data_model::fastpq::transfer_balance_key`
+  is the sole key producer; trace decoding rejects display strings, bare payloads,
+  noncanonical controllers, and alternate layout frames. Asset trace columns carry
+  the decoded canonical 16-byte asset UUID.
 - Transfer witness validation binds each 32-bit Merkle direction vector to the
   key-derived path, authenticates every sibling/root update, enforces debit and
   credit amounts, and chains the witnessed roots to `PublicIO.old_root` and

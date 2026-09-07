@@ -54,6 +54,10 @@ fn account_case(name: &str, account: AccountId) -> Value {
     let literal = account.canonical_i105().unwrap();
     assert_eq!(AccountId::parse_encoded(&literal).unwrap(), account);
     let (raw, flags) = norito::codec::encode_with_header_flags(&account);
+    assert_eq!(
+        flags, 0x02,
+        "fixture advertises the canonical compact-field layout"
+    );
     let policy = if let Some(policy) = account.multisig_policy() {
         object([
             ("version", u64::from(policy.version()).into()),
@@ -231,6 +235,10 @@ pub(super) fn emit() {
         .map(|(name, fields)| {
             let (raw, flags) =
                 norito::codec::encode_with_header_flags(&ControllerFields::Multisig(fields));
+            assert_eq!(
+                flags, 0x02,
+                "negative fixture retains the canonical declared layout"
+            );
             let framed =
                 norito::core::frame_bare_with_header_flags::<AccountId>(&raw, flags).unwrap();
             assert!(

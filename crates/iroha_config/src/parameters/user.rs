@@ -15680,7 +15680,7 @@ mod torii_push_tests {
         for config in [partial_fcm, partial_apns, padded, empty_path] {
             let mut emitter = Emitter::new();
             let _ = config.parse(&mut emitter);
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("invalid provider binding must fail closed");
         }
@@ -16635,7 +16635,7 @@ mod torii_recipient_lookup_tests {
             };
             let mut emitter = Emitter::new();
             assert!(route.parse(0, &mut emitter).is_none(), "{base_url}");
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("unsafe recipient lookup URL must fail closed");
         }
@@ -16658,7 +16658,7 @@ mod torii_recipient_lookup_tests {
             };
             let mut emitter = Emitter::new();
             assert!(route.parse(0, &mut emitter).is_none());
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("noncanonical recipient lookup token must fail closed");
         }

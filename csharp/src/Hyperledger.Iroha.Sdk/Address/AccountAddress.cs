@@ -402,21 +402,38 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
 
     private static void ValidateControllerPublicKey(CurveId curveId, ReadOnlySpan<byte> publicKey)
     {
-        if (curveId == CurveId.Ed25519
-            && (publicKey.Length != 32 || IsAllZero(publicKey)))
+        // This validates the canonical key envelope. Signature/proof verification
+        // and cryptographic group admission remain separate responsibilities.
+        var expectedLength = curveId switch
         {
-            throw NewError(
-                AccountAddressErrorCode.InvalidPublicKey,
-                "invalid Ed25519 public key: expected a nonzero 32-byte key");
-        }
-
-        if (curveId == CurveId.MlDsa
-            && (publicKey.Length != MlDsa65PublicKeyLength || IsAllZero(publicKey)))
+            CurveId.Ed25519 => 32,
+            CurveId.Secp256k1 => 33,
+            CurveId.BlsNormal => 48,
+            CurveId.BlsSmall => 96,
+            CurveId.MlDsa => MlDsa65PublicKeyLength,
+            CurveId.Gost256A or CurveId.Gost256B or CurveId.Gost256C => 64,
+            CurveId.Gost512A or CurveId.Gost512B => 128,
+            CurveId.Sm2 => 0,
+            _ => throw NewError(AccountAddressErrorCode.UnknownCurve, "unknown public key curve"),
+        };
+        if (curveId == CurveId.Sm2)
         {
-            throw NewError(
-                AccountAddressErrorCode.InvalidPublicKey,
-                "invalid ML-DSA public key: expected a nonzero 1952-byte ML-DSA-65 key");
+            if (publicKey.Length < 67) throw NewError(AccountAddressErrorCode.InvalidPublicKey, "invalid SM2 public key envelope");
+            var identityLength = (publicKey[0] << 8) | publicKey[1];
+            if (identityLength > ushort.MaxValue / 8 || publicKey.Length != 2 + identityLength + 65
+                || publicKey[2 + identityLength] != 4)
+                throw NewError(AccountAddressErrorCode.InvalidPublicKey, "invalid SM2 public key envelope");
+            try { _ = new UTF8Encoding(false, true).GetCharCount(publicKey.Slice(2, identityLength)); }
+            catch (DecoderFallbackException) { throw NewError(AccountAddressErrorCode.InvalidPublicKey, "invalid SM2 distinguishing identifier"); }
+            return;
         }
+        if (publicKey.Length != expectedLength || IsAllZero(publicKey)
+            || curveId == CurveId.Secp256k1 && publicKey[0] is not (2 or 3))
+            throw NewError(AccountAddressErrorCode.InvalidPublicKey, curveId switch {
+                CurveId.Ed25519 => "invalid Ed25519 public key: expected a nonzero 32-byte key",
+                CurveId.MlDsa => "invalid ML-DSA public key: expected a nonzero 1952-byte ML-DSA-65 key",
+                _ => $"invalid {CurveIdToAlgorithm(curveId)} public key envelope",
+            });
     }
 
     private static bool IsAllZero(ReadOnlySpan<byte> bytes)
@@ -445,6 +462,9 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         return curveId switch
         {
             CurveId.Ed25519 => "ed25519",
+            CurveId.Secp256k1 => "secp256k1",
+            CurveId.BlsNormal => "bls_normal",
+            CurveId.BlsSmall => "bls_small",
             CurveId.MlDsa => "ml-dsa",
             CurveId.Gost256A => "gost3410-2012-256-paramset-a",
             CurveId.Gost256B => "gost3410-2012-256-paramset-b",

@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 mod connect_key_bindings;
+mod identity_codec_v1;
 #[cfg(test)]
 mod crypto_admission_tests;
 mod privacy_capability_manifest;
@@ -15207,6 +15208,7 @@ fn canonical_genesis_header_hash_v1_py(
 }
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    identity_codec_v1::register(module)?;
     module.add(
         "SorafsMultiFetchError",
         _py.get_type::<SorafsMultiFetchError>(),

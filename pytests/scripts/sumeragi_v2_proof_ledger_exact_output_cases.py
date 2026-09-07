@@ -330,6 +330,91 @@ def test_terminal_lane_production_source_is_bound() -> None:
     assert not errors, errors
 
 
+def _ordinary_ingress_consumer_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Exercise each reviewed ordinary-tail delta after rebinding both owner seals."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs")
+    name = "consume_prepared_dequeued_v2_ingress"
+    original_scalar = module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256
+    original_map = dict(module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256)
+    mutations = (
+        ("propagate lane ingress failure", "executor.current_tag().view(),\n            )?;",
+         "executor.current_tag().view(),\n            );", "lane ingress failure and shared recovery"),
+        ("shared recovery service", "service_historical_recovery_tick(lane_work, services)?",
+         "lane_work.service_next_historical_recovery()?", "lane ingress failure and shared recovery"),
+        ("propagate recovery failure", "service_historical_recovery_tick(lane_work, services)?",
+         "service_historical_recovery_tick(lane_work, services)", "lane ingress failure and shared recovery"),
+        ("preserve authenticated hop", "let authenticated_via = inbound.via().clone();",
+         "let authenticated_via = inbound.sender().clone();", "authenticated hop before consuming"),
+        ("authenticate route set", "if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {",
+         "if false {", "authenticated hop before consuming"),
+        ("strict historical height", "if request.round.height < executor.context().height {",
+         "if request.round.height <= executor.context().height {", "bounded historical worker handoff"),
+        ("transfer exact requester", "                    request,\n                    sender,\n                    authenticated_via,",
+         "                    request,\n                    authenticated_via.clone(),\n                    authenticated_via,", "bounded historical worker handoff"),
+        ("transfer authenticated hop", "                    authenticated_via,\n                    reply_routes,",
+         "                    sender.clone(),\n                    reply_routes,", "bounded historical worker handoff"),
+        ("preserve complete route history", "                    reply_routes,\n                    ingress_ownership,\n                );",
+         "                    reply_routes.retain_active(),\n                    ingress_ownership,\n                );", "bounded historical worker handoff"),
+        ("preserve exact worker ingress", "                    ingress_ownership,\n                );\n                match task.and_then",
+         "                    terminal_ownership,\n                );\n                match task.and_then", "bounded historical worker handoff"),
+        ("installed bounded worker", "block_sync_server.try_enqueue_historical_body(task)",
+         "Ok(HistoricalBodyServeAdmission::Queued)", "bounded historical worker handoff"),
+        ("keep queued ownership alive", "Ok(HistoricalBodyServeAdmission::Queued) => {}",
+         "Ok(HistoricalBodyServeAdmission::Queued) => { mark_leader_wire_volatile(receiver, &terminal_ownership)?; }", "bounded historical worker handoff"),
+        ("retire both capacity rejections", "HistoricalBodyServeAdmission::RateLimited\n                        | HistoricalBodyServeAdmission::Busy",
+         "HistoricalBodyServeAdmission::RateLimited", "bounded historical worker handoff"),
+        ("capacity rejection retires exact owner", "worker admission gate\"\n                        );\n                        mark_leader_wire_volatile(receiver, &terminal_ownership)?;",
+         "worker admission gate\"\n                        );", "bounded historical worker handoff"),
+        ("remote rejection classification", "Err(error) if is_remote_block_sync_rejection(&error) => {",
+         "Err(error) if true => {", "bounded historical worker handoff"),
+        ("remote rejection retires exact owner", '"rejected historical certified body request");\n                        mark_leader_wire_volatile(receiver, &terminal_ownership)?;',
+         '"rejected historical certified body request");', "bounded historical worker handoff"),
+        ("local worker failure propagates", "Err(error) => return Err(error.into()),",
+         "Err(_error) => {},", "bounded historical worker handoff"),
+        ("current-height rejection remains separate", "} else if request.round.height == executor.context().height {",
+         "} else if request.round.height >= executor.context().height {", "bounded historical worker handoff"),
+        ("synchronous body reconstruction stays absent", "let task = HistoricalBodyServeTask::from_bound_ingress(",
+         "let _ = block_sync_server.serve_historical_body(kura, request.clone(), &sender, local_key);\n                let task = HistoricalBodyServeTask::from_bound_ingress(", "historical body work must remain off the ordinary actor"),
+        ("retired manifest path stays absent", "wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {",
+         "wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => { drop(manifest); }\n        wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {", "retired standalone manifest ingress"),
+        ("CommitQC guarded reconstruction", "|| block_sync_server.serve(kura, request, &sender, local_key),",
+         "|| Ok(None),", "CommitQC discovery must remain synchronous under its output guard"),
+        ("CommitQC complete reply routes", "services.post_durable_history_response_on_reply_routes_with_permit(",
+         "services.post_durable_history_response_with_permit(", "historical global responses preserve the complete prevalidated route set"),
+        ("CommitQC exact terminal", "|| mark_leader_wire_volatile(receiver, &terminal_ownership),",
+         "|| Ok(()),", "CommitQC discovery must remain synchronous under its output guard"),
+        ("reply target validation", "if reply_routes.semantic_target() != &sender {\n                iroha_logger::debug!(\n                    %sender,\n                    \"rejected certified body request with mismatched reply target\"",
+         "if false {\n                iroha_logger::debug!(\n                    %sender,\n                    \"rejected certified body request with mismatched reply target\"", "historical response route sets must match"),
+    )
+    try:
+        for index, (case, old, new, expected) in enumerate(mutations):
+            copy_root = tmp_path / f"ordinary-{index:02d}"
+            path = copy_root / relative
+            path.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT_DIR / relative, path)
+            baseline = module._ordinary_ingress_consumer_source_fidelity_errors(copy_root)
+            assert not baseline, (case, baseline)
+            mutate_rust_item_source_in_context(module, path, name, (), old, new)
+            source = path.read_text(encoding="utf-8")
+            item = next(item for item in module.rust_items(source, name) if item.brace_context == ())
+            digest = module._rust_item_token_sha256(item)
+            assert digest != original_scalar, case
+            module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = digest
+            module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256[name] = digest
+            errors = module._ordinary_ingress_consumer_source_fidelity_errors(copy_root)
+            assert any(expected in error for error in errors), (case, errors)
+            assert not any("exact reviewed token digest" in error for error in errors), (case, errors)
+            module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = original_scalar
+            module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.clear()
+            module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.update(original_map)
+    finally:
+        module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = original_scalar
+        module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.clear()
+        module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.update(original_map)
+
+
 @pytest.mark.parametrize(
     ("old", "new", "expected_error"),
     (
@@ -3156,10 +3241,10 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         (
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
             "fn consume_prepared_dequeued_v2_ingress(",
-            "    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {\n"
-            "        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
-            "        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);\n"
-            "    }\n",
+            "        BlockMessage::KuraReplicaAdvert(_) => {\n"
+            "            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
+            "            finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);\n"
+            "        }\n",
             "",
             "KuraReplicaAdvert ingress must bypass both consensus reducers",
         ),
@@ -3213,6 +3298,14 @@ def test_exact_output_production_source_mutations_fail_closed(
 ) -> None:
     module = load_checker()
     exact_output_production_fixture(tmp_path)
+
+    if (
+        region_marker == "fn consume_prepared_dequeued_v2_ingress("
+        and old == "services.post_durable_history_response_on_reply_routes_with_permit("
+    ):
+        _ordinary_ingress_consumer_mutations_survive_digest_refresh(
+            tmp_path / "ordinary-consumer-semantics"
+        )
 
     path = tmp_path / relative_path
     source = path.read_text(encoding="utf-8")

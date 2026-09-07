@@ -461,13 +461,21 @@ fn proof_blob_for_profile(
                         .to_vec()
                 };
                 batch.push(fastpq_prover::StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.from_account,
+                    )
+                    .expect("canonical balance key"),
                     balance_bytes(&delta.from_balance_before),
                     balance_bytes(&delta.from_balance_after),
                     fastpq_prover::OperationKind::Transfer,
                 ));
                 batch.push(fastpq_prover::StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.to_account,
+                    )
+                    .expect("canonical balance key"),
                     balance_bytes(&delta.to_balance_before),
                     balance_bytes(&delta.to_balance_after),
                     fastpq_prover::OperationKind::Transfer,

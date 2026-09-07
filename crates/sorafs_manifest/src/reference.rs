@@ -1013,7 +1013,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairEvidence => {
-            let evidence = decode_repair_bundle_payload::<RepairEvidenceV1>(payload, generated_at)?;
+            let evidence = decode_bundle_payload::<RepairEvidenceV1>(payload, generated_at)?;
             validate_repair_bundle_value(evidence.validate(), &evidence, payload, generated_at)?;
             links.observe_manifest(
                 evidence.manifest_digest,
@@ -1032,7 +1032,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairReport => {
-            let report = decode_repair_bundle_payload::<RepairReportV1>(payload, generated_at)?;
+            let report = decode_bundle_payload::<RepairReportV1>(payload, generated_at)?;
             validate_repair_bundle_value(report.validate(), &report, payload, generated_at)?;
             links.observe_manifest(
                 report.evidence.manifest_digest,
@@ -1051,7 +1051,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairTaskRecord => {
-            let task = decode_repair_bundle_payload::<RepairTaskRecordV1>(payload, generated_at)?;
+            let task = decode_bundle_payload::<RepairTaskRecordV1>(payload, generated_at)?;
             validate_repair_bundle_value(task.validate(), &task, payload, generated_at)?;
             links.observe_manifest(
                 task.manifest_digest,
@@ -1070,8 +1070,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairSlashProposal => {
-            let proposal =
-                decode_repair_bundle_payload::<RepairSlashProposalV1>(payload, generated_at)?;
+            let proposal = decode_bundle_payload::<RepairSlashProposalV1>(payload, generated_at)?;
             validate_repair_bundle_value(proposal.validate(), &proposal, payload, generated_at)?;
             links.observe_manifest(
                 proposal.manifest_digest,
@@ -1090,7 +1089,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairTaskEvent => {
-            let event = decode_repair_bundle_payload::<RepairTaskEventV1>(payload, generated_at)?;
+            let event = decode_bundle_payload::<RepairTaskEventV1>(payload, generated_at)?;
             validate_repair_bundle_value(event.validate(), &event, payload, generated_at)?;
             links.observe_manifest(
                 event.manifest_digest,
@@ -1191,23 +1190,7 @@ fn decode_bundle_payload<T>(
 where
     T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
-    norito::decode_from_bytes::<T>(payload.bytes).map_err(|error| {
-        bundle_decode_error(
-            payload.kind,
-            &payload.label,
-            error.to_string(),
-            generated_at,
-        )
-    })
-}
-fn decode_repair_bundle_payload<T>(
-    payload: &FixtureBundlePayloadV1<'_>,
-    generated_at: u64,
-) -> Result<T, ValidationOutcomeV1>
-where
-    T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
-{
-    decode_repair_archive_payload::<T>(payload.bytes).map_err(|error| {
+    decode_reference_frame::<T>(payload.bytes).map_err(|error| {
         bundle_decode_error(
             payload.kind,
             &payload.label,
@@ -1323,7 +1306,7 @@ pub fn validate_governance_log_node_bytes(
 ) -> ValidationOutcomeV1 {
     let label = label.into();
     let inputs = vec![ValidationInputV1::new("governance_log_node", label.clone())];
-    let node = match norito::decode_from_bytes::<GovernanceLogNodeV1>(bytes) {
+    let node = match decode_reference_frame::<GovernanceLogNodeV1>(bytes) {
         Ok(node) => node,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -1459,7 +1442,7 @@ pub fn validate_governance_dag_block_bytes(
         "governance_dag_block",
         label.clone(),
     )];
-    let block = match norito::decode_from_bytes::<GovernanceDagBlockV1>(bytes) {
+    let block = match decode_reference_frame::<GovernanceDagBlockV1>(bytes) {
         Ok(block) => block,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -1558,7 +1541,7 @@ pub fn validate_governance_dag_head_chain_bytes(
             label.clone(),
         ));
     }
-    let head = match norito::decode_from_bytes::<GovernanceDagHeadV1>(head_bytes) {
+    let head = match decode_reference_frame::<GovernanceDagHeadV1>(head_bytes) {
         Ok(head) => head,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -1581,7 +1564,7 @@ pub fn validate_governance_dag_head_chain_bytes(
     };
     let mut blocks = Vec::with_capacity(block_payloads.len());
     for (bytes, label) in block_payloads {
-        match norito::decode_from_bytes::<GovernanceDagBlockV1>(bytes) {
+        match decode_reference_frame::<GovernanceDagBlockV1>(bytes) {
             Ok(block) => blocks.push(block),
             Err(error) => {
                 return ValidationOutcomeV1::error(
@@ -3605,7 +3588,7 @@ pub fn validate_repair_payload_bytes(
     let inputs = vec![input];
     macro_rules! decode_repair_payload {
         ($payload_type:ty) => {
-            match decode_repair_archive_payload::<$payload_type>(bytes) {
+            match decode_reference_frame::<$payload_type>(bytes) {
                 Ok(payload) => payload,
                 Err(error) => {
                     return ValidationOutcomeV1::error(
@@ -3712,7 +3695,8 @@ pub fn validate_repair_payload_bytes(
         generated_at,
     )
 }
-fn decode_repair_archive_payload<T>(bytes: &[u8]) -> Result<T, norito::Error>
+// One canonical uncompressed V1 outer frame; each caller retains its semantic/signature errors.
+fn decode_reference_frame<T>(bytes: &[u8]) -> Result<T, norito::Error>
 where
     T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
@@ -3814,7 +3798,7 @@ pub fn validate_replication_order_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("replication_order", input_label);
     let inputs = vec![input];
-    let order = match norito::decode_from_bytes::<ReplicationOrderV1>(bytes) {
+    let order = match decode_reference_frame::<ReplicationOrderV1>(bytes) {
         Ok(order) => order,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -3875,7 +3859,7 @@ pub fn validate_signed_replication_order_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("signed_replication_order", input_label);
     let inputs = vec![input];
-    let envelope = match norito::decode_from_bytes::<SignedReplicationOrderV1>(bytes) {
+    let envelope = match decode_reference_frame::<SignedReplicationOrderV1>(bytes) {
         Ok(envelope) => envelope,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -3959,7 +3943,7 @@ pub fn validate_provider_admission_envelope_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("provider_admission_envelope", input_label);
     let inputs = vec![input];
-    let envelope = match norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(bytes) {
+    let envelope = match decode_reference_frame::<ProviderAdmissionEnvelopeV1>(bytes) {
         Ok(envelope) => envelope,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4036,7 +4020,7 @@ pub fn validate_provider_admission_renewal_bytes(
         ValidationInputV1::new("provider_admission_envelope", previous_envelope_label),
         ValidationInputV1::new("provider_admission_renewal", renewal_label),
     ];
-    let previous_envelope = match norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(
+    let previous_envelope = match decode_reference_frame::<ProviderAdmissionEnvelopeV1>(
         previous_envelope_bytes,
     ) {
         Ok(envelope) => envelope,
@@ -4058,7 +4042,7 @@ pub fn validate_provider_admission_renewal_bytes(
             );
         }
     };
-    let renewal = match norito::decode_from_bytes::<ProviderAdmissionRenewalV1>(renewal_bytes) {
+    let renewal = match decode_reference_frame::<ProviderAdmissionRenewalV1>(renewal_bytes) {
         Ok(renewal) => renewal,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4159,7 +4143,7 @@ pub fn validate_provider_admission_revocation_bytes(
         ValidationInputV1::new("provider_admission_envelope", envelope_label),
         ValidationInputV1::new("provider_admission_revocation", revocation_label),
     ];
-    let envelope = match norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(envelope_bytes) {
+    let envelope = match decode_reference_frame::<ProviderAdmissionEnvelopeV1>(envelope_bytes) {
         Ok(envelope) => envelope,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4177,9 +4161,8 @@ pub fn validate_provider_admission_revocation_bytes(
             );
         }
     };
-    let revocation = match norito::decode_from_bytes::<ProviderAdmissionRevocationV1>(
-        revocation_bytes,
-    ) {
+    let revocation = match decode_reference_frame::<ProviderAdmissionRevocationV1>(revocation_bytes)
+    {
         Ok(revocation) => revocation,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -5145,7 +5128,7 @@ pub fn validate_potr_receipt_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("potr_receipt", input_label);
     let inputs = vec![input];
-    let receipt = match norito::decode_from_bytes::<PotrReceiptV1>(bytes) {
+    let receipt = match decode_reference_frame::<PotrReceiptV1>(bytes) {
         Ok(receipt) => receipt,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -8198,7 +8181,7 @@ mod tests {
         };
         assert_ne!(bytes, encoded(&task), "fixture must distinguish layouts");
         assert!(matches!(
-            decode_repair_archive_payload::<RepairTaskRecordV1>(&bytes),
+            decode_reference_frame::<RepairTaskRecordV1>(&bytes),
             Err(norito::Error::NonCanonicalEncoding)
         ));
         let outcome = validate_repair_payload_bytes(
@@ -8680,4 +8663,5 @@ mod tests {
         assert_eq!(field(&outcome.context, "canonical_bytes"), Some("85"));
     }
     include!("reference/tests/replication_and_cancel_validation.rs");
+    include!("reference/tests/canonical_signed_frames.rs");
 }

@@ -1,6 +1,132 @@
 """Coordinator-owned Certified-Serve production source-fidelity contracts."""
 
 
+def _ordinary_ingress_consumer_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Read and seal the sole post-dequeue owner independently of broad checks."""
+
+    errors: list[str] = []
+    path, source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        errors,
+        "ordinary ingress consumer source",
+    )
+    name = "consume_prepared_dequeued_v2_ingress"
+    item = _require_rust_item(path, source, name, errors)
+    _require_rust_item_context(
+        path, item, (), "ordinary ingress consumer owner", errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",),
+    )
+    for digest in (
+        _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256,
+        _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256[name],
+    ):
+        _require_rust_item_token_sha256(path, item, digest, name, errors)
+    _require_ordinary_ingress_consumer_source_contracts(path, item, errors)
+    return errors
+
+
+def _require_ordinary_ingress_consumer_source_contracts(
+    path: Path, item: RustItem | None, errors: list[str],
+) -> None:
+    """Keep exact ingress ownership through bounded body work and CommitQC reply."""
+
+    _require_rust_token_sequence(path, item, """
+match inbound.message() {
+    BlockMessage::KuraReplicaAdvert(_) => {
+        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    }
+    BlockMessage::LaneBlockProposal(_)
+    | BlockMessage::LaneExecutablePayload(_)
+    | BlockMessage::LaneBlockNewViewVote(_)
+    | BlockMessage::LaneBlockNewViewCertificate(_)
+    | BlockMessage::LaneBlockVote(_)
+    | BlockMessage::LaneBlockQc(_)
+    | BlockMessage::LaneBlockCertificate(_)
+    | BlockMessage::LaneHistoricalRecoveryRequest(_)
+    | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
+        let _ = lane_work.accept_lane_message_with_ingress_ownership(
+            inbound, executor.current_tag().view(),
+        )?;
+        let _ = service_historical_recovery_tick(lane_work, services)?;
+        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    }
+    BlockMessage::V2(_) => {}
+}
+let mut ingress_ownership = inbound.take_ingress_ownership()
+""", "KuraReplicaAdvert ingress must bypass both consensus reducers before propagating lane ingress failure and shared recovery", errors)
+    _require_rust_token_sequence(path, item, """
+let authenticated_via = inbound.via().clone();
+let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
+    return Err(V2RunnerError::Service(
+        "global Sumeragi v2 ingress changed its authenticated reply routes".to_owned(),
+    ));
+}
+""", "ordinary ingress must retain its authenticated hop before consuming the exact carrier and validating complete reply routes", errors)
+    _require_rust_token_sequence(path, item, """
+if request.round.height < executor.context().height {
+    let terminal_ownership = ingress_ownership.clone();
+    let task = HistoricalBodyServeTask::from_bound_ingress(
+        request, sender, authenticated_via, reply_routes, ingress_ownership,
+    );
+    match task.and_then(|task| block_sync_server.try_enqueue_historical_body(task)) {
+        Ok(HistoricalBodyServeAdmission::Queued) => {}
+        Ok(HistoricalBodyServeAdmission::RateLimited | HistoricalBodyServeAdmission::Busy,) => {
+            iroha_logger::debug!(
+                "retired historical certified body request at the bounded worker admission gate"
+            );
+            mark_leader_wire_volatile(receiver, &terminal_ownership)?;
+        }
+        Err(error) if is_remote_block_sync_rejection(&error) => {
+            iroha_logger::debug!(%error, "rejected historical certified body request");
+            mark_leader_wire_volatile(receiver, &terminal_ownership)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+} else if request.round.height == executor.context().height {
+""", "ordinary ingress must transfer exact request, hop, full routes and ownership to its bounded historical worker handoff; only rejected admission may retire locally and service errors must propagate", errors)
+    _require_rust_token_sequence(path, item, """
+let response_peer = sender.clone();
+let terminal_ownership = ingress_ownership.clone();
+let served = serve_block_sync_while_guarded(
+    services_output_guard.as_ref(),
+    || block_sync_server.serve(kura, request, &sender, local_key),
+    |response, permit| {
+        services.post_durable_history_response_on_reply_routes_with_permit(
+            response_peer, reply_routes, ingress_ownership, response, permit,
+        )
+    },
+);
+match finalize_bound_block_sync_serve(
+    served,
+    || mark_leader_wire_volatile(receiver, &terminal_ownership),
+    |error| {
+        iroha_logger::debug!(%error, "rejected CommitQC discovery request");
+    },
+)? {
+""", "CommitQC discovery must remain synchronous under its output guard with exact terminal ownership", errors)
+    _require_rust_token_sequence(path, item, """
+services.post_durable_history_response_on_reply_routes_with_permit(
+    response_peer, reply_routes, ingress_ownership, response, permit,
+)
+""", "historical global responses preserve the complete prevalidated route set at the single synchronous CommitQC response seam", errors, count=1)
+    _require_rust_token_sequence(path, item,
+        "if reply_routes.semantic_target() != &sender {",
+        "historical response route sets must match their authenticated semantic target", errors, count=2)
+    if item is not None:
+        tokens = rust_code_tokens(item.body)
+        for forbidden, description in (
+            ("serve_historical_body", "historical body work must remain off the ordinary actor"),
+            ("PayloadManifest", "retired standalone manifest ingress must remain absent"),
+        ):
+            if forbidden in tokens:
+                errors.append(f"{path}:{item.line}: {description}")
+
+
 
 def _lane_recovery_cache_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,

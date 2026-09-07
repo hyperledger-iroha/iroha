@@ -2238,6 +2238,13 @@ the modulus, including zero. Commitment and nullifier wrappers each contain
 one scalar field. They have no hash marker, alias tag or issuance timestamp.
 The roster root remains a separate marked Iroha hash.
 
+Account-controller policies retain the full u16 member count (1–65,535). The
+address decoder requires the single canonical count layout, V1 policy version,
+nonzero weights, reachable threshold and members ordered by algorithm name and
+full public-key bytes. `MultisigPolicyBuilder` sorts input members into that
+order and rejects duplicates. Tests use the same canonical account encoder as
+applications.
+
 `KaigiPrivacyStateV1.decodeCanonicalRecordJSON` reads the full retained record,
 including original host and retained original participant accounts. It checks
 strict scalar/integer JSON, duplicate and unknown fields, effective participant

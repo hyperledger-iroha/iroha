@@ -159,16 +159,22 @@ pub fn build_kaigi_authorization_proof_v1(
     pre_roster_root: Uint8Array,
     mut blinding: Uint8ArraySlice<'_>,
 ) -> napi::Result<JsKaigiAuthorizationProofV1> {
+    // Public byte views may share JS backing storage with the consumed view.
+    // Snapshot exact-size values without allocating from an untrusted length.
+    let network: Result<[u8; 32], _> = network_id.as_ref().try_into();
+    let root: Result<[u8; 32], _> = pre_roster_root.as_ref().try_into();
     let witness = consume_blinding(env, &mut blinding)?;
+    let network = network.map_err(|_| invalid("networkId must contain exactly 32 bytes"))?;
+    let root = root.map_err(|_| invalid("preRosterRoot must contain exactly 32 bytes"))?;
     let context = parse_context(
-        network_id.as_ref(),
+        &network,
         &domain_id,
         &call_name,
         &host_id,
         &subject_id,
         &participation_sequence,
         &action,
-        pre_roster_root.as_ref(),
+        &root,
     )?;
     produce(context, witness).map(|(artifacts, _)| artifacts)
 }

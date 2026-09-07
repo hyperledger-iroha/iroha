@@ -4555,7 +4555,7 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_active": "e1b71a7cbcf7bace4d8814f87ddee89958e245f65c8bee18f21c68526841af45",
     "pending_active": "c2cd203e23b90f5123858ef5ce1d137d69ef48effe544cfd409a0887647775c8",
 }
-_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "2894b1983a7168fd7756c88b964c2b67918696f347a4ae521cce6fdd7bd486a0"
+_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3adf384d9eb315ac86726a07929fb0cc6c713a7e547e484a5a70a5a4c7eaba5"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
 # trusted runtime contract. These complete-item seals bind the structural
@@ -5105,7 +5105,7 @@ _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
         "31022665faf68e0fd519f0e7a27d7b09558ad16ad7b1d2ea073549c162e5ac21"
     ),
     "consume_prepared_dequeued_v2_ingress": (
-        "2894b1983a7168fd7756c88b964c2b67918696f347a4ae521cce6fdd7bd486a0"
+        "e3adf384d9eb315ac86726a07929fb0cc6c713a7e547e484a5a70a5a4c7eaba5"
     ),
 }
 

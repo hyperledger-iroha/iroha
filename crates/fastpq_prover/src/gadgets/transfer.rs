@@ -7,6 +7,7 @@ use iroha_data_model::{
     fastpq::{
         TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
         TransferTranscript, normalized_numeric_to_u64, transfer_asset_scales,
+        transfer_balance_key as balance_key,
     },
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -119,15 +120,17 @@ impl TransferRowKey {
 /// A row shape may legitimately recur after intervening updates to other leaves. Preserve every
 /// proof in transcript order so callers do not silently replace an earlier Merkle path with the
 /// later one.
-#[must_use]
+///
+/// # Errors
+/// Returns an encoding error if a canonical balance identity cannot be framed.
 pub fn index_row_proofs(
     inputs: &[TransferGadgetInput],
-) -> HashMap<TransferRowKey, VecDeque<TransferMerkleProof>> {
+) -> Result<HashMap<TransferRowKey, VecDeque<TransferMerkleProof>>, Error> {
     let mut map = HashMap::new();
     for witness in inputs {
         for delta in &witness.deltas {
-            let sender_key = balance_key(&delta.asset_definition, &delta.from_account);
-            let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
+            let sender_key = balance_key(&delta.asset_definition, &delta.from_account)?;
+            let receiver_key = balance_key(&delta.asset_definition, &delta.to_account)?;
             map.entry(TransferRowKey::new(
                 sender_key.clone(),
                 delta.from_balance_before.to_le_bytes().to_vec(),
@@ -144,7 +147,7 @@ pub fn index_row_proofs(
             .push_back(delta.smt_proof.to.clone());
         }
     }
-    map
+    Ok(map)
 }
 /// Wrapper containing SMT update proofs for both participants of a transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,7 +163,7 @@ impl TransferSmtProof {
         snapshot: &BalanceSnapshot,
         path_allocation: &TransferSmtPathAllocation,
     ) -> Result<Self, Error> {
-        let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+        let from_key = balance_key(&delta.asset_definition, &delta.from_account)?;
         let from = TransferMerkleProof::from_witness(&delta.from_smt_witness)?;
         from.verify_update(
             &from_key,
@@ -169,7 +172,7 @@ impl TransferSmtProof {
             snapshot.from_after,
             "sender",
         )?;
-        let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+        let to_key = balance_key(&delta.asset_definition, &delta.to_account)?;
         let to = TransferMerkleProof::from_witness(&delta.to_smt_witness)?;
         to.verify_update(
             &to_key,
@@ -380,7 +383,7 @@ pub fn attach_transfer_smt_witnesses(
         TranscriptDigestPolicy::AllowMissingSingle,
     )?;
     let asset_scales = transfer_asset_scales(transcripts);
-    let balance_keys = transcript_balance_keys(transcripts);
+    let balance_keys = transcript_balance_keys(transcripts)?;
     let mut state = TransferSmtState::for_keys(&balance_keys)?;
     let delta_count = seed_transfer_smt_state(&mut state, transcripts, &asset_scales)?;
     if delta_count == 0 {
@@ -398,7 +401,7 @@ pub fn attach_transfer_smt_witnesses(
             // balance to fit the stable asset scale here would prevent the repair below.
             let _ = BalanceSnapshot::from_delta(delta)?;
             let amount = numeric_to_u64("amount", &delta.amount, scale)?;
-            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account)?;
             let from_balance_before = state.current_value(&from_key)?;
             let from_balance_after =
                 from_balance_before
@@ -416,7 +419,7 @@ pub fn attach_transfer_smt_witnesses(
                     .expect("non-negative FASTPQ quantity");
             let from_smt_witness =
                 state.update_witness(&from_key, from_balance_before, from_balance_after)?;
-            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account)?;
             let to_balance_before = state.current_value(&to_key)?;
             let to_balance_after =
                 to_balance_before
@@ -472,14 +475,14 @@ fn seed_transfer_smt_state(
         for delta in &transcript.deltas {
             delta_count = delta_count.saturating_add(1);
             let scale = asset_scale(asset_scales, delta);
-            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account)?;
             if seeded_keys.insert(from_key.clone()) {
                 state.insert(
                     &from_key,
                     numeric_to_u64("from_balance_before", &delta.from_balance_before, scale)?,
                 )?;
             }
-            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account)?;
             if seeded_keys.insert(to_key.clone()) {
                 state.insert(
                     &to_key,
@@ -719,7 +722,7 @@ pub fn transcripts_to_witnesses(
     validate_transcript_structure_and_digests(transcripts, TranscriptDigestPolicy::Finalized)?;
     let asset_scales = transfer_asset_scales(transcripts);
     let path_allocation =
-        TransferSmtPathAllocation::from_keys(&transcript_balance_keys(transcripts))?;
+        TransferSmtPathAllocation::from_keys(&transcript_balance_keys(transcripts)?)?;
     let mut current_root = *expected_old_root;
     let mut inputs = Vec::with_capacity(transcripts.len());
     for transcript in transcripts {
@@ -847,7 +850,7 @@ fn ensure_transfer_rows(
     delta: &TransferDeltaTranscript,
     snapshot: &BalanceSnapshot,
 ) -> Result<(), Error> {
-    let sender_key = balance_key(&delta.asset_definition, &delta.from_account);
+    let sender_key = balance_key(&delta.asset_definition, &delta.from_account)?;
     take_matching_row(
         index,
         transitions,
@@ -856,7 +859,7 @@ fn ensure_transfer_rows(
         snapshot.sender_after_bytes(),
         "sender",
     )?;
-    let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
+    let receiver_key = balance_key(&delta.asset_definition, &delta.to_account)?;
     take_matching_row(
         index,
         transitions,
@@ -926,20 +929,13 @@ fn index_transfers(transitions: &[StateTransition]) -> HashMap<Vec<u8>, VecDeque
     }
     map
 }
-fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-    format!("asset/{asset}/{account}").into_bytes()
-}
-fn transcript_balance_keys(transcripts: &[TransferTranscript]) -> BTreeSet<Vec<u8>> {
-    transcripts
-        .iter()
-        .flat_map(|transcript| &transcript.deltas)
-        .flat_map(|delta| {
-            [
-                balance_key(&delta.asset_definition, &delta.from_account),
-                balance_key(&delta.asset_definition, &delta.to_account),
-            ]
-        })
-        .collect()
+fn transcript_balance_keys(transcripts: &[TransferTranscript]) -> Result<BTreeSet<Vec<u8>>, Error> {
+    let mut keys = BTreeSet::new();
+    for delta in transcripts.iter().flat_map(|transcript| &transcript.deltas) {
+        keys.insert(balance_key(&delta.asset_definition, &delta.from_account)?);
+        keys.insert(balance_key(&delta.asset_definition, &delta.to_account)?);
+    }
+    Ok(keys)
 }
 /// Compute the Poseidon digest committed by a transfer transcript entry.
 pub fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
@@ -1065,6 +1061,28 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
+    #[test]
+    fn transfer_balance_keys_paths_and_roots_ignore_account_display_discriminant() {
+        use iroha_data_model::account::address::ChainDiscriminantGuard;
+        let baseline = sample_transcript();
+        let expected_keys = transcript_balance_keys(std::slice::from_ref(&baseline)).unwrap();
+        let expected_roots = transcript_roots(&baseline);
+        for discriminant in [0, 369, 753, 65_535] {
+            let _display = ChainDiscriminantGuard::enter(discriminant);
+            let mut transcript = baseline.clone();
+            let roots =
+                attach_transfer_smt_witnesses(std::slice::from_mut(&mut transcript)).unwrap();
+            assert_eq!(
+                transcript_balance_keys(std::slice::from_ref(&transcript)).unwrap(),
+                expected_keys
+            );
+            assert_eq!(roots, expected_roots);
+            assert_eq!(transcript.deltas, baseline.deltas);
+            let rows = sample_transitions(&transcript);
+            verify_transcripts(&rows, std::slice::from_ref(&transcript)).unwrap();
+            transcripts_to_witnesses(&[transcript], &roots.0, &roots.1).unwrap();
+        }
+    }
     #[test]
     fn decode_transcripts_absent_metadata() {
         let metadata = BTreeMap::new();
@@ -1301,7 +1319,8 @@ mod tests {
         let sender_key = balance_key(
             &transcript.deltas[0].asset_definition,
             &transcript.deltas[0].from_account,
-        );
+        )
+        .expect("canonical balance key");
         let mut transitions = sample_transitions(&transcript);
         let sender = transitions
             .iter_mut()
@@ -1319,7 +1338,8 @@ mod tests {
         let receiver_key = balance_key(
             &transcript.deltas[0].asset_definition,
             &transcript.deltas[0].to_account,
-        );
+        )
+        .expect("canonical balance key");
         let mut transitions = sample_transitions(&transcript);
         transitions.retain(|transition| transition.key != receiver_key);
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("receiver row absent");
@@ -1364,13 +1384,15 @@ mod tests {
             .flat_map(|delta| {
                 let target_scale = delta.normalized_scale();
                 let sender = StateTransition::new(
-                    balance_key(&delta.asset_definition, &delta.from_account),
+                    balance_key(&delta.asset_definition, &delta.from_account)
+                        .expect("canonical balance key"),
                     numeric_to_le_bytes(&delta.from_balance_before, target_scale),
                     numeric_to_le_bytes(&delta.from_balance_after, target_scale),
                     OperationKind::Transfer,
                 );
                 let receiver = StateTransition::new(
-                    balance_key(&delta.asset_definition, &delta.to_account),
+                    balance_key(&delta.asset_definition, &delta.to_account)
+                        .expect("canonical balance key"),
                     numeric_to_le_bytes(&delta.to_balance_before, target_scale),
                     numeric_to_le_bytes(&delta.to_balance_after, target_scale),
                     OperationKind::Transfer,
@@ -1809,7 +1831,8 @@ mod tests {
         let transcript = sample_transcript();
         let delta = &transcript.deltas[0];
         let snapshot = BalanceSnapshot::from_delta(delta).expect("normalized balances");
-        let key = balance_key(&delta.asset_definition, &delta.from_account);
+        let key = balance_key(&delta.asset_definition, &delta.from_account)
+            .expect("canonical balance key");
         let keys = BTreeSet::from([key.clone()]);
         let path_allocation =
             TransferSmtPathAllocation::from_keys(&keys).expect("single-key allocation");
@@ -1904,17 +1927,18 @@ mod tests {
         let witnesses =
             transcripts_to_witnesses(std::slice::from_ref(&transcript), &old_root, &new_root)
                 .expect("witnesses");
-        let index = index_row_proofs(&witnesses);
+        let index = index_row_proofs(&witnesses).expect("proof index");
         assert_eq!(index.len(), 2);
         let delta = &transcript.deltas[0];
         let sender_key = TransferRowKey::new(
-            balance_key(&delta.asset_definition, &delta.from_account),
+            balance_key(&delta.asset_definition, &delta.from_account)
+                .expect("canonical balance key"),
             (200u64).to_le_bytes().to_vec(),
             (158u64).to_le_bytes().to_vec(),
         );
         assert_eq!(index.get(&sender_key).map(VecDeque::len), Some(1));
         let receiver_key = TransferRowKey::new(
-            balance_key(&delta.asset_definition, &delta.to_account),
+            balance_key(&delta.asset_definition, &delta.to_account).expect("canonical balance key"),
             (1u64).to_le_bytes().to_vec(),
             (43u64).to_le_bytes().to_vec(),
         );
@@ -1938,9 +1962,10 @@ mod tests {
             deltas: vec![first.clone(), later.clone()],
         }];
 
-        let index = index_row_proofs(&inputs);
+        let index = index_row_proofs(&inputs).expect("proof index");
         let sender_key = TransferRowKey::new(
-            balance_key(&first.asset_definition, &first.from_account),
+            balance_key(&first.asset_definition, &first.from_account)
+                .expect("canonical balance key"),
             first.from_balance_before.to_le_bytes().to_vec(),
             first.from_balance_after.to_le_bytes().to_vec(),
         );
@@ -2009,10 +2034,12 @@ mod tests {
     }
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
         let (from_witness, to_witness) = build_transfer_smt_witness_pair(
-            &balance_key(&delta.asset_definition, &delta.from_account),
+            &balance_key(&delta.asset_definition, &delta.from_account)
+                .expect("canonical balance key"),
             numeric_to_u64(&delta.from_balance_before, delta.normalized_scale()),
             numeric_to_u64(&delta.from_balance_after, delta.normalized_scale()),
-            &balance_key(&delta.asset_definition, &delta.to_account),
+            &balance_key(&delta.asset_definition, &delta.to_account)
+                .expect("canonical balance key"),
             numeric_to_u64(&delta.to_balance_before, delta.normalized_scale()),
             numeric_to_u64(&delta.to_balance_after, delta.normalized_scale()),
         )
@@ -2021,18 +2048,21 @@ mod tests {
         delta.to_smt_witness = to_witness;
     }
     fn attach_transcript_witnesses(transcript: &mut TransferTranscript) {
-        let balance_keys = transcript_balance_keys(std::slice::from_ref(transcript));
+        let balance_keys =
+            transcript_balance_keys(std::slice::from_ref(transcript)).expect("balance keys");
         let mut state = TransferSmtState::for_keys(&balance_keys).expect("path allocation");
         let mut seeded_keys = BTreeSet::new();
         for delta in &transcript.deltas {
             let scale = delta.normalized_scale();
-            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account)
+                .expect("canonical balance key");
             if seeded_keys.insert(from_key.clone()) {
                 state
                     .insert(&from_key, numeric_to_u64(&delta.from_balance_before, scale))
                     .expect("sender leaf");
             }
-            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account)
+                .expect("canonical balance key");
             if seeded_keys.insert(to_key.clone()) {
                 state
                     .insert(&to_key, numeric_to_u64(&delta.to_balance_before, scale))
@@ -2041,7 +2071,8 @@ mod tests {
         }
         for delta in &mut transcript.deltas {
             let scale = delta.normalized_scale();
-            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account)
+                .expect("canonical balance key");
             delta.from_smt_witness = state
                 .update_witness(
                     &from_key,
@@ -2049,7 +2080,8 @@ mod tests {
                     numeric_to_u64(&delta.from_balance_after, scale),
                 )
                 .expect("sender update");
-            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account)
+                .expect("canonical balance key");
             delta.to_smt_witness = state
                 .update_witness(
                     &to_key,

@@ -992,7 +992,8 @@ pub struct Vote {
     pub choice: VoteChoice,
 }
 /// Parliament governance body identifiers.
-/// JSON values and object keys use the same canonical kebab-case body names.
+///
+/// JSON values and object keys share the canonical lowercase, hyphenated body labels.
 #[derive(
     Clone,
     Copy,

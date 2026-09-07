@@ -21,6 +21,49 @@ fn canonical_decode_rejects_trailing_and_compressed_bytes() {
     assert!(decode_canonical::<CheckpointBodyV1>(&compressed, "checkpoint").is_err());
 }
 #[test]
+fn service_decoder_rejects_compression_before_allocation() {
+    let source = signed_source(1, 0x31, 1_800_000_000);
+    macro_rules! check_signed_frame {
+        ($value:expr, $ty:ty) => {{
+            let value = $value;
+            let canonical = norito::encode_canonical(value).unwrap();
+            assert_eq!(decode_canonical::<$ty>(&canonical, "signed frame").unwrap(), *value);
+            let compressed = norito::to_compressed_bytes(value, Some(norito::CompressionConfig::default())).unwrap();
+            assert_eq!(norito::decode_from_bytes::<$ty>(&compressed).unwrap(), *value);
+            let mut tagged = canonical.clone();
+            let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+            let compression_offset = header.magic.len() + 2 + header.schema.len();
+            tagged[compression_offset] = norito::Compression::Zstd as u8;
+            let mut oversized_header = tagged[..norito::core::Header::SIZE].to_vec();
+            oversized_header[compression_offset + 1..compression_offset + 9]
+                .copy_from_slice(&u64::MAX.to_le_bytes());
+            assert_eq!(norito::core::Header::read(tagged.as_slice()).unwrap().compression, norito::Compression::Zstd);
+            let oversized = norito::core::Header::read(oversized_header.as_slice()).unwrap();
+            assert_eq!(oversized.compression, norito::Compression::Zstd);
+            assert_eq!(oversized.length, u64::MAX);
+            let no_allocation = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+            for flags in governance_service_caller_layouts() {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                for bytes in [&compressed, &tagged, &oversized_header] {
+                    let error = norito::with_decode_limits_scope(no_allocation, || {
+                        decode_canonical::<$ty>(bytes, "signed frame")
+                    }).expect_err("compression must fail before the zero allocation limit");
+                    assert!(matches!(error, GovernanceDagServiceError::Source(ref message)
+                        if message == "signed frame is not canonical Norito"));
+                }
+                let error = norito::with_decode_limits_scope(no_allocation, || {
+                    decode_canonical::<$ty>(&canonical, "signed frame")
+                }).expect_err("valid control must reach the active zero allocation limit");
+                assert!(matches!(error, GovernanceDagServiceError::Source(ref message)
+                    if message.contains("allocation") && message.contains("decode failed")));
+                assert_eq!(norito::core::get_decode_flags(), flags);
+            }
+        }};
+    }
+    check_signed_frame!(&source.blocks[0].block, GovernanceDagBlockV1);
+    check_signed_frame!(&source.head, GovernanceDagHeadV1);
+}
+#[test]
 fn service_source_bytes_and_full_frame_boundary_ignore_caller_layout() {
     let limit = GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
     let mut value = settlement(0, 1_800_000_000);

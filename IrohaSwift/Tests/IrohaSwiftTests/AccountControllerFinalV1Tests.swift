@@ -3,6 +3,52 @@ import XCTest
 @testable import IrohaSwift
 
 final class AccountControllerFinalV1Tests: XCTestCase {
+  func testAllRustOwnedFullControllerFixturesMatchCanonicalWire() throws {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("fixtures/account/multisig_wire_v1.json")
+    let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    XCTAssertEqual(root["schema"] as? String, "iroha.account.multisig-wire.v1")
+    XCTAssertEqual(root["chain_discriminant"] as? Int, 753)
+    let positives = try XCTUnwrap(root["positive"] as? [[String: Any]])
+    XCTAssertEqual(positives.count, 16)
+    for item in positives {
+      let name = try XCTUnwrap(item["name"] as? String)
+      XCTAssertEqual(item["layout_flags"] as? Int, 2, name)
+      let literal = try XCTUnwrap(item["i105"] as? String)
+      let address = try AccountAddress.parseEncoded(literal, expectedPrefix: 753)
+      let canonical = try XCTUnwrap(Data(hexString: XCTUnwrap(item["canonical_address_hex"] as? String)))
+      XCTAssertEqual(try address.canonicalBytes(), canonical, name)
+      let expected = try XCTUnwrap(Data(hexString: XCTUnwrap(item["account_id_payload_hex"] as? String)))
+      XCTAssertEqual(try CanonicalNorito.encodeCompactAccountId(literal), expected, name)
+      XCTAssertTrue(AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(expected), name)
+      let frame = try XCTUnwrap(noritoDecodeFrame(Data(hexString: XCTUnwrap(item["account_id_frame_hex"] as? String))!))
+      XCTAssertEqual(frame.header.flags, 2, name); XCTAssertEqual(frame.payload, expected, name)
+      if let policy = item["policy"] as? [String: Any] {
+        let parsed = try XCTUnwrap(address.multisigPolicyInfo())
+        XCTAssertEqual(Int(parsed.version), policy["version"] as? Int, name)
+        XCTAssertEqual(Int(parsed.threshold), policy["threshold"] as? Int, name)
+        let members = try XCTUnwrap(policy["members"] as? [[String: Any]])
+        XCTAssertEqual(parsed.members.count, members.count, name)
+        for index in members.indices {
+          XCTAssertEqual(parsed.members[index].algorithm, members[index]["algorithm"] as? String, name)
+          XCTAssertEqual(Int(parsed.members[index].weight), members[index]["weight"] as? Int, name)
+          XCTAssertEqual(Data(hexString: String(parsed.members[index].publicKeyHex.dropFirst(2))),
+            Data(hexString: try XCTUnwrap(members[index]["public_key_hex"] as? String)), name)
+        }
+      } else { XCTAssertNil(try address.multisigPolicyInfo(), name) }
+    }
+    let negatives = try XCTUnwrap(root["negative"] as? [[String: Any]])
+    XCTAssertEqual(negatives.count, 7)
+    for item in negatives {
+      let name = try XCTUnwrap(item["name"] as? String)
+      XCTAssertEqual(item["layout_flags"] as? Int, 2, name)
+      let payload = try XCTUnwrap(Data(hexString: XCTUnwrap(item["account_id_payload_hex"] as? String)))
+      XCTAssertFalse(AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(payload), name)
+    }
+  }
+
   func testAccountEncodingAlwaysRequiresCanonicalController() throws {
     let address = try AccountAddress.fromAccount(publicKey: keys(1)[0])
     let literal = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)

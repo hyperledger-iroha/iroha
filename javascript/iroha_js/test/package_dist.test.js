@@ -254,6 +254,14 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
   }
 });
 
+test("package dist exposes both final Kaigi proof generators through root and crypto", () => {
+  for (const surface of [packageExports, packageCryptoExports]) {
+    assert.equal(typeof surface.buildKaigiAuthorizationProofV1, "function");
+    assert.equal(typeof surface.buildKaigiUsageProofV1, "function");
+    assert.equal("buildKaigiRosterJoinProof" in surface, false);
+  }
+});
+
 test("package dist does not expose Private Kaigi fee proof synthesis", () => {
   for (const [surface, exports] of [
     ["root", packageExports],

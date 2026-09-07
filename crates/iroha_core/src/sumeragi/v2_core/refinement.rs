@@ -4271,13 +4271,13 @@ macro_rules! in_flight_first_release_static_equal_body {
             && $left.producer == $right.producer
             && $left.producer_selected_owner == $right.producer_selected_owner
             && $left.replicated_carrier_owners == $right.replicated_carrier_owners
-            && $left.payload_binding_a == $right.payload_binding_a
             && canonical_identity_equal_body!($left.binding_a, $right.binding_a)
     }};
 }
 macro_rules! in_flight_first_release_state_equal_body {
     ($left:expr, $right:expr) => {{
         in_flight_first_release_static_equal_body!($left, $right)
+            && $left.payload_binding_a == $right.payload_binding_a
             && in_flight_first_release_queue_equal_body!($left.queue, $right.queue)
             && in_flight_first_release_carrier_equal_body!($left.carrier, $right.carrier)
             && in_flight_first_release_session_equal_body!($left.session, $right.session)
@@ -4355,6 +4355,14 @@ macro_rules! production_in_flight_first_release_state_body {
             && (history.ever_execution_input_durable & !validator_mask) == 0u128
             && (history.ever_ready_authorized & !validator_mask) == 0u128
             && (history.ready_signed & !validator_mask) == 0u128
+            && (carrier.kura_active & !state.payload_binding_a) == 0u128
+            && (carrier.execution_input_durable & !state.payload_binding_a) == 0u128
+            && (session.ready_authorized & !state.payload_binding_a) == 0u128
+            && (history.ever_execution_input_durable & !state.payload_binding_a) == 0u128
+            && (history.ever_ready_authorized & !state.payload_binding_a) == 0u128
+            && (history.ready_signed & !state.payload_binding_a) == 0u128
+            && (decision.lane_commit_owner & !state.payload_binding_a) == 0u128
+            && (decision.release_owner & !state.payload_binding_a) == 0u128
             && (carrier.execution_input_durable & !carrier.kura_active) == 0u128
             && (carrier.kura_active == 0u128 || history.ever_reservation_v1)
             && (session.ready_authorized & !carrier.execution_input_durable) == 0u128
@@ -4449,6 +4457,41 @@ macro_rules! production_in_flight_first_release_state_body {
             && (!release.kura_retired || decision.release_owner != 0u128)
             && (release.pending_prefix == 0u64
                 || (release.kura_retired && decision.release_owner != 0u128))
+            // Actor-free abort/orphan release is authorized only before any
+            // durable Kura custody. Retired replicas retain their exact
+            // nonproducer release owner and complete ReleasePending prefix.
+            && if queue.reservation_state
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+                && !release.kura_retired
+            {
+                carrier.kura_active == 0u128
+            } else {
+                true
+            }
+            // Every release disposition excludes both a lane decision and
+            // actual WSV ownership, even before Commit cleanup is terminal.
+            && if queue.reservation_state
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT)
+                || queue.reservation_state
+                    == refinement_tag_value!(
+                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+                    )
+            {
+                decision.lane_commit_owner == 0u128
+                    && !decision.wsv_committed
+                    && decision.application_count == 0u8
+                    && decision.applied_by == 0u128
+            } else {
+                true
+            }
             && if queue.reservation_state
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
                 && release.kura_retired
@@ -4552,6 +4595,13 @@ macro_rules! production_in_flight_first_release_transition_body {
         production_in_flight_first_release_state_body!(before)
             && production_in_flight_first_release_state_body!(after)
             && in_flight_first_release_static_equal_body!(before, after)
+            && if projection.action
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA)
+            {
+                after.payload_binding_a == (before.payload_binding_a | projection.actor)
+            } else {
+                after.payload_binding_a == before.payload_binding_a
+            }
             && if projection.action
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1)
             {
@@ -5264,6 +5314,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && ((projection.actor == 0u128
                         && before.queue.reservation_state
                             == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
+                        && before.carrier.kura_active == 0u128
                         && before.decision.lane_commit_owner == 0u128
                         && before.decision.release_owner == 0u128)
                         || (in_flight_first_release_single_validator_body!(
@@ -6358,7 +6409,8 @@ pub(crate) struct ProductionInFlightFirstReleaseReleaseProjection {
 /// identifies the authenticated committee members whose custody of that
 /// complete reservation group is established at this boundary; it is
 /// committee-bounded and must include the selected producer, but it does not
-/// assert knowledge by every validator.
+/// assert knowledge by every validator. Authenticated Kura activation adds
+/// exactly its actor to that custody mask; every other action preserves it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseStateProjection {
     pub(crate) validator_count: u8,

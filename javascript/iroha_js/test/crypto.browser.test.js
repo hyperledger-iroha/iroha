@@ -9,6 +9,8 @@ import {
 } from "../src/crypto.browser.js";
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
 import * as distBrowserCrypto from "../dist/crypto.browser.js";
+import * as srcPublicBrowserCrypto from "../src/public/crypto.browser.js";
+import * as distPublicBrowserCrypto from "../dist/public/crypto.browser.js";
 import * as srcBrowserFacade from "../src/browser.js";
 import * as distBrowserFacade from "../dist/browser.js";
 import * as srcPrivacyCapabilities from "../src/privacyCapabilities.js";
@@ -27,7 +29,7 @@ test("browser crypto bundle rejects native Kaigi authorization proof constructio
   const originalFill = Uint8Array.prototype.fill;
   try {
     Uint8Array.prototype.fill = () => { throw new Error("replaced fill must not run"); };
-    for (const crypto of [srcBrowserCrypto, distBrowserCrypto]) {
+    for (const crypto of [srcBrowserCrypto, distBrowserCrypto, srcPublicBrowserCrypto, distPublicBrowserCrypto]) {
       for (const method of ["buildKaigiAuthorizationProofV1", "buildKaigiUsageProofV1"]) {
         const secret = Uint8Array.from(Array(32).fill(0x11));
         assert.throws(() => crypto[method]({blinding: secret}), /unavailable/u);

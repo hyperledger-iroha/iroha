@@ -274,7 +274,7 @@ pub enum Error {
         length: usize,
     },
     /// A numeric asset operation did not use the canonical state-key shape.
-    #[error("invalid asset operation key; expected `asset/<asset-id>/<account>`")]
+    #[error("invalid asset operation key; expected a canonical `FastpqBalanceKeyV1` Norito frame")]
     InvalidAssetKey,
     /// A mint or burn did not change the balance in its required direction.
     #[error("{operation} must change the asset value in the required direction")]

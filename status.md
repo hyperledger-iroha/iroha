@@ -19,56 +19,50 @@ counts, plans, dates, and former policies do not attest the current candidate.
 Kaigi's final scalar/identity/retained-participation model passes 33 tests, and
 the authorization/usage circuit library passes 20 tests with real proofs and
 every public-row mutation. Retired circuit/seed/artifact-hint interfaces are
-removed. Kotlin/Java pass 22 focused cases, Python 51, and 15 canonical Rust wire
-vectors plus three scalar-negative archives pass. Mandatory host authorization,
+removed. A fresh strict account-decoder run passes 42 cases across all ten
+Norito layouts. Kotlin/Java pass 40 scoped tests including the shared 16-positive,
+seven-negative full-controller fixture. Earlier Python wire results predate its
+new native identity adapter; installed-wheel verification is pending. Mandatory host authorization,
 leave/rejoin, usage and storage reservations await the shared Core verification
 build; final SDK artifacts, relay transport and deployment remain unqualified.
 See the [current privacy evidence](specs/privacy_first_release_closure.md).
 
 Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
-Source inspection confirms substantial implementation beyond the original plan;
-fresh qualification remains open. The unmerged index entries have been resolved;
-source and receipt inventories are being reconciled. No milestone or release gate
-is closed by this audit. The focused JVM consensus/HTTP selection passes 123 tests,
-zero failures/errors/skips, including immutable evidence ownership, bounded wire vectors and Java
-consumers of Kotlin. Both migrated Java release runners pass (59 diagnostics and
-6 grouped tests); 10 affected legacy settlement/onboarding checks also pass. Four private-invocation layout tests and 55 formal-launcher/artifact-retention
-tests pass. QueuePlan's source ledger/startup controls pass 85 cases plus five
-semantic checks. Six finite TLC models, 106 multilane mutations and 22 in-flight
-mutations pass with fresh retained raw traces; five Apalache bounds pass. The
-original 18-step run ended without a terminal result at state 13. A host restart
-also ended its second attempt without a retained result; the bound is unqualified.
-JS/Python settlement ownership and exact TWAP checks pass 63/65 grouped tests
-and 152 related Python tests; Kotlin retains signed Numeric and bounded Quantity
-semantics. Rust completion cleanup and crash/classifier regressions await the
-shared build queue. Current cohort source-closure and receipt checks pass 23/7.
-Public-certificate source controls pass 19 cases. A subsequent recovery fix stages
-the complete bounded proposal set before eviction and prevents completed historical
-source resurrection; its four new cache tests and updated hydration regressions
-await Rust execution. G-UNIT now registers 531 tests; production remains 881 across
-43 modules. Before the terminal-replay changes, the pinned Python environment passed 84 recovery-owner
-controls and 114 persistent recovery-cut checks, including that component's full
-source integration. Terminal votes/QCs now require full authentication before a
-read-only duplicate result; bounded cache retirement checks exact application
-before fresh signing and preserves separate output owners. Five new cache tests
-and the real merge fixture await Rust execution. The fixture now includes a
-second real application and older-receipt replay with a stable Kura-local key.
-Terminal source controls pass 63 cases and a fresh baseline; current inventory
-checks pass 84 cases, and the capacity contract passes 33 tests plus ten subcases.
-The broader source check failed with 77 errors. Two obsolete hydration clauses
-now use the canonical atomic-batch contract; its positive and reordered-batch
-negative checks pass. Full source and runtime qualification remain open.
-The restart cleared temporary raw artifacts and unfinished Core/Apple builds.
-Earlier observations cannot supply current release artifacts. Nine terminal Rust
-file hashes are unchanged; resumed checks use durable ignored `dist/` outputs.
-The fresh complete terminal cohort passes all 69 source checks, including six
-new ingress negatives. The 18-step model check is active after typechecking.
-All 17 Swift wire fixture tests pass in
-an isolated source build after bounding vector allocations; the complete SDK
-gate still needs its real bridge artifact. The broad receipt/bootstrap selection
-finishes with 555 passes and one cache parent-change rejection; that case passes
-on isolated retry. Source-contract reconciliation, a settled full receipt run,
-fixture regeneration and full release qualification remain open.
+No milestone or release gate is closed. The current source adds authenticated
+terminal replay, bounded atomic cache retirement, a real second autonomous
+application fixture and mandatory move-only authority for shipping Queue release.
+G-UNIT registers 531 tests; production registers 881 across 43 modules. Those
+runtime changes await the coordinated Core build; all original affected fixture
+assertions remain. The combined source manifest covers 17 Rust files and five
+model/configuration files under ignored `dist/multilane-validation-20260907/`.
+
+A fresh formal audit reproduced direct FIFO release with active Kura custody,
+then lane Commit and WSV application, in the former model and shared predicate.
+The repaired relation acquires exact authenticated replica custody at Kura
+activation and excludes Commit/application from every release disposition.
+Exhaustive TLC passes all 20 configured invariants over 280,818 distinct states;
+all 25 exact mutation controls produce their named counterexamples, including
+the new 4/19/4-action failures. Four explicit replica/application and release
+paths also pass. Current-model Apalache, Verus and Rust execution remain open.
+The running 18-step check uses the earlier frozen model and cannot qualify this
+repair. These model results do not establish live-network exploitability.
+
+Fresh source evidence passes 69 terminal controls, 21 merge-cache semantic
+negatives with copied positives, all eight cache owners, and the complete
+QueuePlan contract with 14 release-authority negatives. The terminal baseline
+also passes after the custody correction. The broader source diagnostic still
+fails with 71 errors; ingress, lifecycle completion, worker ownership and
+finalization contracts remain under review. Four inputs changed during that
+run, so it is development evidence. Four retired-codec guards pass.
+
+The host restart deleted temporary raw artifacts and unfinished Core/Apple
+builds. Earlier SDK/formal/source observations are recorded in the linked goals
+and closure ledger but cannot supply current retained release artifacts. New
+checks retain exact inputs, commands and logs in durable ignored `dist/`.
+Full SwiftPM needs the real ABI-23 bridge; grouped fixtures need two fresh
+Rust-owned regenerations. Source-contract reconciliation, current Rust/SDK
+execution, four-peer suites, 10 corridor seeds, the two-hour soak, scaling and
+workspace qualification remain open.
 
 Torii's router regenerates the canonical OpenAPI bundle on the ordinary runtime
 stack; four exact Rust authority/authentication checks, tracked metadata
@@ -76,7 +70,7 @@ verification and all 145 Node tooling tests are recorded as passing.
 
 | Area | Observed evidence | Practical limit |
 | --- | --- | --- |
-| Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. Apple duplicate archive ownership is corrected and three target link controls pass; the fresh full XCFramework build is running; complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
+| Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. Apple duplicate archive ownership is corrected and three target link controls pass; the previous full XCFramework build was lost during host restart and has no final artifact; complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
 | SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact checkpoint identity, complete breaker readbacks, builder Git/verifier/attribute isolation, and canonical wire identifiers across Rust/SDKs, circuits and contracts. Earlier focused Rust/Core/model/production compile checks pass. Fresh validation: 459 Python tests with zero skips, 45 TON contract tests, authenticated StateInit write/check, and pinned EVM/TRON compiler plus EVM runtime smoke pass. Rust validator suites pass 22/27 tests, and the compiled Rust wire fixture passes. Policy/proof negatives have positive controls and precise rejection checks. All 8 R1CS identities are freshly measured, with a verified source closure and no pending profiles. | Full Core/workspace and Torii runtime tests are unclaimed. Production keys/proofs, trusted release signatures and authenticated deployment readbacks remain separate release artifacts. |
 | Rust SDK dependency separation | Relay accounting moved to `soranet_incentives`; SoraNet policies and shared defaults have one `iroha_service_model` owner. Archive construction, filesystem persistence, orchestrated fetch and DA workflows now live in `iroha_storage_client`. The shipping SDK graph has 28 local packages, 87 external packages and 268 required edges; its boundary checks pass without node, CAR or orchestrator dependencies. Storage-client tests pass 41 cases. Protocol capability probes are isolated per context and shared by clones. Immutable account/operator transaction contexts, signed multisig submission and the explicit blocking runtime pass eight focused tests. CLI-owned queue/witness paths preserve source-relative resolution and scoped authority binding; 15 SDK and 13 CLI config/authentication tests pass. All development binaries and integration-library tests compile; the three development-bin suites pass 40 tests. AccountTransactionDraft and AccountClient::prepare_transaction/sign_transaction now replace all generic helpers and the quote-and-sign composite, with crate-level typed errors; ten focused tests preserve exact bytes, defaults, attachments and context isolation. SDK examples and all CLI/Musubi/Izanami/test-network and integration test targets compile. Four specialized SoraFS wrappers are removed; five focused tests preserve exact instructions, moderation TTL and invariant checks. | The base Client still has mutable fields; remaining specialized preparation APIs, non-transaction error shapes, synchronous capabilities, broader operator families and complete consumer migration remain unfinished. |
 | Configuration and status HTTP contracts | Shared configuration DTOs have 22 wire tests, 3 node conversion tests and 14 Core runtime tests. Shared status preserves 32 captured named DTO frames/hashes/JSON; 93 telemetry tests pass. Core, SDK/CLI, test-network, schema generation, Mochi and grouped consumers compile. | Named records are qualified by focused fixtures; arbitrary generic-envelope schema identity is not yet cut over or fully qualified. |
@@ -125,7 +119,12 @@ The retention-request model selection also passes three tests. Provider/rollout
 source contracts pass 410 checks, with two unfinished-source closure failures.
 The review corrects canonical manifest/deal/audit/replication identities, retention
 request digests, pin-accounting keys, and node billing/reputation/governance
-checkpoint and publication framing. Node and Core qualification is pending.
+checkpoint and publication framing. The fresh node retry passes **19 of 19**
+regressions after correcting the two-slot encoder and fixtures; compression is
+rejected before allocation. The full node suite reports **1,378 passed, 48 failed
+and two Kubo cases ignored**; retained failure diagnostics are under review.
+Canonical Core state/nonce keys and SDK reference frame admission are being
+completed before the shared Core capture; broader qualification remains pending.
 The host reboot cleared previous `/tmp` SoraFS logs and interrupted native
 captures; those older observations cannot serve as retained current evidence.
 The former Core run exposed 113 failures, and its fixture/security corrections

@@ -256,17 +256,26 @@ lifecycle pass yet. The machine restarted before the preceding combined build
 produced an executable, and cleared its temporary logs and frozen Apple build.
 Those temporary artifacts cannot qualify the current candidate.
 
-The final wire passes 15 exact Rust/Python/Kotlin vectors and three
-modulus-negative archives. Kotlin/Java and Python focused selections pass 22 and
-51 tests respectively; the Kotlin tests include bounded decoding of malicious
-multisig member counts before allocation. The fresh canonical multisig-address
-and Kaigi selection passes 35 tests: full-key ordering is normalized during
-construction and malformed external ordering, duplicates and policy versions
-are rejected. The Node native generator produced a
-real authorization proof verified by Core, and its other 17 focused native
-tests pass after fixture corrections. A frozen official addon build will verify
-the final circuit/key source. Swift and C# scalar/wire integration is ongoing.
-These results do not attest deployment, relay transport or release readiness.
+The final wire previously passed 15 exact Rust/Python/Kotlin vectors and three
+modulus-negative archives. Fresh post-restart account decoding passes 42 tests
+in 0.65s, including every declared Norito layout. The shared Rust-owned fixture
+contains 16 complete controller positives (all eleven algorithms, full weighted
+and mixed policies, and 256 members) and seven malformed policy negatives. Its
+SHA256 is `054f16109e6525d06565ef55d26a39b9291fad6831a39bcdd7d18cb1e232ffa6`.
+Kotlin/Java now pass 40 scoped tests, including actual Rust transfer and account
+fixture parity. Full-controller C# and Swift managed diagnostic suites pass
+5,689 and 79 cases; their final fixture/native package runs are still pending.
+Python now calls the required canonical Rust identity validators instead of
+restricting Kaigi to ASCII and Ed25519; its earlier 51 tests precede this change,
+and fresh installed-wheel validation is required.
+
+Node authorization and usage generators use the final 31/25-row circuits,
+retain only public proving material between calls, and self-verify generated
+canonical envelopes through Core. Supplied mutable blinding views are cleared
+on success and failure. Source/type/browser/publication checks pass; actual
+new native proofs and a frozen official addon build remain pending. The prior
+native authorization run predates these final generator changes. None of these
+results attests deployment, relay transport or release readiness.
 
 The captured four-validator harness compiles, but its first runtime attempt
 stopped before peer startup on a stale X509 status expectation: the current

@@ -51,7 +51,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_from_bytes_with_limits};
+use norito::DecodeLimits;
 use sorafs_manifest::{
     XorQuantity,
     orderbook::{
@@ -338,17 +338,22 @@ fn event_journal_head_key() -> &'static StatePath {
         StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
-fn nonce_key(owner: &AccountId) -> StatePath {
+fn nonce_key(owner: &AccountId) -> Result<StatePath, InstructionExecutionError> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NONCE_KEY_DOMAIN_V1);
-    hasher.update(owner.to_string().as_bytes());
-    digest_key(NONCE_STATE_KEY_PREFIX, *hasher.finalize().as_bytes())
+    norito::core::write_canonical_to_writer(owner, &mut hasher).map_err(|error| {
+        corrupt_state(format!("failed to encode orderbook nonce owner: {error}"))
+    })?;
+    Ok(digest_key(
+        NONCE_STATE_KEY_PREFIX,
+        *hasher.finalize().as_bytes(),
+    ))
 }
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    norito::to_bytes(value)
+    norito::encode_canonical(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
@@ -430,22 +435,17 @@ where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-        decode_from_bytes_with_limits::<T>(bytes, limits)
+        norito::decode_canonical_with_limits::<T>(bytes, limits)
     });
     let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
             InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
-        }
-    })?;
-    norito::verify_exact_frame(&value, bytes).map_err(|error| {
-        if matches!(error, norito::Error::NonCanonicalEncoding) {
+        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
             corrupt_state(format!("{label} state is not exact canonical Norito"))
         } else {
-            corrupt_state(format!("failed to encode {label}: {error}"))
+            corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
     Ok((value, usage.total_allocated_bytes()))
@@ -877,7 +877,7 @@ fn read_nonce(
     world: &impl WorldReadOnly,
     owner: &AccountId,
 ) -> Result<Option<OrderbookOwnerNonceRecord>, InstructionExecutionError> {
-    let key = nonce_key(owner);
+    let key = nonce_key(owner)?;
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
@@ -917,7 +917,7 @@ fn write_nonce(
     state_transaction
         .world
         .smart_contract_state
-        .insert(nonce_key(owner), encoded);
+        .insert(nonce_key(owner)?, encoded);
     Ok(())
 }
 fn read_order(
@@ -5497,60 +5497,7 @@ mod tests {
             Err(QueryExecutionFail::Conversion(_))
         ));
     }
-    #[test]
-    fn signed_cancellation_updates_order_and_shared_nonce() {
-        let buyer = keypair(0x31);
-        let authority = account(&buyer);
-        let state = state_with_accounts(&[&buyer]);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let order = order(&buyer, 1);
-        let initial_balance = asset_balance(&stx, &authority);
-        let escrow_id = orderbook_order_escrow_id(order.order_id);
-        SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
-            .execute(&authority, &mut stx)
-            .expect("order");
-        assert!(asset_balance(&stx, &authority) < initial_balance);
-        let cancel = cancel(&buyer, order.order_id, 2);
-        CancelSorafsOrderbookOrder::new(encode(&cancel), policy_digest)
-            .execute(&authority, &mut stx)
-            .expect("cancel");
-        let stored = read_order(stx.world(), order.order_id)
-            .expect("read order")
-            .expect("order");
-        assert_eq!(stored.status, OrderbookOrderStatusV1::Cancelled);
-        assert!(stored.canonical_cancel.is_some());
-        assert_eq!(stored.cancelled_at_unix, Some(NOW));
-        assert_eq!(stored.cancelled_policy_digest, Some(policy_digest));
-        assert_eq!(asset_balance(&stx, &authority), initial_balance);
-        let escrow = stx
-            .world
-            .asset_escrows
-            .get(&escrow_id)
-            .expect("closed bid custody");
-        assert_eq!(
-            escrow.status,
-            iroha_data_model::escrow::AssetEscrowStatus::Cancelled
-        );
-        assert_eq!(escrow.remaining_amount, Quantity::zero());
-        assert!(
-            !crate::smartcontracts::isi::escrow::is_orderbook_order_lock(stx.world(), &escrow_id,)
-                .expect("read removed bid marker")
-        );
-        assert_eq!(
-            read_nonce(stx.world(), &authority)
-                .expect("read nonce")
-                .expect("nonce")
-                .highest_nonce,
-            2
-        );
-        assert!(
-            CancelSorafsOrderbookOrder::new(encode(&cancel), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-    }
+    include!("sorafs/orderbook_nonce_tests.rs");
     #[test]
     fn cancellation_rejects_unknown_wrong_owner_wrong_policy_and_stale_nonce() {
         let buyer = keypair(0x32);

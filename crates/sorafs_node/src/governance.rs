@@ -9385,7 +9385,7 @@ where
     T: norito::NoritoSerialize,
 {
     let max = bytes.len().max(1);
-    let value = norito::decode_from_bytes_with_limits(
+    norito::decode_canonical_with_limits(
         bytes,
         DecodeLimits::new(
             MAX_REPUTATION_TRUST_EDGES,
@@ -9395,18 +9395,12 @@ where
             128,
         ),
     )
-    .map_err(|error| {
-        GovernancePublishError::other(format!("{label} canonical decode failed: {error}"))
-    })?;
-    let canonical = norito::encode_canonical(&value).map_err(|error| {
-        GovernancePublishError::other(format!("{label} canonical encode failed: {error}"))
-    })?;
-    if canonical != bytes {
-        return Err(GovernancePublishError::other(format!(
-            "{label} bytes are noncanonical"
-        )));
-    }
-    Ok(value)
+    .map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => {
+            GovernancePublishError::other(format!("{label} bytes are noncanonical"))
+        }
+        error => GovernancePublishError::other(format!("{label} canonical decode failed: {error}")),
+    })
 }
 fn runtime_dag_decode_allocation_limit(input_bytes: usize) -> usize {
     input_bytes

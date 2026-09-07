@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { buildKaigiAuthorizationProofV1, buildKaigiUsageProofV1 } from "../src/crypto.js";
-import { NetworkId } from "../src/networkId.js";
+import { buildKaigiAuthorizationProofV1, buildKaigiUsageProofV1 } from "@iroha/iroha-js/crypto";
+import { NetworkId } from "@iroha/iroha-js";
 import { makeNativeTest, nativeBinding } from "./helpers/native.js";
 
 const nativeTest = makeNativeTest(test, {
@@ -41,6 +41,14 @@ nativeTest("packaged Kaigi authorization rejects invalid context and wipes its n
     assert.throws(() => nativeBinding.buildKaigiAuthorizationProofV1(...nativeArguments(blinding)));
     assert.ok(blinding.every((byte) => byte === 0));
   }
+  const overlapping = Buffer.alloc(32, 0x11);
+  const args = nativeArguments(overlapping);
+  args[0] = overlapping;
+  args[1] = "invalid";
+  // The original marked network remains valid after the shared view is wiped;
+  // parsing must reach the invalid domain, not observe a cleared network.
+  assert.throws(() => nativeBinding.buildKaigiAuthorizationProofV1(...args), /domain/u);
+  assert.deepEqual(overlapping, Buffer.alloc(32));
 });
 
 nativeTest("packaged Kaigi usage rejects invalid metrics and host commitment and wipes its native input view", () => {
@@ -60,6 +68,10 @@ nativeTest("packaged Kaigi usage rejects invalid metrics and host commitment and
     assert.deepEqual(owner.subarray(0, 4), Buffer.alloc(4, 0x11));
     assert.deepEqual(owner.subarray(36), Buffer.alloc(4, 0x11));
   }
+  const overlapping = Buffer.alloc(32, 0x11);
+  assert.throws(() => nativeBinding.buildKaigiUsageProofV1(overlapping, "invalid", "native-authorization",
+    host, overlapping, 0, 1n, 0n, overlapping, overlapping), /domain/u);
+  assert.deepEqual(overlapping, Buffer.alloc(32));
 });
 
 nativeTest("packaged Kaigi authorization and usage construct Core-verified final proofs and consume blinding", {

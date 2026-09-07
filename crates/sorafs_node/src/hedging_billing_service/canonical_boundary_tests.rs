@@ -90,7 +90,8 @@ fn billing_checkpoint_exact_byte_ceiling_ignores_ambient_norito_layout() {
     let root = tempfile::tempdir().expect("state root");
     let (service, feed_policy, _reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
-    let source_limit = BILLING_SOURCE_ID_MAX_BYTES_V1.min(MAX_HEDGING_IDENTIFIER_BYTES - "storage:".len());
+    let source_limit =
+        BILLING_SOURCE_ID_MAX_BYTES_V1.min(MAX_HEDGING_IDENTIFIER_BYTES - "storage:".len());
     for first_sequence in [1, 65] {
         let events = (first_sequence..first_sequence + 64)
             .map(|sequence| {
@@ -216,4 +217,46 @@ fn epoch_witness_has_one_bounded_canonical_persistence_format() {
         ),
         Err(HedgingBillingServiceError::InvalidEpochWitness)
     ));
+}
+
+#[test]
+fn billing_checkpoint_rejects_compression_before_decode_allocation() {
+    let policy = service_policy();
+    let feed_policy = feed_policy();
+    let checkpoint = HedgingBillingCheckpointV1::empty(&policy).expect("empty checkpoint");
+    let canonical = encode_checkpoint(&checkpoint, &policy, &feed_policy).expect("canonical frame");
+    let header = norito::core::Header::read(canonical.as_slice()).expect("valid header");
+    let compression_offset = header.magic.len() + 2 + header.schema.len();
+    let length_offset = compression_offset + 1;
+    let mut forbidden = canonical.clone();
+    forbidden[compression_offset] = norito::Compression::Zstd as u8;
+    forbidden[length_offset..length_offset + 8]
+        .copy_from_slice(&policy.checkpoint_max_bytes.to_le_bytes());
+    let advertised =
+        norito::core::Header::read(forbidden.as_slice()).expect("forbidden compression header");
+    assert_eq!(advertised.compression, norito::Compression::Zstd);
+    assert_eq!(advertised.length, policy.checkpoint_max_bytes);
+    let zero_allocation = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    assert_eq!(
+        norito::with_decode_limits_scope(zero_allocation, || decode_checkpoint(
+            &forbidden,
+            &policy,
+            &feed_policy
+        )),
+        Err(HedgingBillingServiceError::NonCanonicalCheckpoint),
+        "forbidden compression must reject before reserving its advertised inflated length",
+    );
+    assert_eq!(
+        norito::with_decode_limits_scope(zero_allocation, || decode_checkpoint(
+            &canonical,
+            &policy,
+            &feed_policy
+        )),
+        Err(HedgingBillingServiceError::InvalidCheckpoint),
+        "the allocation budget must still apply to an admitted uncompressed decode",
+    );
+    assert_eq!(
+        decode_checkpoint(&canonical, &policy, &feed_policy).expect("ordinary canonical recovery"),
+        checkpoint
+    );
 }

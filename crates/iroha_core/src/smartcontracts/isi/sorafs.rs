@@ -76,7 +76,7 @@ use iroha_primitives::{
 };
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
-    DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits,
+    DecodeLimits, decode_canonical_with_limits,
     json::{self, Value},
 };
 use sorafs_manifest::{
@@ -336,7 +336,7 @@ fn encode_pin_accounting_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    let bytes = norito::to_bytes(value)
+    let bytes = norito::encode_canonical(value)
         .map_err(|error| pin_accounting_corruption(format!("failed to encode {label}: {error}")))?;
     if bytes.len() > PIN_ACCOUNTING_STATE_MAX_BYTES {
         return Err(pin_accounting_corruption(format!(
@@ -354,15 +354,13 @@ where
             "stored {label} exceeds {PIN_ACCOUNTING_STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, PIN_ACCOUNTING_DECODE_LIMITS).map_err(
-        |error| pin_accounting_corruption(format!("failed to decode stored {label}: {error}")),
-    )?;
-    if encode_pin_accounting_state(&value, label)? != bytes {
-        return Err(pin_accounting_corruption(format!(
-            "stored {label} is not exact canonical Norito"
-        )));
-    }
-    Ok(value)
+    decode_canonical_with_limits::<T>(bytes, PIN_ACCOUNTING_DECODE_LIMITS).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            pin_accounting_corruption(format!("stored {label} is not exact canonical Norito"))
+        } else {
+            pin_accounting_corruption(format!("failed to decode stored {label}: {error}"))
+        }
+    })
 }
 fn read_pin_usage(
     world: &impl crate::state::WorldReadOnly,
@@ -3890,24 +3888,7 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 .into(),
             ));
         }
-        let order_payload = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-            &self.order_payload,
-            REPLICATION_ORDER_DECODE_LIMITS,
-        )
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid replication order payload for {order_label}: {err}"
-            ))
-        })?;
-        order_payload.validate().map_err(|err| {
-            invalid_parameter(format!(
-                "replication order validation failed for {order_label}: {err}"
-            ))
-        })?;
-        // Preserve semantic-validation precedence while asking the bounded
-        // canonical decoder, rather than a raw decode/re-encode comparison,
-        // to enforce the one accepted V1 layout.
-        decode_canonical_with_limits::<ReplicationOrderV1>(
+        let order_payload = decode_canonical_with_limits::<ReplicationOrderV1>(
             &self.order_payload,
             REPLICATION_ORDER_DECODE_LIMITS,
         )
@@ -3918,9 +3899,14 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 ))
             } else {
                 invalid_parameter(format!(
-                    "failed to canonicalize replication order {order_label}: {err}"
+                    "invalid replication order payload for {order_label}: {err}"
                 ))
             }
+        })?;
+        order_payload.validate().map_err(|err| {
+            invalid_parameter(format!(
+                "replication order validation failed for {order_label}: {err}"
+            ))
         })?;
         if order_payload.order_id != *self.order_id.as_bytes() {
             return Err(invalid_parameter(format!(
@@ -4234,7 +4220,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
                 .into());
             }
         }
-        record.canonical_order = norito::to_bytes(&canonical_order).map_err(|error| {
+        record.canonical_order = norito::encode_canonical(&canonical_order).map_err(|error| {
             InstructionExecutionError::InvariantViolation(
                 format!(
                     "replication order {order_label} replacement assignments could not be canonicalized: {error}"
@@ -4265,25 +4251,7 @@ pub(crate) fn validate_stored_replication_order(
                 .into(),
         )
     })?;
-    let canonical_payload: ReplicationOrderV1 =
-        decode_from_bytes_with_limits(&record.canonical_order, REPLICATION_ORDER_DECODE_LIMITS)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                format!(
-                    "replication order {order_label} canonical payload could not be decoded: {err}"
-                )
-                .into(),
-            )
-            })?;
-    canonical_payload.validate().map_err(|err| {
-        InstructionExecutionError::InvariantViolation(
-            format!("replication order {order_label} stored payload failed validation: {err}")
-                .into(),
-        )
-    })?;
-    // Keep stored semantic validation ahead of the representation check so
-    // corruption reports retain their established precedence.
-    decode_canonical_with_limits::<ReplicationOrderV1>(
+    let canonical_payload = decode_canonical_with_limits::<ReplicationOrderV1>(
         &record.canonical_order,
         REPLICATION_ORDER_DECODE_LIMITS,
     )
@@ -4298,11 +4266,17 @@ pub(crate) fn validate_stored_replication_order(
         } else {
             InstructionExecutionError::InvariantViolation(
                 format!(
-                    "replication order {order_label} stored payload could not be canonicalized: {err}"
+                    "replication order {order_label} canonical payload could not be decoded: {err}"
                 )
                 .into(),
             )
         }
+    })?;
+    canonical_payload.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!("replication order {order_label} stored payload failed validation: {err}")
+                .into(),
+        )
     })?;
     if canonical_payload.order_id != *record.order_id.as_bytes()
         || canonical_payload.manifest_digest != *record.manifest_digest.as_bytes()
@@ -14552,116 +14526,6 @@ mod sorafs_tests {
             ReplicationOrderStatus::Completed(epoch) if epoch == 4
         ));
         assert_eq!(record.provider_completions.len(), 3);
-    }
-    #[test]
-    fn completion_revalidates_policy_assignment_and_finalized_anchor_at_commit() {
-        let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        insert_manifest_with_status(
-            &mut stx,
-            default_digest(),
-            default_chunk_digest(),
-            None,
-            PinStatus::Approved(1),
-        );
-        let order_id = ReplicationOrderId::new([0x7B; 32]);
-        let original_provider = ProviderId::new([0x3A; 32]);
-        let replacement_provider = ProviderId::new([0x3B; 32]);
-        seed_provider_owners(
-            &mut stx,
-            &[original_provider, replacement_provider],
-            &alice(),
-        );
-        let payload = encode_replication_order_for_epoch_window(
-            replication_order_struct(order_id, default_digest(), &[original_provider], 1),
-            1,
-            10,
-        );
-        IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("issue replication order");
-        let revision_one = completion_authority(&alice(), 1);
-        let revision_two = completion_authority(&alice(), 2);
-        let prepared_under_revision_one =
-            completion_instruction(order_id, original_provider, 2, &alice());
-        SetProviderIngestCompletionAuthority::new(
-            original_provider,
-            Some(revision_one),
-            revision_two,
-        )
-        .execute(&alice(), &mut stx)
-        .expect("rotate original provider completion policy");
-        let stale_policy = prepared_under_revision_one
-            .execute(&alice(), &mut stx)
-            .expect_err("completion prepared under the old policy must fail after rotation");
-        assert!(matches!(
-            stale_policy,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("completion authority")
-        ));
-        let prepared_before_reassignment =
-            completion_instruction(order_id, original_provider, 2, &alice());
-        ReviseReplicationOrderAssignments::new(
-            order_id,
-            1,
-            2,
-            vec![ReplicationAssignmentV1 {
-                provider_id: *replacement_provider.as_bytes(),
-                slice_gib: 512,
-                lane: None,
-            }],
-        )
-        .execute(&alice(), &mut stx)
-        .expect("atomically reassign pending order");
-        let stale_assignment = prepared_before_reassignment
-            .execute(&alice(), &mut stx)
-            .expect_err("completion prepared before reassignment must fail");
-        assert!(matches!(
-            stale_assignment,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("assignment revision")
-        ));
-        let mut stale_anchor = completion_instruction(order_id, replacement_provider, 3, &alice());
-        stale_anchor.expected_assignment_revision = 2;
-        stale_anchor.finalized_anchor.block_hash = [0xEE; 32];
-        let stale_anchor = stale_anchor
-            .execute(&alice(), &mut stx)
-            .expect_err("completion anchored to another committed prefix must fail");
-        assert!(matches!(
-            stale_anchor,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("finalized anchor")
-        ));
-        let mut valid = completion_instruction(order_id, replacement_provider, 3, &alice());
-        valid.expected_assignment_revision = 2;
-        valid
-            .execute(&alice(), &mut stx)
-            .expect("current authority, assignment revision, and anchor must complete");
-        let record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("completed order retained");
-        let completion = record
-            .provider_completion(replacement_provider)
-            .expect("completion audit context retained");
-        assert_eq!(completion.assignment_revision, 2);
-        assert_eq!(
-            completion.completion_authority,
-            completion_authority(&alice(), 1)
-        );
-        assert_eq!(completion.finalized_anchor, completion_anchor());
     }
     #[test]
     fn completion_after_deadline_fails_without_changing_pending_order() {

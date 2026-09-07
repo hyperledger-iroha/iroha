@@ -170,6 +170,14 @@ mod tests {
         use std::collections::BTreeMap;
 
         let canonical = "ab".repeat(32);
+        let mut visited = String::new();
+        key.visit_json_key_text::<core::convert::Infallible>(|chunk| {
+            visited.push_str(chunk);
+            Ok(())
+        })
+        .expect("visit governance key");
+        assert_eq!(visited, canonical);
+
         let map = BTreeMap::from([(key, 1_u8)]);
         let expected = format!("{{\"{canonical}\":1}}");
         assert_eq!(
@@ -196,6 +204,8 @@ mod tests {
             format!("{canonical} "),
             canonical[..63].to_owned(),
             format!("{canonical}0"),
+            "ab".repeat(31),
+            "ab".repeat(33),
             "gg".repeat(32),
             String::new(),
         ] {
@@ -258,6 +268,14 @@ mod tests {
             let expected = format!("{{\"{label}\":1}}");
             let value = format!("\"{label}\"");
             assert_eq!(json::to_json(&body).expect("canonical body value"), value);
+            assert_eq!(
+                json::to_json_bounded(&body, value.len()).expect("body value at exact bound"),
+                value,
+            );
+            assert!(matches!(
+                json::to_json_bounded(&body, value.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge),
+            ));
             assert_eq!(json::from_json::<ParliamentBody>(&value).unwrap(), body);
             assert_eq!(json::to_json(&map).expect("canonical body key"), expected);
             assert_eq!(
@@ -278,6 +296,7 @@ mod tests {
                 format!("{body:?}"),
                 format!(" {label}"),
                 format!("{label} "),
+                "unknown".to_owned(),
                 String::new(),
             ] {
                 assert!(ParliamentBody::from_json_key_text(&invalid).is_err());

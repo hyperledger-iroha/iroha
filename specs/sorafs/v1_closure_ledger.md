@@ -64,6 +64,39 @@ admitted caller layout. No compatibility decoder or second V1 state format is
 introduced. The earlier 113 Core failures and all four-validator cases remain
 open until fresh execution proves their corrections.
 
+The first fresh node artifact compiles in 4m16s and registers 1,423 tests. Its
+14-test canonical-boundary selection reports **11 passes and three failures**
+in 21.333 seconds (`node-canonical-results.json`). The failures expose a remaining
+ambient encoder in the shared Governance DAG two-slot binding owner and two
+invalid fixture setups: an overlong prefixed billing source ID and a mismatched
+finalized PoR source anchor. Corrections preserve the production ID ceiling and
+fork rejection. A separate decoder review found that the remote governance-head
+path allocated within its finite amplification budget before rejecting forbidden
+compression. Canonical header admission now rejects compression before allocation.
+After one test-only return-type correction, the fresh node retry passes all
+**19 exact regressions**, zero failures/ignored, in 40.489 seconds, including
+all three original failures, two-slot persistence and the compression checks.
+The captured binary SHA-256 is
+`148b3a290aca776a2f193fe07fbd20940ac0b5be5ab6050aea6815be22ad15b1`;
+`node-canonical-retry-results.json` retains each exact test and log hash.
+The full library run against that artifact reports **1,378 passed, 48 failed,
+two ignored**, zero filtered out, in 441.769 seconds; the two ignored cases
+require a real local Kubo deployment. `node-canonical-full-result.json` and
+`node-canonical-full-failures.json` retain the binary/log hashes and diagnostics.
+Failures include stale fixture identities and approval expectations, shared
+test storage/leases and symlinked temporary roots, allocation-budget assertions,
+and replay/recovery cases that still require review. They remain open. The
+empty-multisig assertion now requires the shared verifier's exact rejection;
+that test correction has not yet been rebuilt.
+
+The next bounded Core audit found an orderbook nonce key derived from display
+text instead of canonical account identity, and remaining ambient-framed
+orderbook/reserve/moderation/pin state and reassigned replication order writes.
+These corrections and the SDK reference validators' canonical outer-frame
+admission are being completed before the shared Core/daemon capture. No fallback
+lookup or old state decoder is retained. These source changes and the targeted
+node passes do not establish Core or distributed readiness.
+
 The full current provider/rollout source-contract selection passes 410 checks
 and fails two unfinished-source closure checks in 61.73 seconds. Its retained
 log is `canonical-final-source-contracts.log`; the earlier focused audit's

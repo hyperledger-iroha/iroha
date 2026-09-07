@@ -1,5 +1,7 @@
 //! FASTPQ-specific data structures shared between the host and prover.
+mod balance_key;
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
+pub use balance_key::{FastpqBalanceKeyV1, transfer_balance_key};
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,

@@ -776,6 +776,8 @@
       "MLPostCarrierCommitCleanupOrder",
       "MLReleasePrefixesRecoverable",
       "MLReleaseStageOrder",
+      "MLDirectReleaseRequiresAbsentKura",
+      "MLTerminalDispositionExclusive",
       "MLQueuePlanV1SelectedConjunctionBound4096"
     ],
     "mutations": [
@@ -866,9 +868,55 @@
       {
         "config": "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
         "invariant": "MLQueuePlanV1SelectedConjunctionBound4096"
+      },
+      {
+        "config": "inflight_first_release_direct_release_with_active_kura_bug.cfg",
+        "invariant": "MLDirectReleaseRequiresAbsentKura"
+      },
+      {
+        "config": "inflight_first_release_direct_release_commit_conflict_bug.cfg",
+        "invariant": "MLTerminalDispositionExclusive"
+      },
+      {
+        "config": "inflight_first_release_kura_without_payload_binding_bug.cfg",
+        "invariant": "MLValidatorCarrierOwnership"
       }
     ],
     "production_symbols": [
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "kind": "fn",
+        "symbol": "persist_nonqueue_autonomous_payload_with_custody",
+        "required_tokens": [
+          "process_generation.local_peer_id() != local_peer",
+          "key_pair.public_key() != local_peer.public_key()",
+          "process_generation.network_id() != payload.network_id",
+          "lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())",
+          "let binding = AutonomousLifecycleAttemptBindingV1::from_payload(",
+          "let (_, local_actor) = binding.local_validator_identity();",
+          "let producer = binding.producer_actor_projection();",
+          "validator_count == 0 || validator_count > 128",
+          "payload_binding_a: producer,",
+          "binding_a: canonical_lane_queue_reservation_group_identity_projection(reservation_group),",
+          "carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),",
+          "bodies: producer | local_actor,",
+          "let mut after_activate = before_activate;\n    after_activate.payload_binding_a |= local_actor;\n    after_activate.carrier.kura_active |= local_actor;",
+          "action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,\n            actor: local_actor,\n            target: 0,\n            before: before_activate,\n            after: after_activate,",
+          "let activate_projection = *checked_activate.accepted_projection();",
+          "let authorization = authorize(binding.clone(), checked_activate)?;",
+          ".classify_autonomous_payload_custody_for_persistence(payload, authorization)",
+          "AutonomousLifecycleCursorPhaseV1::prepared(\n            process_generation.generation(),\n            activate_projection,",
+          ".finalize(prepared_signature, &descriptor.validator_set)",
+          "AutonomousLifecycleCursorPhaseV1::live(process_generation.generation(), after_activate)",
+          ".finalize(live_signature, &descriptor.validator_set)",
+          ".autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(",
+          "let bootstrap_signature = sign_lifecycle_preimage(&bootstrap_preimage)?;",
+          ".persist_autonomous_lifecycle_bootstrap_with_payload_custody(\n            process_generation,\n            payload,\n            binding,\n            prepared_activate,\n            live_activate.clone(),\n            bootstrap_signature,\n            authorization,",
+          ".authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(",
+          ".complete_autonomous_lifecycle_bootstrap(bootstrap_permit)",
+          "completion.takeover_required() || completion.cursor() != &live_activate"
+        ]
+      },
       {
         "path": "crates/iroha_core/src/lane_consensus.rs",
         "kind": "struct",
@@ -1579,6 +1627,16 @@
         "kind": "macro",
         "symbol": "production_in_flight_first_release_state_body",
         "required_tokens": [
+          "(carrier.kura_active & !state.payload_binding_a) == 0u128",
+          "(carrier.execution_input_durable & !state.payload_binding_a) == 0u128",
+          "(session.ready_authorized & !state.payload_binding_a) == 0u128",
+          "(history.ever_execution_input_durable & !state.payload_binding_a) == 0u128",
+          "(history.ever_ready_authorized & !state.payload_binding_a) == 0u128",
+          "(history.ready_signed & !state.payload_binding_a) == 0u128",
+          "(decision.lane_commit_owner & !state.payload_binding_a) == 0u128",
+          "(decision.release_owner & !state.payload_binding_a) == 0u128",
+          "&& if queue.reservation_state\n                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)\n                && !release.kura_retired\n            {\n                carrier.kura_active == 0u128\n            } else {\n                true\n            }",
+          "&& if queue.reservation_state\n                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED)\n                || queue.reservation_state\n                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED)\n                || queue.reservation_state\n                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN)\n                || queue.reservation_state\n                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)\n                || queue.reservation_state\n                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT)\n                || queue.reservation_state\n                    == refinement_tag_value!(\n                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED\n                    )\n            {\n                decision.lane_commit_owner == 0u128\n                    && !decision.wsv_committed\n                    && decision.application_count == 0u8\n                    && decision.applied_by == 0u128\n            } else {\n                true\n            }",
           "in_flight_first_release_validator_mask_body!(state.validator_count)",
           "in_flight_first_release_ready_quorum_body!(state.validator_count)",
           "state.validator_count >= 1u8",
@@ -1609,6 +1667,8 @@
         "kind": "macro",
         "symbol": "production_in_flight_first_release_transition_body",
         "required_tokens": [
+          "&& if projection.action\n                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA)\n            {\n                after.payload_binding_a == (before.payload_binding_a | projection.actor)\n            } else {\n                after.payload_binding_a == before.payload_binding_a\n            }",
+          "&& ((projection.actor == 0u128\n                        && before.queue.reservation_state\n                            == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)\n                        && before.carrier.kura_active == 0u128\n                        && before.decision.lane_commit_owner == 0u128\n                        && before.decision.release_owner == 0u128)\n                        || (in_flight_first_release_single_validator_body!(\n                            projection.actor,\n                            validator_mask\n                        ) && projection.actor == before.decision.release_owner\n                            && projection.actor != before.producer\n                            && before.release.kura_retired\n                            && before.release.pending_prefix == before.queue.selected_count\n                            && (before.queue.reservation_state\n                                == refinement_tag_value!(\n                                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE\n                                )\n                                || (before.queue.reservation_state\n                                    == refinement_tag_value!(\n                                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n                                    )\n                                    && before.release.fifo_restored))))",
           "production_in_flight_first_release_state_body!(before)",
           "production_in_flight_first_release_state_body!(after)",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1",
@@ -2181,13 +2241,13 @@
         "path": "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
         "kind": "enum",
         "symbol": "ExactOutputRolloverClaim",
-          "required_tokens": [
-            "NonRetireableLaneTransport",
-            "target: PeerId",
-            "message_hash: HashOf<BlockMessage>",
-            "HistoricalLaneCertification",
-            "source_height: u64",
-            "lane_block_height: u64"
+        "required_tokens": [
+          "NonRetireableLaneTransport",
+          "target: PeerId",
+          "message_hash: HashOf<BlockMessage>",
+          "HistoricalLaneCertification",
+          "source_height: u64",
+          "lane_block_height: u64"
         ]
       },
       {
@@ -2227,10 +2287,10 @@
         "required_tokens": [
           "BlockMessage::LaneExecutablePayload",
           "BlockMessage::LaneBlockNewViewVote",
-            "BlockMessage::LaneBlockNewViewCertificate",
-            "ExactOutputRolloverClaim::NonRetireableLaneTransport",
-            "ExactOutputRolloverClaim::HistoricalLaneCertification",
-            "message_hash: HashOf::new(message)",
+          "BlockMessage::LaneBlockNewViewCertificate",
+          "ExactOutputRolloverClaim::NonRetireableLaneTransport",
+          "ExactOutputRolloverClaim::HistoricalLaneCertification",
+          "message_hash: HashOf::new(message)",
           "lane_output_identity(message)"
         ]
       },
@@ -3328,35 +3388,35 @@
         ]
       },
       {
-          "path": "crates/iroha_core/src/queue/canonical_terminal_cleanup.rs",
-          "kind": "method",
-          "symbol": "Queue::commit_prepared_lane_reservation_carriers",
-          "required_tokens": [
-            "let carrier_reservation_counts = carriers",
-            "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
-            "let group_count = carriers",
-            "terminal_evidence\n            .try_reserve_exact(group_count)",
-            "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
-            "self.wait_for_durability_transitions(&cleanup_hashes)",
-            "let mut queue_guard = self.push_remove_lock.lock()",
-            "while cleanup_hashes",
-            ".any(|hash| self.durability_transition_active(hash))",
-            "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
-            "queue_guard = self.push_remove_lock.lock()",
-            "let store = self.lane_reservations.lock()",
-            "for group in carriers.iter().flatten()",
-            "seen_group_hashes.insert",
-            "seen_group_identities.insert",
-            "seen_group_slot_keys.insert",
-            "seen_hashes.insert",
-            "seen_entrypoints.insert",
-            "self.preflight_lane_reservation_group_locked(",
-            "begin_durability_transition_locked(",
-            "drop(store)",
-            "drop(queue_guard)",
-            "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
-            "for group in carriers.into_iter().flatten()",
-            "self.commit_lane_reservation("
+        "path": "crates/iroha_core/src/queue/canonical_terminal_cleanup.rs",
+        "kind": "method",
+        "symbol": "Queue::commit_prepared_lane_reservation_carriers",
+        "required_tokens": [
+          "let carrier_reservation_counts = carriers",
+          "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
+          "let group_count = carriers",
+          "terminal_evidence\n            .try_reserve_exact(group_count)",
+          "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
+          "self.wait_for_durability_transitions(&cleanup_hashes)",
+          "let mut queue_guard = self.push_remove_lock.lock()",
+          "while cleanup_hashes",
+          ".any(|hash| self.durability_transition_active(hash))",
+          "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
+          "queue_guard = self.push_remove_lock.lock()",
+          "let store = self.lane_reservations.lock()",
+          "for group in carriers.iter().flatten()",
+          "seen_group_hashes.insert",
+          "seen_group_identities.insert",
+          "seen_group_slot_keys.insert",
+          "seen_hashes.insert",
+          "seen_entrypoints.insert",
+          "self.preflight_lane_reservation_group_locked(",
+          "begin_durability_transition_locked(",
+          "drop(store)",
+          "drop(queue_guard)",
+          "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
+          "for group in carriers.into_iter().flatten()",
+          "self.commit_lane_reservation("
         ]
       },
       {
@@ -3456,6 +3516,36 @@
       }
     ],
     "ordered_source_checks": [
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "kind": "fn",
+        "symbol": "persist_nonqueue_autonomous_payload_with_custody",
+        "tokens": [
+          "AutonomousLifecycleAttemptBindingV1::from_payload(",
+          "let (_, local_actor) = binding.local_validator_identity();",
+          "let producer = binding.producer_actor_projection();",
+          "let before_activate = ProductionInFlightFirstReleaseStateProjection {",
+          "payload_binding_a: producer,",
+          "after_activate.payload_binding_a |= local_actor;",
+          "after_activate.carrier.kura_active |= local_actor;",
+          "let checked_activate = check_production_in_flight_first_release_transition(",
+          "let activate_projection = *checked_activate.accepted_projection();",
+          "let authorization = authorize(binding.clone(), checked_activate)?;",
+          ".classify_autonomous_payload_custody_for_persistence(payload, authorization)",
+          "let prepared_unsigned = AutonomousLifecycleCursorUnsignedV1::new(",
+          "let prepared_signature = sign_lifecycle_preimage(",
+          ".finalize(prepared_signature, &descriptor.validator_set)",
+          "let live_unsigned = AutonomousLifecycleCursorUnsignedV1::new(",
+          "let live_signature = sign_lifecycle_preimage(",
+          ".finalize(live_signature, &descriptor.validator_set)",
+          ".autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(",
+          "let bootstrap_signature = sign_lifecycle_preimage(&bootstrap_preimage)?;",
+          ".persist_autonomous_lifecycle_bootstrap_with_payload_custody(",
+          ".authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(",
+          ".complete_autonomous_lifecycle_bootstrap(bootstrap_permit)",
+          "completion.takeover_required() || completion.cursor() != &live_activate"
+        ]
+      },
       {
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "kind": "struct",
@@ -4475,18 +4565,18 @@
       },
       {
         "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "method",
-          "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
-          "tokens": [
-            ".all(|payload| !self.local_can_own_autonomous_payload(&payload.origin_proposal))",
-            "for pending_payload in payloads",
-            "if !self.local_can_own_autonomous_payload(&pending_payload.origin_proposal)",
-            "current_autonomous_lane_payload(",
-            "durable_hint_free.origin_proposal.payload_block_hint = None",
-            "if durable_hint_free == *pending_payload",
-            "retirement_payload = durable",
-            "let payload = &retirement_payload",
-            "retire_autonomous_lane_slot_and_release_reservations(",
+        "kind": "method",
+        "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
+        "tokens": [
+          ".all(|payload| !self.local_can_own_autonomous_payload(&payload.origin_proposal))",
+          "for pending_payload in payloads",
+          "if !self.local_can_own_autonomous_payload(&pending_payload.origin_proposal)",
+          "current_autonomous_lane_payload(",
+          "durable_hint_free.origin_proposal.payload_block_hint = None",
+          "if durable_hint_free == *pending_payload",
+          "retirement_payload = durable",
+          "let payload = &retirement_payload",
+          "retire_autonomous_lane_slot_and_release_reservations(",
           "retire_autonomous_lane_replica_with_queue_disposition(",
           "let terminal_authorizations = self",
           ".authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
@@ -4593,35 +4683,35 @@
         ]
       },
       {
-          "path": "crates/iroha_core/src/queue/canonical_terminal_cleanup.rs",
-          "kind": "method",
-          "symbol": "Queue::commit_prepared_lane_reservation_carriers",
-          "tokens": [
-            "let carrier_reservation_counts = carriers",
-            "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
-            "let group_count = carriers",
-            "terminal_evidence\n            .try_reserve_exact(group_count)",
-            "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
-            "self.wait_for_durability_transitions(&cleanup_hashes)",
-            "let mut queue_guard = self.push_remove_lock.lock()",
-            "while cleanup_hashes",
-            ".any(|hash| self.durability_transition_active(hash))",
-            "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
-            "queue_guard = self.push_remove_lock.lock()",
-            "let store = self.lane_reservations.lock()",
-            "for group in carriers.iter().flatten()",
-            "seen_group_hashes.insert",
-            "seen_group_identities.insert",
-            "seen_group_slot_keys.insert",
-            "seen_hashes.insert",
-            "seen_entrypoints.insert",
-            "self.preflight_lane_reservation_group_locked(",
-            "begin_durability_transition_locked(",
-            "drop(store)",
-            "drop(queue_guard)",
-            "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
-            "for group in carriers.into_iter().flatten()",
-            "self.commit_lane_reservation("
+        "path": "crates/iroha_core/src/queue/canonical_terminal_cleanup.rs",
+        "kind": "method",
+        "symbol": "Queue::commit_prepared_lane_reservation_carriers",
+        "tokens": [
+          "let carrier_reservation_counts = carriers",
+          "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
+          "let group_count = carriers",
+          "terminal_evidence\n            .try_reserve_exact(group_count)",
+          "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
+          "self.wait_for_durability_transitions(&cleanup_hashes)",
+          "let mut queue_guard = self.push_remove_lock.lock()",
+          "while cleanup_hashes",
+          ".any(|hash| self.durability_transition_active(hash))",
+          "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
+          "queue_guard = self.push_remove_lock.lock()",
+          "let store = self.lane_reservations.lock()",
+          "for group in carriers.iter().flatten()",
+          "seen_group_hashes.insert",
+          "seen_group_identities.insert",
+          "seen_group_slot_keys.insert",
+          "seen_hashes.insert",
+          "seen_entrypoints.insert",
+          "self.preflight_lane_reservation_group_locked(",
+          "begin_durability_transition_locked(",
+          "drop(store)",
+          "drop(queue_guard)",
+          "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
+          "for group in carriers.into_iter().flatten()",
+          "self.commit_lane_reservation("
         ]
       }
     ],
@@ -4949,6 +5039,11 @@
       {
         "path": "pytests/scripts/sumeragi_v2_multilane_models_test.py",
         "required_tokens": [
+          "def test_inflight_direct_release_and_binding_repair_rejects_semantic_weakening(",
+          "def test_inflight_repair_mutation_registration_rejects_wrong_mode_and_omission(",
+          "def test_inflight_nonqueue_kura_activation_rejects_unowned_projection(",
+          "def test_inflight_nonqueue_kura_activation_rejects_authority_order_drift(",
+          "def test_inflight_repair_apalache_registration_retains_bound_and_tlc_ownership(",
           "def test_inflight_layout_contract_accepts_current_production(",
           "def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(",
           "def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(",

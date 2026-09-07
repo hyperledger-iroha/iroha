@@ -74,7 +74,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits};
+#[cfg(test)]
+use norito::decode_from_bytes_with_limits;
+use norito::{DecodeLimits, decode_canonical_with_limits};
 use sorafs_manifest::pop_credentials::{
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopEligibilityClassV1, PopMembershipProofV1,
     verify_pop_membership_proof_v1,
@@ -695,7 +697,7 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    norito::to_bytes(value)
+    norito::encode_canonical(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
 fn encode_payload<T: norito::core::NoritoSerialize>(
@@ -738,26 +740,21 @@ where
     .map_err(InstructionExecutionError::Query)?;
     let (value, allocation_bytes) = if current.is_some() {
         let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_from_bytes_with_limits::<T>(bytes, limits)
+            decode_canonical_with_limits::<T>(bytes, limits)
         });
         (value, Some(usage.total_allocated_bytes()))
     } else {
-        (decode_from_bytes_with_limits::<T>(bytes, limits), None)
+        (decode_canonical_with_limits::<T>(bytes, limits), None)
     };
     let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
             InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
-        }
-    })?;
-    norito::verify_exact_frame(&value, bytes).map_err(|error| {
-        if matches!(error, norito::Error::NonCanonicalEncoding) {
+        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
             corrupt_state(format!("{label} state is not exact canonical Norito"))
         } else {
-            corrupt_state(format!("failed to encode {label}: {error}"))
+            corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
     if let (Some(current), Some(allocation_bytes)) = (current.as_deref_mut(), allocation_bytes) {
@@ -10387,3 +10384,7 @@ mod tests {
     }
     include!("sorafs/moderation_tail_tests.rs");
 }
+
+#[cfg(test)]
+#[path = "sorafs_moderation/canonical_state_tests.rs"]
+mod canonical_state_tests;

@@ -967,7 +967,9 @@ pub(crate) fn require_validator_storage_platform(
 /// Cross the signed non-Queue lifecycle bootstrap before publishing one exact
 /// executable payload. `authorize` is source-specific and receives the checked
 /// ActivateKura transition only after the attempt binding has been derived from
-/// the producer-signed payload and frozen local committee identity.
+/// the producer-signed payload and frozen local committee identity. That
+/// transition acquires the local actor's authenticated binding together with
+/// durable Kura custody; received bytes alone establish only volatile custody.
 #[allow(clippy::too_many_arguments)]
 fn persist_nonqueue_autonomous_payload_with_custody(
     kura: &Kura,
@@ -1028,7 +1030,7 @@ fn persist_nonqueue_autonomous_payload_with_custody(
         producer,
         producer_selected_owner: producer,
         replicated_carrier_owners: validator_mask & !producer,
-        payload_binding_a: producer | local_actor,
+        payload_binding_a: producer,
         binding_a: canonical_lane_queue_reservation_group_identity_projection(reservation_group),
         queue: ProductionInFlightFirstReleaseQueueProjection {
             plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
@@ -1050,6 +1052,7 @@ fn persist_nonqueue_autonomous_payload_with_custody(
         release: ProductionInFlightFirstReleaseReleaseProjection::default(),
     };
     let mut after_activate = before_activate;
+    after_activate.payload_binding_a |= local_actor;
     after_activate.carrier.kura_active |= local_actor;
     let checked_activate = check_production_in_flight_first_release_transition(
         ProductionInFlightFirstReleaseTransitionProjection {

@@ -69476,88 +69476,9 @@ if certified_body_request_is_superseded_after_decision(request, terminal_subject
         "shared current Serve classification must bind transport ownership, retire unauthenticated input locally, and retain authenticated Decision supersession for durable negative settlement",
         errors,
     )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-match inbound.message() {
-    BlockMessage::KuraReplicaAdvert(_) => {
-        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-    }
-    BlockMessage::LaneBlockProposal(_)
-    | BlockMessage::LaneExecutablePayload(_)
-    | BlockMessage::LaneBlockNewViewVote(_)
-    | BlockMessage::LaneBlockNewViewCertificate(_)
-    | BlockMessage::LaneBlockVote(_)
-    | BlockMessage::LaneBlockQc(_)
-    | BlockMessage::LaneBlockCertificate(_)
-    | BlockMessage::LaneHistoricalRecoveryRequest(_)
-    | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
-        let _ = lane_work
-            .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
-        let _ = lane_work.service_next_historical_recovery()?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-    }
-    BlockMessage::V2(_) => {}
-}
-""",
-        "KuraReplicaAdvert ingress must bypass both consensus reducers through its exact durable admission seam",
-        errors,
+    _require_ordinary_ingress_consumer_source_contracts(
+        ordinary_ingress_consumer_path, ordinary_ingress_consumer, errors,
     )
-    if ordinary_ingress_consumer is not None:
-        consumer_tokens = rust_code_tokens(ordinary_ingress_consumer.body)
-        kura_terminal_positions = _token_sequence_positions(
-            consumer_tokens,
-            rust_code_tokens(
-                """
-BlockMessage::KuraReplicaAdvert(_) => {
-    admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-}
-"""
-            ),
-        )
-        lane_local_positions = _token_sequence_positions(
-            consumer_tokens,
-            rust_code_tokens(
-                """
-BlockMessage::LaneBlockProposal(_)
-| BlockMessage::LaneExecutablePayload(_)
-| BlockMessage::LaneBlockNewViewVote(_)
-| BlockMessage::LaneBlockNewViewCertificate(_)
-| BlockMessage::LaneBlockVote(_)
-| BlockMessage::LaneBlockQc(_)
-| BlockMessage::LaneBlockCertificate(_)
-| BlockMessage::LaneHistoricalRecoveryRequest(_)
-| BlockMessage::LaneHistoricalRecoveryResponse(_) => {
-    let _ = lane_work
-        .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
-"""
-            ),
-        )
-        consensus_owner_positions = _token_sequence_positions(
-            consumer_tokens,
-            rust_code_tokens(
-                "let mut ingress_ownership = inbound.take_ingress_ownership()"
-            ),
-        )
-        if (
-            len(kura_terminal_positions) != 1
-            or len(lane_local_positions) != 1
-            or len(consensus_owner_positions) != 1
-            or not (
-                kura_terminal_positions[0]
-                < lane_local_positions[0]
-                < consensus_owner_positions[0]
-            )
-        ):
-            errors.append(
-                f"{ordinary_ingress_consumer_path}:{ordinary_ingress_consumer.line}: "
-                "KuraReplicaAdvert ingress "
-                "must bypass both consensus reducers through its exact durable "
-                "admission seam before lane-local or leader-wire dispatch"
-            )
     _require_rust_token_sequence(
         ordinary_ingress_consumer_path,
         ordinary_ingress_consumer,
@@ -69621,39 +69542,6 @@ if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
 """,
         "runner ingress must retain canonical message, semantic origin, and source-isolated routes through checked dequeue and Runtime binding",
         errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["historical_body_guard"],
-        "historical body route must reconstruct from Kura under the output guard",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-services.post_durable_history_response_on_reply_routes_with_permit(
-    response_peer,
-    reply_routes,
-    ingress_ownership,
-    response,
-    permit,
-)
-""",
-        "historical global responses preserve the complete prevalidated route set",
-        errors,
-        count=2,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-if reply_routes.semantic_target() != &sender {
-""",
-        "historical response route sets must match their authenticated semantic target",
-        errors,
-        count=2,
     )
     _require_rust_token_sequence(
         runner_path,

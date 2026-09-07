@@ -186,9 +186,41 @@ pending, so `ML-AUT-01` and `ML-AUT-05` are not closed.
 Further formal inspection found that the fixed in-flight configuration omits its
 defined terminal-exclusivity invariant and the current abstract direct-release
 action can coexist with active Kura custody. Later Commit/application guards do
-not reject that disposition. A guided trace and the corresponding state-kernel
-and extraction contracts are under review. Earlier bounded results and the active
-18-step run do not establish this missing ownership safety obligation.
+not reject that disposition. Pinned TLC confirms original-`Next` traces with
+active-Kura direct release at four actions, FIFO plus lane Commit at 19, and FIFO
+plus WSV at 20. The existing 18 configured invariants plus omitted exclusivity
+predicate accept the complete 20-action trace. The shared Rust state predicate
+also admits that inconsistent disposition. Model/kernel repair is underway;
+this does not establish a live-network exploit. Earlier bounded results and the
+active 18-step run do not establish the missing ownership safety obligation.
+
+The resumed complete exact-output source diagnostic ends with 71 failures after
+936.75 seconds. The complete errors and input hashes are retained under
+`dist/multilane-validation-20260907/exact-output-result.json`; four inputs changed
+during the run, so it is not immutable-candidate evidence. Broader ingress,
+lifecycle completion, worker ownership and finalization contracts remain open.
+
+
+The combined correction is now source-ready. Authenticated Kura activation adds
+only its actor to payload custody; all other transitions preserve that bitmap.
+Strict-absence direct release excludes active Kura, and all release dispositions
+exclude lane Commit and WSV application. Exact retired replica proof stutter is
+preserved. The terminal extractor rejects inconsistent states; Kura fixtures now
+derive custody and Commit actors from actual certificates. All original 480
+refinement assertions and 125 Kura assertions remain. The combined ready manifest
+under `dist/multilane-validation-20260907/` binds 17 Rust and five model/config
+files; the latest Rust write is `2026-09-07T03:52:05.610100Z`.
+
+Fresh exhaustive TLC passes 20 invariants over 280,818 distinct states, depth 36.
+Three new controls fail at their expected invariant after 4/19/4 actions, and four
+explicit replica/application and release traces pass. The fresh private-temp fixed-plus-25 matrix
+then passes independent inspection: every mutant returns exit 12 with its exact
+named invariant, and all 22 original CFG bytes/order remain intact. The earlier
+concurrent standard-module extraction failure remains retained separately. Full
+results are in `formal/direct-release-repair/tlc-current-private/` under the
+validation directory. The post-custody terminal source baseline passes.
+Current-model Apalache, Verus and the coordinated Rust execution remain open;
+the earlier-model 18-step attempt cannot qualify the correction.
 
 ## 2026-08-19 mutable-development closure snapshot
 
@@ -2144,7 +2176,7 @@ The in-flight contract registers exactly 27 production actions. Its composed
 state/action relation has a source-extraction seam for every name, including
 `Crash`, `Recover`, `RecoverReservationSnapshot`, and
 `RehydrateLocalKuraCustody`; the declared open-action tuple is empty. The
-twenty-two exact TLC mutation witnesses remain mandatory source inventory, not
+twenty-five exact TLC mutation witnesses remain mandatory source inventory, not
 executed results. This is only a structural partition of current production
 symbols: it does not establish operational correspondence and is not a formal
 completion certificate.

@@ -17,7 +17,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_data_model::{NetworkId, account::AccountId};
 use norito::{
-    DecodeLimits, NoritoSerialize, decode_from_bytes_with_limits,
+    DecodeLimits, NoritoSerialize, decode_canonical_with_limits,
     derive::{
         JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
         NoritoDeserialize as DeriveNoritoDeserialize, NoritoSerialize as DeriveNoritoSerialize,
@@ -1009,7 +1009,7 @@ impl HedgingBillingServicePolicyV1 {
             return Err(HedgingBillingServiceError::InvalidPolicy);
         }
         let max_bytes = HEDGING_BILLING_SERVICE_POLICY_MAX_BYTES_V1;
-        let policy = decode_from_bytes_with_limits::<Self>(
+        let policy = decode_canonical_with_limits::<Self>(
             bytes,
             DecodeLimits::new(
                 max_bytes,
@@ -1022,9 +1022,7 @@ impl HedgingBillingServicePolicyV1 {
             ),
         )
         .map_err(|_| HedgingBillingServiceError::InvalidPolicy)?;
-        if policy.canonical_bytes()?.as_slice() != bytes {
-            return Err(HedgingBillingServiceError::InvalidPolicy);
-        }
+        policy.validate()?;
         Ok(policy)
     }
     fn digest(&self) -> Result<[u8; 32], HedgingBillingServiceError> {
@@ -1279,7 +1277,7 @@ impl HedgingBillingEpochWitnessRecordV1 {
         }
         let max_record_bytes = usize::try_from(max_record_bytes)
             .map_err(|_| HedgingBillingServiceError::ResourceExhausted)?;
-        let record = decode_from_bytes_with_limits::<Self>(
+        let record = decode_canonical_with_limits::<Self>(
             bytes,
             DecodeLimits::new(
                 max_record_bytes,
@@ -1292,9 +1290,7 @@ impl HedgingBillingEpochWitnessRecordV1 {
             ),
         )
         .map_err(|_| HedgingBillingServiceError::InvalidEpochWitness)?;
-        if record.to_canonical_bytes(checkpoint_max_bytes)?.as_slice() != bytes {
-            return Err(HedgingBillingServiceError::InvalidEpochWitness);
-        }
+        record.validate(checkpoint_max_bytes)?;
         Ok(record)
     }
 }
@@ -6558,7 +6554,7 @@ fn decode_checkpoint(
     let max_allocation = max_bytes
         .saturating_mul(CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT)
         .saturating_add(CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES);
-    let checkpoint: HedgingBillingCheckpointV1 = decode_from_bytes_with_limits(
+    let checkpoint: HedgingBillingCheckpointV1 = decode_canonical_with_limits(
         bytes,
         DecodeLimits::new(
             max_elements,
@@ -6568,12 +6564,10 @@ fn decode_checkpoint(
             CHECKPOINT_MAX_NESTING_DEPTH,
         ),
     )
-    .map_err(|_| HedgingBillingServiceError::InvalidCheckpoint)?;
-    let canonical = norito::encode_canonical(&checkpoint)
-        .map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
-    if canonical != bytes {
-        return Err(HedgingBillingServiceError::NonCanonicalCheckpoint);
-    }
+    .map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => HedgingBillingServiceError::NonCanonicalCheckpoint,
+        _ => HedgingBillingServiceError::InvalidCheckpoint,
+    })?;
     checkpoint.validate(policy, feed_policy)?;
     Ok(checkpoint)
 }

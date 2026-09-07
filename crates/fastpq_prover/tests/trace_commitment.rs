@@ -97,13 +97,21 @@ fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTran
         .iter()
         .flat_map(|delta| {
             let sender = StateTransition::new(
-                format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(
+                    &delta.asset_definition,
+                    &delta.from_account,
+                )
+                .expect("canonical balance key"),
                 numeric_to_bytes(&delta.from_balance_before),
                 numeric_to_bytes(&delta.from_balance_after),
                 OperationKind::Transfer,
             );
             let receiver = StateTransition::new(
-                format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(
+                    &delta.asset_definition,
+                    &delta.to_account,
+                )
+                .expect("canonical balance key"),
                 numeric_to_bytes(&delta.to_balance_before),
                 numeric_to_bytes(&delta.to_balance_after),
                 OperationKind::Transfer,

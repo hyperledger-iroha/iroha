@@ -1955,6 +1955,18 @@ Pass ``include_peer_telemetry=False`` when the deployment does not expose
 `/v1/telemetry/peers-info`; the helper still records the remaining endpoints for
 the audit trail.
 
+## Kaigi instruction identities
+
+The typed builders in `iroha_python.kaigi` obtain canonical `AccountId`,
+`DomainId`, and `Name` frames from the required native extension. Account inputs
+retain their full controller, including multisig member keys, weights, and
+threshold. Domain normalization and exact NFC name validation use the same
+pinned profiles as the node. Identity comparisons use the domainless controller
+bytes, so different I105 display prefixes cannot disguise duplicate accounts.
+Use the SDK and extension from the same source revision; a missing canonical
+identity encoder is an error. The resulting instruction archive is decoded and
+checked again by the native transaction builder.
+
 ## Kaigi relay inventory
 
 Operators can audit registered Kaigi relays, inspect per-domain metrics, and

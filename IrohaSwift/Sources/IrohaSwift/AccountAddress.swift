@@ -329,7 +329,7 @@ private extension CurveId {
         #endif
         #if IROHASWIFT_ENABLE_MLDSA
         case .mldsa:
-            return "mldsa"
+            return "ml-dsa"
         #endif
         #if IROHASWIFT_ENABLE_BLS
         case .blsNormal:
@@ -443,6 +443,7 @@ private enum ControllerPayload {
             withUnsafeBytes(of: &length) { payload.append(contentsOf: $0) }
             payload.append(distidBytes)
             payload.append(publicKey)
+            try validatePublicKey(curve: curve, publicKey: payload)
             return payload
         }
         #endif
@@ -454,16 +455,11 @@ private enum ControllerPayload {
     }
 
     static func validatePublicKey(curve: CurveId, publicKey: Data) throws {
-        if curve == .ed25519,
-           !Ed25519PublicKeyAdmission.isValidPublicKey(publicKey) {
+        do {
+            try AccountAddress.validateCompactNoritoPublicKey(curve: curve, publicKey: publicKey)
+        } catch {
             throw AccountAddressError.invalidPublicKey
         }
-        #if IROHASWIFT_ENABLE_MLDSA
-        if curve == .mldsa,
-           (publicKey.count != 1_952 || !publicKey.contains(where: { $0 != 0 })) {
-            throw AccountAddressError.invalidPublicKey
-        }
-        #endif
     }
 
     func validatePublicKeys() throws {
@@ -1416,7 +1412,7 @@ extension AccountAddress {
         return (curve, publicKey)
     }
 
-    private static func validateCompactNoritoPublicKey(
+    fileprivate static func validateCompactNoritoPublicKey(
         curve: CurveId,
         publicKey: Data
     ) throws {

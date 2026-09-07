@@ -420,7 +420,46 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
 - The composed model audit found that its fixed configuration omits the defined
   `MLTerminalDispositionExclusive` invariant. It also permits direct release while
   Kura custody remains active; subsequent Commit/application guards do not check
-  that disposition. The current state predicate and terminal extractor require
-  further review against actual ownership. Guided counterexample confirmation and
-  a matching model/kernel repair are underway; the old 18-step run cannot close
-  this newly identified safety obligation.
+  that disposition. Pinned TLC confirms a guided trace conjoining every edge with
+  the original `Next`: active-Kura/direct release at four actions, FIFO plus lane
+  Commit at 19, and FIFO plus WSV application at 20. All 18 configured invariants
+  and the omitted exclusivity predicate still accept that complete 20-action
+  trace. The shared Rust state predicate likewise permits the inconsistent state.
+  Matching model/kernel guards, stronger configured invariants and counterexample
+  controls are being implemented. This is a verified abstraction/refinement gap,
+  not evidence of a live-network exploit; the old 18-step run cannot qualify it.
+- The complete exact-output source diagnostic finishes with 71 errors in 936.75
+  seconds. All failures and before/after input hashes are retained in
+  `dist/multilane-validation-20260907/exact-output-result.json`. Four input files
+  changed during the run, so it is mutable-development evidence. Ordinary ingress,
+  lifecycle completion, worker ownership/ACK and finalization source contracts
+  remain under review; the focused passes above do not waive these failures.
+
+- The combined repair is now source-ready: authenticated Kura activation adds only
+  its actor to the payload binding; every other transition preserves that binding.
+  Direct actor-free release requires absent Kura custody, and release dispositions
+  exclude lane Commit and WSV application. Retired replica proof stutter remains
+  valid. The terminal extractor checks the complete state predicate. Existing
+  Rust fixtures derive custody from real certificates rather than all-member masks;
+  480 refinement and 125 Kura assertions remain, with 17 and three added assertions.
+- Fresh exhaustive TLC passes all 20 invariants over 280,818 distinct states, depth
+  36. All three new mutations fail at their named invariant after 4/19/4 actions.
+  Four explicit original-`Next` replica and release paths also pass. A complete
+  fixed-plus-25-control rerun is pending after one earlier concurrent TLC process
+  failed during standard-module extraction; that failed attempt is retained.
+  Current-model Apalache, Verus and Rust execution remain unqualified.
+- The combined ready manifest verifies 17 Rust and five model/configuration files
+  against their separate owner records. Its latest Rust write is
+  `2026-09-07T03:52:05.610100Z`; the shared Core owner has it for capture. The
+  post-custody terminal source baseline passes. These focused results do not close
+  the 71-error full source diagnostic or any milestone/release gate.
+
+- The fresh private-temp fixed-plus-25 TLC matrix passes after independent result
+  inspection: the positive explores 280,818 distinct states at depth 36 in 22.02
+  seconds; every mutant returns exit 12 and its exact named invariant. All 22
+  original configuration bytes and their order remain intact. The prior extraction
+  failure remains retained separately. Raw logs, tool/source hashes, commands and
+  independent verification are under `formal/direct-release-repair/tlc-current-private/`
+  in the durable validation directory. Four explicit replica/release positives
+  pass at 25, 10, 10 and 11 actions. Current-model Apalache has a separate run;
+  Verus and the planned 89 direct-binary Core regressions remain pending.

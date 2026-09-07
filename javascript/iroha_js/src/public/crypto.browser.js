@@ -8,6 +8,7 @@ export {
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,
   buildKaigiAuthorizationProofV1,
+  buildKaigiUsageProofV1,
   deriveConfidentialDiversifierV2,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,

@@ -3395,7 +3395,7 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$INFLIGHT_FIRST_RELEASE_MODULE" \\
   inflight_first_release_fixed.cfg \\
   18 \\
-  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV1ConjunctionBeforeReservationV1, MLReservationV1BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV1SelectedConjunctionBound4096\"""",
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV1ConjunctionBeforeReservationV1, MLReservationV1BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLDirectReleaseRequiresAbsentKura, MLTerminalDispositionExclusive, MLQueuePlanV1SelectedConjunctionBound4096\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -3504,6 +3504,9 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "inflight_first_release_release_complete_before_released_bug.cfg",
         "inflight_first_release_forget_release_before_fifo_bug.cfg",
         "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
+        "inflight_first_release_direct_release_with_active_kura_bug.cfg",
+        "inflight_first_release_direct_release_commit_conflict_bug.cfg",
+        "inflight_first_release_kura_without_payload_binding_bug.cfg",
     ):
         if forbidden in source:
             errors.append(

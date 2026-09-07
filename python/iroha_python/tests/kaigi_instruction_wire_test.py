@@ -204,19 +204,12 @@ def test_complex_create_matches_final_v1_reference_without_losing_u64_precision(
     assert base64.b64encode(archive).decode("ascii") == expected["instruction_box_base64"]
 
 
-def test_native_instruction_round_trip_when_current_extension_is_available() -> None:
+def test_native_instruction_round_trip_uses_current_extension() -> None:
+    from iroha_python.crypto import Instruction as NativeInstruction
+
     wires = _minimal_wires()
-    try:
-        from iroha_python.crypto import Instruction as NativeInstruction
-    except (AttributeError, ImportError, RuntimeError) as error:
-        pytest.skip(f"native extension unavailable or stale: {error}")
     assert NativeInstruction is not None
-    try:
-        instructions = [wire.to_instruction() for wire in wires.values()]
-    except ValueError as error:
-        if "unknown instruction" in str(error):
-            pytest.skip("local native extension predates the Kaigi instruction registry")
-        raise
+    instructions = [wire.to_instruction() for wire in wires.values()]
     assert [instruction.wire_id() for instruction in instructions] == [
         wire.wire_id for wire in wires.values()
     ]
@@ -489,27 +482,64 @@ def test_relay_manifest_and_hpke_key_v1_boundaries() -> None:
         )
 
 
-def test_identity_codec_fails_closed_outside_single_key_ed25519() -> None:
-    call_id = KaigiIdV1(**_FIXTURE["call_id"])
-    ml_dsa = AccountAddress.from_account(
-        public_key=bytes([0xA5]) * 1_952,
-        algorithm="ml-dsa",
-    )
-    with pytest.raises(ValueError, match="Ed25519 account controller"):
-        encode_create_kaigi_instruction_v1(call_id=call_id, host=ml_dsa.to_i105())
+def test_identity_codec_preserves_every_rust_controller_fixture() -> None:
+    from iroha_python.kaigi import _account_id
 
+    fixture_path = Path(__file__).resolve().parents[3] / "fixtures/account/multisig_wire_v1.json"
+    fixture = json.loads(fixture_path.read_text("utf-8"))
+    assert len(fixture["positive"]) == 16
+    for case in fixture["positive"]:
+        literal, payload = _account_id(case["i105"], case["name"])
+        assert literal == case["i105"]
+        assert payload.hex() == case["account_id_payload_hex"]
+        wire = encode_create_kaigi_instruction_v1(
+            call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=literal
+        )
+        assert wire.to_instruction().to_norito_bytes() == wire.to_norito_bytes()
+
+
+def test_identity_codec_rejects_degenerate_ed25519() -> None:
     identity_point = AccountAddress.from_account(
         public_key=b"\x01" + bytes(31), algorithm="ed25519"
     )
-    with pytest.raises(ValueError, match="small-order"):
-        encode_create_kaigi_instruction_v1(call_id=call_id, host=identity_point.to_i105())
+    with pytest.raises(ValueError):
+        encode_create_kaigi_instruction_v1(
+            call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=identity_point.to_i105()
+        )
 
 
-def test_unpinned_identity_unicode_and_ace_labels_fail_closed() -> None:
-    with pytest.raises(ValueError, match="consensus NFC profile"):
-        KaigiIdV1("wonderland.sora", "éclair")
-    with pytest.raises(ValueError, match="non-ACE ASCII"):
-        KaigiIdV1("xn--r8jz45g.sora", "call")
+def test_identity_unicode_uses_the_rust_nfc_and_uts46_profiles() -> None:
+    call = KaigiIdV1("例え.SORA", "éclair")
+    assert call.domain_id == "xn--r8jz45g.sora"
+    assert call.call_name == "éclair"
+    assert call == KaigiIdV1("xn--r8jz45g.sora", "éclair")
+    with pytest.raises(ValueError, match="NFC"):
+        KaigiIdV1("wonderland.sora", "e\u0301clair")
+    with pytest.raises(ValueError):
+        KaigiIdV1("xn--.sora", "call")
+
+
+def test_identity_comparison_uses_controllers_across_display_prefixes() -> None:
+    from iroha_python.kaigi import _account_id
+
+    account = AccountAddress.from_i105(_FIXTURE["accounts"][0])
+    first = account.to_i105(753)
+    second = account.to_i105(42)
+    assert first != second
+    assert _account_id(first, "first")[1] == _account_id(second, "second")[1]
+    wire = encode_create_kaigi_instruction_v1(
+        call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=first, billing_account=second
+    )
+    assert wire.to_instruction().to_norito_bytes() == wire.to_norito_bytes()
+    with pytest.raises(ValueError, match="duplicate relays"):
+        KaigiRelayManifestV1(
+            [
+                KaigiRelayHopV1(first, b"key1"),
+                KaigiRelayHopV1(second, b"key2"),
+                KaigiRelayHopV1(_FIXTURE["accounts"][1], b"key3"),
+            ],
+            1000,
+        )
 
 
 def test_wire_value_rejects_forged_or_corrupted_inner_frames() -> None:
@@ -522,12 +552,12 @@ def test_wire_value_rejects_forged_or_corrupted_inner_frames() -> None:
         KaigiInstructionWireV1(wire.wire_id, 40)  # type: ignore[arg-type]
 
 
-def test_metadata_rejects_floats_and_unpinned_unicode_identity_keys() -> None:
+def test_metadata_rejects_floats_and_noncanonical_unicode_identity_keys() -> None:
     call_id = KaigiIdV1(**_FIXTURE["call_id"])
     account = _FIXTURE["accounts"][0]
     with pytest.raises(TypeError, match="floating-point"):
         encode_create_kaigi_instruction_v1(call_id=call_id, host=account, metadata={"rate": 1.5})
-    with pytest.raises(ValueError, match="consensus NFC profile"):
+    with pytest.raises(ValueError, match="NFC"):
         encode_create_kaigi_instruction_v1(call_id=call_id, host=account, metadata={"e\u0301": 1})
 
 

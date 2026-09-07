@@ -266,6 +266,10 @@ where
     })
 }
 /// Concrete Musubi instruction values missing from the generated-record capture.
+#[allow(
+    dead_code,
+    reason = "the generator and grouped tests render JSON; library identity tests read these fields"
+)]
 pub(crate) struct MusubiGeneratedIdentityValues {
     /// Namespace-binding registration fixture.
     pub(crate) register_namespace: RegisterMusubiNamespaceBindingV1,
@@ -302,6 +306,10 @@ pub(crate) fn instruction_document() -> Value {
 }
 
 /// Construct the typed values needed by the generated-record identity capture.
+#[allow(
+    dead_code,
+    reason = "only library identity tests need typed values from this shared fixture module"
+)]
 #[must_use]
 pub(crate) fn generated_identity_values() -> MusubiGeneratedIdentityValues {
     instruction_document_and_generated_identity_values().1

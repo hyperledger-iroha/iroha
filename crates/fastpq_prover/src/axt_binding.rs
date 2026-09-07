@@ -2154,7 +2154,8 @@ mod tests {
     }
 
     fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-        format!("asset/{asset}/{account}").into_bytes()
+        iroha_data_model::fastpq::transfer_balance_key(asset, account)
+            .expect("canonical balance key")
     }
     fn transfer_transcript(
         asset_definition: &AssetDefinitionId,

@@ -704,7 +704,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         &canonical.transitions,
         &canonical.public_inputs,
     )?;
-    let mut transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
+    let mut transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses)?;
     let metadata_hash_limbs = metadata_commitment_limbs(&canonical.metadata)?;
     let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
     // The exact `u64` remains bound by `PublicIO`; trace columns must use the
@@ -1091,7 +1091,7 @@ pub(crate) fn ensure_trace_schema_limit(
 /// # Errors
 ///
 /// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
-/// `asset/<asset-id>/<account>` key shape.
+/// `FastpqBalanceKeyV1` Norito frame.
 pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let widths = trace_schema_limb_widths(batch)?;
     let mut columns = [
@@ -1813,18 +1813,10 @@ pub fn hash_columns_gpu_with_first_level(
     });
     Some(ColumnDigests::new(leaves, Some(parents)))
 }
-fn canonical_asset_id_bytes(key: &[u8]) -> Result<&[u8]> {
-    let rest = key.strip_prefix(b"asset/").ok_or(Error::InvalidAssetKey)?;
-    let separator = rest
-        .iter()
-        .position(|&byte| byte == b'/')
-        .ok_or(Error::InvalidAssetKey)?;
-    let (asset_id, account_with_separator) = rest.split_at(separator);
-    let account = &account_with_separator[1..];
-    if asset_id.is_empty() || account.is_empty() || account.contains(&b'/') {
-        return Err(Error::InvalidAssetKey);
-    }
-    Ok(asset_id)
+fn canonical_asset_id_bytes(key: &[u8]) -> Result<[u8; 16]> {
+    let identity: iroha_data_model::fastpq::FastpqBalanceKeyV1 =
+        norito::decode_canonical(key).map_err(|_| Error::InvalidAssetKey)?;
+    Ok(identity.asset_definition.aid_bytes())
 }
 fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
     Ok(canonical_asset_id_bytes(key)?.to_vec())
@@ -2418,6 +2410,21 @@ mod tests {
             clear_poseidon_gpu_event_observer();
         }
     }
+    fn sample_balance_key(label: &str) -> Vec<u8> {
+        let asset = iroha_data_model::asset::id::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let account = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(
+                label.as_bytes().to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .into_parts()
+            .0,
+        );
+        iroha_data_model::fastpq::transfer_balance_key(&asset, &account).unwrap()
+    }
     fn sample_batch() -> TransitionBatch {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
@@ -2433,13 +2440,13 @@ mod tests {
             batch.push(transition);
         }
         batch.push(StateTransition::new(
-            b"asset/xor/mint-target".to_vec(),
+            sample_balance_key("mint-target"),
             20_u64.to_le_bytes().to_vec(),
             40_u64.to_le_bytes().to_vec(),
             OperationKind::Mint,
         ));
         batch.push(StateTransition::new(
-            b"asset/xor/burn-source".to_vec(),
+            sample_balance_key("burn-source"),
             60_u64.to_le_bytes().to_vec(),
             50_u64.to_le_bytes().to_vec(),
             OperationKind::Burn,
@@ -2638,7 +2645,7 @@ mod tests {
             let mut batch =
                 TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
             batch.push(StateTransition::new(
-                b"asset/xor/alice".to_vec(),
+                sample_balance_key("alice"),
                 before.to_le_bytes().to_vec(),
                 after.to_le_bytes().to_vec(),
                 operation,
@@ -2655,7 +2662,7 @@ mod tests {
             let mut batch =
                 TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
             batch.push(StateTransition::new(
-                b"asset/xor/alice".to_vec(),
+                sample_balance_key("alice"),
                 before.to_le_bytes().to_vec(),
                 after.to_le_bytes().to_vec(),
                 operation,
@@ -2672,7 +2679,7 @@ mod tests {
         let mut batch =
             TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
-            b"asset/xor/alice".to_vec(),
+            sample_balance_key("alice"),
             4_u64.to_le_bytes().to_vec(),
             9_u64.to_le_bytes().to_vec(),
             OperationKind::Mint,
@@ -2694,7 +2701,7 @@ mod tests {
         let mut oversized =
             TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         oversized.push(StateTransition::new(
-            b"asset/xor/alice".to_vec(),
+            sample_balance_key("alice"),
             0_u64.to_le_bytes().to_vec(),
             u64::MAX.to_le_bytes().to_vec(),
             OperationKind::Mint,
@@ -2714,6 +2721,7 @@ mod tests {
     fn build_trace_rejects_noncanonical_asset_operation_keys() {
         for key in [
             b"xor/alice".as_slice(),
+            b"asset/xor/alice".as_slice(),
             b"asset//alice".as_slice(),
             b"asset/xor".as_slice(),
             b"asset/xor/".as_slice(),
@@ -2744,7 +2752,7 @@ mod tests {
                     (4_u64.to_le_bytes().to_vec(), vec![0; length])
                 };
                 batch.push(StateTransition::new(
-                    b"asset/xor/alice".to_vec(),
+                    sample_balance_key("alice"),
                     pre_value,
                     post_value,
                     OperationKind::Mint,
@@ -3736,7 +3744,7 @@ mod tests {
         let expected = transfer::transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect("witness extraction");
         assert_eq!(trace.transfer_witnesses, expected);
-        let proof_index = transfer::index_row_proofs(&expected);
+        let proof_index = transfer::index_row_proofs(&expected).expect("proof index");
         let mut canonical = batch.clone();
         canonical.sort();
         for (row, transition) in canonical.transitions.iter().enumerate() {
@@ -3785,7 +3793,7 @@ mod tests {
             authority_digest: witnesses[0].authority_digest,
             deltas: vec![first, later],
         }];
-        let mut proof_index = transfer::index_row_proofs(&inputs);
+        let mut proof_index = transfer::index_row_proofs(&inputs).expect("proof index");
         let sender_transition = sample_transitions(&transcript)
             .into_iter()
             .next()
@@ -3950,10 +3958,16 @@ mod tests {
     }
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
         let scale = delta.normalized_scale();
-        let sender_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
-        let receiver_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes();
+        let sender_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.from_account,
+        )
+        .expect("canonical balance key");
+        let receiver_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.to_account,
+        )
+        .expect("canonical balance key");
         let (from, to) = transfer::build_transfer_smt_witness_pair(
             &sender_key,
             numeric_to_u64(&delta.from_balance_before, scale),
@@ -3983,13 +3997,21 @@ mod tests {
             .iter()
             .flat_map(|delta| {
                 let sender = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.from_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.from_balance_before),
                     numeric_to_bytes(&delta.from_balance_after),
                     OperationKind::Transfer,
                 );
                 let receiver = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.to_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.to_balance_before),
                     numeric_to_bytes(&delta.to_balance_after),
                     OperationKind::Transfer,

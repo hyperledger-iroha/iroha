@@ -307,10 +307,16 @@ mod tests {
         }
     }
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
-        let sender_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
-        let receiver_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes();
+        let sender_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.from_account,
+        )
+        .expect("canonical balance key");
+        let receiver_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.to_account,
+        )
+        .expect("canonical balance key");
         let (from, to) = transfer::build_transfer_smt_witness_pair(
             &sender_key,
             numeric_u64(&delta.from_balance_before),
@@ -333,13 +339,21 @@ mod tests {
             .iter()
             .flat_map(|delta| {
                 let sender = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.from_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.from_balance_before),
                     numeric_to_bytes(&delta.from_balance_after),
                     OperationKind::Transfer,
                 );
                 let receiver = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.to_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.to_balance_before),
                     numeric_to_bytes(&delta.to_balance_after),
                     OperationKind::Transfer,

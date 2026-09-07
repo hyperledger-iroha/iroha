@@ -254,7 +254,9 @@ or account-rekey authority; those remain with the trusted ledger and verifier.
 Managed identity names currently require canonical ASCII Name/domain labels,
 matching the Kotlin Kaigi encoder's fail-closed scope until the Rust pinned
 NFC/UTS-46 owner is shared. Display text supports UTF-8. Account instruction
-encoding follows the existing managed encoder's supported single-key curves.
+encoding covers all eleven published controller curve IDs and complete canonical
+multisig policies with a u16 member count. Address decoding checks key envelopes;
+cryptographic group membership and signatures require the verifier.
 The C# SDK does not yet generate Kaigi proofs or expose a native Kaigi prover.
 
 The five transparent instructions and complex private-create bytes are pinned

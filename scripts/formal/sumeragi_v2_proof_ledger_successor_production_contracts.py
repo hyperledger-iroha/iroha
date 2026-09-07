@@ -1244,7 +1244,8 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             "historical ingress routing",
             historical_ingress,
             (
-                "block_sync_server.serve_historical_body( kura, request, &sender, local_key )",
+                "HistoricalBodyServeTask::from_bound_ingress( request, sender, authenticated_via, reply_routes, ingress_ownership, )",
+                "task.and_then(|task| block_sync_server.try_enqueue_historical_body(task))",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
             ),
@@ -1253,7 +1254,7 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             ordinary_consumer_path,
             "historical ingress routing omits production refinement tokens when either reviewed route changes",
             historical_ingress,
-            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
+            "block_sync_server.try_enqueue_historical_body(task)",
             1,
         )
     status_path, status_source = load(

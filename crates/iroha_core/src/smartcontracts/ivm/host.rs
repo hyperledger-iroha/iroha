@@ -19931,13 +19931,15 @@ seiyaku OpaqueInstructionSubmission {
                 );
             transcripts[0].poseidon_preimage_digest = Some(poseidon_preimage_digest);
             batch.push(fastpq_prover::StateTransition::new(
-                format!("asset/{asset_definition}/{from_account}").into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &from_account)
+                    .expect("canonical balance key"),
                 10_u64.to_le_bytes().to_vec(),
                 9_u64.to_le_bytes().to_vec(),
                 fastpq_prover::OperationKind::Transfer,
             ));
             batch.push(fastpq_prover::StateTransition::new(
-                format!("asset/{asset_definition}/{to_account}").into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &to_account)
+                    .expect("canonical balance key"),
                 5_u64.to_le_bytes().to_vec(),
                 6_u64.to_le_bytes().to_vec(),
                 fastpq_prover::OperationKind::Transfer,

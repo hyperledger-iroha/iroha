@@ -14,6 +14,9 @@ internal sealed class TransactionEncodingContext
     private static readonly Dictionary<CurveId, byte> PublicKeyAlgorithmTags = new()
     {
         [CurveId.Ed25519] = 0,
+        [CurveId.Secp256k1] = 1,
+        [CurveId.BlsNormal] = 2,
+        [CurveId.BlsSmall] = 3,
         [CurveId.MlDsa] = 4,
         [CurveId.Gost256A] = 5,
         [CurveId.Gost256B] = 6,

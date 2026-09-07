@@ -160,18 +160,25 @@ pub fn build_kaigi_usage_proof_v1(
     host_commitment: Uint8Array,
     mut blinding: Uint8ArraySlice<'_>,
 ) -> napi::Result<JsKaigiUsageProofV1> {
+    // Retain the supplied public context if its JS view overlaps blinding.
+    let network: Result<[u8; 32], _> = network_id.as_ref().try_into();
+    let root: Result<[u8; 32], _> = pre_roster_root.as_ref().try_into();
+    let host: Result<[u8; 32], _> = host_commitment.as_ref().try_into();
     let witness = consume_blinding(env, &mut blinding)?;
+    let network = network.map_err(|_| invalid("networkId must contain exactly 32 bytes"))?;
+    let root = root.map_err(|_| invalid("preRosterRoot must contain exactly 32 bytes"))?;
+    let host = host.map_err(|_| invalid("hostCommitment must contain exactly 32 bytes"))?;
     let context = parse_context(
-        network_id.as_ref(),
+        &network,
         &domain_id,
         &call_name,
         &host_id,
-        pre_roster_root.as_ref(),
+        &root,
         segment_index,
         &duration_ms,
         &billed_gas,
     )?;
-    let host = parse_host_commitment(host_commitment.as_ref())?;
+    let host = parse_host_commitment(&host)?;
     produce(context, host, witness).map(|(artifacts, _)| artifacts)
 }
 
