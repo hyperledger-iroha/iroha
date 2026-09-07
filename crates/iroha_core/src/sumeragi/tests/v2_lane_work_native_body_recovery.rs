@@ -359,7 +359,7 @@ fn grouped_native_candidate_fixture(
         iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
             &participant_settlement,
         )
-        .expect("fixture participant settlement hash");
+        .expect("fixture participant settlement encodes canonically");
     let receipts = source_ids
         .iter()
         .copied()
@@ -656,7 +656,7 @@ fn native_body_recovery_payload(
         iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
             &request.participant_settlement,
         )
-        .expect("fixture participant settlement hash");
+        .expect("fixture participant settlement encodes canonically");
     request.body.participant_settlement_commitment = settlement_hash;
     request
         .validate_plan_binding()
@@ -1218,6 +1218,9 @@ fn merge_native_projection_entry_and_carrier(
             iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry),
         ),
     ));
+    block
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach canonical empty ordinary results to the merge carrier");
     (block, entry)
 }
 fn merge_native_projection_fixture(
@@ -1306,7 +1309,7 @@ fn merge_native_projection_rebind_single_source_participant(
         iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
             &leg.participant_settlement,
         )
-        .expect("fixture participant settlement hash");
+        .expect("fixture participant settlement encodes canonically");
     let descriptor = &leg.participant_proposal.descriptor;
     let participant_lane_id = descriptor.lane_id;
     let participant_dataspace_id = descriptor.dataspace_id;
@@ -1596,7 +1599,7 @@ fn native_amx_merge_projection_rejects_same_route_identity_conflict() {
             iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
                 &leg.participant_settlement,
             )
-            .expect("fixture participant settlement hash");
+            .expect("fixture participant settlement encodes canonically");
         for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
             body.participant_lane_incarnation =
                 leg.participant_proposal.descriptor.lane_incarnation;

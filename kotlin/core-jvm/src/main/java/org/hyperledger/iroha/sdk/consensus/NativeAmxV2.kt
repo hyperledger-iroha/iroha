@@ -328,7 +328,7 @@ object NativeAmxV2 {
         ).hashCode()
     }
 
-    /** Exact terminal participant settlement certified by a Native AMX leg. */
+    /** Exact nonrecursive participant settlement certified by a Native AMX leg. */
     class ParticipantSettlement internal constructor(
         val blockHeight: BigInteger,
         val laneId: Long,
@@ -1780,7 +1780,7 @@ object NativeAmxV2 {
     private val BLS_NORMAL_PEER_ID = Regex("^ea0130[0-9A-F]{96}$")
     private val QUANTITY = Regex("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{0,27}[1-9])?$")
 
-    private val GROUP_FIELDS = setOf(
+    private val PARTICIPANT_SETTLEMENT_FIELDS = setOf(
         "block_height",
         "lane_id",
         "lane_incarnation",
@@ -1793,9 +1793,8 @@ object NativeAmxV2 {
         "swap_metadata",
         "receipts",
         "nexus_fee_receipts",
-        "native_amx_receipts",
     )
-    private val PARTICIPANT_SETTLEMENT_FIELDS = GROUP_FIELDS - "native_amx_receipts"
+    private val GROUP_FIELDS = PARTICIPANT_SETTLEMENT_FIELDS + "native_amx_receipts"
     private val RECEIPT_FIELDS = setOf(
         "version",
         "source_id",

@@ -1120,6 +1120,10 @@ mod tests {
             .finality_epoch_id()
             .expect("mutated paired-Pasta roster remains valid");
         for forged in [forged_seed, forged_roster] {
+            forged
+                .height_context
+                .validate()
+                .expect("forged transition remains structurally valid");
             assert_ne!(forged.height_context.id(), canonical.height_context.id());
             assert_eq!(
                 forged.validate(),

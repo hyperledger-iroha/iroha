@@ -18,7 +18,6 @@ use core::{
 };
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
-use iroha_config::parameters::defaults;
 use iroha_core::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
@@ -156,6 +155,10 @@ use iroha_primitives::{
     numeric::{NumericSpec, Quantity, XorQuantity},
 };
 use iroha_schema::Ident;
+use iroha_service_model::{
+    sorafs,
+    soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy},
+};
 use iroha_torii_shared::{
     connect::{
         AppMeta, ConnectCiphertextV1, ConnectControlV1, ConnectFrameV1, ConnectPayloadV1,
@@ -239,8 +242,7 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, RolloutPhase,
-    TransportPolicy, fetch_via_gateway,
+    DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
@@ -1935,14 +1937,14 @@ fn decode_connect_frame_bytes(bytes: &[u8]) -> PyResult<ConnectFrameV1> {
 }
 fn sorafs_default_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
 fn policy_override_u64<'py>(
@@ -2163,7 +2165,7 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-    let expires_default = generated + defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS;
+    let expires_default = generated + sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS;
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
             let secs: u64 = value.extract().map_err(|_| {

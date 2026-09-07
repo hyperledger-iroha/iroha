@@ -17,6 +17,7 @@
 //! privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
+use super::privacy_exact12_network_support::wait_for_transaction_on_peers;
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::blocking::Client;
@@ -35,15 +36,13 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     permission::Permission,
-    prelude::QueryBuilderExt,
     privacy::{
         PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
         PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
     },
-    query::transaction::prelude::FindTransactions,
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -471,65 +470,6 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-fn exact_applied_transaction_visible(
-    client: &Client,
-    transaction: &SignedTransaction,
-) -> Result<bool> {
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let Some(committed) = transactions
-        .iter()
-        .find(|committed| committed.entrypoint_hash() == &expected_hash)
-    else {
-        return Ok(false);
-    };
-    ensure!(
-        committed.entrypoint() == &expected_entrypoint,
-        "entrypoint hash matched different transaction bytes"
-    );
-    ensure!(
-        committed.result().0.is_ok(),
-        "exact-12 catch-up sentinel is visible but finalized as rejected"
-    );
-    Ok(true)
-}
-async fn wait_for_transaction_on_peers(
-    clients: &[Client],
-    transaction: &SignedTransaction,
-    context: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
-    let mut last_observed = Vec::new();
-    loop {
-        let mut visible = 0_usize;
-        last_observed.clear();
-        for (index, client) in clients.iter().enumerate() {
-            match exact_applied_transaction_visible(client, transaction) {
-                Ok(true) => {
-                    visible += 1;
-                    last_observed.push(format!("peer {index}: exact transaction visible"));
-                }
-                Ok(false) => last_observed.push(format!("peer {index}: transaction absent")),
-                Err(error) => last_observed.push(format!("peer {index}: {error}")),
-            }
-        }
-        if visible == clients.len() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{context}: finalized transaction did not converge within \
-                 {PEER_CONVERGENCE_TIMEOUT:?}; {}",
-                last_observed.join("; ")
-            ));
-        }
-        sleep(POLL_INTERVAL).await;
-    }
-}
 fn assert_unreleased_profiles_unavailable(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
@@ -774,6 +714,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             &all_clients[..restart_index],
             &sentinel,
             "healthy-validator unavailable-profile sentinel convergence",
+            PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
         timeout(
@@ -787,6 +728,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
             &all_clients,
             &sentinel,
             "post-restart unavailable-profile sentinel convergence",
+            PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
         let final_height = client
@@ -1289,6 +1231,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &healthy_clients,
             &catch_up_transaction,
             "healthy-validator exact-12 catch-up sentinel finality",
+            PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
         timeout(
@@ -1309,6 +1252,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             &catch_up_transaction,
             "post-restart exact-12 catch-up sentinel visibility",
+            PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
         ensure!(

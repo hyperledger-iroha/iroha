@@ -1,6 +1,6 @@
 #[cfg(all(test, feature = "app_api"))]
 #[test]
-fn asset_holder_filter_extracts_safe_account_constraints() {
+fn asset_holder_filter_candidates_extracts_safe_account_constraints() {
     let first = AccountId::new(
         checked_routing_fixture_keypair(
             0xF0,

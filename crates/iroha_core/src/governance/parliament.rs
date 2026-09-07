@@ -621,8 +621,19 @@ impl norito::json::JsonDeserialize for ParliamentPulseSlotV1 {
         let encoded = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
         Self::from_canonical_json_key(&encoded)
     }
+}
 
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+impl norito::json::JsonObjectKey for ParliamentPulseSlotV1 {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self.canonical_json_key();
+        visitor(&canonical)
+    }
+}
+impl norito::json::JsonObjectKeyOwned for ParliamentPulseSlotV1 {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         Self::from_canonical_json_key(key)
     }
 }

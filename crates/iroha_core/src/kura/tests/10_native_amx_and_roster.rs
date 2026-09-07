@@ -255,7 +255,7 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
         nexus_fee_receipts: Vec::new(),
     };
     let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
-        .expect("fixture participant settlement hash");
+        .expect("fixture participant settlement encodes canonically");
     let mut receipt = NativeAmxParticipantApplicationReceiptArtifact {
         version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
         participant_proposal: proposal.clone(),
@@ -1298,10 +1298,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
     );
     let malformed_temp_dir = TempDir::new().expect("malformed temporary Kura directory");
     let malformed_config = kura_config_for_dir(&malformed_temp_dir, BLOCKS_IN_MEMORY);
-    let (malformed_kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&malformed_config, &lane_config)
-            .expect("initialize malformed temporary Kura");
-    establish_configured_lane_markers_for_test(&malformed_kura, &lane_config);
+    let (malformed_kura, _) = test_kura_with_default_lane_markers(&malformed_config, &lane_config);
     let malformed_entry = malformed_kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("malformed temporary primary lane entry");
@@ -1337,9 +1334,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
             TempDir::new().expect("oversized publication temporary Kura directory");
         let oversized_config = kura_config_for_dir(&oversized_temp_dir, BLOCKS_IN_MEMORY);
         let (oversized_kura, _) =
-            Kura::open_test_kura_with_configured_lane_config(&oversized_config, &lane_config)
-                .expect("initialize oversized publication temporary Kura");
-        establish_configured_lane_markers_for_test(&oversized_kura, &lane_config);
+            test_kura_with_default_lane_markers(&oversized_config, &lane_config);
         let oversized_entry = oversized_kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("oversized publication temporary primary lane entry");

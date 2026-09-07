@@ -1573,6 +1573,32 @@ fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
     assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
 }
 #[test]
+fn native_amx_participant_settlement_declares_canonical_schema_identity() {
+    // This finite wire type was introduced after the immutable compiler capture.
+    let name = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement";
+    let hash = norito::core::schema_hash_for_name(name);
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::nominal_name(),
+        name
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::frame_name(),
+        name
+    );
+    assert_eq!(
+        norito::schema::identity::frame_hash::<NativeAmxParticipantSettlement>(),
+        hash
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSerialize>::schema_hash(),
+        hash
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoDeserialize>::schema_hash(),
+        hash
+    );
+}
+#[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
     assert_eq!(
         <NativeAmxParticipantSettlement as norito::NoritoSchema>::nominal_name(),
@@ -1637,19 +1663,28 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
     let decoded = norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded)
         .expect("decode participant settlement");
     assert_eq!(decoded, settlement);
-    let mut json =
-        norito::json::to_value(&settlement).expect("serialize participant settlement JSON");
+    let json = norito::json::to_value(&settlement).expect("serialize participant settlement JSON");
     assert!(
         json.get("native_amx_receipts").is_none(),
         "the dedicated participant settlement wire type cannot nest Native AMX receipts"
     );
-    json.as_object_mut()
-        .expect("participant settlement JSON object")
-        .insert("native_amx_receipts".to_owned(), norito::json!([]));
-    assert!(
-        norito::json::from_value::<NativeAmxParticipantSettlement>(json).is_err(),
-        "the participant settlement decoder must reject a nested Native AMX receipt field"
+    assert_eq!(
+        norito::json::from_value::<NativeAmxParticipantSettlement>(json.clone())
+            .expect("decode participant settlement JSON"),
+        settlement
     );
+    for nested_receipts in [norito::json!([]), norito::json!([{}])] {
+        let mut recursive_settlement = json.clone();
+        recursive_settlement
+            .as_object_mut()
+            .expect("participant settlement is a JSON object")
+            .insert("native_amx_receipts".to_owned(), nested_receipts);
+        assert!(
+            norito::json::from_value::<NativeAmxParticipantSettlement>(recursive_settlement)
+                .is_err(),
+            "participant settlement JSON must reject the removed recursive field even when empty"
+        );
+    }
 }
 #[test]
 fn native_amx_v2_leg_rejects_removed_recursive_settlement_layout() {

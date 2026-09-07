@@ -35613,7 +35613,7 @@ policy_digest_hex = "{policy_digest_hex}"
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
-                format!("{error:?}").contains(key),
+                format!("{error:?}").contains("`settlement.offline`"),
                 "unexpected error: {error:?}"
             );
         }
@@ -38076,7 +38076,16 @@ publish_delay_seconds = 17
             Value::Integer(101),
         );
         queues.insert("bodies".into(), Value::Integer(310));
-        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            101,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("height-local lifecycle capacity must fit its physical-slot space");
         let report = format!("{error:?}");
@@ -38128,7 +38137,16 @@ publish_delay_seconds = 17
             Value::Integer(33),
         );
         queues.insert("bodies".into(), Value::Integer(106));
-        queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            33,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("home profile admits at most 32 independent authenticated sources");
         let report = format!("{error:?}");
@@ -38207,6 +38225,21 @@ publish_delay_seconds = 17
         assert_eq!(actual.network.deferred_send_max_bytes_total, 1);
     }
     include!("user/kura_and_snapshot_tests.rs");
+    #[test]
+    fn snapshot_resource_defaults_fit_decoder_limits() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.snapshot.resources.max_decode_depth.get(),
+            norito::core::MAX_VALUE_NESTING_DEPTH
+        );
+        assert!(
+            actual
+                .snapshot
+                .resources
+                .validate(actual.snapshot.max_payload_bytes)
+                .is_ok()
+        );
+    }
     #[test]
     fn snapshot_resource_policy_rejects_incoherent_budgets() {
         let invalid_resources = [

@@ -38,6 +38,8 @@ hardware operation reconciliation and publishing the corresponding private state
 snapshot; a journal by itself cannot reconstruct proof witnesses or approve money.
 New lanes use `create_new` and the existing fully verified `bootstrap` operation.
 Missing/corrupt existing history never falls back to a new empty lane.
+Credential provisioning and concrete disk create/restore entry points currently
+have Core test callers; product coordinator integration remains open.
 
 The separate coordinator operation journal reserves caller-persisted identities
 against exact public bindings. Sender bindings use the tagged canonical Norito

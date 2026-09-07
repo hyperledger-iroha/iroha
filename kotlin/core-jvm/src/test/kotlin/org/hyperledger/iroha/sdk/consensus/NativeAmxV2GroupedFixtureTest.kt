@@ -118,6 +118,25 @@ class NativeAmxV2GroupedFixtureTest {
     }
 
     @Test
+    fun `participant settlement rejects recursive receipts even when empty`() {
+        val group = fixture().objectValue("golden").objectValue("receipt_group")
+        NativeAmxV2.parseReceiptGroup(group.toString())
+        val settlementPath = listOf(
+            "native_amx_receipts", "0", "legs", "0", "participant_settlement",
+        )
+        val settlement = resolve(group, settlementPath).jsonObject
+        assertEquals(12, settlement.size)
+        assertFalse(settlement.containsKey("native_amx_receipts"))
+        val recursive = JsonObject(
+            settlement + ("native_amx_receipts" to JsonArray(emptyList())),
+        )
+        val error = assertFailsWith<IllegalArgumentException> {
+            NativeAmxV2.parseReceiptGroup(assign(group, settlementPath, recursive).toString())
+        }
+        assertTrue(error.message.orEmpty().contains("unknown field `native_amx_receipts`"))
+    }
+
+    @Test
     fun `participant proposal requires an explicit null payload hint`() {
         val group = fixture()
             .objectValue("golden")

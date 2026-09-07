@@ -608,6 +608,7 @@ impl HeightContext {
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
         }
+        self.quorum.validate_roster(&self.roster)?;
         if self.kagemusha_mint_finality_epoch_id == [0; 32] {
             return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
         }
@@ -644,7 +645,6 @@ impl HeightContext {
             (false, Some(_)) => return Err(ValidationError::UnexpectedNextEpochSnapshot),
             (false, None) => {}
         }
-        self.quorum.validate_roster(&self.roster)?;
         if self.roster.iter().any(|validator| validator.power != 1) {
             return Err(ValidationError::VotingPowerNotOne);
         }

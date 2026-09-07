@@ -372,6 +372,20 @@ fn write_lower_hex_byte_to(
     out.push(char::from(ALPHABET[usize::from(byte >> 4)]))?;
     out.push(char::from(ALPHABET[usize::from(byte & 0x0f)]))
 }
+#[cfg(feature = "json")]
+#[allow(unsafe_code)]
+fn visit_lower_hex_byte(
+    byte: u8,
+    visitor: &mut impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+) -> Result<(), json::BoundedJsonError> {
+    const ALPHABET: &[u8; 16] = b"0123456789abcdef";
+    let encoded = [
+        ALPHABET[usize::from(byte >> 4)],
+        ALPHABET[usize::from(byte & 0x0f)],
+    ];
+    // SAFETY: both bytes are selected from the ASCII hexadecimal alphabet.
+    visitor(unsafe { core::str::from_utf8_unchecked(&encoded) })
+}
 
 impl NoritoSerialize for AccountAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
@@ -431,8 +445,39 @@ impl JsonDeserialize for AccountAddress {
         };
         account_address_from_json_str(value)
     }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKey for AccountAddress {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self
+            .canonical_hex()
+            .expect("AccountAddress must produce canonical hex");
+        visitor(&canonical)
+    }
 
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
+    fn visit_json_key_text_checked(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+    ) -> Result<(), json::BoundedJsonError> {
+        visitor("0x")?;
+        self.emit_canonical_bytes(|chunk| {
+            for &byte in chunk {
+                visit_lower_hex_byte(byte, &mut visitor)?;
+            }
+            Ok(())
+        })
+        .map_err(|error| match error {
+            CanonicalEmissionError::Account(_) => json::BoundedJsonError::Unsupported,
+            CanonicalEmissionError::Sink(error) => error,
+        })
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKeyOwned for AccountAddress {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         account_address_from_json_str(key)
     }
 }
@@ -1693,14 +1738,34 @@ mod tests {
                 AccountAddress::json_from_value(&value)
             }),
             norito::core::with_decode_limits_measured(limits(exact), || {
-                AccountAddress::json_from_map_key(&literal)
+                <AccountAddress as json::JsonObjectKeyOwned>::from_json_key_text(&literal)
             }),
         ] {
             assert_eq!(decode.0.expect("exact AccountAddress budget"), address);
             assert_eq!(decode.1.total_allocated_bytes(), exact);
         }
+        let mut key_text = String::new();
+        json::JsonObjectKey::visit_json_key_text_checked(&address, |chunk| {
+            key_text.push_str(chunk);
+            Ok(())
+        })
+        .expect("stream canonical AccountAddress key");
+        assert_eq!(key_text, literal);
+        let mut accepted = 0_usize;
+        let error = json::JsonObjectKey::visit_json_key_text_checked(&address, |chunk| {
+            let next = accepted
+                .checked_add(chunk.len())
+                .ok_or(json::BoundedJsonError::BodyTooLarge)?;
+            if next > literal.len() - 1 {
+                return Err(json::BoundedJsonError::BodyTooLarge);
+            }
+            accepted = next;
+            Ok(())
+        })
+        .expect_err("one-byte-short key sink must reject AccountAddress");
+        assert_eq!(error, json::BoundedJsonError::BodyTooLarge);
         let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
-            AccountAddress::json_from_map_key(&literal)
+            <AccountAddress as json::JsonObjectKeyOwned>::from_json_key_text(&literal)
         });
         assert!(matches!(decoded, Err(json::Error::DecodeResourceLimit)));
         assert!(usage.total_allocated_bytes() < exact);
@@ -2518,7 +2583,8 @@ mod tests {
         )
         .expect("canonical multisig header")
         .encode();
-        for count in [u16::MAX, 1_u16] {
+        // Reject truncated member inventories before charging or allocating their counts.
+        for count in [u16::MAX, 1_u16, 2_u16] {
             let [high, low] = count.to_be_bytes();
             let canonical = [header, CONTROLLER_MULTISIG_TAG, 1, 0, 1, high, low];
             let (result, usage) = norito::core::with_decode_limits_measured(
@@ -2530,6 +2596,7 @@ mod tests {
             assert_eq!(usage.total_allocated_bytes(), 0);
         }
     }
+
     #[test]
     fn parse_encoded_accepts_i105_format() {
         let account = AccountId::new(ed25519_pk());

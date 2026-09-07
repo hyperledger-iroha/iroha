@@ -27,7 +27,6 @@ use crate::zk::kagemusha_v1_recursion::{
     accumulation::{
         fold_kagemusha_ep_accumulators_with_rng_v1, fold_kagemusha_eq_accumulators_with_rng_v1,
     },
-    deferred_parent::kagemusha_protocol_structure_digest_v1,
     generate_kagemusha_mint_authority_artifacts_v1,
     generate_kagemusha_mint_authorization_artifacts_v1,
     generate_kagemusha_mint_hash_artifacts_for_guarded_test_v1,

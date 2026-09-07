@@ -6759,7 +6759,7 @@ mod tests {
     #[test]
     fn merkle_path_quote_rounds_partial_leaf_up_at_power_of_two_boundary() {
         const GAS_LIMIT: u64 = 262_148;
-        let mut vm = IVM::new_with_config(crate::IvmConfig::new(GAS_LIMIT));
+        let mut vm = IVM::new_with_config(crate::runtime::IvmConfig::new(GAS_LIMIT));
         assert_eq!(vm.memory.stack_limit(), 1_048_592);
         vm.memory
             .store_u32(Memory::HEAP_START, 0xfeed_beef)

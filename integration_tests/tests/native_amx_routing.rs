@@ -1935,8 +1935,11 @@ fn assert_grouped_native_amx_execution(
             && canonical_bank_leg
                 .participant_settlement
                 .nexus_fee_receipts
-                .is_empty(),
-        "BANK participant settlement must remain zero-effect and contain no Nexus fee receipts"
+                .is_empty()
+            && norito::json::to_value(&canonical_bank_leg.participant_settlement)?
+                .get("native_amx_receipts")
+                .is_none(),
+        "BANK participant settlement must remain zero-effect and contain no nested receipts"
     );
     for (transaction, receipt) in transactions.iter().zip(&receipts) {
         let leg = bank_participant_leg(receipt)?;

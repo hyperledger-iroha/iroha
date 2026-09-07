@@ -413,6 +413,10 @@ pub fn write_json_display_to<T: fmt::Display + ?Sized, S: JsonWriteSink + ?Sized
 /// visitor error and stops subsequent visitor calls even if a formatter ignores
 /// its write error. An intrinsic formatting failure returns
 /// [`BoundedJsonError::Unsupported`].
+///
+/// # Errors
+///
+/// Returns the first visitor error, or `Unsupported` if formatting itself fails.
 pub fn visit_json_display_text<T: fmt::Display + ?Sized>(
     value: &T,
     visitor: impl FnMut(&str) -> Result<(), BoundedJsonError>,

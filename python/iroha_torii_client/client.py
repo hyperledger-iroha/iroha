@@ -5574,47 +5574,10 @@ class _SumeragiV2StatusParser:
         ]
 
     @classmethod
-    def _settlement(
-        cls, value: Any, *, context: str, native_amx_participant: bool = False
-    ) -> Dict[str, Any]:
-        fields = {
-            "block_height",
-            "lane_id",
-            "lane_incarnation",
-            "dataspace_id",
-            "tx_count",
-            "total_local_amount",
-            "total_xor_due",
-            "total_xor_after_haircut",
-            "total_xor_variance",
-            "swap_metadata",
-            "receipts",
-            "nexus_fee_receipts",
-        }
-        if not native_amx_participant:
-            fields.add("native_amx_receipts")
-        record = cls._exact_mapping(
-            value,
-            context,
-            fields,
-        )
-        block_height = cls._unsigned(
-            record.get("block_height"), f"{context}.block_height"
-        )
-        lane_id = cls._unsigned(
-            record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
-        )
-        lane_incarnation = cls._nonzero_hash(
-            record.get("lane_incarnation"), f"{context}.lane_incarnation"
-        )
-        dataspace_id = cls._unsigned(
-            record.get("dataspace_id"), f"{context}.dataspace_id"
-        )
+    def _settlement_receipts(cls, value: Any, *, context: str) -> List[Dict[str, Any]]:
         receipts: List[Dict[str, Any]] = []
-        for index, receipt_value in enumerate(
-            cls._array(record.get("receipts"), f"{context}.receipts")
-        ):
-            receipt_context = f"{context}.receipts[{index}]"
+        for index, receipt_value in enumerate(cls._array(value, context)):
+            receipt_context = f"{context}[{index}]"
             receipt = cls._exact_mapping(
                 receipt_value,
                 receipt_context,
@@ -5629,7 +5592,9 @@ class _SumeragiV2StatusParser:
             )
             receipts.append(
                 {
-                    "source_id": cls._byte32(receipt.get("source_id"), f"{receipt_context}.source_id"),
+                    "source_id": cls._byte32(
+                        receipt.get("source_id"), f"{receipt_context}.source_id"
+                    ),
                     "local_amount": cls._quantity(
                         receipt.get("local_amount"),
                         f"{receipt_context}.local_amount",
@@ -5643,9 +5608,47 @@ class _SumeragiV2StatusParser:
                         receipt.get("xor_variance"),
                         f"{receipt_context}.xor_variance",
                     ),
-                    "timestamp_ms": cls._unsigned(receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"),
+                    "timestamp_ms": cls._unsigned(
+                        receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"
+                    ),
                 }
             )
+        return receipts
+
+    @classmethod
+    def _settlement(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+                "native_amx_receipts",
+            },
+        )
+        block_height = cls._unsigned(
+            record.get("block_height"), f"{context}.block_height"
+        )
+        lane_id = cls._unsigned(
+            record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
+        )
+        lane_incarnation = cls._nonzero_hash(
+            record.get("lane_incarnation"), f"{context}.lane_incarnation"
+        )
+        dataspace_id = cls._unsigned(
+            record.get("dataspace_id"), f"{context}.dataspace_id"
+        )
+        receipts = cls._settlement_receipts(record.get("receipts"), context=f"{context}.receipts")
         swap_value = record.get("swap_metadata")
         if swap_value is None:
             swap_metadata = None
@@ -5707,21 +5710,19 @@ class _SumeragiV2StatusParser:
                 )
             )
         ]
-        native_amx_receipts: List[Dict[str, Any]] = []
-        if not native_amx_participant:
-            native_amx_receipts = [
-                cls._native_amx_receipt(
-                    item,
-                    context=f"{context}.native_amx_receipts[{index}]",
+        native_amx_receipts = [
+            cls._native_amx_receipt(
+                item,
+                context=f"{context}.native_amx_receipts[{index}]",
+            )
+            for index, item in enumerate(
+                cls._array(
+                    record.get("native_amx_receipts"),
+                    f"{context}.native_amx_receipts",
+                    maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
                 )
-                for index, item in enumerate(
-                    cls._array(
-                        record.get("native_amx_receipts"),
-                        f"{context}.native_amx_receipts",
-                        maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-                    )
-                )
-            ]
+            )
+        ]
         if len({item["source_id"] for item in nexus_fee_receipts}) != len(
             nexus_fee_receipts
         ):
@@ -5767,7 +5768,7 @@ class _SumeragiV2StatusParser:
                 f"{context} native AMX receipts do not bind the exact ordered "
                 "source group"
             )
-        settlement = {
+        return {
             "block_height": block_height,
             "lane_id": lane_id,
             "lane_incarnation": lane_incarnation,
@@ -5787,10 +5788,8 @@ class _SumeragiV2StatusParser:
             "swap_metadata": swap_metadata,
             "receipts": receipts,
             "nexus_fee_receipts": nexus_fee_receipts,
+            "native_amx_receipts": native_amx_receipts,
         }
-        if not native_amx_participant:
-            settlement["native_amx_receipts"] = native_amx_receipts
-        return settlement
 
     @classmethod
     def _nexus_fee_schedule(cls, value: Any, *, context: str) -> Dict[str, Any]:
@@ -6390,6 +6389,57 @@ class _SumeragiV2StatusParser:
         }
 
     @classmethod
+    def _native_amx_participant_settlement(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+            },
+        )
+        if record["swap_metadata"] is not None or record["nexus_fee_receipts"] != []:
+            raise RuntimeError(f"{context} cannot contain swap metadata or fee receipts")
+        cls._array(
+            record["receipts"],
+            f"{context}.receipts",
+            minimum=1,
+            maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+        )
+        return {
+            "block_height": cls._unsigned(record["block_height"], f"{context}.block_height"),
+            "lane_id": cls._unsigned(record["lane_id"], f"{context}.lane_id", maximum=cls.MAX_U32),
+            "lane_incarnation": cls._nonzero_hash(
+                record["lane_incarnation"], f"{context}.lane_incarnation"
+            ),
+            "dataspace_id": cls._unsigned(record["dataspace_id"], f"{context}.dataspace_id"),
+            "tx_count": cls._unsigned(record["tx_count"], f"{context}.tx_count"),
+            "total_local_amount": cls._quantity(
+                record["total_local_amount"], f"{context}.total_local_amount"
+            ),
+            "total_xor_due": cls._quantity(record["total_xor_due"], f"{context}.total_xor_due"),
+            "total_xor_after_haircut": cls._quantity(
+                record["total_xor_after_haircut"], f"{context}.total_xor_after_haircut"
+            ),
+            "total_xor_variance": cls._quantity(
+                record["total_xor_variance"], f"{context}.total_xor_variance"
+            ),
+            "swap_metadata": None,
+            "receipts": cls._settlement_receipts(record["receipts"], context=f"{context}.receipts"),
+            "nexus_fee_receipts": [],
+        }
+
+    @classmethod
     def _native_amx_leg(cls, value: Any, *, context: str) -> Dict[str, Any]:
         record = cls._exact_mapping(
             value,
@@ -6416,20 +6466,8 @@ class _SumeragiV2StatusParser:
             record.get("participant_proposal"),
             context=f"{context}.participant_proposal",
         )
-        settlement_value = cls._mapping(
-            record.get("participant_settlement"),
-            f"{context}.participant_settlement",
-        )
-        cls._array(
-            settlement_value.get("receipts"),
-            f"{context}.participant_settlement.receipts",
-            minimum=1,
-            maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-        )
-        settlement = cls._settlement(
-            settlement_value,
-            context=f"{context}.participant_settlement",
-            native_amx_participant=True,
+        settlement = cls._native_amx_participant_settlement(
+            record.get("participant_settlement"), context=f"{context}.participant_settlement"
         )
         settlement_hash = cls._nonzero_hash(
             record.get("participant_settlement_hash"),

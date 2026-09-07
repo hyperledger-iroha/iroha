@@ -1763,6 +1763,11 @@ mod tests {
                 .expect("four-byte variant tag");
             let decoded_index = u32::from_le_bytes(tag_bytes);
             assert_eq!(decoded_index, expected_index);
+            assert_eq!(
+                BridgeProofPayload::decode(&mut encoded.as_slice())
+                    .expect("complete bridge payload decodes"),
+                *payload
+            );
         }
     }
     #[test]

@@ -3714,7 +3714,7 @@ fn runtime_receipt_validation_separates_submission_and_persisted_sequence_states
 
 #[test]
 fn runtime_receipt_validate_rejects_invalid_host_attribution() {
-    let receipt = SoraRuntimeReceiptV1 {
+    let mut receipt = SoraRuntimeReceiptV1 {
         schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: sample_hash(167),
         service_name: "portal".parse().expect("valid name"),
@@ -3744,6 +3744,15 @@ fn runtime_receipt_validate_rejects_invalid_host_attribution() {
             field: "peer_id",
         }
     ));
+    receipt
+        .execution_host
+        .as_mut()
+        .expect("fixture carries host attribution")
+        .peer_id = "invalid-peer-key".to_owned();
+    let error = receipt
+        .validate()
+        .expect_err("malformed host attribution must be rejected");
+    assert_soracloud_invalid_field(error, "peer_id");
 }
 #[test]
 fn deterministic_validator_host_accepts_independently_canonical_account_and_peer() {
@@ -4294,6 +4303,10 @@ fn agent_apartment_audit_event_validation_requires_execution_fields() {
         .validate()
         .expect_err("execution audit events must carry a result commitment");
     assert_soracloud_invalid_field(error, "result_commitment");
+    event.result_commitment = Some(sample_hash(171));
+    event
+        .validate()
+        .expect("complete execution audit events must validate");
 }
 #[test]
 fn fhe_param_set_validate_rejects_unregistered_backend() {

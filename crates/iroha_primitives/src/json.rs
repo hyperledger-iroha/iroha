@@ -347,11 +347,6 @@ impl json::JsonDeserialize for Json {
             .map_err(|error| json::Error::Message(error.to_string()))?;
         Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
-        let canonical = json::to_json_bounded(key, MAX_JSON_BYTES)
-            .map_err(|error| json::Error::Message(error.to_string()))?;
-        Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
-    }
 }
 impl From<&Value> for Json {
     fn from(value: &Value) -> Self {
@@ -687,14 +682,11 @@ mod tests {
         assert_eq!(parsed, value);
     }
     #[test]
-    fn semantic_value_and_map_key_conversions_use_canonical_bounded_output() {
+    fn semantic_value_conversion_uses_canonical_bounded_output() {
         let value = norito::json!({"z": 2u64, "a": [true, null]});
         let converted = <Json as json::JsonDeserialize>::json_from_value(&value)
             .expect("convert semantic JSON value");
         assert_eq!(converted.get(), r#"{"a":[true,null],"z":2}"#);
-        let key = <Json as json::JsonDeserialize>::json_from_map_key("quote\"line\n")
-            .expect("convert JSON map key");
-        assert_eq!(key.get(), r#""quote\"line\n""#);
     }
     #[test]
     fn json_wrapper_has_closed_output_bound_without_reparsing() {

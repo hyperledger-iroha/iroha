@@ -11590,13 +11590,12 @@ mod manifest_tests {
         let root = canonical_temp_path(&temp);
         let config_path = root.join("orchestrator.json");
         let json_out_path = root.join("summary.json");
+        let mut local_proxy = LocalQuicProxyConfig::default();
+        local_proxy.bind_addr = "127.0.0.1:0".into();
+        local_proxy.telemetry_label = Some("test-proxy".into());
+        local_proxy.proxy_mode = ProxyMode::Bridge;
         let config = OrchestratorConfig {
-            local_proxy: Some(LocalQuicProxyConfig {
-                bind_addr: "127.0.0.1:0".into(),
-                telemetry_label: Some("test-proxy".into()),
-                proxy_mode: ProxyMode::Bridge,
-                ..LocalQuicProxyConfig::default()
-            }),
+            local_proxy: Some(local_proxy),
             ..OrchestratorConfig::default()
         };
         let config_value = orchestrator_config_to_json(&config);

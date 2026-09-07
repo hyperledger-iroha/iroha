@@ -58,7 +58,8 @@ pub(crate) mod pasta_cycle_loader;
 /// Dense normalized-GLV MSM used by paired Pasta recursion.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_dense_msm;
-/// Shared fixed-profile accounting for Pasta IPA recursive proofs.
+/// Test accounting for direct-instance Pasta IPA recursive proofs.
+#[cfg(test)]
 pub(crate) mod pasta_ipa_recursion;
 /// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
 #[cfg(feature = "zk-halo2-ipa")]

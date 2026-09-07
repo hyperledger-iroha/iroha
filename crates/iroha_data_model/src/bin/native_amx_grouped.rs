@@ -1179,11 +1179,14 @@ fn negative_controls(
         b"native-amx-v2-grouped-fixture-coordinator-incarnation",
     ))
     .expect("hash serializes to JSON");
-    let mut recursively_shaped_participant_settlement =
+    // The participant wire type has no nested Native AMX receipt field. Replace
+    // the complete object so the control injects the forbidden field without
+    // requiring that field to exist in the canonical fixture.
+    let mut nested_native_settlement =
         json::to_value(&commitment.native_amx_receipts[0].legs[0].participant_settlement)?;
-    recursively_shaped_participant_settlement
+    nested_native_settlement
         .as_object_mut()
-        .expect("participant settlement serializes as an object")
+        .ok_or("participant settlement must serialize to a JSON object")?
         .insert("native_amx_receipts".to_owned(), norito::json!([{}]));
     let mut controls = vec![
         control(
@@ -1434,11 +1437,7 @@ fn negative_controls(
         ),
         control(
             "nested_native_receipt",
-            mutation(
-                "replace",
-                &settlement,
-                Some(recursively_shaped_participant_settlement),
-            ),
+            mutation("replace", &settlement, Some(nested_native_settlement)),
         ),
         control(
             "nested_fee_receipt",

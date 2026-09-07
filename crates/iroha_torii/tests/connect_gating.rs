@@ -441,10 +441,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
     cfg.tiered_state.enabled = false;
     cfg.tiered_state.hot_retained_keys = 0;
     cfg.tiered_state.max_snapshots = 0;
-    cfg.settlement = A::Settlement {
-        kagemusha: A::Kagemusha::default(),
-        router: A::Router::default(),
-    };
+    cfg.settlement = A::Settlement::default();
     cfg.fraud_monitoring = A::FraudMonitoring {
         enabled: defaults::fraud_monitoring::ENABLED,
         service_endpoints: Vec::new(),

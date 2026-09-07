@@ -4778,6 +4778,7 @@ export interface ToriiNativeAmxParticipantLaneBlockProposal {
   payload_block_hint: null;
 }
 
+/** Exact nonrecursive zero-effect settlement certified by a Native AMX participant. */
 export interface ToriiNativeAmxParticipantSettlement {
   block_height: ToriiU64;
   lane_id: number;

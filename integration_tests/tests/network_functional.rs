@@ -13,6 +13,8 @@ mod observer_sync;
 mod privacy_exact12_activation_network;
 #[path = "privacy_exact12_jindo_network.rs"]
 mod privacy_exact12_jindo_network;
+#[path = "privacy_exact12_network_support.rs"]
+mod privacy_exact12_network_support;
 #[cfg(feature = "privacy-release-evidence")]
 #[path = "privacy_exact12_orchard_pq_masp_network.rs"]
 mod privacy_exact12_orchard_pq_masp_network;

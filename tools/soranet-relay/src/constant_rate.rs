@@ -140,7 +140,17 @@ impl JsonDeserialize for ConstantRateProfileName {
             .ok_or_else(|| JsonError::Message("expected string".into()))
             .and_then(Self::parse_str)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, JsonError> {
+}
+impl json::JsonObjectKey for ConstantRateProfileName {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.as_str())
+    }
+}
+impl json::JsonObjectKeyOwned for ConstantRateProfileName {
+    fn from_json_key_text(key: &str) -> Result<Self, JsonError> {
         Self::parse_str(key)
     }
 }
@@ -161,5 +171,17 @@ mod tests {
         let parsed = ConstantRateProfileName::from_str("null").expect("parse null");
         assert_eq!(parsed, ConstantRateProfileName::Null);
         assert_eq!(parsed.as_str(), "null");
+        let mut key_text = String::new();
+        json::JsonObjectKey::visit_json_key_text(&parsed, |chunk| {
+            key_text.push_str(chunk);
+            Ok::<_, core::convert::Infallible>(())
+        })
+        .expect("infallible profile key visitor");
+        assert_eq!(key_text, "null");
+        assert_eq!(
+            <ConstantRateProfileName as json::JsonObjectKeyOwned>::from_json_key_text(&key_text)
+                .expect("profile object key"),
+            parsed
+        );
     }
 }

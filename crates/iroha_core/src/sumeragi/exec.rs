@@ -891,7 +891,7 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
         };
         let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
-            .expect("fixture participant settlement hash");
+            .expect("fixture participant settlement encodes canonically");
         ManifestParticipantFixture {
             proposal,
             settlement,

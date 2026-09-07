@@ -808,6 +808,7 @@ pub struct ModerationAppealRecordV1 {
     /// Canonically account-ordered `PoP`-eligible candidates.
     pub eligible_jurors: Vec<AccountId>,
     /// First committed post-registration block, pinned by consensus maintenance.
+    /// JSON requires this field even before the anchor exists, when its value is `null`.
     #[norito(required)]
     pub sortition_anchor: Option<ModerationSortitionAnchorV1>,
     /// Selected primary panel and waitlist after registration closes.

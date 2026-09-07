@@ -420,14 +420,29 @@ def _settlement_receipt(receipt: Mapping[str, Any]) -> bytes:
 def compute_native_amx_participant_settlement_hash(
     settlement: Mapping[str, Any],
 ) -> str:
-    """Hash a ``NativeAmxParticipantSettlement`` exactly as Rust."""
+    """Hash the nonrecursive ``NativeAmxParticipantSettlement`` exactly as Rust."""
+
+    expected_fields = {
+        "block_height",
+        "lane_id",
+        "lane_incarnation",
+        "dataspace_id",
+        "tx_count",
+        "total_local_amount",
+        "total_xor_due",
+        "total_xor_after_haircut",
+        "total_xor_variance",
+        "swap_metadata",
+        "receipts",
+        "nexus_fee_receipts",
+    }
+    if set(settlement) != expected_fields:
+        raise ValueError("Native AMX participant settlement must contain exactly its 12 fields")
 
     if settlement.get("swap_metadata") is not None:
         raise ValueError("Native AMX participant settlement must not contain swap metadata")
     if settlement.get("nexus_fee_receipts"):
         raise ValueError("Native AMX participant settlement must not contain fee receipts")
-    if "native_amx_receipts" in settlement:
-        raise ValueError("Native AMX participant settlement cannot contain Native AMX receipts")
     payload = _struct(
         (
             _u64(settlement["block_height"]),
@@ -445,6 +460,4 @@ def compute_native_amx_participant_settlement_hash(
         )
     )
     frame = _norito_frame(_SETTLEMENT_TYPE, payload)
-    return _hash_literal(
-        _u64(len(_SETTLEMENT_HASH_DOMAIN)) + _SETTLEMENT_HASH_DOMAIN + frame
-    )
+    return _hash_literal(_u64(len(_SETTLEMENT_HASH_DOMAIN)) + _SETTLEMENT_HASH_DOMAIN + frame)

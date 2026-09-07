@@ -27117,7 +27117,7 @@ pub(super) mod tests {
             .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment =
             compute_native_amx_participant_settlement_hash(&participant_settlement)
-                .expect("fixture participant settlement hash");
+                .expect("fixture participant settlement encodes canonically");
         let mut participant_proposal = proposal.clone();
         participant_proposal.payload_block_hint = None;
         NativeAmxAttestationRequestV2 {
@@ -27235,7 +27235,7 @@ pub(super) mod tests {
             .expect("single-source distinct-participant settlement is valid");
         body.participant_settlement_commitment =
             compute_native_amx_participant_settlement_hash(&participant_settlement)
-                .expect("fixture participant settlement hash");
+                .expect("fixture participant settlement encodes canonically");
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),

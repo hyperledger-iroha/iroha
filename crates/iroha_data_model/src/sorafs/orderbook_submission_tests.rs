@@ -116,6 +116,12 @@ fn embedded_signature_owner_and_discriminant_fail_closed() {
     let canonical = AccountAddress::from_account_id(&AccountId::new(keypair(seed).public_key().clone())).unwrap();
     let mut alternate = hex::decode(canonical.canonical_hex().unwrap().trim_start_matches("0x")).unwrap(); alternate[0] ^= 0b0010_0000;
     assert!(matches!(AccountAddress::from_canonical_bytes(&alternate), Err(crate::account::AccountAddressError::InvalidHeaderVersion(1))));
+
+    // I105 for raw header 0x20: its checksum is valid, but header version 1 is retired.
+    let alternate = "testZVVNPUA";
+    assert!(matches!(AccountAddress::from_i105_for_discriminant(alternate, Some(DISCRIMINANT)), Err(crate::account::AccountAddressError::InvalidHeaderVersion(1))));
+    let alternate = signed(vec![order_instruction(alternate.as_bytes().to_vec(), seed)], seed);
+    assert_eq!(inspect_sorafs_orderbook_submission_for_discriminant_v1(&alternate.encode_wire_v1().unwrap(), Route::SubmitOrder, &network(NETWORK_SEED), DISCRIMINANT), Err(Error::InvalidEmbeddedPayload));
 }
 #[test]
 #[rustfmt::skip]

@@ -624,7 +624,7 @@ mod tests {
         let const_vec = ConstVec::from(items.clone());
         let mut const_bytes = Vec::new();
         ncore::serialize_to_buffer(&const_vec, &mut const_bytes)
-            .expect("serialize ConstVec<Vec<u8>>");
+            .expect("serialize ConstVec<Vec<u8>> with packed-seq flags");
         let mut vec_bytes = Vec::new();
         ncore::serialize_to_buffer(&items, &mut vec_bytes).expect("serialize Vec<Vec<u8>>");
         assert_eq!(

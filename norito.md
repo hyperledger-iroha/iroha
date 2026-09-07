@@ -672,6 +672,20 @@ Maps encode deterministically with the same active layout flags:
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
 
+JSON objects have a separate key contract. `JsonObjectKey` supplies canonical,
+unquoted text; the map writer adds quotes and applies the same escaping as JSON
+strings. `JsonObjectKeyOwned` parses that text directly when decoding. Numeric
+and boolean keys therefore use quoted decimal and `true`/`false` spellings.
+Byte-array keys use uppercase hexadecimal. Arbitrary JSON values, optional
+values, tuples, and collections are not object keys; their ordinary value
+serializers cannot establish an unambiguous key identity.
+
+Bounded writers visit key text through the checked contract, including through
+borrowed keys, and stop on the first conversion or output-limit error. Streaming
+formatters must preserve that error even if a formatter ignores a failed write.
+Key decoders retain duplicate-key rejection and the active decode resource
+limits. This JSON contract does not change the binary map layout above.
+
 ## MerkleTree Derived-Cache Encoding
 
 `iroha_crypto::MerkleTree<T>` never serializes its breadth-first internal-node

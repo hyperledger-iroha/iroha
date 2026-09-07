@@ -225,3 +225,8 @@ path = "tests/exact_field_streaming_allocations.rs"
 name = "json_parse_string_allocations"
 path = "tests/json_parse_string_allocations.rs"
 required-features = ["json"]
+
+[[test]]
+name = "json_object_key_allocations"
+path = "tests/json_object_key_allocations.rs"
+required-features = ["json"]

@@ -542,6 +542,19 @@ impl norito::json::JsonDeserialize for LaneId {
     }
 }
 #[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for LaneId {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for LaneId {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        <u32 as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
+    }
+}
+
+#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ShardId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -2125,6 +2138,19 @@ impl norito::json::JsonDeserialize for DataSpaceId {
         Ok(Self(value))
     }
 }
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for DataSpaceId {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for DataSpaceId {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        <u64 as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

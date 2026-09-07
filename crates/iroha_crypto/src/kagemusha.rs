@@ -398,10 +398,12 @@ mod tests {
         )
         .expect("seal");
         assert_eq!(sealed.ephemeral_public_key, ALICE_PUBLIC);
+        // Cross-checked with cryptography's X25519/HKDF-SHA256 and libsodium's
+        // XChaCha20-Poly1305 using the same explicit material.
         assert_eq!(
             sealed.ciphertext_and_tag,
             hex_literal::hex!(
-                "8e0abea022b4fc8fa6c3f3d9e8c1d5e5c2f7e1990d5afa834ef24b32d47932ab359e4a36750231b7d49f37d17ae4d926"
+                "0a58ba20d5b9ee42b602c1a8759e696523417181d33b2d35a1679c1d382b36dc6ecff4748e5d4a8db7139d59d14475a1"
             )
         );
         let opened = open_kagemusha_credit_bytes_v1(

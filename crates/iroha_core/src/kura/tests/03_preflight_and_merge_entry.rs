@@ -885,7 +885,7 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
     };
     let participant_settlement_hash =
         compute_native_amx_participant_settlement_hash(&participant_settlement)
-            .expect("fixture participant settlement hash");
+            .expect("fixture participant settlement encodes canonically");
     let participant_validator_set = Vec::<PeerId>::new();
     let participant_validator_set_hash = HashOf::new(&participant_validator_set);
     let source_id = [0x73; Hash::LENGTH];

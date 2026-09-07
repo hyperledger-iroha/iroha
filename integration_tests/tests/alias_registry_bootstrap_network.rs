@@ -419,21 +419,21 @@ fn validator_bindings(
             .get("type")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("lane validator item omitted status.type"))?;
-        let validator_literal = item
-            .get("validator")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("lane validator item omitted validator"))?;
-        let validator = AccountId::parse_encoded(validator_literal)?;
+        let validator = AccountId::parse_encoded(
+            item.get("validator")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| eyre!("lane validator item omitted validator"))?,
+        )?;
         let peer = item
             .get("peer_id")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("lane validator item omitted peer_id"))?
             .parse()?;
-        let stake_account_literal = item
-            .get("stake_account")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("lane validator item omitted stake_account"))?;
-        let stake_account = AccountId::parse_encoded(stake_account_literal)?;
+        let stake_account = AccountId::parse_encoded(
+            item.get("stake_account")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| eyre!("lane validator item omitted stake_account"))?,
+        )?;
         ensure!(
             stake_account == validator
                 && item
@@ -2332,10 +2332,10 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     }
     // Preserve every original layer, including fees, lane authority and signed
     // genesis. The one new layer adds only the canonical BPNG catalog identity.
-    let mut layers = network
+    let mut layers: Vec<Cow<'static, Table>> = network
         .config_layers()
         .map(|layer| Cow::Owned(layer.into_owned()))
-        .collect::<Vec<Cow<'static, Table>>>();
+        .collect::<Vec<_>>();
     layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
         timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;

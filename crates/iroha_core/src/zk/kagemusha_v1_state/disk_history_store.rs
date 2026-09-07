@@ -39,6 +39,14 @@ pub(crate) struct KagemushaHistoryDeviceCredentialsV1 {
 
 impl KagemushaHistoryDeviceCredentialsV1 {
     /// Construct one exact profile/epoch credential history, rejecting duplicate epochs.
+    // TODO: Supply pinned credential history from the product coordinator's provisioning owner.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the product coordinator has not wired durable history provisioning"
+        )
+    )]
     pub(crate) fn new(
         profile_id: DigestV1,
         keys: impl IntoIterator<Item = (u128, KagemushaDevicePublicKeyV1)>,
@@ -116,6 +124,14 @@ pub(crate) struct KagemushaDiskAuthenticatedHistoryStoreV1 {
 
 impl KagemushaDiskAuthenticatedHistoryStoreV1 {
     /// Create new private history; existing paths are never reset or reused.
+    // TODO: Wire new durable lanes into the product coordinator's verified bootstrap flow.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the product coordinator has not wired durable lane creation"
+        )
+    )]
     pub(crate) fn create_new(
         path: &Path,
         lane_binding: DigestV1,
@@ -291,6 +307,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         self.state.require_prepared(transaction)
     }
 
+    #[cfg(test)]
     fn overlay_usage(&self) -> KagemushaHistoryOverlayUsageV1 {
         self.state.overlay_usage()
     }
@@ -303,6 +320,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         self.state.read_node(address)
     }
 
+    #[cfg(test)]
     fn read_committed_root(
         &self,
         tree: KagemushaHistoryTreeV1,

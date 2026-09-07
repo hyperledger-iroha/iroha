@@ -24,12 +24,9 @@ use halo2_proofs::{
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
     plonk::{Circuit, ProvingKey, VerifyingKey, create_proof, keygen_vk},
-    poly::{
-        commitment::ParamsProver as _,
-        ipa::{
-            commitment::{IPACommitmentScheme, ParamsIPA},
-            multiopen::ProverIPA,
-        },
+    poly::ipa::{
+        commitment::{IPACommitmentScheme, ParamsIPA},
+        multiopen::ProverIPA,
     },
 };
 use iroha_crypto::{Hash, HashOf, kagemusha::KagemushaRecoverySeedV1};
@@ -39,11 +36,10 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     kagemusha::{
-        KAGEMUSHA_HALO2_K_V1, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-        KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
-        KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaPairedProofV1,
-        KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-        kagemusha_asset_identity_digest_v1, kagemusha_device_key_reference_v1,
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
+        KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1,
+        KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1,
+        KagemushaPaymentV1, kagemusha_asset_identity_digest_v1, kagemusha_device_key_reference_v1,
         kagemusha_liability_pool_id_v1, kagemusha_pasta_state_commitment_v1,
     },
     nexus::AxtAssetIncarnationV1,

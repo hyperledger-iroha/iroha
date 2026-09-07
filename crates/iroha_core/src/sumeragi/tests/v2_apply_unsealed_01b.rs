@@ -515,8 +515,7 @@ v2_apply_test!(
             .kura
             .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
             .expect("persist missing-Queue-owner payload");
-        let lifecycle_group =
-            install_autonomous_crash_live_cursor(&fixture, &payload, &producer);
+        let lifecycle_group = install_autonomous_crash_live_cursor(&fixture, &payload, &producer);
         assert_eq!(
             lifecycle_group,
             lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
@@ -986,7 +985,7 @@ v2_apply_test!(restart_recovers_kura_block_written_before_wsv_commit, {
     );
 });
 v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let baseline_state_hash =
         crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
     fixture.kura.fail_next_native_amx_prepublication_for_tests();
@@ -1189,13 +1188,14 @@ v2_apply_test!(
     fresh_apply_recomputes_and_rejects_a_consistently_forged_marker_and_qc,
     {
         let fixture = ApplyFixture::new();
-        let forged_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"forged parent state"),
-            Hash::new(b"forged post state"),
-            Hash::new(b"forged ordinary writes"),
-            1,
-            Hash::new(b"forged executed block wire"),
-        );
+        let forged_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"forged parent state"),
+                Hash::new(b"forged post state"),
+                Hash::new(b"forged ordinary writes"),
+                1,
+                Hash::new(b"forged executed block wire"),
+            );
         let mut certificate = fixture.task.certificate().clone();
         certificate.execution_commitment = forged_commitment;
         let mut keys = (1_u8..=4)

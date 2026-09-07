@@ -274,7 +274,13 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
         top_up.insert(
             "description".to_owned(),
             Value::from(
-                "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
+                concat!(
+                    "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. ",
+                    "The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. ",
+                    "Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. ",
+                    "The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. ",
+                    "The embedded top-up request is limited to 16 KiB.",
+                ),
             ),
         );
         set_kagemusha_norito_request(

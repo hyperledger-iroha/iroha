@@ -183,6 +183,19 @@ impl JsonDeserialize for CustomParameterId {
     }
 }
 #[cfg(feature = "json")]
+impl json::JsonObjectKey for CustomParameterId {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKeyOwned for CustomParameterId {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        <Name as json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
+    }
+}
+
+#[cfg(feature = "json")]
 impl JsonSerialize for CustomParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');

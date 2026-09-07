@@ -602,12 +602,14 @@ impl VerifiedKagemushaHistoryRootSelectionV1 {
 }
 
 /// Exact byte accounting for the live, uncommitted prepare/WAL overlay.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct KagemushaHistoryOverlayUsageV1 {
     live_bytes: u64,
     capacity_bytes: u64,
 }
 
+#[cfg(test)]
 impl KagemushaHistoryOverlayUsageV1 {
     /// Return canonical bytes retained for transactions that have not reached a terminal state.
     pub(crate) const fn live_bytes(self) -> u64 {
@@ -621,6 +623,7 @@ impl KagemushaHistoryOverlayUsageV1 {
 }
 
 /// Availability of the exact node selected by a committed tree root.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum KagemushaCommittedRootReadV1 {
     /// The backing store answered for the exact root.
@@ -771,6 +774,7 @@ pub(crate) enum KagemushaHistoryStoreErrorV1 {
         root: DigestV1,
     },
     /// A committed nonempty root is missing even though storage answered.
+    #[cfg(test)]
     #[error("missing committed KAGEMUSHA {tree:?} root node {root:?}")]
     MissingCommittedRoot {
         /// Independent tree whose committed node is missing.
@@ -862,6 +866,7 @@ pub(crate) trait KagemushaAuthenticatedHistoryStoreV1 {
     ) -> Result<(), KagemushaHistoryStoreErrorV1>;
 
     /// Return exact byte usage of the uncommitted overlay.
+    #[cfg(test)]
     fn overlay_usage(&self) -> KagemushaHistoryOverlayUsageV1;
 
     /// Read one immutable node by its content address.
@@ -871,6 +876,7 @@ pub(crate) trait KagemushaAuthenticatedHistoryStoreV1 {
     ) -> Result<Option<KagemushaHistoryNodeRecordV1>, KagemushaHistoryStoreErrorV1>;
 
     /// Read the node at one exact committed root without substituting another root on failure.
+    #[cfg(test)]
     fn read_committed_root(
         &self,
         tree: KagemushaHistoryTreeV1,
@@ -2253,6 +2259,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaMemoryAuthenticatedHistor
         Ok(())
     }
 
+    #[cfg(test)]
     fn overlay_usage(&self) -> KagemushaHistoryOverlayUsageV1 {
         KagemushaHistoryOverlayUsageV1 {
             live_bytes: self.live_overlay_bytes,
@@ -2280,6 +2287,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaMemoryAuthenticatedHistor
         Ok(node)
     }
 
+    #[cfg(test)]
     fn read_committed_root(
         &self,
         tree: KagemushaHistoryTreeV1,

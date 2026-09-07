@@ -1150,28 +1150,36 @@ mod tests {
             settlement::SettlementPlan::default(),
         ));
         let registry = default();
-        for (type_name, framed) in [
+        for (wire_id, type_name, framed, source) in [
             (
+                MintBox::WIRE_ID,
                 std::any::type_name::<MintBox>(),
                 framed_instruction_payload(&register_box),
+                std::any::type_name::<RegisterBox>(),
             ),
             (
+                settlement::SettlementInstructionBox::WIRE_ID,
                 std::any::type_name::<settlement::SettlementInstructionBox>(),
                 framed_instruction_payload(&repo_box),
+                std::any::type_name::<repo::RepoInstructionBox>(),
             ),
             (
+                repo::RepoInstructionBox::WIRE_ID,
                 std::any::type_name::<repo::RepoInstructionBox>(),
                 framed_instruction_payload(&settlement_box),
+                std::any::type_name::<settlement::SettlementInstructionBox>(),
             ),
         ] {
-            assert!(
-                registry.wire_id(type_name).is_some(),
-                "{type_name} remains registered for encoding"
+            assert_eq!(
+                registry.wire_id(type_name),
+                Some(wire_id),
+                "{type_name} encodes with its canonical wire identifier"
             );
             assert!(
                 registry.decode(type_name, &framed).is_none(),
-                "{type_name} is not a decode alias"
+                "retired type-name alias must not resolve: {type_name}"
             );
+            assert_default_registry_rejects_framed_payload(wire_id, &framed, source);
         }
     }
     #[test]

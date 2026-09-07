@@ -30,6 +30,10 @@ use iroha_data_model::{
         BridgeFinalityBundle, BridgeFinalityProof, BridgeFinalityVerifier,
         BridgeFinalityVerifyError,
     },
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
+    },
     peer::PeerId,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
@@ -92,11 +96,29 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, block_key.private_key()),
     );
+    let mint_roster = KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch: 0,
+        validators: roster
+            .iter()
+            .zip(1..=4_u8)
+            .map(|(validator, index)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [index; 32],
+                ep_proof_public_key: [index + 16; 32],
+            })
+            .collect(),
+    };
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
+        kagemusha_mint_finality_epoch_id: mint_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster"),
+        kagemusha_mint_finality_epoch_roster: mint_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

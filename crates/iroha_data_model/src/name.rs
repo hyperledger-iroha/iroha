@@ -399,6 +399,21 @@ impl norito::json::JsonDeserialize for Name {
         Self::parse_for_json_decode(candidate)
     }
 }
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for Name {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.as_ref())
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for Name {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        Self::parse_for_json_decode(key)
+    }
+}
 // Norito deserialization is derived via `Decode` above.
 // DecodeFromSlice is provided via a crate-level shim in `norito_slice_decode.rs`.
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.

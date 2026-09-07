@@ -570,115 +570,11 @@ function encodeSumeragiNativeSettlementReceipt(receipt) {
   ]);
 }
 
-function parseSumeragiNativeParticipantSettlement(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "block_height",
-      "lane_id",
-      "lane_incarnation",
-      "dataspace_id",
-      "tx_count",
-      "total_local_amount",
-      "total_xor_due",
-      "total_xor_after_haircut",
-      "total_xor_variance",
-      "swap_metadata",
-      "receipts",
-      "nexus_fee_receipts",
-    ],
-    context,
-  );
-  if (record.swap_metadata !== null) {
-    throw new TypeError(`${context}.swap_metadata must be null`);
-  }
-  const receipts = Object.freeze(
-    assertSumeragiArrayBound(
-      record.receipts,
-      MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-      `${context}.receipts`,
-      1,
-    ).map((receipt, index) => {
-      const receiptContext = `${context}.receipts[${index}]`;
-      const receiptRecord = assertExactSumeragiRecord(
-        receipt,
-        [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms",
-        ],
-        receiptContext,
-      );
-      return Object.freeze({
-        source_id: parseSumeragiByte32(
-          receiptRecord.source_id,
-          `${receiptContext}.source_id`,
-        ),
-        local_amount: requireCanonicalQuantity(
-          receiptRecord.local_amount,
-          `${receiptContext}.local_amount`,
-        ),
-        xor_due: requireCanonicalQuantity(
-          receiptRecord.xor_due,
-          `${receiptContext}.xor_due`,
-        ),
-        xor_after_haircut: requireCanonicalQuantity(
-          receiptRecord.xor_after_haircut,
-          `${receiptContext}.xor_after_haircut`,
-        ),
-        xor_variance: requireCanonicalQuantity(
-          receiptRecord.xor_variance,
-          `${receiptContext}.xor_variance`,
-        ),
-        timestamp_ms: parseSumeragiUnsigned(
-          receiptRecord.timestamp_ms,
-          `${receiptContext}.timestamp_ms`,
-        ),
-      });
-    }),
-  );
-  const nexusFeeReceipts = Object.freeze(
-    assertSumeragiArrayBound(
-      record.nexus_fee_receipts,
-      0,
-      `${context}.nexus_fee_receipts`,
-    ),
-  );
-  return Object.freeze({
-    block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),
-    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
-      max: 0xffffffff,
-    }),
-    lane_incarnation: parseSumeragiNonzeroHash(
-      record.lane_incarnation,
-      `${context}.lane_incarnation`,
-    ),
-    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
-    tx_count: parseSumeragiUnsigned(record.tx_count, `${context}.tx_count`),
-    total_local_amount: requireCanonicalQuantity(
-      record.total_local_amount,
-      `${context}.total_local_amount`,
-    ),
-    total_xor_due: requireCanonicalQuantity(
-      record.total_xor_due,
-      `${context}.total_xor_due`,
-    ),
-    total_xor_after_haircut: requireCanonicalQuantity(
-      record.total_xor_after_haircut,
-      `${context}.total_xor_after_haircut`,
-    ),
-    total_xor_variance: requireCanonicalQuantity(
-      record.total_xor_variance,
-      `${context}.total_xor_variance`,
-    ),
-    swap_metadata: null,
-    receipts,
-    nexus_fee_receipts: nexusFeeReceipts,
-  });
-}
+const SUMERAGI_NATIVE_PARTICIPANT_SETTLEMENT_FIELDS = [
+  "block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count",
+  "total_local_amount", "total_xor_due", "total_xor_after_haircut",
+  "total_xor_variance", "swap_metadata", "receipts", "nexus_fee_receipts",
+];
 
 function computeSumeragiNativeParticipantSettlementHash(settlement) {
   const canonicalSettlement = parseSumeragiNativeParticipantSettlement(
@@ -1037,6 +933,86 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   });
 }
 
+function parseSumeragiLaneSettlementReceipt(receipt, context) {
+  const receiptRecord = assertExactSumeragiRecord(
+    receipt,
+    [
+      "source_id",
+      "local_amount",
+      "xor_due",
+      "xor_after_haircut",
+      "xor_variance",
+      "timestamp_ms",
+    ],
+    context,
+  );
+  return {
+    source_id: parseSumeragiByte32(
+      receiptRecord.source_id,
+      `${context}.source_id`,
+    ),
+    local_amount: requireCanonicalQuantity(
+      receiptRecord.local_amount,
+      `${context}.local_amount`,
+    ),
+    xor_due: requireCanonicalQuantity(
+      receiptRecord.xor_due,
+      `${context}.xor_due`,
+    ),
+    xor_after_haircut: requireCanonicalQuantity(
+      receiptRecord.xor_after_haircut,
+      `${context}.xor_after_haircut`,
+    ),
+    xor_variance: requireCanonicalQuantity(
+      receiptRecord.xor_variance,
+      `${context}.xor_variance`,
+    ),
+    timestamp_ms: parseSumeragiUnsigned(
+      receiptRecord.timestamp_ms,
+      `${context}.timestamp_ms`,
+    ),
+  };
+}
+
+function parseSumeragiNativeParticipantSettlement(value, context) {
+  const record = assertExactSumeragiRecord(
+    value,
+    SUMERAGI_NATIVE_PARTICIPANT_SETTLEMENT_FIELDS,
+    context,
+  );
+  if (
+    record.swap_metadata !== null ||
+    !Array.isArray(record.nexus_fee_receipts) ||
+    record.nexus_fee_receipts.length !== 0
+  ) {
+    throw new TypeError(`${context} cannot contain swap metadata or fee receipts`);
+  }
+  const receipts = assertSumeragiArrayBound(
+    record.receipts,
+    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+    `${context}.receipts`,
+    1,
+  ).map((receipt, index) =>
+    Object.freeze(
+      parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${index}]`),
+    ),
+  );
+  return Object.freeze({
+    block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),
+    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, { max: 0xffffffff }),
+    lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${context}.lane_incarnation`),
+    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
+    tx_count: parseSumeragiUnsigned(record.tx_count, `${context}.tx_count`),
+    total_local_amount: requireCanonicalQuantity(record.total_local_amount, `${context}.total_local_amount`),
+    total_xor_due: requireCanonicalQuantity(record.total_xor_due, `${context}.total_xor_due`),
+    total_xor_after_haircut: requireCanonicalQuantity(record.total_xor_after_haircut, `${context}.total_xor_after_haircut`),
+    total_xor_variance: requireCanonicalQuantity(record.total_xor_variance, `${context}.total_xor_variance`),
+    swap_metadata: null,
+    receipts: Object.freeze(receipts),
+    nexus_fee_receipts: Object.freeze([]),
+  });
+}
+
 function parseSumeragiNativeAmxLeg(value, context) {
   const record = assertExactSumeragiRecord(
     value,
@@ -1370,46 +1346,9 @@ function parseLaneSettlementCommitments(payload) {
         `status.lane_settlement_commitments[${index}].receipts must be an array`,
       );
     }
-    const receipts = receiptsRecord.map((receipt, receiptIndex) => {
-      const receiptRecord = assertExactSumeragiRecord(
-        receipt,
-        [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms",
-        ],
-        `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
-      );
-      return {
-        source_id: parseSumeragiByte32(
-          receiptRecord.source_id,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].source_id`,
-        ),
-        local_amount: requireCanonicalQuantity(
-          receiptRecord.local_amount,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].local_amount`,
-        ),
-        xor_due: requireCanonicalQuantity(
-          receiptRecord.xor_due,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_due`,
-        ),
-        xor_after_haircut: requireCanonicalQuantity(
-          receiptRecord.xor_after_haircut,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_after_haircut`,
-        ),
-        xor_variance: requireCanonicalQuantity(
-          receiptRecord.xor_variance,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_variance`,
-        ),
-        timestamp_ms: parseSumeragiUnsigned(
-          receiptRecord.timestamp_ms,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].timestamp_ms`,
-        ),
-      };
-    });
+    const receipts = receiptsRecord.map((receipt, receiptIndex) =>
+      parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${receiptIndex}]`),
+    );
     const nexusFeeReceipts = Object.freeze(
       assertSumeragiArrayBound(
         record.nexus_fee_receipts,

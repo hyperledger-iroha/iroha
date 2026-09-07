@@ -268,12 +268,13 @@ mod tests {
     };
     use data_model::query::QueryItemKind;
     use data_model::{
+        asset::AssetDefinition,
         isi::InstructionBox,
         permission::Permission,
         prelude::Json,
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
-            QueryResponse, SingularQueryOutputBox,
+            QueryResponse, SingularQueryBox, SingularQueryOutputBox,
         },
     };
     use std::{
@@ -284,6 +285,7 @@ mod tests {
     static CALLED: AtomicBool = AtomicBool::new(false);
     thread_local! {
         static INSTRUCTION_RECORDER: RefCell<Option<Vec<InstructionBox>>> = const { RefCell::new(None) };
+        static ASSET_DEFINITIONS: RefCell<Vec<AssetDefinition>> = const { RefCell::new(Vec::new()) };
     }
     fn empty_iterable_batch(
         query: &data_model::query::QueryWithParams,
@@ -293,7 +295,9 @@ mod tests {
             QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
             QueryItemKind::AccountId => QueryOutputBatchBox::AccountId(Vec::new()),
             QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
-            QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
+            QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(
+                ASSET_DEFINITIONS.with(|definitions| definitions.borrow().clone()),
+            ),
             QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
             QueryItemKind::Nft => QueryOutputBatchBox::Nft(Vec::new()),
             QueryItemKind::Rwa => QueryOutputBatchBox::Rwa(Vec::new()),
@@ -358,19 +362,28 @@ mod tests {
     pub unsafe extern "C" fn execute_query(ptr: *const u8, len: usize) -> *const u8 {
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
         let query_request = norito::decode_from_bytes::<QueryRequest>(bytes).ok();
-        let response: Result<QueryResponse, ValidationFail> = Ok(match query_request {
-            Some(QueryRequest::Singular(_)) => QueryResponse::Singular(
-                SingularQueryOutputBox::Parameters(data_model::parameter::Parameters::default()),
-            ),
-            Some(QueryRequest::Start(query)) => {
-                QueryResponse::Iterable(QueryOutput::new(empty_iterable_batch(&query), 0, None))
+        let response: Result<QueryResponse, ValidationFail> = match query_request {
+            Some(QueryRequest::Singular(SingularQueryBox::FindParameters(_))) => {
+                Ok(QueryResponse::Singular(SingularQueryOutputBox::Parameters(
+                    data_model::parameter::Parameters::default(),
+                )))
             }
-            Some(QueryRequest::Continue(_)) | None => QueryResponse::Iterable(QueryOutput::new(
+            Some(QueryRequest::Singular(_)) => Err(ValidationFail::QueryFailed(
+                data_model::query::error::QueryExecutionFail::NotFound,
+            )),
+            Some(QueryRequest::Start(query)) => {
+                Ok(QueryResponse::Iterable(QueryOutput::new(
+                    empty_iterable_batch(&query),
+                    0,
+                    None,
+                )))
+            }
+            Some(QueryRequest::Continue(_)) | None => Ok(QueryResponse::Iterable(QueryOutput::new(
                 QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Permission(Vec::new())),
                 0,
                 None,
-            )),
-        });
+            ))),
+        };
         let body = norito::to_bytes(&response).expect("encode query ok");
         unsafe { encode_with_len_prefix(&body) }
     }
@@ -397,6 +410,23 @@ mod tests {
         let _restore = RestoreGuard {
             previous: Some(previous),
         };
+        f()
+    }
+    /// Seed exact asset definitions for one test's ownership queries.
+    pub(crate) fn with_mock_asset_definitions<R>(
+        definitions: Vec<AssetDefinition>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        struct RestoreGuard(Vec<AssetDefinition>);
+        impl Drop for RestoreGuard {
+            fn drop(&mut self) {
+                ASSET_DEFINITIONS.with(|definitions| {
+                    definitions.replace(core::mem::take(&mut self.0));
+                });
+            }
+        }
+        let previous = ASSET_DEFINITIONS.with(|current| current.replace(definitions));
+        let _restore = RestoreGuard(previous);
         f()
     }
     pub(crate) fn record_submitted_instructions<R>(

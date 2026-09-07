@@ -52,6 +52,10 @@ mod tests {
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+        runtime.inrou.trusted_guest_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: "31".repeat(32),
+            content_cid: "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge".to_owned(),
+        });
 
         runtime.assert_runtime_posture();
     }

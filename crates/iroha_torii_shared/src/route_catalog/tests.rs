@@ -656,8 +656,16 @@ mod tests {
             assert!(!route.projections().mcp());
             assert_eq!(route.route_match(), RouteMatch::Exact);
             assert_eq!(route.path_normalization(), PathNormalization::Strict);
-            assert!(route.implicit_head());
             assert!(route.cors_options());
+            assert_eq!(
+                RouteCatalog::new(&[route]).implicit_routes(EnabledFeatures::none()),
+                vec![ImplicitRouteDescriptor {
+                    parent_route_id: expected_id,
+                    path: expected_path,
+                    kind: ImplicitRouteKind::CorsOptions,
+                }],
+                "SCCP replay routes declare only CORS OPTIONS as implicit behavior"
+            );
         }
     }
     #[test]

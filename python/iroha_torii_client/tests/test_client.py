@@ -6270,6 +6270,8 @@ def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipt
     )
     assert leg["participant_settlement"]["block_height"] == 8
     assert len(leg["participant_settlement"]["receipts"]) == 2
+    assert len(leg["participant_settlement"]) == 12
+    assert "native_amx_receipts" not in leg["participant_settlement"]
     assert leg["prepare_qc"]["body"]["source_id"] == "AB" * 32
     assert leg["prepare_qc"]["body"]["tx_entrypoint_hash"] == _canonical_hash(0x61)
 
@@ -6879,6 +6881,9 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         leg["participant_settlement"]["tx_count"] = 4097
         leg["participant_settlement"]["receipts"] = [receipt] * 4097
 
+    def empty_recursive_settlement(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = []
+
     def recursive_settlement(leg: Dict[str, Any]) -> None:
         leg["participant_settlement"]["native_amx_receipts"] = [{}]
 
@@ -6912,6 +6917,7 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         wrong_settlement_tx_count,
         empty_settlement,
         oversized_settlement,
+        empty_recursive_settlement,
         recursive_settlement,
     )
     for mutate in mutations:

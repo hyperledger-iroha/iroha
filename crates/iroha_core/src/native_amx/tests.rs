@@ -1271,7 +1271,7 @@
             .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment =
             compute_native_amx_participant_settlement_hash(&participant_settlement)
-                .expect("fixture participant settlement hash");
+                .expect("fixture participant settlement encodes canonically");
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: routing_plan.legs(),
@@ -1371,7 +1371,7 @@
             .participant_settlement_commitment = compute_native_amx_participant_settlement_hash(
             &coordinator_participates.participant_settlement,
         )
-        .expect("fixture participant settlement hash");
+        .expect("fixture participant settlement encodes canonically");
         assert_eq!(
             coordinator_participates.validate_plan_binding(),
             Ok(()),
@@ -1404,7 +1404,7 @@
             compute_native_amx_participant_settlement_hash(
                 &stale_same_route.participant_settlement,
             )
-            .expect("fixture participant settlement hash");
+            .expect("fixture participant settlement encodes canonically");
         assert_eq!(
             stale_same_route.validate_plan_binding(),
             Err(NativeAmxRequestError::ParticipantProposalMismatch),

@@ -1,6 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-peer lifecycle and restart coverage proving that an active Jindo
 //! protocol remains unavailable without registered Exact12 evidence.
+use super::privacy_exact12_network_support::wait_for_transaction_on_peers;
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
@@ -604,6 +605,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             &preflight_clients,
             &queue_plan_transaction,
             "QueuePlanSynced preflight terminal visibility",
+            PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
         let queue_plan_end_height =
