@@ -71,7 +71,9 @@ impl FromStr for FeeSponsorProgramId {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramRevisionKey")]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramRevisionKey"
+)]
 pub struct FeeSponsorProgramRevisionKey {
     /// Program owning the immutable revision.
     pub program_id: FeeSponsorProgramId,
@@ -140,7 +142,9 @@ pub enum FeeSponsorRuleEffect {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorNativeInstructionSelector")]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorNativeInstructionSelector"
+)]
 pub struct FeeSponsorNativeInstructionSelector {
     /// Exact registered instruction wire ID.
     pub wire_id: String,
@@ -646,7 +650,9 @@ pub struct FeeSponsorBlockBudgetWindow {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramEpochBudgetWindow")]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramEpochBudgetWindow"
+)]
 pub struct FeeSponsorProgramEpochBudgetWindow {
     /// Height-derived epoch number.
     pub epoch: u64,
@@ -656,7 +662,9 @@ pub struct FeeSponsorProgramEpochBudgetWindow {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBeneficiaryEpochBudgetWindow")]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBeneficiaryEpochBudgetWindow"
+)]
 pub struct FeeSponsorBeneficiaryEpochBudgetWindow {
     /// Height-derived epoch number.
     pub epoch: u64,

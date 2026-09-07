@@ -35,6 +35,8 @@ mod model {
     #[getset(get = "pub")]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::role::model::RoleId")]
     pub struct RoleId {
         /// Role name, should be unique .
         pub name: Name,
@@ -43,6 +45,8 @@ mod model {
     #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[display("{id}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::role::model::Role")]
     pub struct Role {
         /// Unique name of the role.
         pub id: RoleId,

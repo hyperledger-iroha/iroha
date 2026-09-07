@@ -29,9 +29,9 @@ use url::Url;
 
 use self::private_settlement_online_auditor::{
     PrivateSettlementAuditorBusinessPolicyV1, coordinate_private_settlement_online_auditor_v1,
-    load_private_settlement_audit_policy_v1,
-    load_private_settlement_auditor_business_policy_v1, load_private_settlement_auditor_secret_v1,
-    load_private_settlement_committee_authority_v1, load_private_settlement_pool_governance_v1,
+    load_private_settlement_audit_policy_v1, load_private_settlement_auditor_business_policy_v1,
+    load_private_settlement_auditor_secret_v1, load_private_settlement_committee_authority_v1,
+    load_private_settlement_pool_governance_v1,
 };
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -413,9 +413,11 @@ fn private_settlement<C: RunContext>(
             let request = PrivateSettlementAuditorCapsuleRequestV1 {
                 audit_policy: load_private_settlement_audit_policy_v1(&args.audit_policy)?,
             };
-            context.print_data(
-                &client.private_settlement_auditor_capsule_v1(payload_digest, &request, &role_key)?,
-            )
+            context.print_data(&client.private_settlement_auditor_capsule_v1(
+                payload_digest,
+                &request,
+                &role_key,
+            )?)
         }
         PrivateSettlementCommand::AuditApproval(args) => {
             let role_key = private_settlement_operator_key(context)?;
@@ -451,9 +453,7 @@ fn private_settlement<C: RunContext>(
                 &decryption_secrets,
                 &role_key,
             )
-            .map_err(|_| {
-                eyre!("private-settlement auditor decryption-key keyring is invalid")
-            })?;
+            .map_err(|_| eyre!("private-settlement auditor decryption-key keyring is invalid"))?;
             let request_signer = BorrowedKeyPairIdentityRequestSignerV1::new(&role_key);
             let evaluator = PrivateSettlementAuditDecisionPolicyV1 {
                 decision: args.decision,

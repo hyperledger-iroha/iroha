@@ -10,6 +10,7 @@ use crate::{
 use iroha_primitives::numeric::Quantity;
 isi! {
     /// Register an oracle feed configuration on-chain.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::RegisterOracleFeed")]
     pub struct RegisterOracleFeed {
         /// Feed configuration to make available for oracle submissions.
         pub feed: FeedConfig,
@@ -17,6 +18,7 @@ isi! {
 }
 isi! {
     /// Submit a signed oracle observation for admission.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::SubmitOracleObservation")]
     pub struct SubmitOracleObservation {
         /// Observation payload and signature produced by the oracle provider.
         pub observation: Observation,
@@ -24,6 +26,7 @@ isi! {
 }
 isi! {
     /// Aggregate admitted observations for a feed slot into a feed event.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::AggregateOracleFeed")]
     pub struct AggregateOracleFeed {
         /// Target feed identifier.
         pub feed_id: FeedId,
@@ -38,6 +41,7 @@ isi! {
 }
 isi! {
     /// Open a dispute against an oracle provider for a specific feed slot.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::OpenOracleDispute")]
     pub struct OpenOracleDispute {
         /// Feed identifier for the disputed observation window.
         pub feed_id: FeedId,
@@ -59,6 +63,7 @@ isi! {
 }
 isi! {
     /// Resolve an open oracle dispute.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::ResolveOracleDispute")]
     pub struct ResolveOracleDispute {
         /// Identifier of the dispute being resolved.
         pub dispute_id: OracleDisputeId,
@@ -71,6 +76,7 @@ isi! {
 }
 isi! {
     /// Propose a governance change for an oracle feed.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::ProposeOracleChange")]
     pub struct ProposeOracleChange {
         /// Unique identifier for the change proposal.
         pub change_id: OracleChangeId,
@@ -87,6 +93,7 @@ isi! {
 }
 isi! {
     /// Record a stage vote for an oracle change proposal.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::VoteOracleChangeStage")]
     pub struct VoteOracleChangeStage {
         /// Identifier of the change proposal being reviewed.
         pub change_id: OracleChangeId,
@@ -101,6 +108,7 @@ isi! {
 }
 isi! {
     /// Explicitly roll back an oracle change proposal.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::RollbackOracleChange")]
     pub struct RollbackOracleChange {
         /// Identifier of the change being rolled back.
         pub change_id: OracleChangeId,
@@ -113,6 +121,7 @@ isi! {
 }
 isi! {
     /// Submit a native Soracles attestation carrying `DeFi` ABI-compatible oracle bytes.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::SubmitDefiOracleAttestation")]
     pub struct SubmitDefiOracleAttestation {
         /// Attestation payload and compatibility signature.
         pub attestation: DefiOracleAttestation,
@@ -120,6 +129,7 @@ isi! {
 }
 isi! {
     /// Record a twitter follow binding attestation.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::RecordTwitterBinding")]
     pub struct RecordTwitterBinding {
         /// Attestation payload produced by the oracle committee.
         pub attestation: TwitterBindingAttestation,
@@ -129,6 +139,7 @@ isi! {
 }
 isi! {
     /// Revoke a twitter follow binding record.
+    #[norito_schema(name = "iroha_data_model::isi::oracle::RevokeTwitterBinding")]
     pub struct RevokeTwitterBinding {
         /// Binding keyed hash to revoke.
         pub binding_hash: KeyedHash,

@@ -1,7 +1,7 @@
 //! Platform flags for nonblocking filesystem opens that reject final-component symlinks.
 //!
-//! This module is available on Linux; Android aarch64, arm, riscv64, x86 and x86_64; macOS;
-//! iOS; FreeBSD; OpenBSD; NetBSD; and DragonFly. Other targets expose no filesystem flag module.
+//! This module is available on Linux; Android `aarch64`, `arm`, `riscv64`, `x86` and `x86_64`; macOS;
+//! iOS; FreeBSD; OpenBSD; NetBSD; and `DragonFly`. Other targets expose no filesystem flag module.
 //! Callers must fail closed when these operations are unavailable.
 //!
 //! `O_NOFOLLOW` protects only the final path component. Callers remain responsible for ancestor

@@ -393,23 +393,7 @@ pub mod wire {
             Self { index, payload }
         }
         fn tuple_flags() -> u8 {
-            let defaults = ncore::default_encode_flags();
-            let dynamic_mask = ncore::header_flags::PACKED_SEQ;
-            let static_defaults = defaults & !dynamic_mask;
-            match ncore::effective_decode_flags() {
-                None => defaults,
-                Some(0) => 0,
-                Some(current) => {
-                    let current_dynamic = current & dynamic_mask;
-                    let current_static = current & !dynamic_mask;
-                    let effective_static = if current_static == 0 {
-                        static_defaults
-                    } else {
-                        current_static | static_defaults
-                    };
-                    current_dynamic | effective_static
-                }
-            }
+            ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags)
         }
         fn payload_wire_len(&self) -> Option<usize> {
             ncore::seq_len_prefix_len(self.payload.len()).checked_add(self.payload.len())
@@ -562,8 +546,7 @@ fn checked_block_signature_from_wire(
         SignatureOf::from_signature(signature),
     ))
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::header::BlockHeaderConsensusProjectionV1")]
 struct BlockHeaderConsensusProjectionV1 {
     version: u16,

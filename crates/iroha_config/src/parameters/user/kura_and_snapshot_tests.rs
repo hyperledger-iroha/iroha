@@ -232,6 +232,14 @@ fn explicit_snapshot_store_dir_is_preserved() {
     );
 }
 #[test]
+fn default_snapshot_decode_depth_matches_norito() {
+    let actual = load_root(base_table());
+    assert_eq!(
+        actual.snapshot.resources.max_decode_depth.get(),
+        norito::core::MAX_VALUE_NESTING_DEPTH,
+    );
+}
+#[test]
 fn snapshot_bootstrap_policy_parses_only_complete_exact_authority() {
     let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
     let mut table = base_table();

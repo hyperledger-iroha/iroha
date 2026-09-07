@@ -43,5 +43,6 @@ export {
   sccpReplayKeyV1,
   sccpReplayRecordDigestV1,
   sccpReplayRootFromWitnessV1,
+  sccpReplayVerifyAgainstCurrentRootV1,
   sccpSourceEventDigest,
 } from "./index.js";

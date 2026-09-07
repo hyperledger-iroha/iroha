@@ -3,6 +3,8 @@
 #[path = "ui.rs"]
 mod ui;
 
+#[path = "data_event_identity.rs"]
+mod data_event_identity;
 #[path = "event_set.rs"]
 mod event_set;
 #[path = "has_origin.rs"]
@@ -17,3 +19,7 @@ mod model_macro;
 #[cfg(feature = "trybuild-tests")]
 #[path = "registrable_builder_ui.rs"]
 mod registrable_builder_ui;
+
+#[cfg(feature = "trybuild-tests")]
+#[path = "event_set_ui.rs"]
+mod event_set_ui;

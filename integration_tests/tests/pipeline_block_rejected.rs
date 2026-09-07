@@ -4,6 +4,7 @@
 //! This stays `#[ignore]` until a deterministic rejection trigger is wired into the
 //! harness. Run with `IROHA_RUN_IGNORED=1 cargo test -p integration_tests pipeline_block_rejected -- --ignored`.
 use eyre::Result;
+use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::data_model::events::{
     EventBox,
@@ -36,7 +37,9 @@ async fn emits_block_rejected_event() -> Result<()> {
             iroha_data_model::block::error::BlockRejectionReason::ConsensusBlockRejection,
         )));
     let mut events = client
+        .client()
         .listen_for_events([filter])
+        .await
         .expect("events subscription")
         .take(1);
     // Future work: induce a deterministic rejection.
@@ -55,7 +58,7 @@ async fn emits_block_rejected_event() -> Result<()> {
     // network.peers()[1].kill().await.expect("kill peer");
     // submit_transactions_to_fill_block(&client).await;
     // Expect one rejected block event
-    if let Some(Ok(ev)) = events.next() {
+    if let Some(Ok(ev)) = events.next().await {
         match ev {
             EventBox::Pipeline(PipelineEventBox::Block(b)) => {
                 assert!(matches!(b.status, BlockStatus::Rejected(_)));

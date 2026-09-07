@@ -1638,7 +1638,7 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
     let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
         proposal.descriptor.accepted_transaction_hashes[0],
     );
-    let settlement = LaneBlockCommitment {
+    let settlement = iroha_data_model::block::consensus::NativeAmxParticipantSettlement {
         block_height: proposal.descriptor.lane_block_height,
         lane_id: proposal.descriptor.lane_id,
         lane_incarnation: proposal.descriptor.lane_incarnation,
@@ -1658,10 +1658,12 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
             timestamp_ms: 1,
         }],
         nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
     };
-    let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-        .expect("hash Native archive settlement");
+    let settlement_hash =
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &settlement,
+        )
+        .expect("hash Native archive participant settlement");
     let executed_block_wire = block
         .encode_wire()
         .expect("encode Native archive executed block wire");
@@ -2621,10 +2623,9 @@ fn geometry_native_amx_receipt(
         participant_lane_block_height: participant_descriptor.lane_block_height,
         participant_lane_block_view: participant_descriptor.lane_block_view,
         participant_proposal_hash: participant_proposal.proposal_hash,
-        participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
-            0;
-            Hash::LENGTH
-        ])),
+        participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0; Hash::LENGTH],
+        )),
         participant_validator_set_hash: HashOf::new(&participant_validator_set),
         participant_validator_count: 1,
         participant_min_quorum: 1,
@@ -2639,10 +2640,11 @@ fn geometry_native_amx_receipt(
     let participant_settlement = prepare_body
         .computed_grouped_participant_settlement(&[prepare_body.source_id])
         .expect("single-source test fixture settlement is valid");
-    let participant_settlement_hash = iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
-        &participant_settlement,
-    )
-    .expect("fixture participant settlement hash");
+    let participant_settlement_hash =
+        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
+            &participant_settlement,
+        )
+        .expect("fixture participant settlement hash");
     let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
         .expect("geometry retirement participant PoP");
     let qc = |body| {

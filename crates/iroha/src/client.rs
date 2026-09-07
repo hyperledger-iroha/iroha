@@ -1,5 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
-mod bounded_async_response;
+pub(crate) mod bounded_async_response;
 mod moderation;
 #[cfg(test)]
 mod operator_auth_tests;
@@ -12,6 +12,7 @@ mod runtime_governance_client_auth;
 use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
 pub use crate::query::QueryError;
 use crate::{
+    Error as SdkError, TransactionPreparationError, TransactionSigningError,
     config::Config,
     crypto::{HashOf, KeyPair},
     da::{
@@ -24,17 +25,15 @@ use crate::{
     data_model::{
         ChainId,
         block::{BlockHeader, SignedBlock},
-        events::pipeline::{
-            BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
-            TransactionEventFilter, TransactionStatus,
-        },
         prelude::*,
         transaction::{
             TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
-    http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
+    http_default::{
+        self, DefaultHttpTransport, DefaultRequest, DefaultRequestBuilder, WebSocketMessage,
+    },
     nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
     subscriptions::{
         SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCreateRequest,
@@ -48,12 +47,20 @@ use base64::Engine as _;
 use bytes::Bytes;
 use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
-use futures_util::{Stream, StreamExt, stream};
-use http_default::{AsyncWebSocketStream, WebSocketStream};
+#[cfg(test)]
+use futures_util::{Stream, StreamExt};
+use http_default::AsyncWebSocketStream;
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 /// Closed penalty lifecycle returned by the Sumeragi evidence audit API.
 pub use iroha_data_model::block::consensus::EvidencePenaltyStatus as SumeragiEvidencePenaltyStatus;
+#[cfg(test)]
+use iroha_data_model::events::pipeline::{
+    BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
+    TransactionEventFilter, TransactionStatus,
+};
 pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1;
+#[cfg(test)]
+use iroha_data_model::query::error::QueryExecutionFail;
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     alias::AliasIndex,
@@ -74,11 +81,10 @@ use iroha_data_model::{
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
-        AssetPermissionManifest, FeeSponsorProgram, FeeSponsorProgramId, LaneLifecycleParameterV1,
-        LaneLifecyclePlan, LaneLifecycleStatusV1, UniversalAccountId,
+        AssetPermissionManifest, FeeSponsorProgram, FeeSponsorProgramId, LaneLifecycleStatusV1,
+        UniversalAccountId,
     },
     privacy::PrivacyExact12CapabilityManifestV1,
-    query::error::QueryExecutionFail,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
 };
@@ -116,7 +122,9 @@ pub use iroha_torii_shared::private_settlement_api::{
 use iroha_torii_shared::status::Status;
 #[cfg(test)]
 use iroha_torii_shared::status::{TxGossipSnapshot, Uptime};
-use tracing::{debug, error, trace, warn};
+#[cfg(test)]
+use tracing::{debug, warn};
+use tracing::{error, trace};
 
 /// Exact public-map count vector returned by the non-shipping APS evidence route.
 #[cfg(feature = "test-network-private-settlement-evidence")]
@@ -177,6 +185,8 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     pub counts: PrivateSettlementTestNetworkStateCountsV1,
 }
 use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
+#[cfg(test)]
+use iroha_torii_shared::PipelineTransactionDetailsResponse;
 pub use iroha_torii_shared::kagemusha_api::{
     KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
     KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1, KagemushaReadinessV1,
@@ -204,10 +214,9 @@ pub use iroha_torii_shared::validation_fee_api::{
 };
 use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
-    AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
+    AccountReadResponse, ErrorEnvelope, FeeQuoteRequest as FeeQuoteWireRequest, FeeQuoteResponse,
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
-    PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
-    TriggerCompletionListResponse,
+    PipelineTransactionStatusResponse, TriggerCompletionListResponse,
     kagemusha_api::{
         KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1, KAGEMUSHA_READINESS_MAX_BYTES_V1,
         KagemushaOperationKindV1, KagemushaOperationStateV1,
@@ -239,12 +248,13 @@ use sorafs_manifest::{
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt::{self, Write as _},
-    future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex, OnceLock, Weak},
-    thread,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -291,7 +301,8 @@ const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES: usize =
     iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1;
 const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
 const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
-const SORAFS_MODERATION_TRANSACTION_TTL: Duration = Duration::from_millis(5 * 60 * 1_000);
+/// Required lifetime for native `SoraFS` moderation transactions.
+pub const SORAFS_MODERATION_TRANSACTION_TTL: Duration = Duration::from_millis(5 * 60 * 1_000);
 const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
@@ -427,18 +438,19 @@ macro_rules! sorafs_transaction_submitter {
         ) -> Result<HashOf<SignedTransaction>> {
             $validate($route, transaction)?;
             self.ensure_transaction_submit_compatibility()?;
-            let payload = Self::prepare_transaction_payload(transaction);
+            let payload = PreparedTransactionPayload::from_transaction(transaction);
             let hash = payload.hash();
             let response = DefaultRequestBuilder::new(
                 HttpMethod::POST,
                 join_torii_url(&self.torii_url, $path),
             )
+            .with_transport(self.http_transport.clone())
             .headers(self.transaction_headers_without_content_type())
             .header("Content-Type", APPLICATION_NORITO)
             .header("Accept", self.wire_format_preference.accept_header())
             .body(payload.as_bytes().to_vec())
             .build()?
-            .send()
+            .send_blocking()
             .wrap_err_with(|| format!(concat!($error, " {:?}"), hash))?;
             TransactionResponseHandler::handle(&response)?;
             Ok(hash)
@@ -672,10 +684,6 @@ fn validate_contract_call_prepare_response_fields(response: &JsonValue) -> Resul
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_arguments,
-    reason = "receipt validation binds every independent public claim to its exact request or draft field"
-)]
 fn validate_contract_call_prepare_receipt(
     response: &JsonValue,
     requested_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
@@ -774,7 +782,7 @@ impl WireFormatPreference {
         }
     }
 }
-fn apply_fee_quote_intent(
+pub(crate) fn apply_fee_quote_intent(
     payload: &mut TransactionPayload,
     recommended_intent: FeePaymentIntent,
 ) -> Result<()> {
@@ -3548,7 +3556,7 @@ fn canonical_validation_fee_draft_instruction(
     };
     Ok((proposal_kind, instruction))
 }
-fn validate_validation_fee_draft_response(
+pub(crate) fn validate_validation_fee_draft_response(
     response: &ValidationFeeProposalDraftResponseV1,
     request: &ValidationFeeProposalDraftRequestV1,
 ) -> Result<InstructionBox> {
@@ -8564,13 +8572,36 @@ pub enum TransactionSchemaCompatibilityError {
         details: String,
     },
 }
+/// Transient failure while fetching the node capability document.
+///
+/// This error is shared by callers waiting on the same context-local probe. It
+/// is never retained as a compatibility decision, so a later independent call
+/// retries the probe.
+#[derive(Clone, Debug, Error)]
+#[error("Torii node capability probe failed: {details}")]
+pub struct CapabilityProbeError {
+    details: Arc<str>,
+}
+
+impl CapabilityProbeError {
+    fn from_report(error: &eyre::Report) -> Self {
+        Self {
+            details: Arc::from(format!("{error:#}")),
+        }
+    }
+
+    /// Return the complete formatted error chain from the failed probe.
+    #[must_use]
+    pub fn details(&self) -> &str {
+        &self.details
+    }
+}
+
 /// Cached compatibility state for the Torii node.
 #[derive(Debug, Clone)]
 pub(crate) enum DataModelCompatibility {
     /// Compatibility check has not been performed yet.
     Unchecked,
-    /// Node data model version matches the client.
-    Compatible,
     /// Node data model version and signed transaction schema hash both match the client.
     SubmitCompatible,
     /// Node data model version is incompatible.
@@ -8578,30 +8609,121 @@ pub(crate) enum DataModelCompatibility {
     /// Node signed transaction schema hash is incompatible for submissions.
     SchemaIncompatible(TransactionSchemaCompatibilityError),
 }
-type DataModelCompatibilityState = Arc<Mutex<DataModelCompatibility>>;
-fn data_model_compatibility_cache_key(
-    network_id: &NetworkId,
-    torii_url: &Url,
-    account: &AccountId,
-) -> String {
-    format!("{network_id}|{}|{account}", torii_url.as_str())
+
+pub(crate) struct CompatibilityProbeCoordinator {
+    gate: tokio::sync::Mutex<()>,
+    generation: AtomicU64,
+    last_failure: Mutex<Option<(u64, CapabilityProbeError)>>,
 }
-fn shared_data_model_compatibility_state(
-    network_id: &NetworkId,
-    torii_url: &Url,
-    account: &AccountId,
-) -> DataModelCompatibilityState {
-    static CACHE: OnceLock<Mutex<HashMap<String, Weak<Mutex<DataModelCompatibility>>>>> =
-        OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = data_model_compatibility_cache_key(network_id, torii_url, account);
-    let mut guard = cache.lock().expect("data model compatibility cache lock");
-    if let Some(existing) = guard.get(&key).and_then(Weak::upgrade) {
-        return existing;
+
+impl CompatibilityProbeCoordinator {
+    pub(crate) fn new() -> Self {
+        Self {
+            gate: tokio::sync::Mutex::new(()),
+            generation: AtomicU64::new(0),
+            last_failure: Mutex::new(None),
+        }
     }
-    let state = Arc::new(Mutex::new(DataModelCompatibility::Unchecked));
-    guard.insert(key, Arc::downgrade(&state));
-    state
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    fn completion_after(
+        &self,
+        observed_generation: u64,
+    ) -> Option<std::result::Result<(), CapabilityProbeError>> {
+        let completed_generation = self.generation();
+        if completed_generation == observed_generation {
+            return None;
+        }
+        let failure = self
+            .last_failure
+            .lock()
+            .expect("capability probe failure lock")
+            .as_ref()
+            .filter(|(generation, _)| *generation == completed_generation)
+            .map(|(_, error)| error.clone());
+        Some(failure.map_or(Ok(()), Err))
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.generation().wrapping_add(1)
+    }
+
+    fn finish_success(&self) {
+        let generation = self.next_generation();
+        *self
+            .last_failure
+            .lock()
+            .expect("capability probe failure lock") = None;
+        self.generation.store(generation, Ordering::Release);
+    }
+
+    fn finish_failure(&self, error: &eyre::Report) -> CapabilityProbeError {
+        let generation = self.next_generation();
+        let error = CapabilityProbeError::from_report(error);
+        *self
+            .last_failure
+            .lock()
+            .expect("capability probe failure lock") = Some((generation, error.clone()));
+        self.generation.store(generation, Ordering::Release);
+        error
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CompatibilityRequirement {
+    DataModel,
+    Submission,
+}
+
+fn evaluate_node_compatibility(capabilities: &norito::json::Value) -> DataModelCompatibility {
+    let version = match parse_optional_u64(
+        capabilities.get("data_model_version"),
+        "node capabilities data_model_version",
+    ) {
+        Ok(None) => {
+            return DataModelCompatibility::Incompatible(DataModelCompatibilityError::Missing {
+                expected: DATA_MODEL_VERSION,
+            });
+        }
+        Ok(Some(raw)) => match u32::try_from(raw) {
+            Ok(value) if value > 0 => value,
+            Ok(_) => {
+                return DataModelCompatibility::Incompatible(
+                    DataModelCompatibilityError::Invalid {
+                        expected: DATA_MODEL_VERSION,
+                        details: "data_model_version must be >= 1".to_owned(),
+                    },
+                );
+            }
+            Err(_) => {
+                return DataModelCompatibility::Incompatible(
+                    DataModelCompatibilityError::Invalid {
+                        expected: DATA_MODEL_VERSION,
+                        details: format!("data_model_version {raw} is out of range"),
+                    },
+                );
+            }
+        },
+        Err(error) => {
+            return DataModelCompatibility::Incompatible(DataModelCompatibilityError::Invalid {
+                expected: DATA_MODEL_VERSION,
+                details: error.to_string(),
+            });
+        }
+    };
+    if version != DATA_MODEL_VERSION {
+        return DataModelCompatibility::Incompatible(DataModelCompatibilityError::Mismatch {
+            expected: DATA_MODEL_VERSION,
+            actual: version,
+        });
+    }
+    match parse_signed_transaction_schema_hash_hex(capabilities) {
+        Ok(_) => DataModelCompatibility::SubmitCompatible,
+        Err(error) => DataModelCompatibility::SchemaIncompatible(error),
+    }
 }
 /// Sole evidence kind exposed by the first-release Sumeragi audit API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10945,7 +11067,7 @@ mod evidence_response_tests {
     }
 }
 #[cfg(test)]
-fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
+pub(crate) fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     sorafs_manifest::alias_cache::AliasCachePolicy::new(
         std::time::Duration::from_secs(
             iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
@@ -10986,7 +11108,7 @@ fn capabilities_body_with(
     format!("{{{}}}", fields.join(","))
 }
 #[cfg(test)]
-fn compatible_capabilities_body() -> String {
+pub(crate) fn compatible_capabilities_body() -> String {
     capabilities_body_with(
         Some(DATA_MODEL_VERSION),
         Some(&signed_transaction_schema_hash_hex()),
@@ -10999,9 +11121,73 @@ fn checked_random_keypair() -> KeyPair {
 #[cfg(test)]
 mod evidence_http_tests {
     use super::{default_alias_policy, *};
+
+    impl Client {
+        pub(super) fn submit_transaction_for_test(
+            &self,
+            transaction: &SignedTransaction,
+        ) -> Result<HashOf<SignedTransaction>> {
+            let account = self.account_client()?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("transaction test runtime")
+                .block_on(account.submit_transaction(transaction))
+        }
+
+        pub(super) fn submit_prepared_transaction_payload_for_test(
+            &self,
+            payload: &PreparedTransactionPayload,
+        ) -> Result<HashOf<SignedTransaction>> {
+            let account = self.account_client()?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("prepared transaction test runtime")
+                .block_on(account.submit_prepared_transaction_payload(payload))
+        }
+
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "test helper exercises the exact public contract-call request binding"
+        )]
+        fn post_contract_call_json_for_test(
+            &self,
+            authority: &AccountId,
+            private_key: Option<&iroha_crypto::PrivateKey>,
+            contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+            contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+            entrypoint: &str,
+            payload: Option<&norito::json::Value>,
+            caller_metadata: Option<&Metadata>,
+            creation_time_ms: Option<u64>,
+            transaction_ttl_ms: Option<u64>,
+            fee_payment: &FeePaymentIntent,
+            draft_intent: &ContractCallDraftIntent,
+        ) -> Result<norito::json::Value> {
+            let account = self.account_client()?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("contract-call test runtime")
+                .block_on(account.post_contract_call_json(
+                    authority,
+                    private_key,
+                    contract_address,
+                    contract_alias,
+                    entrypoint,
+                    payload,
+                    caller_metadata,
+                    creation_time_ms,
+                    transaction_ttl_ms,
+                    fee_payment,
+                    draft_intent,
+                ))
+        }
+    }
     use crate::{
         http::{Method as HttpMethod, Response as HttpResponse},
-        http_default::{RequestSnapshot, with_send_hook},
+        http_default::{DefaultHttpTransport, RequestSnapshot},
     };
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
@@ -11044,8 +11230,6 @@ mod evidence_http_tests {
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),
-            connect_queue_root: crate::config::default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: default_alias_policy(),
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: RolloutPhase::Canary,
@@ -11081,9 +11265,9 @@ mod evidence_http_tests {
     }
     pub(super) fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<HttpResponse<Vec<u8>>> + Send + Sync + 'static,
-        f: impl FnOnce() -> R,
+        f: impl FnOnce(DefaultHttpTransport) -> R,
     ) -> R {
-        with_send_hook(Arc::new(responder), f)
+        f(DefaultHttpTransport::mock(Arc::new(responder)))
     }
     pub(super) fn respond_with(
         store: &SnapshotStore,
@@ -11097,7 +11281,7 @@ mod evidence_http_tests {
     }
     pub(super) fn capture_requests<R>(
         response: HttpResponse<Vec<u8>>,
-        request: impl FnOnce() -> R,
+        request: impl FnOnce(DefaultHttpTransport) -> R,
     ) -> (R, Vec<RequestSnapshot>) {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let result = with_mock_http(respond_with(&snapshots, response), request);
@@ -11106,7 +11290,7 @@ mod evidence_http_tests {
     }
     pub(super) fn capture_request<R>(
         response: HttpResponse<Vec<u8>>,
-        request: impl FnOnce() -> R,
+        request: impl FnOnce(DefaultHttpTransport) -> R,
     ) -> (R, RequestSnapshot) {
         let (result, snapshots) = capture_requests(response, request);
         assert_eq!(snapshots.len(), 1, "expected exactly one HTTP request");
@@ -11221,7 +11405,11 @@ mod evidence_http_tests {
                 proposal_id = proposal_id,
             ),
         );
-        with_mock_http(respond_with(&snapshots, response), || {
+        with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let request = MultisigProposalsQueryRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
@@ -11270,7 +11458,11 @@ mod evidence_http_tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&snapshots, response), || {
+        with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             for request in [
                 MultisigProposalsQueryRequest {
                     multisig_account_id: None,
@@ -11347,7 +11539,11 @@ mod evidence_http_tests {
             proposal_id: Some(proposal_id.clone()),
             instructions_hash: None,
         };
-        with_mock_http(respond_with(&snapshots, response), || {
+        with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let decoded = client
                 .post_multisig_proposals_resolve(&request)
                 .expect("post multisig proposal resolve");
@@ -11401,7 +11597,11 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode multisig response"),
         );
-        with_mock_http(respond_with(&snapshots, response), || {
+        with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let resp = client
                 .post_multisig_propose(&request)
                 .expect("post multisig propose");
@@ -11615,7 +11815,7 @@ mod evidence_http_tests {
                 "gas_used": null,
                 "fee_payment": (fee_payment),
                 "payload_digest_hex": (contract_call_payload_digest_hex(None).expect("empty payload digest")),
-            },
+            }
         })
     }
     #[test]
@@ -11626,7 +11826,12 @@ mod evidence_http_tests {
             StatusCode::UNPROCESSABLE_ENTITY,
             "{\"error\":\"malformed native instruction frame\"}",
         );
-        let (result, _) = capture_request(response, || client.post_multisig_propose(&request));
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_multisig_propose(&request)
+        });
         let err = result.expect_err("server rejection must be surfaced");
         let message = err.to_string();
         assert!(
@@ -11639,7 +11844,12 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let (_, request) = multisig_propose_request("bad response");
         let response = json_response(StatusCode::OK, "{\"ok\":true}");
-        let (result, _) = capture_request(response, || client.post_multisig_propose(&request));
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_multisig_propose(&request)
+        });
         let err = result.expect_err("malformed success response must be rejected");
         let message = err.to_string();
         assert!(
@@ -11660,11 +11870,18 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode bad hash response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, bad_hash_response), || {
-            client
-                .post_multisig_propose(&request)
-                .expect_err("short response hash must be rejected")
-        });
+        let err = with_mock_http(
+            respond_with(&snapshots, bad_hash_response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client
+                    .post_multisig_propose(&request)
+                    .expect_err("short response hash must be rejected")
+            },
+        );
         assert!(
             err.to_string()
                 .contains("failed to validate multisig propose response"),
@@ -11676,11 +11893,18 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode bad signing response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, bad_signing_response), || {
-            client
-                .post_multisig_propose(&request)
-                .expect_err("bad signing message must be rejected")
-        });
+        let err = with_mock_http(
+            respond_with(&snapshots, bad_signing_response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client
+                    .post_multisig_propose(&request)
+                    .expect_err("bad signing message must be rejected")
+            },
+        );
         assert!(
             err.to_string()
                 .contains("failed to validate multisig propose response"),
@@ -11691,11 +11915,18 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode empty signing response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, empty_signing_response), || {
-            client
-                .post_multisig_propose(&request)
-                .expect_err("empty signing message must be rejected")
-        });
+        let err = with_mock_http(
+            respond_with(&snapshots, empty_signing_response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client
+                    .post_multisig_propose(&request)
+                    .expect_err("empty signing message must be rejected")
+            },
+        );
         assert!(
             err.to_string()
                 .contains("failed to validate multisig propose response"),
@@ -11706,11 +11937,18 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode false ok response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, false_ok_response), || {
-            client
-                .post_multisig_propose(&request)
-                .expect_err("false ok response must be rejected")
-        });
+        let err = with_mock_http(
+            respond_with(&snapshots, false_ok_response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client
+                    .post_multisig_propose(&request)
+                    .expect_err("false ok response must be rejected")
+            },
+        );
         assert!(
             err.to_string()
                 .contains("failed to validate multisig propose response"),
@@ -11732,7 +11970,11 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&changed_fee).expect("encode changed fee response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_propose(&request)
                 .expect_err("fee payer selection substitution must fail")
@@ -11750,7 +11992,11 @@ mod evidence_http_tests {
             &norito::json::to_json(&changed_creation_time)
                 .expect("encode changed creation time response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_propose(&request)
                 .expect_err("creation time substitution must fail")
@@ -11768,7 +12014,11 @@ mod evidence_http_tests {
             &norito::json::to_json(&changed_proposal_id)
                 .expect("encode changed proposal id response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_propose(&request)
                 .expect_err("proposal hash substitution must fail")
@@ -11800,7 +12050,11 @@ mod evidence_http_tests {
             &norito::json::to_json(&changed_executable)
                 .expect("encode changed executable response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_propose(&request)
                 .expect_err("transaction executable substitution must fail")
@@ -11838,7 +12092,11 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&changed_metadata).expect("encode changed metadata response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_propose(&metadata_request)
                 .expect_err("transaction metadata substitution must fail")
@@ -11856,7 +12114,11 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode wrong signer response"),
         );
-        let err = with_mock_http(respond_with(&snapshots, response), || {
+        let err = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_propose(&changed_signer_request)
                 .expect_err("transaction authority substitution must fail")
@@ -11876,8 +12138,12 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_value).expect("encode contract call response"),
         );
-        let (result, _) = capture_request(response, || {
-            client.post_contract_call_json(
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
+            client.post_contract_call_json_for_test(
                 &client.account,
                 None,
                 Some(&contract_address),
@@ -11918,8 +12184,12 @@ mod evidence_http_tests {
             &norito::json::to_json(&response_value)
                 .expect("encode metadata-and-TTL contract response"),
         );
-        let (result, snapshot) = capture_request(response, || {
-            client.post_contract_call_json(
+        let (result, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
+            client.post_contract_call_json_for_test(
                 &client.account,
                 None,
                 Some(&contract_address),
@@ -11957,8 +12227,12 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_value).expect("encode substituted contract response"),
         );
-        let (result, _) = capture_request(response, || {
-            client.post_contract_call_json(
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
+            client.post_contract_call_json_for_test(
                 &client.account,
                 None,
                 Some(&contract_address),
@@ -12035,8 +12309,12 @@ mod evidence_http_tests {
                 &norito::json::to_json(&response_value)
                     .expect("encode substituted contract response"),
             );
-            let (result, _) = capture_request(response, || {
-                client.post_contract_call_json(
+            let (result, _) = capture_request(response, |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.post_contract_call_json_for_test(
                     &client.account,
                     None,
                     Some(&contract_address),
@@ -12105,8 +12383,12 @@ mod evidence_http_tests {
                 &norito::json::to_json(&response_value)
                     .expect("encode incomplete contract response"),
             );
-            let (result, _) = capture_request(response, || {
-                client.post_contract_call_json(
+            let (result, _) = capture_request(response, |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.post_contract_call_json_for_test(
                     &client.account,
                     None,
                     Some(&contract_address),
@@ -12143,8 +12425,12 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_value).expect("encode contract call response"),
         );
-        let (result, _) = capture_request(response, || {
-            client.post_contract_call_json(
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
+            client.post_contract_call_json_for_test(
                 &client.account,
                 None,
                 Some(&contract_address),
@@ -12196,8 +12482,12 @@ mod evidence_http_tests {
                 &norito::json::to_json(&response_value)
                     .expect("encode incomplete contract response"),
             );
-            let (result, _) = capture_request(response, || {
-                client.post_contract_call_json(
+            let (result, _) = capture_request(response, |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.post_contract_call_json_for_test(
                     &client.account,
                     None,
                     Some(&contract_address),
@@ -12234,9 +12524,14 @@ mod evidence_http_tests {
             },
             "metadata": {},
             "bytecode": { "placeholder": true },
-            "proved": { "placeholder": true },
+            "proved": { "placeholder": true }
         });
-        let (resp, snapshot) = capture_request(response, || client.post_zk_ivm_prove_json(&req));
+        let (resp, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_zk_ivm_prove_json(&req)
+        });
         let resp = resp.expect("post zk ivm prove json");
         assert_eq!(resp["job_id"].as_str(), Some("abc"));
         assert_eq!(snapshot.method, HttpMethod::POST);
@@ -12260,9 +12555,14 @@ mod evidence_http_tests {
                 "value": { "charge_limits": [], "gas_limit": 123 }
             },
             "metadata": {},
-            "bytecode": { "placeholder": true },
+            "bytecode": { "placeholder": true }
         });
-        let (resp, snapshot) = capture_request(response, || client.post_zk_ivm_derive_json(&req));
+        let (resp, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_zk_ivm_derive_json(&req)
+        });
         let resp = resp.expect("post zk ivm derive json");
         assert!(resp.get("proved").is_some());
         assert_eq!(snapshot.method, HttpMethod::POST);
@@ -12285,20 +12585,34 @@ mod evidence_http_tests {
             norito::json!({ "vk_ref": { "backend": "aztec/plonkish/private-kernel", "name": "vk_main" } }),
             norito::json!({ "vk_ref": { "backend": "halo2/ipa", "name": "   " } }),
         ] {
-            let derive_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_ivm_derive_json(&req)
-                    .expect_err("bad derive vk_ref must be rejected")
-            });
+            let derive_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_ivm_derive_json(&req)
+                        .expect_err("bad derive vk_ref must be rejected")
+                },
+            );
             assert!(
                 derive_err.to_string().contains("vk_ref"),
                 "unexpected derive error: {derive_err}"
             );
-            let prove_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_ivm_prove_json(&req)
-                    .expect_err("bad prove vk_ref must be rejected")
-            });
+            let prove_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_ivm_prove_json(&req)
+                        .expect_err("bad prove vk_ref must be rejected")
+                },
+            );
             assert!(
                 prove_err.to_string().contains("vk_ref"),
                 "unexpected prove error: {prove_err}"
@@ -12383,7 +12697,7 @@ mod evidence_http_tests {
         let value = norito::json!({
             "submitted": false,
             "transaction_payload_b64": transaction_payload_b64,
-            "signing_message_b64": signing_message_b64,
+            "signing_message_b64": signing_message_b64
         });
         json_response(
             StatusCode::OK,
@@ -12431,7 +12745,11 @@ mod evidence_http_tests {
                 Ok(response)
             }
         };
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let register_draft = client
                 .post_zk_vk_register(&register_req)
                 .expect("post register vk");
@@ -12487,7 +12805,12 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_body).expect("encode mismatched VK draft"),
         );
-        let (result, _) = capture_request(response, || client.post_zk_vk_register(&request));
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_zk_vk_register(&request)
+        });
         let error = result.expect_err("mismatched signing message must be rejected");
         assert!(
             error.to_string().contains("does not match"),
@@ -12518,21 +12841,35 @@ mod evidence_http_tests {
             vk_submission_json(&authority, &[("backend", norito::json::Value::from(7u64))]),
             norito::json!({ "name": "vk_main" }),
         ] {
-            let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_vk_register(&req)
-                    .expect_err("bad VK register JSON must be rejected")
-            });
+            let register_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_vk_register(&req)
+                        .expect_err("bad VK register JSON must be rejected")
+                },
+            );
             assert!(
                 register_err.to_string().contains("backend")
                     || register_err.to_string().contains("name"),
                 "unexpected register error: {register_err}"
             );
-            let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_vk_update(&req)
-                    .expect_err("bad VK update JSON must be rejected")
-            });
+            let update_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_vk_update(&req)
+                        .expect_err("bad VK update JSON must be rejected")
+                },
+            );
             assert!(
                 update_err.to_string().contains("backend")
                     || update_err.to_string().contains("name"),
@@ -12550,21 +12887,35 @@ mod evidence_http_tests {
                 &[("private_key", norito::json::Value::from("ed25519:retired"))],
             ),
         ] {
-            let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_vk_register(&req)
-                    .expect_err("VK register JSON with invalid identity fields must be rejected")
-            });
+            let register_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client.post_zk_vk_register(&req).expect_err(
+                        "VK register JSON with invalid identity fields must be rejected",
+                    )
+                },
+            );
             assert!(
                 register_err.to_string().contains("authority")
                     || register_err.to_string().contains("private_key"),
                 "unexpected register error: {register_err}"
             );
-            let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_vk_update(&req)
-                    .expect_err("VK update JSON with invalid identity fields must be rejected")
-            });
+            let update_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_vk_update(&req)
+                        .expect_err("VK update JSON with invalid identity fields must be rejected")
+                },
+            );
             assert!(
                 update_err.to_string().contains("authority")
                     || update_err.to_string().contains("private_key"),
@@ -12643,20 +12994,34 @@ mod evidence_http_tests {
                 "commitment_hex",
             ),
         ] {
-            let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_vk_register(&req)
-                    .expect_err("malformed VK register JSON must be rejected")
-            });
+            let register_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_vk_register(&req)
+                        .expect_err("malformed VK register JSON must be rejected")
+                },
+            );
             assert!(
                 register_err.to_string().contains(expected),
                 "unexpected register error for {expected}: {register_err}"
             );
-            let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
-                client
-                    .post_zk_vk_update(&req)
-                    .expect_err("malformed VK update JSON must be rejected")
-            });
+            let update_err = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client
+                        .post_zk_vk_update(&req)
+                        .expect_err("malformed VK update JSON must be rejected")
+                },
+            );
             assert!(
                 update_err.to_string().contains(expected),
                 "unexpected update error for {expected}: {update_err}"
@@ -12671,8 +13036,12 @@ mod evidence_http_tests {
     fn get_zk_ivm_prove_job_json_builds_request() {
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\",\"status\":\"done\"}");
-        let (resp, snapshot) =
-            capture_request(response, || client.get_zk_ivm_prove_job_json("abc"));
+        let (resp, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_zk_ivm_prove_job_json("abc")
+        });
         let resp = resp.expect("get zk ivm prove job json");
         assert_eq!(resp["status"].as_str(), Some("done"));
         assert_eq!(snapshot.method, HttpMethod::GET);
@@ -12686,8 +13055,12 @@ mod evidence_http_tests {
     fn delete_zk_ivm_prove_job_json_builds_request() {
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        let (resp, snapshot) =
-            capture_request(response, || client.delete_zk_ivm_prove_job_json("abc"));
+        let (resp, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.delete_zk_ivm_prove_job_json("abc")
+        });
         let resp = resp.expect("delete zk ivm prove job json");
         assert_eq!(resp["job_id"].as_str(), Some("abc"));
         assert_eq!(snapshot.method, HttpMethod::DELETE);
@@ -12756,8 +13129,9 @@ mod evidence_http_tests {
             rate_limit_bytes: Some(512_000),
             requests_per_minute: Some(120),
         };
-        with_mock_http(responder, || {
-            let mut client = client_with_base_url(base_url());
+        with_mock_http(responder, |mock_transport| {
+            let mut client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client.set_operator_key_pair(checked_random_keypair());
             client
                 .post_sorafs_storage_token(
@@ -12839,8 +13213,9 @@ mod evidence_http_tests {
             .body(b"{}".to_vec())
             .expect("response build");
         let store = Arc::new(Mutex::new(Vec::new()));
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             let resp = client
                 .get_sorafs_pin_manifest(&"11".repeat(32))
                 .expect("fresh alias proof should be accepted");
@@ -12862,8 +13237,9 @@ mod evidence_http_tests {
             .body(b"{}".to_vec())
             .expect("response build");
         let store = Arc::new(Mutex::new(Vec::new()));
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             let err = client
                 .get_sorafs_pin_manifest(&"11".repeat(32))
                 .expect_err("stale alias proof should be rejected");
@@ -12885,8 +13261,9 @@ mod evidence_http_tests {
             .body(b"{}".to_vec())
             .expect("response build");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             let builder = client.default_request(HttpMethod::GET, base_url());
             let err = client
                 .send_builder(builder)
@@ -13092,16 +13469,26 @@ mod evidence_http_tests {
     ) -> (Result<SumeragiEvidenceListResponse>, RequestSnapshot) {
         capture_request(
             json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
-            || client_with_base_url(base_url()).get_sumeragi_evidence_list(filter),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sumeragi_evidence_list(filter)
+            },
         )
     }
     #[test]
     fn get_evidence_count_fetches_typed_json() {
         let client = client_with_base_url(base_url());
-        let (response, snapshot) =
-            capture_request(json_response(StatusCode::OK, r#"{"count":7}"#), || {
+        let (response, snapshot) = capture_request(
+            json_response(StatusCode::OK, r#"{"count":7}"#),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.get_sumeragi_evidence_count()
-            });
+            },
+        );
         assert_eq!(response.expect("count request").count, 7);
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence/count");
@@ -13187,7 +13574,12 @@ mod evidence_http_tests {
                 &Arc::new(Mutex::new(Vec::new())),
                 json_response(StatusCode::OK, r#"{"count":"#),
             ),
-            || client.get_sumeragi_evidence_count(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_evidence_count()
+            },
         )
         .expect_err("malformed successful count response should fail");
         let message = err.to_string();
@@ -13209,7 +13601,12 @@ mod evidence_http_tests {
                     &Arc::new(Mutex::new(Vec::new())),
                     mk_response(StatusCode::OK, br#"{"count":0}"#.to_vec(), content_type),
                 ),
-                || client.get_sumeragi_evidence_count(),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.get_sumeragi_evidence_count()
+                },
             )
             .expect_err("count response must use the negotiated JSON media type");
             assert!(
@@ -13226,7 +13623,12 @@ mod evidence_http_tests {
                         content_type,
                     ),
                 ),
-                || client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
+                },
             )
             .expect_err("list response must use the negotiated JSON media type");
             assert!(
@@ -13243,7 +13645,12 @@ mod evidence_http_tests {
                 &Arc::new(Mutex::new(Vec::new())),
                 json_response(StatusCode::OK, r#"{"total":0,"items":[],"items":[]}"#),
             ),
-            || client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default()),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
+            },
         )
         .expect_err("duplicate-key successful list response should fail");
         let message = err.to_string();
@@ -13264,7 +13671,12 @@ mod evidence_http_tests {
                 &Arc::new(Mutex::new(Vec::new())),
                 json_response(StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":1}"#),
             ),
-            || client.get_sumeragi_evidence_count(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_evidence_count()
+            },
         )
         .unwrap_err();
         assert!(
@@ -13370,7 +13782,12 @@ mod evidence_http_tests {
         );
         let response = with_mock_http(
             respond_with(&snapshots, norito_response(StatusCode::OK, &payload)),
-            || client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default()),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default())
+            },
         )
         .expect("wire request");
         assert_eq!(response.total, 7);
@@ -13411,7 +13828,12 @@ mod evidence_http_tests {
                     },
                 ),
             ),
-            || client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default()),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default())
+            },
         )
         .unwrap_err();
         assert!(
@@ -13434,7 +13856,12 @@ mod evidence_http_tests {
                     &Arc::new(Mutex::new(Vec::new())),
                     mk_response(StatusCode::OK, body.clone(), content_type),
                 ),
-                || client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default())
+                },
             )
             .expect_err("wire response must declare the negotiated Norito media type");
             assert!(
@@ -13453,11 +13880,19 @@ mod evidence_http_tests {
     ) -> (SignedTransaction, PipelineTransactionDetailsResponse) {
         use crate::crypto::MerkleProof;
         use iroha_data_model::query::CommittedTransaction;
-        let signed = client.build_transaction(
-            Vec::<InstructionBox>::new(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let signed = {
+            let account = client
+                .account_client()
+                .expect("bind committed-transaction fixture account");
+            account
+                .prepare_transaction(AccountTransactionDraft::new(
+                    Vec::<InstructionBox>::new(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build committed-transaction fixture");
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let entrypoint_hash = signed.hash_as_entrypoint();
         assert_eq!(entrypoint.hash(), entrypoint_hash);
@@ -13485,8 +13920,9 @@ mod evidence_http_tests {
         response: HttpResponse<Vec<u8>>,
         confirmation: bool,
     ) -> (Result<Option<TxConfirmationStatus>>, Vec<RequestSnapshot>) {
-        capture_requests(response, || {
-            let client = client_with_base_url(base_url());
+        capture_requests(response, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
             let hash = transaction_hash(seed);
             if confirmation {
@@ -13506,7 +13942,7 @@ mod evidence_http_tests {
             "hash": hash,
             "status": status,
             "scope": scope,
-            "resolved_from": resolved_from,
+            "resolved_from": resolved_from
         });
         json_response(
             StatusCode::OK,
@@ -13648,7 +14084,11 @@ mod evidence_http_tests {
                 }
             }
         };
-        let status = with_mock_http(responder, || {
+        let status = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
                 entrypoint_hash,
@@ -13716,7 +14156,11 @@ mod evidence_http_tests {
                 }
             }
         };
-        let error = with_mock_http(responder, || {
+        let error = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
                 entrypoint_hash,
@@ -13762,7 +14206,11 @@ mod evidence_http_tests {
             torii_uri::TRANSACTION_DETAILS => Ok(empty_response(StatusCode::FORBIDDEN)),
             path => panic!("unexpected rejection-details request path: {path}"),
         };
-        let error = with_mock_http(responder, || {
+        let error = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
                 entrypoint_hash,
@@ -13816,7 +14264,11 @@ mod evidence_http_tests {
                 }
             }
         };
-        let (retryable, resolved) = with_mock_http(responder, || {
+        let (retryable, resolved) = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let retryable = client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
                 entrypoint_hash,
@@ -13870,7 +14322,11 @@ mod evidence_http_tests {
             torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
             path => panic!("unexpected rejection-details request path: {path}"),
         };
-        let error = with_mock_http(responder, || {
+        let error = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
                 entrypoint_hash,
@@ -13966,19 +14422,21 @@ mod evidence_http_tests {
                 "status": { "kind": "Applied", "block_height": 9 },
                 "scope": "global",
                 "resolved_from": "state",
-                "legacy": true,
+                "legacy": true
             }),
             norito::json!({
                 "hash": (hash.to_string()),
                 "status": { "kind": "Applied", "block_height": 9, "legacy": true },
                 "scope": "global",
-                "resolved_from": "state",
+                "resolved_from": "state"
             }),
         ] {
             let body = norito::json::to_string(&payload).expect("status payload");
             let (result, snapshots) =
-                capture_requests(json_response(StatusCode::OK, &body), || {
-                    client_with_base_url(base_url()).get_transaction_status_response_global(hash)
+                capture_requests(json_response(StatusCode::OK, &body), |mock_transport| {
+                    client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone())
+                        .get_transaction_status_response_global(hash)
                 });
             let _ = result.expect_err("unknown pipeline status fields must fail closed");
             assert_eq!(snapshots.len(), 1);
@@ -13995,20 +14453,22 @@ mod evidence_http_tests {
             "hash": expected_hash,
             "status": status,
             "scope": "global",
-            "resolved_from": resolved_from,
+            "resolved_from": resolved_from
         });
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_string(&payload).expect("status payload"),
         );
-        let (outcome, snapshots) = capture_requests(response, || {
-            client_with_base_url(base_url()).wait_for_transaction_applied(
-                hash,
-                TransactionWaitOptions {
-                    timeout: Duration::from_millis(5),
-                    poll_interval: Duration::from_millis(1),
-                },
-            )
+        let (outcome, snapshots) = capture_requests(response, |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .wait_for_transaction_applied(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: Duration::from_millis(25),
+                        poll_interval: Duration::from_millis(1),
+                    },
+                )
         });
         (outcome, expected_hash, snapshots)
     }
@@ -14073,16 +14533,20 @@ mod evidence_http_tests {
     #[test]
     fn wait_for_transaction_applied_rejects_zero_poll_interval_without_http() {
         let hash = transaction_hash(0x39);
-        let (result, snapshots) =
-            capture_requests(empty_response(StatusCode::INTERNAL_SERVER_ERROR), || {
-                client_with_base_url(base_url()).wait_for_transaction_applied(
-                    hash,
-                    TransactionWaitOptions {
-                        timeout: Duration::from_millis(5),
-                        poll_interval: Duration::ZERO,
-                    },
-                )
-            });
+        let (result, snapshots) = capture_requests(
+            empty_response(StatusCode::INTERNAL_SERVER_ERROR),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .wait_for_transaction_applied(
+                        hash,
+                        TransactionWaitOptions {
+                            timeout: Duration::from_millis(5),
+                            poll_interval: Duration::ZERO,
+                        },
+                    )
+            },
+        );
         let error = result.expect_err("zero poll interval must fail closed");
         assert!(
             error
@@ -14120,16 +14584,20 @@ mod evidence_http_tests {
             &norito::json::to_value(&payload).expect("status payload value"),
         )
         .expect("status payload");
-        let (decoded, snapshot) = capture_request(json_response(StatusCode::OK, &body), || {
-            let client = client_with_base_url(base_url());
-            match request {
-                StatusResponseRequest::Default => client.get_transaction_status_response(hash),
-                StatusResponseRequest::Local => client.get_transaction_status_response_local(hash),
-                StatusResponseRequest::Global => {
-                    client.get_transaction_status_response_global(hash)
+        let (decoded, snapshot) =
+            capture_request(json_response(StatusCode::OK, &body), |mock_transport| {
+                let client = client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone());
+                match request {
+                    StatusResponseRequest::Default => client.get_transaction_status_response(hash),
+                    StatusResponseRequest::Local => {
+                        client.get_transaction_status_response_local(hash)
+                    }
+                    StatusResponseRequest::Global => {
+                        client.get_transaction_status_response_global(hash)
+                    }
                 }
-            }
-        });
+            });
         assert_eq!(
             decoded
                 .expect("transaction status response")
@@ -14205,7 +14673,11 @@ mod evidence_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
         let client = client_with_base_url(base_url());
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.get_account_read(&account_id)
         })
         .expect("account read response");
@@ -14245,7 +14717,11 @@ mod evidence_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
         let client = client_with_base_url(base_url());
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.get_account_read_unsigned(&account_id)
         })
         .expect("anonymous account read response");
@@ -14303,22 +14779,31 @@ mod evidence_http_tests {
             ),
         ];
         for (path, expectation, request) in requests {
-            let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-                request(&client_with_base_url(base_url()))
-            });
+            let (result, snapshot) =
+                capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
+                    request(
+                        &client_with_base_url(base_url())
+                            .with_test_http_transport(mock_transport.clone()),
+                    )
+                });
             result.expect(expectation);
             assert_json_accept(&snapshot, path);
         }
-        let (result, snapshot) =
-            capture_request(json_response(StatusCode::OK, r#"{"count":0}"#), || {
-                client_with_base_url(base_url()).get_sumeragi_evidence_count()
-            });
+        let (result, snapshot) = capture_request(
+            json_response(StatusCode::OK, r#"{"count":0}"#),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sumeragi_evidence_count()
+            },
+        );
         result.expect("typed Sumeragi evidence count");
         assert_json_accept(&snapshot, "/v1/sumeragi/evidence/count");
         let (result, snapshot) = capture_request(
             json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
-            || {
+            |mock_transport| {
                 client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
                     .get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
             },
         );
@@ -14338,8 +14823,9 @@ mod evidence_http_tests {
                 )))
             }
         };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+        let result = with_mock_http(responder, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
             client.transaction_confirmation_status(transaction_hash(seed))
         });
@@ -14359,31 +14845,6 @@ mod evidence_http_tests {
 }
 /// Private structure to incapsulate error reporting for HTTP response.
 pub(crate) struct ResponseReport(pub(crate) eyre::Report);
-type RetainedQueuePlanResponseHeaders = Vec<(&'static str, Vec<::http::HeaderValue>)>;
-fn retain_queue_plan_response_headers(
-    headers: &::http::HeaderMap,
-) -> RetainedQueuePlanResponseHeaders {
-    [
-        "content-type",
-        "x-iroha-reject-code",
-        TRANSACTION_ENTRYPOINT_HASH_HEADER,
-        SIGNED_TRANSACTION_HASH_HEADER,
-    ]
-    .into_iter()
-    .map(|name| (name, headers.get_all(name).iter().cloned().collect()))
-    .collect()
-}
-fn restore_queue_plan_response_headers(
-    response: &mut Response<Vec<u8>>,
-    retained: RetainedQueuePlanResponseHeaders,
-) {
-    for (name, values) in retained {
-        response.headers_mut().remove(name);
-        for value in values {
-            response.headers_mut().append(name, value);
-        }
-    }
-}
 fn response_has_norito_error_content_type(response: &Response<Vec<u8>>) -> bool {
     response
         .headers()
@@ -14634,6 +15095,37 @@ fn format_error_envelope(envelope: &ErrorEnvelope) -> String {
     if let Some(hint) = details.hint.as_deref() {
         let _ = write!(message, "; hint={hint}");
     }
+    if let Some(fee) = details.fee.as_ref() {
+        let _ = write!(
+            message,
+            "; fee_code={} retryable={}",
+            fee.code, fee.retryable
+        );
+        if let Some(program_id) = fee.program_id.as_deref() {
+            let _ = write!(message, "; fee_program_id={program_id}");
+        }
+        if let Some(program_revision) = fee.program_revision {
+            let _ = write!(message, "; fee_program_revision={program_revision}");
+        }
+        if let Some(asset_definition_id) = fee.asset_definition_id.as_deref() {
+            let _ = write!(message, "; fee_asset_definition_id={asset_definition_id}");
+        }
+        if let Some(required) = fee.required.as_deref() {
+            let _ = write!(message, "; fee_required={required}");
+        }
+        if let Some(available) = fee.available.as_deref() {
+            let _ = write!(message, "; fee_available={available}");
+        }
+        if let Some(rule_id) = fee.rule_id.as_deref() {
+            let _ = write!(message, "; fee_rule_id={rule_id}");
+        }
+        if let Some(observation_height) = fee.observation_height {
+            let _ = write!(message, "; fee_observation_height={observation_height}");
+        }
+        if let Some(remediation) = fee.remediation.as_deref() {
+            let _ = write!(message, "; fee_remediation={remediation}");
+        }
+    }
     if let Some(axt) = details.axt.as_ref()
         && let Some(code) = axt.code.as_deref()
     {
@@ -14784,6 +15276,23 @@ pub struct TransactionWaitOutcome {
     /// Final typed pipeline status payload returned by Torii.
     pub r#final: PipelineTransactionStatusResponse,
 }
+
+fn transaction_wait_outcome(
+    response: PipelineTransactionStatusResponse,
+    attempts: u64,
+    elapsed: Duration,
+) -> TransactionWaitOutcome {
+    TransactionWaitOutcome {
+        hash: response.hash.clone(),
+        terminal_kind: response.status.kind.clone(),
+        attempts,
+        elapsed_ms: elapsed_ms_u64(elapsed),
+        block_height: response.status.block_height,
+        scope: response.scope.clone(),
+        resolved_from: response.resolved_from.clone(),
+        r#final: response,
+    }
+}
 #[derive(Debug)]
 struct TxConfirmationFinalError {
     report: eyre::Report,
@@ -14824,7 +15333,7 @@ fn tx_confirmation_final_report(report: eyre::Report) -> eyre::Report {
 fn tx_confirmation_unresolved_final_report(report: eyre::Report) -> eyre::Report {
     TxConfirmationFinalError::unresolved(report).into()
 }
-/// QueuePlan admission may have crossed its durability boundary, but the client could not
+/// `QueuePlan` admission may have crossed its durability boundary, but the client could not
 /// determine whether the submitted transaction was applied, rejected, or expired.
 ///
 /// Callers must reconcile the returned identities and must not automatically resubmit or create
@@ -14900,9 +15409,11 @@ fn is_unresolved_tx_confirmation_error(err: &eyre::Report) -> bool {
             .is_some_and(|error| error.resolution == TxConfirmationErrorResolution::Unresolved)
     })
 }
+#[cfg(test)]
 fn should_fallback_after_confirmation_error(err: &eyre::Report) -> bool {
     !is_final_tx_confirmation_error(err)
 }
+#[cfg(test)]
 fn is_tx_confirmation_connection_refused(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         cause
@@ -15024,8 +15535,180 @@ pub struct Client {
     pub rollout_phase: RolloutPhase,
     /// Cached Torii compatibility state for queries and transaction submissions.
     pub(crate) data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
+    /// Serializes capability probes and shares their completion across clones.
+    pub(crate) compatibility_probe: Arc<CompatibilityProbeCoordinator>,
+    /// HTTP connection pools scoped to this immutable client context.
+    pub(crate) http_transport: DefaultHttpTransport,
     /// Default response wire-format preference for negotiated Torii endpoints.
     pub wire_format_preference: WireFormatPreference,
+}
+/// Failure to bind an immutable authority context to a client configuration.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum AuthorityContextError {
+    /// Torii endpoints must use HTTP or HTTPS.
+    #[error("Torii endpoint scheme `{scheme}` is not supported")]
+    UnsupportedEndpointScheme {
+        /// Rejected URL scheme.
+        scheme: String,
+    },
+    /// The Torii endpoint omitted its network host.
+    #[error("Torii endpoint must include a host")]
+    MissingEndpointHost,
+    /// User information in a URL could escape the SDK's explicit authentication boundary.
+    #[error("Torii endpoint must not contain embedded credentials")]
+    EmbeddedEndpointCredentials,
+    /// Query and fragment components do not belong in a reusable API base URL.
+    #[error("Torii endpoint must not contain a query or fragment")]
+    EndpointHasQueryOrFragment,
+    /// The request router requires a directory-form base path.
+    #[error("Torii endpoint path must end with `/`")]
+    EndpointPathMissingTrailingSlash,
+    /// The configured signing key must control the configured account.
+    #[error("account authority does not match the configured signing key")]
+    AccountSigningKeyMismatch,
+    /// A multisignature account context must be bound by one of its members.
+    #[error("configured signing key is not a member of the account multisignature policy")]
+    AccountSigningKeyNotMultisigMember,
+}
+
+/// Local signing capability of an immutable account context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountSigningCapability {
+    /// The context key directly controls a single-key account.
+    Direct,
+    /// The context key is one member of a multisignature account.
+    ///
+    /// This context can submit fully signed multisignature transactions and
+    /// prepare requests for external signing. It cannot create a direct account
+    /// signature by itself.
+    MultisigMember,
+}
+
+/// Exact local transaction draft bound to an [`AccountClient`] at preparation time.
+///
+/// Network and authority are deliberately absent: the immutable account context
+/// supplies both, so callers cannot prepare a payload for a different signing
+/// domain through this API.
+#[derive(Clone, Debug)]
+pub struct AccountTransactionDraft {
+    executable: Executable,
+    fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+    admission_intent: TransactionAdmissionIntent,
+    attachments: Option<iroha_data_model::proof::ProofAttachmentList>,
+    time_to_live: Option<Duration>,
+}
+
+impl AccountTransactionDraft {
+    /// Create a queue-plan-synchronized transaction draft.
+    pub fn new(
+        executable: impl Into<Executable>,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> Self {
+        Self {
+            executable: executable.into(),
+            fee_payment,
+            metadata,
+            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
+            attachments: None,
+            time_to_live: None,
+        }
+    }
+
+    /// Select the signature-bound admission protocol for this draft.
+    #[must_use]
+    pub fn with_admission_intent(mut self, admission_intent: TransactionAdmissionIntent) -> Self {
+        self.admission_intent = admission_intent;
+        self
+    }
+
+    /// Attach proof payloads to the exact transaction signature preimage.
+    #[must_use]
+    pub fn with_attachments(
+        mut self,
+        attachments: iroha_data_model::proof::ProofAttachmentList,
+    ) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
+
+    /// Override the account context's configured transaction lifetime.
+    #[must_use]
+    pub fn with_time_to_live(mut self, time_to_live: Duration) -> Self {
+        self.time_to_live = Some(time_to_live);
+        self
+    }
+}
+
+/// Exact transaction payload and authorization used for one fee quote.
+///
+/// The authorization variant is explicit because a direct account signature
+/// and a detached multisignature witness have different validation and wire
+/// requirements. Both variants bind the exact borrowed payload bytes.
+pub enum FeeQuoteRequest<'a> {
+    /// Authenticate the quote with this account context's direct signing key.
+    AccountSignature {
+        /// Exact unsigned payload that will receive the quoted fee intent.
+        payload: &'a TransactionPayload,
+    },
+    /// Authenticate the quote with a complete detached multisignature witness.
+    MultisigWitness {
+        /// Exact unsigned payload bound by the witness.
+        payload: &'a TransactionPayload,
+        /// Threshold witness over the canonical fee-quote HTTP request.
+        witness: &'a CanonicalRequestWitnessV1,
+    },
+}
+
+/// Immutable account-authorized SDK context.
+///
+/// Clones share transport pools and compatibility state. Endpoint, network,
+/// authority, and signing key state cannot be changed after binding.
+#[derive(Clone)]
+pub struct AccountClient {
+    context: Arc<Client>,
+    signing_capability: AccountSigningCapability,
+}
+
+impl fmt::Debug for AccountClient {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountClient")
+            .field(
+                "torii_url",
+                &self.context.torii_url.origin().ascii_serialization(),
+            )
+            .field("network_id", &self.context.network_id)
+            .field("authority", &self.context.account)
+            .field("public_key", self.context.key_pair.public_key())
+            .field("signing_capability", &self.signing_capability)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Immutable operator-authorized SDK context.
+///
+/// The operator key is explicit and private to this context. Clones share the
+/// same transport pools and compatibility state.
+#[derive(Clone)]
+pub struct OperatorClient {
+    context: Arc<Client>,
+    operator_key_pair: KeyPair,
+}
+
+impl fmt::Debug for OperatorClient {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OperatorClient")
+            .field(
+                "torii_url",
+                &self.context.torii_url.origin().ascii_serialization(),
+            )
+            .field("network_id", &self.context.network_id)
+            .field("public_key", self.operator_key_pair.public_key())
+            .finish_non_exhaustive()
+    }
 }
 /// A signed transaction prepared for repeated or high-throughput submission.
 ///
@@ -15038,6 +15721,14 @@ pub struct PreparedTransactionPayload {
     hash: HashOf<SignedTransaction>,
 }
 impl PreparedTransactionPayload {
+    /// Encode and hash a signed transaction once for later submission.
+    #[must_use]
+    pub fn from_transaction(transaction: &SignedTransaction) -> Self {
+        Self {
+            bytes: Bytes::from(transaction.encode_versioned()),
+            hash: transaction.hash(),
+        }
+    }
     /// Return the signed transaction hash associated with this payload.
     pub fn hash(&self) -> HashOf<SignedTransaction> {
         self.hash
@@ -15045,6 +15736,51 @@ impl PreparedTransactionPayload {
     /// Return the canonical versioned `SignedTransaction` bytes.
     pub fn as_bytes(&self) -> &[u8] {
         self.bytes.as_ref()
+    }
+}
+impl AccountClient {
+    /// Borrow the exact account authority bound to this context.
+    #[must_use]
+    pub fn authority(&self) -> &AccountId {
+        &self.context.account
+    }
+
+    /// Borrow the exact network identity bound to this context.
+    #[must_use]
+    pub fn network_id(&self) -> &NetworkId {
+        &self.context.network_id
+    }
+
+    /// Borrow the validated Torii endpoint bound to this context.
+    #[must_use]
+    pub fn endpoint(&self) -> &Url {
+        &self.context.torii_url
+    }
+
+    /// Return whether this context can sign directly or participates in a
+    /// multisignature controller.
+    #[must_use]
+    pub fn signing_capability(&self) -> AccountSigningCapability {
+        self.signing_capability
+    }
+}
+impl OperatorClient {
+    /// Borrow the operator public key bound to this context.
+    #[must_use]
+    pub fn public_key(&self) -> &PublicKey {
+        self.operator_key_pair.public_key()
+    }
+
+    /// Borrow the exact network identity bound to this context.
+    #[must_use]
+    pub fn network_id(&self) -> &NetworkId {
+        &self.context.network_id
+    }
+
+    /// Borrow the validated Torii endpoint bound to this context.
+    #[must_use]
+    pub fn endpoint(&self) -> &Url {
+        &self.context.torii_url
     }
 }
 impl fmt::Debug for Client {
@@ -15078,6 +15814,8 @@ impl fmt::Debug for Client {
             )
             .field("rollout_phase", &self.rollout_phase.label())
             .field("data_model_compatibility", &"<cached>")
+            .field("compatibility_probe", &"<context-local>")
+            .field("http_transport", &"<context-owned>")
             .field("wire_format_preference", &self.wire_format_preference)
             .finish()
     }
@@ -15092,11 +15830,113 @@ impl Client {
     pub fn new(configuration: Config) -> Self {
         Self::with_headers(configuration, HashMap::new())
     }
+    /// Construct a client with an explicitly owned HTTP transport.
+    ///
+    /// Clones of the returned client share `transport`; separately constructed
+    /// clients share nothing unless the caller deliberately supplies the same
+    /// [`crate::http::HttpTransport`] instance.
+    #[inline]
+    pub fn with_transport(
+        configuration: Config,
+        transport: Arc<dyn crate::http::HttpTransport>,
+    ) -> Self {
+        Self::with_headers_and_transport(
+            configuration,
+            HashMap::new(),
+            DefaultHttpTransport::from_shared(transport),
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn with_test_http_transport(mut self, transport: DefaultHttpTransport) -> Self {
+        self.http_transport = transport;
+        self
+    }
     /// Constructor for client from configuration and headers
     ///
     /// *Authorization* header will be added if `basic_auth` is presented
     #[inline]
-    pub fn with_headers(
+    pub fn with_headers(configuration: Config, headers: HashMap<String, String>) -> Self {
+        Self::with_headers_and_transport(configuration, headers, DefaultHttpTransport::new())
+    }
+
+    fn validate_context_endpoint(&self) -> core::result::Result<(), AuthorityContextError> {
+        if !matches!(self.torii_url.scheme(), "http" | "https") {
+            return Err(AuthorityContextError::UnsupportedEndpointScheme {
+                scheme: self.torii_url.scheme().to_owned(),
+            });
+        }
+        if self.torii_url.host().is_none() {
+            return Err(AuthorityContextError::MissingEndpointHost);
+        }
+        if !self.torii_url.username().is_empty() || self.torii_url.password().is_some() {
+            return Err(AuthorityContextError::EmbeddedEndpointCredentials);
+        }
+        if self.torii_url.query().is_some() || self.torii_url.fragment().is_some() {
+            return Err(AuthorityContextError::EndpointHasQueryOrFragment);
+        }
+        if !self.torii_url.path().ends_with('/') {
+            return Err(AuthorityContextError::EndpointPathMissingTrailingSlash);
+        }
+        Ok(())
+    }
+
+    fn validate_account_authority(
+        &self,
+    ) -> core::result::Result<AccountSigningCapability, AuthorityContextError> {
+        match self.account.controller() {
+            AccountController::Single(account_key) => {
+                if account_key != self.key_pair.public_key() {
+                    return Err(AuthorityContextError::AccountSigningKeyMismatch);
+                }
+                Ok(AccountSigningCapability::Direct)
+            }
+            AccountController::Multisig(policy) => {
+                if !policy
+                    .members()
+                    .iter()
+                    .any(|member| member.public_key() == self.key_pair.public_key())
+                {
+                    return Err(AuthorityContextError::AccountSigningKeyNotMultisigMember);
+                }
+                Ok(AccountSigningCapability::MultisigMember)
+            }
+        }
+    }
+
+    /// Bind this public-read client to its configured account authority.
+    ///
+    /// The returned context owns an immutable snapshot. Its clones share the
+    /// original transport pools and compatibility cache.
+    ///
+    /// # Errors
+    /// Returns a typed error when the endpoint, network identity, account
+    /// controller, or signing-key binding is invalid.
+    pub fn account_client(&self) -> core::result::Result<AccountClient, AuthorityContextError> {
+        self.validate_context_endpoint()?;
+        let signing_capability = self.validate_account_authority()?;
+        Ok(AccountClient {
+            context: Arc::new(self.clone()),
+            signing_capability,
+        })
+    }
+
+    /// Bind this public-read client to an explicit operator authority.
+    ///
+    /// # Errors
+    /// Returns a typed error when the endpoint is invalid. The strongly typed
+    /// network identity and explicit operator key are retained byte-for-byte.
+    pub fn operator_client(
+        &self,
+        operator_key_pair: KeyPair,
+    ) -> core::result::Result<OperatorClient, AuthorityContextError> {
+        self.validate_context_endpoint()?;
+        Ok(OperatorClient {
+            context: Arc::new(self.clone()),
+            operator_key_pair,
+        })
+    }
+
+    fn with_headers_and_transport(
         Config {
             chain,
             network_id,
@@ -15109,13 +15949,12 @@ impl Client {
             transaction_add_nonce,
             transaction_ttl,
             transaction_status_timeout,
-            connect_queue_root: _connect_queue_root,
-            soracloud_http_witness_file: _soracloud_http_witness_file,
             sorafs_alias_cache,
             sorafs_anonymity_policy,
             sorafs_rollout_phase,
         }: Config,
         mut headers: HashMap<String, String>,
+        http_transport: DefaultHttpTransport,
     ) -> Self {
         if let Some(basic_auth) = basic_auth {
             let credentials = format!(
@@ -15127,8 +15966,8 @@ impl Client {
             let encoded = base64::engine::Engine::encode(&engine, credentials);
             headers.insert(String::from("Authorization"), format!("Basic {encoded}"));
         }
-        let data_model_compatibility =
-            shared_data_model_compatibility_state(&network_id, &torii_api_url, &account);
+        let data_model_compatibility = Arc::new(Mutex::new(DataModelCompatibility::Unchecked));
+        let compatibility_probe = Arc::new(CompatibilityProbeCoordinator::new());
         Self {
             chain,
             network_id,
@@ -15145,6 +15984,8 @@ impl Client {
             default_anonymity_policy: sorafs_anonymity_policy,
             rollout_phase: sorafs_rollout_phase,
             data_model_compatibility,
+            compatibility_probe,
+            http_transport,
             wire_format_preference: WireFormatPreference::default(),
         }
     }
@@ -15169,7 +16010,9 @@ impl Client {
         // application/json` would be appended alongside a later `Accept: application/x-norito`,
         // and some servers/frameworks only observe the first header value. Callers set `Accept`
         // explicitly when needed; otherwise modern Torii defaults to Norito.
-        let mut builder = DefaultRequestBuilder::new(method, url).headers(&self.headers);
+        let mut builder = DefaultRequestBuilder::new(method, url)
+            .with_transport(self.http_transport.clone())
+            .headers(&self.headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
@@ -15181,7 +16024,9 @@ impl Client {
         url: Url,
     ) -> DefaultRequestBuilder {
         let headers = self.headers_without_canonical_account_auth();
-        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        let mut builder = DefaultRequestBuilder::new(method, url)
+            .with_transport(self.http_transport.clone())
+            .headers(headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
@@ -15245,7 +16090,7 @@ impl Client {
             builder = builder.max_response_bytes(max_response_bytes);
         }
         match endpoint.auth {
-            SorafsEndpointAuth::Anonymous => builder.build()?.send(),
+            SorafsEndpointAuth::Anonymous => builder.build()?.send_blocking(),
             SorafsEndpointAuth::Account => self.send_builder(builder),
         }
     }
@@ -15256,7 +16101,13 @@ impl Client {
     }
 
     fn send_prepared_request(&self, request: DefaultRequest) -> Result<Response<Vec<u8>>> {
-        let response = request.send()?;
+        let response = request.send_blocking()?;
+        self.enforce_alias_policy(&response)?;
+        Ok(response)
+    }
+
+    async fn dispatch_request(&self, request: DefaultRequest) -> Result<Response<Vec<u8>>> {
+        let response = request.send().await?;
         self.enforce_alias_policy(&response)?;
         Ok(response)
     }
@@ -15331,31 +16182,6 @@ impl Client {
         }
         String::from_utf8(encoded).map_err(|_| eyre!("signed request nonce is not UTF-8"))
     }
-    fn transaction_nonce_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
-        rng: &mut R,
-    ) -> Result<NonZeroU32> {
-        for _ in 0..16 {
-            let value = rand::rand_core::TryRngCore::try_next_u32(rng)
-                .map_err(|error| eyre!("transaction nonce OS RNG failed: {error}"))?;
-            if let Some(nonce) = NonZeroU32::new(value) {
-                return Ok(nonce);
-            }
-        }
-        Err(eyre!("transaction nonce OS RNG returned zero repeatedly"))
-    }
-    fn apply_transaction_defaults_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
-        &self,
-        tx_builder: &mut TransactionBuilder,
-        rng: &mut R,
-    ) -> Result<()> {
-        if let Some(transaction_ttl) = self.transaction_ttl {
-            tx_builder.set_ttl(transaction_ttl);
-        }
-        if self.add_transaction_nonce {
-            tx_builder.set_nonce(Self::transaction_nonce_with_rng(rng)?);
-        }
-        Ok(())
-    }
     fn account_signed_request(
         &self,
         method: HttpMethod,
@@ -15363,7 +16189,9 @@ impl Client {
         body: Vec<u8>,
     ) -> Result<DefaultRequestBuilder> {
         let headers = self.account_signed_headers(&method, &url, &body)?;
-        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        let mut builder = DefaultRequestBuilder::new(method, url)
+            .with_transport(self.http_transport.clone())
+            .headers(headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
@@ -15442,612 +16270,519 @@ impl Client {
             evaluation.age.as_secs()
         ))
     }
-    /// Builds a transaction with an explicit signature-bound fee payment intent.
-    ///
-    /// Prefer [`Self::try_build_transaction`] when callers need to handle OS
-    /// entropy failures from configured transaction nonce generation or
-    /// signing failures from the configured signature backend.
-    ///
-    /// # Panics
-    /// Panics if `transaction_add_nonce` is enabled and OS entropy is
-    /// unavailable while generating a transaction nonce, or if signing fails.
-    pub fn build_transaction<Exec: Into<Executable>>(
+    fn cached_compatibility_result(
         &self,
-        instructions: Exec,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> SignedTransaction {
-        self.try_build_transaction(instructions, fee_payment, metadata)
-            .expect("failed to build transaction")
-    }
-    /// Builds a transaction with an explicit signature-bound fee payment intent.
-    ///
-    /// # Errors
-    /// Fails if configured transaction nonce generation cannot read OS entropy,
-    /// or if the configured signature backend cannot sign the transaction.
-    pub fn try_build_transaction<Exec: Into<Executable>>(
-        &self,
-        instructions: Exec,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<SignedTransaction> {
-        self.try_build_transaction_with_rng(
-            instructions,
-            fee_payment,
-            metadata,
-            &mut rand::rngs::OsRng,
-        )
-    }
-    /// Build, but do not sign, the exact payload used by fee quoting.
-    ///
-    /// The returned payload already contains the client's deterministic
-    /// transaction defaults (creation time, TTL, and optional nonce). Callers
-    /// may replace only `fee_payment` with the fixed-point intent returned by
-    /// `/v1/fees/quote`, then pass the same payload to
-    /// [`Self::try_sign_transaction_payload`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if configured nonce generation cannot read OS entropy or the fee
-    /// payment intent is structurally invalid.
-    pub fn try_build_transaction_payload<Exec: Into<Executable>>(
-        &self,
-        instructions: Exec,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<TransactionPayload> {
-        self.try_build_transaction_payload_with_rng(
-            instructions,
-            fee_payment,
-            metadata,
-            &mut rand::rngs::OsRng,
-        )
-    }
-    fn try_build_transaction_payload_with_rng<Exec, R>(
-        &self,
-        instructions: Exec,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-        rng: &mut R,
-    ) -> Result<TransactionPayload>
-    where
-        Exec: Into<Executable>,
-        R: rand::rand_core::TryCryptoRng + ?Sized,
-    {
-        let mut builder =
-            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
-                .with_executable(instructions.into());
-        self.apply_transaction_defaults_with_rng(&mut builder, rng)?;
-        builder
-            .with_metadata(metadata)
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-            .into_payload()
-            .wrap_err("build exact unsigned client transaction payload")
-    }
-    fn try_build_transaction_with_rng<Exec, R>(
-        &self,
-        instructions: Exec,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-        rng: &mut R,
-    ) -> Result<SignedTransaction>
-    where
-        Exec: Into<Executable>,
-        R: rand::rand_core::TryCryptoRng + ?Sized,
-    {
-        let mut tx_builder =
-            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
-                .with_executable(instructions.into());
-        self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
-        tx_builder
-            .with_metadata(metadata)
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-            .try_sign(self.key_pair.private_key())
-            .wrap_err("sign client transaction")
-    }
-    /// Builds a transaction from a collection of items convertible into `InstructionBox`.
-    ///
-    /// This avoids re-boxing already boxed instructions.
-    /// Prefer [`Self::try_build_transaction_from_items`] when callers need to
-    /// handle OS entropy failures from configured transaction nonce generation
-    /// or signing failures from the configured signature backend.
-    ///
-    /// # Panics
-    /// Panics if `transaction_add_nonce` is enabled and OS entropy is
-    /// unavailable while generating a transaction nonce, or if signing fails.
-    pub fn build_transaction_from_items<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> SignedTransaction
-    where
-        I: Into<InstructionBox>,
-    {
-        self.try_build_transaction_from_items(instructions, fee_payment, metadata)
-            .expect("failed to build transaction items with explicit fee payment")
-    }
-    /// Builds a transaction from a collection of items convertible into `InstructionBox`.
-    ///
-    /// This avoids re-boxing already boxed instructions.
-    ///
-    /// # Errors
-    /// Fails if configured transaction nonce generation cannot read OS entropy,
-    /// or if the configured signature backend cannot sign the transaction.
-    pub fn try_build_transaction_from_items<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<SignedTransaction>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.try_build_transaction_from_items_with_rng(
-            instructions,
-            fee_payment,
-            metadata,
-            &mut rand::rngs::OsRng,
-        )
-    }
-    /// Build, but do not sign, an exact payload from instruction items.
-    ///
-    /// # Errors
-    ///
-    /// Fails if configured nonce generation cannot read OS entropy or the fee
-    /// payment intent is structurally invalid.
-    pub fn try_build_transaction_payload_from_items<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<TransactionPayload>
-    where
-        I: Into<InstructionBox>,
-    {
-        let mut builder =
-            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
-                .with_instructions(instructions);
-        self.apply_transaction_defaults_with_rng(&mut builder, &mut rand::rngs::OsRng)?;
-        builder
-            .with_metadata(metadata)
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-            .into_payload()
-            .wrap_err("build exact unsigned client transaction payload from items")
-    }
-    fn try_build_transaction_from_items_with_rng<I, R>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-        rng: &mut R,
-    ) -> Result<SignedTransaction>
-    where
-        I: Into<InstructionBox>,
-        R: rand::rand_core::TryCryptoRng + ?Sized,
-    {
-        let mut tx_builder =
-            TransactionBuilder::new(self.network_id, self.account.clone(), fee_payment)
-                .with_instructions(instructions);
-        self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
-        tx_builder
-            .with_metadata(metadata)
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-            .try_sign(self.key_pair.private_key())
-            .wrap_err("sign client transaction from instruction items")
-    }
-    /// Encode and hash a signed transaction once for later submission.
-    pub fn prepare_transaction_payload(
-        transaction: &SignedTransaction,
-    ) -> PreparedTransactionPayload {
-        PreparedTransactionPayload {
-            bytes: Bytes::from(transaction.encode_versioned()),
-            hash: transaction.hash(),
+        requirement: CompatibilityRequirement,
+    ) -> Option<Result<()>> {
+        let outcome = self
+            .data_model_compatibility
+            .lock()
+            .expect("data model compatibility lock")
+            .clone();
+        match (requirement, outcome) {
+            (_, DataModelCompatibility::Unchecked) => None,
+            (
+                CompatibilityRequirement::DataModel,
+                DataModelCompatibility::SubmitCompatible
+                | DataModelCompatibility::SchemaIncompatible(_),
+            )
+            | (CompatibilityRequirement::Submission, DataModelCompatibility::SubmitCompatible) => {
+                Some(Ok(()))
+            }
+            (_, DataModelCompatibility::Incompatible(error)) => Some(Err(error.into())),
+            (
+                CompatibilityRequirement::Submission,
+                DataModelCompatibility::SchemaIncompatible(error),
+            ) => Some(Err(error.into())),
         }
     }
-    /// Try to sign a transaction.
+
+    fn completed_compatibility_result(
+        &self,
+        observed_generation: u64,
+        requirement: CompatibilityRequirement,
+    ) -> Option<Result<()>> {
+        match self
+            .compatibility_probe
+            .completion_after(observed_generation)?
+        {
+            Ok(()) => Some(
+                self.cached_compatibility_result(requirement)
+                    .unwrap_or_else(|| {
+                        Err(eyre!(
+                            "completed capability probe did not produce a compatibility decision"
+                        ))
+                    }),
+            ),
+            Err(error) => Some(Err(error.into())),
+        }
+    }
+
+    fn store_compatibility_outcome(&self, outcome: DataModelCompatibility) {
+        *self
+            .data_model_compatibility
+            .lock()
+            .expect("data model compatibility lock") = outcome;
+        self.compatibility_probe.finish_success();
+    }
+
+    fn ensure_compatibility_blocking(
+        &self,
+        requirement: CompatibilityRequirement,
+        require_fresh_probe: bool,
+    ) -> Result<()> {
+        crate::blocking::reject_inside_async_runtime()?;
+        let observed_generation = self.compatibility_probe.generation();
+        let _probe = self.compatibility_probe.gate.blocking_lock();
+        if let Some(result) = self.completed_compatibility_result(observed_generation, requirement)
+        {
+            return result;
+        }
+        if !require_fresh_probe && let Some(result) = self.cached_compatibility_result(requirement)
+        {
+            return result;
+        }
+        let capabilities = match self.get_node_capabilities_json() {
+            Ok(capabilities) => capabilities,
+            Err(error) => {
+                return Err(self.compatibility_probe.finish_failure(&error).into());
+            }
+        };
+        let outcome = evaluate_node_compatibility(&capabilities);
+        self.store_compatibility_outcome(outcome);
+        self.cached_compatibility_result(requirement)
+            .unwrap_or_else(|| Err(eyre!("capability probe produced no compatibility decision")))
+    }
+
+    async fn ensure_compatibility(
+        &self,
+        requirement: CompatibilityRequirement,
+        require_fresh_probe: bool,
+    ) -> Result<()> {
+        let observed_generation = self.compatibility_probe.generation();
+        let _probe = self.compatibility_probe.gate.lock().await;
+        if let Some(result) = self.completed_compatibility_result(observed_generation, requirement)
+        {
+            return result;
+        }
+        if !require_fresh_probe && let Some(result) = self.cached_compatibility_result(requirement)
+        {
+            return result;
+        }
+        let capabilities = match self.fetch_node_capabilities().await {
+            Ok(capabilities) => capabilities,
+            Err(error) => {
+                return Err(self.compatibility_probe.finish_failure(&error).into());
+            }
+        };
+        let outcome = evaluate_node_compatibility(&capabilities);
+        self.store_compatibility_outcome(outcome);
+        self.cached_compatibility_result(requirement)
+            .unwrap_or_else(|| Err(eyre!("capability probe produced no compatibility decision")))
+    }
+
+    pub(crate) fn ensure_data_model_compatibility(&self) -> Result<()> {
+        self.ensure_compatibility_blocking(CompatibilityRequirement::DataModel, false)
+    }
+
+    pub(crate) fn ensure_transaction_submit_compatibility(&self) -> Result<()> {
+        self.ensure_compatibility_blocking(CompatibilityRequirement::Submission, false)
+    }
+}
+
+impl AccountClient {
+    fn client(&self) -> &Client {
+        &self.context
+    }
+
+    fn ensure_direct_signing_capability(
+        &self,
+    ) -> core::result::Result<(), TransactionSigningError> {
+        if self.signing_capability == AccountSigningCapability::MultisigMember {
+            return Err(TransactionSigningError::DirectSigningUnavailable {
+                authority: self.client().account.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn transaction_nonce_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
+        rng: &mut R,
+    ) -> core::result::Result<NonZeroU32, TransactionPreparationError> {
+        for _ in 0..16 {
+            let value = rand::rand_core::TryRngCore::try_next_u32(rng).map_err(|error| {
+                TransactionPreparationError::NonceEntropy {
+                    details: error.to_string(),
+                }
+            })?;
+            if let Some(nonce) = NonZeroU32::new(value) {
+                return Ok(nonce);
+            }
+        }
+        Err(TransactionPreparationError::NonceEntropyExhausted)
+    }
+
+    fn apply_transaction_defaults_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
+        &self,
+        tx_builder: &mut TransactionBuilder,
+        rng: &mut R,
+    ) -> core::result::Result<(), TransactionPreparationError> {
+        let client = self.client();
+        if let Some(transaction_ttl) = client.transaction_ttl {
+            tx_builder.set_ttl(transaction_ttl);
+        }
+        if client.add_transaction_nonce {
+            tx_builder.set_nonce(Self::transaction_nonce_with_rng(rng)?);
+        }
+        Ok(())
+    }
+
+    /// Prepare an exact unsigned transaction payload bound to this account context.
+    ///
+    /// Multisignature member contexts may prepare payloads for external threshold
+    /// signing. The immutable context supplies the network and authority, while
+    /// configured TTL and nonce policy are applied exactly once.
     ///
     /// # Errors
-    /// Fails if the transaction does not bind this client's exact network or
-    /// the configured signature backend cannot sign it.
-    pub fn try_sign_transaction(
+    /// Returns [`crate::Error`] when nonce entropy fails or the
+    /// signature-bound payload is structurally invalid.
+    pub fn prepare_transaction(
         &self,
-        transaction: TransactionBuilder,
-    ) -> Result<SignedTransaction> {
-        self.ensure_transaction_signing_domain(transaction.payload())?;
-        transaction
-            .try_sign(self.key_pair.private_key())
-            .wrap_err("sign client transaction builder")
+        draft: AccountTransactionDraft,
+    ) -> crate::Result<TransactionPayload> {
+        self.prepare_transaction_with_rng(draft, &mut rand::rngs::OsRng)
     }
-    fn ensure_transaction_signing_domain(&self, payload: &TransactionPayload) -> Result<()> {
-        if payload.domain
-            != iroha_data_model::transaction::TransactionDomain::Network(self.network_id)
-        {
+
+    fn prepare_transaction_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
+        &self,
+        draft: AccountTransactionDraft,
+        rng: &mut R,
+    ) -> crate::Result<TransactionPayload> {
+        let client = self.client();
+        let time_to_live = draft.time_to_live;
+        let mut builder =
+            TransactionBuilder::new(client.network_id, client.account.clone(), draft.fee_payment)
+                .with_executable(draft.executable)
+                .with_metadata(draft.metadata)
+                .with_admission_intent(draft.admission_intent);
+        if let Some(attachments) = draft.attachments {
+            builder = builder.with_attachments(attachments);
+        }
+        self.apply_transaction_defaults_with_rng(&mut builder, rng)?;
+        if let Some(time_to_live) = time_to_live {
+            builder.set_ttl(time_to_live);
+        }
+        builder
+            .into_payload()
+            .map_err(|source| TransactionPreparationError::InvalidPayload { source })
+            .map_err(SdkError::from)
+    }
+
+    fn ensure_transaction_signing_domain(
+        &self,
+        payload: &TransactionPayload,
+    ) -> core::result::Result<(), TransactionSigningError> {
+        let client = self.client();
+        let expected_domain =
+            iroha_data_model::transaction::TransactionDomain::Network(client.network_id);
+        if payload.domain != expected_domain {
+            return Err(TransactionSigningError::NetworkMismatch {
+                expected: client.network_id,
+                actual: payload.domain,
+            });
+        }
+        if payload.authority != client.account {
+            return Err(TransactionSigningError::AuthorityMismatch {
+                expected: client.account.clone(),
+                actual: payload.authority.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Sign one exact transaction payload with this immutable account context.
+    ///
+    /// Proof attachments are retained because they are part of the consumed
+    /// payload. Multisignature member contexts must use an external threshold
+    /// signing workflow and cannot call this direct-signing operation.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error`] for authority or network mismatch,
+    /// direct signing from a multisignature context, invalid payload state, key
+    /// mismatch, or cryptographic backend failure.
+    pub fn sign_transaction(
+        &self,
+        payload: TransactionPayload,
+    ) -> crate::Result<SignedTransaction> {
+        self.ensure_direct_signing_capability()
+            .map_err(SdkError::from)?;
+        self.ensure_transaction_signing_domain(&payload)
+            .map_err(SdkError::from)?;
+        let client = self.client();
+        let signatory = payload
+            .authority
+            .try_signatory()
+            .ok_or_else(|| TransactionSigningError::AuthorityNotDirect {
+                authority: payload.authority.clone(),
+            })
+            .map_err(SdkError::from)?;
+        if signatory != client.key_pair.public_key() {
+            return Err(TransactionSigningError::KeyMismatch {
+                expected: signatory.clone(),
+                actual: client.key_pair.public_key().clone(),
+            }
+            .into());
+        }
+        TransactionBuilder::from_payload(payload)
+            .map_err(|source| TransactionSigningError::InvalidPayload { source })?
+            .try_sign(client.key_pair.private_key())
+            .map_err(|source| TransactionSigningError::Signature { source })
+            .map_err(SdkError::from)
+    }
+
+    fn ensure_fee_quote_domain(&self, payload: &TransactionPayload) -> Result<()> {
+        let client = self.client();
+        if payload.network_id() != Some(&client.network_id) {
             return Err(eyre!(
-                "transaction signing domain does not match the client network"
+                "fee-quote payload network differs from the account context network"
+            ));
+        }
+        if payload.authority() != &client.account {
+            return Err(eyre!(
+                "fee-quote payload authority differs from the bound account context"
             ));
         }
         Ok(())
     }
-    /// Sign the exact payload previously quoted by Torii.
-    ///
-    /// Unlike the general builder signing path, this method rejects an
-    /// authority/key mismatch instead of normalizing the authority, ensuring
-    /// that quote and signature cover byte-identical payloads.
-    ///
-    /// # Errors
-    ///
-    /// Fails if the payload does not bind this client's exact network, is
-    /// invalid, uses a non-single-key authority, names an authority different
-    /// from this client's key, or signing fails.
-    pub fn try_sign_transaction_payload(
+
+    fn multisig_fee_quote_request(
         &self,
-        payload: TransactionPayload,
-    ) -> Result<SignedTransaction> {
-        self.ensure_transaction_signing_domain(&payload)?;
-        let signatory = payload.authority.try_signatory().ok_or_else(|| {
-            eyre!("direct quote-to-sign requires a single-key transaction authority")
-        })?;
-        if signatory != self.key_pair.public_key() {
+        payload: &TransactionPayload,
+        witness: &CanonicalRequestWitnessV1,
+        url: Url,
+        body: Vec<u8>,
+    ) -> Result<DefaultRequestBuilder> {
+        if self.signing_capability != AccountSigningCapability::MultisigMember {
             return Err(eyre!(
-                "quoted transaction authority does not match the client signing key"
+                "multisig-witness fee quoting requires a multisignature account context"
             ));
         }
-        TransactionBuilder::from_payload(payload)
-            .wrap_err("reconstruct quoted transaction payload")?
-            .try_sign(self.key_pair.private_key())
-            .wrap_err("sign exact quoted transaction payload")
+        if &witness.subject_account != payload.authority() {
+            return Err(eyre!(
+                "fee-quote witness subject differs from the payload authority"
+            ));
+        }
+        let AccountController::Multisig(policy) = payload.authority().controller() else {
+            return Err(eyre!(
+                "multisig-witness fee quoting requires a multisig payload authority"
+            ));
+        };
+        if witness.signatures.len() < 2 || witness.signatures.len() > policy.members().len() {
+            return Err(eyre!(
+                "fee-quote witness must contain at least two and no more than the policy member count"
+            ));
+        }
+        if witness
+            .signatures
+            .windows(2)
+            .any(|pair| pair[0].signer >= pair[1].signer)
+        {
+            return Err(eyre!(
+                "fee-quote witness signers must be distinct and in canonical public-key order"
+            ));
+        }
+        let message = canonical_request_witness_message(witness)?;
+        let mut total_weight = 0_u32;
+        for entry in &witness.signatures {
+            let member = policy
+                .members()
+                .iter()
+                .find(|member| member.public_key() == &entry.signer)
+                .ok_or_else(|| eyre!("fee-quote witness includes a nonmember signer"))?;
+            iroha_crypto::verify_signature_for_admission(&entry.signature, &entry.signer, &message)
+                .wrap_err("fee-quote witness signature failed verification")?;
+            total_weight = total_weight
+                .checked_add(u32::from(member.weight()))
+                .ok_or_else(|| eyre!("fee-quote witness weight overflow"))?;
+        }
+        if total_weight < u32::from(policy.threshold()) {
+            return Err(eyre!(
+                "fee-quote witness signatures do not satisfy the multisig threshold"
+            ));
+        }
+
+        let client = self.client();
+        let expected_hash =
+            canonical_network_request_hash(&client.network_id, &HttpMethod::POST, &url, &body)?;
+        if witness.canonical_request_hash != expected_hash {
+            return Err(eyre!(
+                "fee-quote witness does not bind the exact canonical request"
+            ));
+        }
+        let witness_header = canonical_request_witness_header_value(witness)?;
+        let cleartext = url.scheme() == "http";
+        if !cleartext && url.scheme() != "https" {
+            return Err(eyre!("fee-quote transport requires HTTPS or local HTTP"));
+        }
+        let request = client
+            .request_without_canonical_account_auth(HttpMethod::POST, url)
+            .header(HEADER_WITNESS, &witness_header)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(body)
+            .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES);
+        Ok(if cleartext {
+            request.direct_loopback()
+        } else {
+            request
+        })
     }
-    /// Quote and sign one exact unsigned transaction payload.
+
+    /// Quote the exact fee intent for one unsigned transaction payload.
     ///
-    /// Torii may replace only the canonical per-component charge maxima. The
-    /// selected authority or exact sponsor-program revision and the executable
-    /// gas bound must remain identical to the caller's signed request.
+    /// The request variant explicitly selects direct account authentication or
+    /// a complete multisignature witness. The response is decoded and checked
+    /// against the exact payload before it is returned.
     ///
     /// # Errors
+    /// Returns an error for a foreign network or authority, an invalid direct
+    /// or multisignature authorization, request construction or transport
+    /// failure, Torii rejection, an oversized response, or a response that is
+    /// not bound to the exact payload.
+    pub async fn quote_fees(&self, request: FeeQuoteRequest<'_>) -> Result<FeeQuoteResponse> {
+        let (payload, authorization) = match request {
+            FeeQuoteRequest::AccountSignature { payload } => (payload, None),
+            FeeQuoteRequest::MultisigWitness { payload, witness } => (payload, Some(witness)),
+        };
+        self.ensure_fee_quote_domain(payload)?;
+        let client = self.client();
+        let url = join_torii_url(
+            &client.torii_url,
+            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+        );
+        let body = norito::json::to_vec(&FeeQuoteWireRequest {
+            payload: payload.clone(),
+        })?;
+        let builder = if let Some(witness) = authorization {
+            self.multisig_fee_quote_request(payload, witness, url, body)?
+        } else {
+            self.ensure_direct_signing_capability()?;
+            client
+                .account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES)
+        };
+        let response = client
+            .dispatch_request(builder.build()?)
+            .await
+            .wrap_err("quote exact unsigned account transaction payload")?;
+        Client::decode_fee_quote_response(payload, &response)
+    }
+
+    /// Register one `SoraFS` pin manifest through the bound account authority.
     ///
-    /// Returns an error when fee quoting fails, the quote changes the selected
-    /// payer or gas bound, or the exact quoted payload cannot be signed by this
-    /// client.
-    pub fn quote_and_sign_transaction_payload(
+    /// # Errors
+    /// Returns an error for invalid Norito, fee quoting, local signing,
+    /// transport failure, or Torii rejection.
+    pub async fn post_sorafs_pin_register(
         &self,
-        mut payload: TransactionPayload,
-    ) -> Result<SignedTransaction> {
+        params: SorafsPinRegisterArgs<'_>,
+    ) -> Result<norito::json::Value> {
+        let client = self.client();
+        let url = join_torii_url(&client.torii_url, "v1/sorafs/pin/register");
+        let instruction = Client::build_sorafs_pin_register_instruction(params)?;
+        let mut payload = self.prepare_transaction(
+            AccountTransactionDraft::new(
+                [InstructionBox::from(instruction)],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary),
+        )?;
         let quote = self
-            .quote_fees(&payload)
-            .wrap_err("quote exact unsigned transaction payload")?;
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
         apply_fee_quote_intent(&mut payload, quote.intent)
-            .wrap_err("apply exact fee quote to unsigned transaction payload")?;
-        self.try_sign_transaction_payload(payload)
+            .wrap_err("apply exact fee quote to SoraFS pin registration")?;
+        let transaction = self.sign_transaction(payload)?;
+        let request = client
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", APPLICATION_JSON)
+            .body(transaction.encode_versioned())
+            .build()?;
+        let response = client.dispatch_request(request).await?;
+        Client::decode_json_response(
+            response,
+            StatusCode::ACCEPTED,
+            "Failed to register pin manifest",
+            " ",
+        )
     }
-    /// Signs transaction.
-    ///
-    /// Prefer [`Self::try_sign_transaction`] when callers need to handle
-    /// signing failures from the configured signature backend.
-    ///
-    /// # Panics
-    /// Panics if the configured signature backend cannot sign the transaction.
-    pub fn sign_transaction(&self, transaction: TransactionBuilder) -> SignedTransaction {
-        self.try_sign_transaction(transaction)
-            .expect("failed to sign transaction")
-    }
-    /// Instructions API entry point. Submits one Iroha Special Instruction to `Iroha` peers.
-    /// Returns submitted transaction's hash or error string.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit<I>(
-        &self,
-        isi: I,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.submit_all([isi], fee_payment)
-    }
-    /// Instructions API entry point. Submits several Iroha Special Instructions to `Iroha` peers.
-    /// Returns submitted transaction's hash or error string.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_all<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.submit_all_with_metadata(instructions, fee_payment, Metadata::default())
-    }
-    /// Instructions API entry point. Submits one Iroha Special Instruction to `Iroha` peers.
-    /// Allows to specify [`Metadata`] of [`TransactionBuilder`].
-    /// Returns submitted transaction's hash or error string.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_with_metadata<I>(
-        &self,
-        instruction: I,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.submit_all_with_metadata([instruction], fee_payment, metadata)
-    }
-    /// Instructions API entry point. Submits several Iroha Special Instructions to `Iroha` peers.
-    /// Allows to specify [`Metadata`] of [`TransactionBuilder`].
-    /// Returns submitted transaction's hash or error string.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_all_with_metadata<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        let payload =
-            self.try_build_transaction_payload_from_items(instructions, fee_payment, metadata)?;
-        let transaction = self.quote_and_sign_transaction_payload(payload)?;
-        self.submit_transaction(&transaction)
-    }
-    pub(crate) fn ensure_data_model_compatibility(&self) -> Result<()> {
-        let mut cached = self
-            .data_model_compatibility
-            .lock()
-            .expect("data model compatibility lock");
-        match cached.clone() {
-            DataModelCompatibility::Unchecked => {}
-            DataModelCompatibility::Compatible
-            | DataModelCompatibility::SubmitCompatible
-            | DataModelCompatibility::SchemaIncompatible(_) => return Ok(()),
-            DataModelCompatibility::Incompatible(err) => return Err(err.into()),
-        }
-        let capabilities = self.get_node_capabilities_json()?;
-        let outcome = match parse_optional_u64(
-            capabilities.get("data_model_version"),
-            "node capabilities data_model_version",
-        ) {
-            Ok(None) => {
-                DataModelCompatibility::Incompatible(DataModelCompatibilityError::Missing {
-                    expected: DATA_MODEL_VERSION,
-                })
-            }
-            Ok(Some(raw)) => {
-                let parsed = match u32::try_from(raw) {
-                    Ok(value) if value > 0 => Ok(value),
-                    Ok(_) => Err(DataModelCompatibilityError::Invalid {
-                        expected: DATA_MODEL_VERSION,
-                        details: "data_model_version must be >= 1".to_string(),
-                    }),
-                    Err(_) => Err(DataModelCompatibilityError::Invalid {
-                        expected: DATA_MODEL_VERSION,
-                        details: format!("data_model_version {raw} is out of range"),
-                    }),
-                };
-                match parsed {
-                    Ok(actual) => {
-                        if actual == DATA_MODEL_VERSION {
-                            DataModelCompatibility::Compatible
-                        } else {
-                            DataModelCompatibility::Incompatible(
-                                DataModelCompatibilityError::Mismatch {
-                                    expected: DATA_MODEL_VERSION,
-                                    actual,
-                                },
-                            )
-                        }
-                    }
-                    Err(err) => DataModelCompatibility::Incompatible(err),
-                }
-            }
-            Err(err) => {
-                DataModelCompatibility::Incompatible(DataModelCompatibilityError::Invalid {
-                    expected: DATA_MODEL_VERSION,
-                    details: err.to_string(),
-                })
-            }
-        };
-        *cached = outcome.clone();
-        match outcome {
-            DataModelCompatibility::Compatible | DataModelCompatibility::SubmitCompatible => Ok(()),
-            DataModelCompatibility::Incompatible(err) => Err(err.into()),
-            DataModelCompatibility::SchemaIncompatible(_) => {
-                unreachable!("data model compatibility evaluation cannot produce schema errors")
-            }
-            DataModelCompatibility::Unchecked => {
-                unreachable!("data model compatibility cannot remain unchecked after evaluation")
-            }
-        }
-    }
-    fn ensure_transaction_submit_compatibility(&self) -> Result<()> {
-        self.ensure_transaction_submit_compatibility_with_transport(false, false)
-    }
-    fn ensure_transaction_submit_compatibility_with_transport(
-        &self,
-        direct_loopback: bool,
-        require_fresh_probe: bool,
-    ) -> Result<()> {
-        let mut cached = self
-            .data_model_compatibility
-            .lock()
-            .expect("data model compatibility lock");
-        match cached.clone() {
-            DataModelCompatibility::Unchecked | DataModelCompatibility::Compatible => {}
-            DataModelCompatibility::SubmitCompatible if !require_fresh_probe => return Ok(()),
-            DataModelCompatibility::SubmitCompatible => {}
-            DataModelCompatibility::Incompatible(err) if !require_fresh_probe => {
-                return Err(err.into());
-            }
-            DataModelCompatibility::Incompatible(_) => {}
-            DataModelCompatibility::SchemaIncompatible(err) if !require_fresh_probe => {
-                return Err(err.into());
-            }
-            DataModelCompatibility::SchemaIncompatible(_) => {}
-        }
-        let capabilities = self.get_node_capabilities_json_with_transport(direct_loopback)?;
-        let outcome = match parse_optional_u64(
-            capabilities.get("data_model_version"),
-            "node capabilities data_model_version",
-        ) {
-            Ok(None) => {
-                DataModelCompatibility::Incompatible(DataModelCompatibilityError::Missing {
-                    expected: DATA_MODEL_VERSION,
-                })
-            }
-            Ok(Some(raw)) => {
-                let parsed = match u32::try_from(raw) {
-                    Ok(value) if value > 0 => Ok(value),
-                    Ok(_) => Err(DataModelCompatibilityError::Invalid {
-                        expected: DATA_MODEL_VERSION,
-                        details: "data_model_version must be >= 1".to_string(),
-                    }),
-                    Err(_) => Err(DataModelCompatibilityError::Invalid {
-                        expected: DATA_MODEL_VERSION,
-                        details: format!("data_model_version {raw} is out of range"),
-                    }),
-                };
-                match parsed {
-                    Ok(actual) => {
-                        if actual == DATA_MODEL_VERSION {
-                            match parse_signed_transaction_schema_hash_hex(&capabilities) {
-                                Ok(_) => DataModelCompatibility::SubmitCompatible,
-                                Err(err) => DataModelCompatibility::SchemaIncompatible(err),
-                            }
-                        } else {
-                            DataModelCompatibility::Incompatible(
-                                DataModelCompatibilityError::Mismatch {
-                                    expected: DATA_MODEL_VERSION,
-                                    actual,
-                                },
-                            )
-                        }
-                    }
-                    Err(err) => DataModelCompatibility::Incompatible(err),
-                }
-            }
-            Err(err) => {
-                DataModelCompatibility::Incompatible(DataModelCompatibilityError::Invalid {
-                    expected: DATA_MODEL_VERSION,
-                    details: err.to_string(),
-                })
-            }
-        };
-        *cached = outcome.clone();
-        match outcome {
-            DataModelCompatibility::SubmitCompatible => Ok(()),
-            DataModelCompatibility::Compatible => {
-                unreachable!("submit compatibility evaluation must not stop at data model only")
-            }
-            DataModelCompatibility::Incompatible(err) => Err(err.into()),
-            DataModelCompatibility::SchemaIncompatible(err) => Err(err.into()),
-            DataModelCompatibility::Unchecked => unreachable!(
-                "transaction submit compatibility cannot remain unchecked after evaluation"
-            ),
-        }
-    }
-    /// Submit a prebuilt transaction.
-    /// Returns submitted transaction's hash or error string.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails, if it response with error, or if the node
-    /// submit compatibility advert is missing or incompatible. On HTTP 200, the node must
-    /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. Any
-    /// non-successful or malformed capability response aborts before transaction bytes are sent.
-    /// QueuePlan transport ambiguity or claimed outcome-unknown responses return a downcastable
-    /// [`QueuePlanOutcomeUnknownError`]; callers must reconcile its identities and must not retry
-    /// automatically.
-    pub fn submit_transaction(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.ensure_transaction_submit_compatibility()?;
-        tracing::trace!(tx=?transaction, "Submitting");
-        let payload = Self::prepare_transaction_payload(transaction);
-        let hash = payload.hash();
-        let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
-        let request = self.prepare_transaction_payload_request(&payload).build()?;
-        let disposition = match request.send() {
-            Ok(response) => {
-                TransactionResponseHandler::handle_for_confirmation(&response, transaction)
-            }
-            Err(error) => queue_plan_post_dispatch_disposition(
-                expected.as_ref(),
-                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
-            ),
-        }?;
-        finish_nonblocking_transaction_submission(disposition, hash)
-    }
-    fn submit_transaction_for_confirmation(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<TransactionSubmissionDisposition> {
-        self.ensure_transaction_submit_compatibility()?;
-        tracing::trace!(tx=?transaction, "Submitting for blocking confirmation");
-        let payload = Self::prepare_transaction_payload(transaction);
-        let hash = payload.hash();
-        let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
-        let request = self.prepare_transaction_payload_request(&payload).build()?;
-        match request.send() {
-            Ok(response) => {
-                TransactionResponseHandler::handle_for_confirmation(&response, transaction)
-            }
-            Err(error) => queue_plan_post_dispatch_disposition(
-                expected.as_ref(),
-                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
-            ),
-        }
-    }
-    /// Submit an already encoded transaction payload.
-    ///
-    /// # Errors
-    /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
-    /// response, or if the submit compatibility advert is missing or incompatible. QueuePlan
-    /// ambiguity returns a downcastable [`QueuePlanOutcomeUnknownError`] with both local
-    /// identities and must not be retried automatically.
-    pub fn submit_prepared_transaction_payload(
-        &self,
-        payload: &PreparedTransactionPayload,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.ensure_transaction_submit_compatibility()?;
-        let expected = QueuePlanOutcomeUnknownIdentity::for_prepared_payload(payload)?;
-        let hash = payload.hash();
-        let request = self.prepare_transaction_payload_request(payload).build()?;
-        let disposition = match request.send() {
-            Ok(response) => TransactionResponseHandler::handle_with_queue_plan_identity(
-                &response,
-                expected.as_ref(),
-            ),
-            Err(error) => queue_plan_post_dispatch_disposition(
-                expected.as_ref(),
-                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
-            ),
-        }?;
-        finish_nonblocking_transaction_submission(disposition, hash)
-    }
+
     /// Submit a prebuilt transaction with the asynchronous HTTP transport.
     ///
     /// Returns the submitted transaction's hash once Torii accepts the request.
     ///
     /// # Errors
     /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
-    /// response, or if the submit compatibility advert is missing or incompatible. QueuePlan
+    /// response, or if the submit compatibility advert is missing or incompatible. `QueuePlan`
     /// ambiguity returns a downcastable [`QueuePlanOutcomeUnknownError`] with both local
     /// identities and must not be retried automatically.
-    pub async fn submit_transaction_async(
+    pub async fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
-        let payload = Self::prepare_transaction_payload(transaction);
-        self.submit_prepared_transaction_payload_async(&payload)
+        let payload = PreparedTransactionPayload::from_transaction(transaction);
+        self.submit_prepared_transaction_payload(&payload).await
+    }
+    pub(crate) async fn submit_transaction_and_wait(
+        &self,
+        transaction: &SignedTransaction,
+    ) -> Result<HashOf<SignedTransaction>> {
+        let client = self.client();
+        client
+            .ensure_compatibility(CompatibilityRequirement::Submission, false)
+            .await?;
+        let payload = PreparedTransactionPayload::from_transaction(transaction);
+        let hash = payload.hash();
+        let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
+        tracing::debug!(%hash, ?transaction, "Submitting transaction and waiting for finality");
+        let request = client
+            .prepare_transaction_payload_request(&payload)
+            .build()?;
+        let disposition = match request.send().await {
+            Ok(response) => {
+                TransactionResponseHandler::handle_for_confirmation(&response, transaction)
+            }
+            Err(error) => queue_plan_post_dispatch_disposition(
+                expected.as_ref(),
+                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
+            ),
+        }?;
+        let outcome_unknown = match disposition {
+            TransactionSubmissionDisposition::Accepted => None,
+            TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context) => Some(context),
+        };
+        let timeout = if client.transaction_status_timeout == Duration::ZERO {
+            DEFAULT_MAX_QUEUED_DURATION
+        } else {
+            client.transaction_status_timeout
+        };
+        client
+            .wait_until_transaction_applied(
+                hash,
+                TransactionWaitOptions {
+                    timeout,
+                    poll_interval: Client::tx_confirmation_poll_interval(timeout),
+                },
+            )
             .await
+            .map(|_| hash)
+            .map_err(|error| {
+                finalize_transaction_confirmation_error(error, outcome_unknown.as_ref())
+            })
     }
     /// Submit an already encoded transaction payload with the asynchronous HTTP transport.
     ///
@@ -16055,59 +16790,33 @@ impl Client {
     ///
     /// # Errors
     /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
-    /// response, or if the submit compatibility advert is missing or incompatible. QueuePlan
+    /// response, or if the submit compatibility advert is missing or incompatible. `QueuePlan`
     /// ambiguity returns a downcastable [`QueuePlanOutcomeUnknownError`] with both local
     /// identities and must not be retried automatically.
-    pub async fn submit_prepared_transaction_payload_async(
+    pub async fn submit_prepared_transaction_payload(
         &self,
         payload: &PreparedTransactionPayload,
     ) -> Result<HashOf<SignedTransaction>> {
-        self.ensure_transaction_submit_compatibility()?;
+        let client = self.client();
+        client
+            .ensure_compatibility(CompatibilityRequirement::Submission, false)
+            .await?;
         let expected = QueuePlanOutcomeUnknownIdentity::for_prepared_payload(payload)?;
         let hash = payload.hash();
         tracing::trace!(%hash, "Submitting prepared transaction payload");
-        let mut request = bounded_async_response::client()
-            .post(join_torii_url(&self.torii_url, torii_uri::TRANSACTION))
-            .timeout(self.torii_request_timeout)
-            .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", self.wire_format_preference.accept_header());
-        for (name, value) in self.transaction_headers_without_content_type() {
-            request = request.header(name, value);
-        }
-        let response = match request.body(payload.bytes.clone()).send().await {
+        let request = client
+            .prepare_transaction_payload_request(payload)
+            .build()?;
+        let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
                 let disposition = queue_plan_post_dispatch_disposition(
                     expected.as_ref(),
-                    eyre::Report::new(error)
-                        .wrap_err(format!("Failed to send transaction with hash {hash:?}")),
+                    error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
                 )?;
                 return finish_nonblocking_transaction_submission(disposition, hash);
             }
         };
-        let retained_headers = expected
-            .as_ref()
-            .map(|_| retain_queue_plan_response_headers(response.headers()));
-        let mut response = match bounded_async_response::into_response(
-            response,
-            TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                let disposition = queue_plan_post_dispatch_disposition(
-                    expected.as_ref(),
-                    error.wrap_err(format!(
-                        "Failed to read transaction response for hash {hash:?}"
-                    )),
-                )?;
-                return finish_nonblocking_transaction_submission(disposition, hash);
-            }
-        };
-        if let Some(retained_headers) = retained_headers {
-            restore_queue_plan_response_headers(&mut response, retained_headers);
-        }
         let disposition = TransactionResponseHandler::handle_with_queue_plan_identity(
             &response,
             expected.as_ref(),
@@ -16122,11 +16831,14 @@ impl Client {
     /// Fails if sending the batch to the peer fails, if Torii returns a non-success response, if
     /// the accepted-count acknowledgement does not match the requested batch size, or if the submit
     /// compatibility advert is missing or incompatible.
-    pub async fn submit_prepared_transaction_payload_batch_async(
+    pub async fn submit_prepared_transaction_payload_batch(
         &self,
         payloads: &[PreparedTransactionPayload],
     ) -> Result<Vec<HashOf<SignedTransaction>>> {
-        self.ensure_transaction_submit_compatibility()?;
+        let client = self.client();
+        client
+            .ensure_compatibility(CompatibilityRequirement::Submission, false)
+            .await?;
         if payloads.is_empty() {
             return Ok(Vec::new());
         }
@@ -16139,28 +16851,22 @@ impl Client {
             .map(|payload| payload.as_bytes().to_vec())
             .collect::<Vec<_>>();
         let body = to_bytes(&body).wrap_err("failed to encode transaction batch as Norito")?;
-        let mut request = bounded_async_response::client()
-            .post(join_torii_url(
-                &self.torii_url,
-                torii_uri::TRANSACTIONS_BATCH,
-            ))
-            .timeout(self.torii_request_timeout)
+        let mut request = client
+            .default_request(
+                HttpMethod::POST,
+                join_torii_url(&client.torii_url, torii_uri::TRANSACTIONS_BATCH),
+            )
             .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", self.wire_format_preference.accept_header())
-            .header("Prefer", "return=minimal");
-        for (name, value) in self.transaction_headers_without_content_type() {
-            request = request.header(name, value);
-        }
+            .header("Accept", client.wire_format_preference.accept_header())
+            .header("Prefer", "return=minimal")
+            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+        request = request.headers(client.transaction_headers_without_content_type());
         let response = request
             .body(body)
+            .build()?
             .send()
             .await
             .wrap_err("Failed to send transaction batch")?;
-        let response = bounded_async_response::into_response(
-            response,
-            TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES,
-        )
-        .await?;
         TransactionResponseHandler::handle(&response)?;
         let accepted_count = response
             .headers()
@@ -16176,53 +16882,10 @@ impl Client {
         }
         Ok(hashes)
     }
-    /// Submit the prebuilt transaction and wait until it is either rejected or applied.
-    /// If rejected, return the rejection reason.
-    /// Note: `Committed` is emitted after Kura persistence (before WSV apply), so
-    /// confirmation always waits for `Applied` to ensure state updates are visible.
-    ///
-    /// # Errors
-    /// Fails if sending a transaction to a peer fails or there is an error in the response
-    pub fn submit_transaction_blocking(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        let (init_sender, init_receiver) = tokio::sync::oneshot::channel();
-        let (submit_result_sender, submit_result_receiver) =
-            tokio::sync::oneshot::channel::<Result<TransactionSubmissionDisposition>>();
-        let outcome_unknown = Arc::new(OnceLock::new());
-        let submitter_outcome_unknown = Arc::clone(&outcome_unknown);
-        let hash = transaction.hash();
-        let entrypoint_hash = transaction.hash_as_entrypoint();
-        tracing::debug!(%hash, ?transaction, "Submitting transaction");
-        thread::scope(|spawner| {
-            let submitter_handle = spawner.spawn(move || {
-                // Wait for the listener connection attempt so we don't miss early
-                // events, but still proceed even if setup fails.
-                let _ = init_receiver.blocking_recv();
-                let result = self.submit_transaction_for_confirmation(transaction);
-                if let Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context)) =
-                    &result
-                {
-                    let _ = submitter_outcome_unknown.set(context.clone());
-                }
-                let _ = submit_result_sender.send(result);
-            });
-            let confirmation_res = self.listen_for_tx_confirmation(
-                init_sender,
-                submit_result_receiver,
-                hash,
-                entrypoint_hash,
-                Arc::clone(&outcome_unknown),
-            );
-            match submitter_handle.join() {
-                Ok(()) => confirmation_res.map_err(|error| {
-                    finalize_transaction_confirmation_error(error, outcome_unknown.get())
-                }),
-                Err(_) => Err(eyre!("Transaction submitter thread panicked")),
-            }
-        })
-    }
+}
+
+impl Client {
+    #[cfg(test)]
     fn tx_confirmation_filters(hash: HashOf<SignedTransaction>) -> Vec<PipelineEventFilterBox> {
         vec![
             TransactionEventFilter::default().for_hash(hash).into(),
@@ -16234,227 +16897,14 @@ impl Client {
             ),
         ]
     }
-    #[allow(clippy::too_many_lines)]
-    fn listen_for_tx_confirmation(
-        &self,
-        init_sender: tokio::sync::oneshot::Sender<bool>,
-        submit_result_receiver: tokio::sync::oneshot::Receiver<
-            Result<TransactionSubmissionDisposition>,
-        >,
-        hash: HashOf<SignedTransaction>,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-        outcome_unknown: Arc<OnceLock<QueuePlanOutcomeUnknownContext>>,
-    ) -> Result<HashOf<SignedTransaction>> {
-        debug!(
-            %hash,
-            timeout_ms = %self.transaction_status_timeout.as_millis(),
-            "starting tx confirmation listener"
-        );
-        thread::scope(|scope| {
-            let client = self;
-            scope
-                .spawn(move || -> Result<HashOf<SignedTransaction>> {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()?;
-                    rt.block_on(async {
-                        let timeout_err = || Self::tx_confirmation_timeout_report(client.transaction_status_timeout);
-                        let filters = Self::tx_confirmation_filters(hash);
-                        let connect_timeout =
-                            Self::tx_confirmation_connect_timeout(client.transaction_status_timeout);
-                        let connect_deadline = tokio::time::Instant::now() + connect_timeout;
-                        let event_iterator_result = tokio::time::timeout_at(
-                            connect_deadline,
-                            client.listen_for_events_async(filters),
-                        )
-                        .await
-                        .map_err(Into::into)
-                        .and_then(std::convert::identity)
-                        .wrap_err("Failed to establish event listener connection");
-                        // Signal the submitter thread after attempting to connect so we
-                        // avoid missing early events when the stream is available.
-                        let _ = init_sender.send(true);
-                        let mut event_iterator = match event_iterator_result {
-                            Ok(iter) => Some(iter),
-                            Err(err) => {
-                                warn!(
-                                    %hash,
-                                    ?err,
-                                    timeout_ms = %connect_timeout.as_millis(),
-                                    "tx confirmation listener setup failed; continuing with status polling"
-                                );
-                                None
-                            }
-                        };
-                        let max_queued_duration = if client.transaction_status_timeout
-                            == Duration::ZERO
-                        {
-                            DEFAULT_MAX_QUEUED_DURATION
-                        } else {
-                            client.transaction_status_timeout
-                        };
-                        let poll_interval =
-                            Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
-                        let hash_for_check = hash;
-                        let submission = await_transaction_submission_disposition(
-                            hash,
-                            submit_result_receiver,
-                        )
-                        .await;
-                        let result = match submission {
-                            Ok(()) => {
-                                // The status timeout measures confirmation after Torii has either
-                                // acknowledged admission or reported an indeterminate durable
-                                // admission. Listener setup and the separately bounded HTTP POST
-                                // must not consume this deadline or trigger status reads while the
-                                // POST is still pending.
-                                let deadline = tokio::time::Instant::now()
-                                    + client.transaction_status_timeout;
-                                if let Some(ref mut iterator) = event_iterator {
-                                    tokio::time::timeout_at(
-                                        deadline,
-                                        Self::listen_for_tx_confirmation_loop(
-                                            iterator,
-                                            hash,
-                                            max_queued_duration,
-                                            poll_interval,
-                                            None,
-                                            || {
-                                                client.transaction_confirmation_status_with_rejection_details(
-                                                    hash_for_check,
-                                                    entrypoint_hash,
-                                                )
-                                            },
-                                        ),
-                                    )
-                                    .await
-                                } else {
-                                    let mut empty_stream = stream::empty::<Result<EventBox>>();
-                                    tokio::time::timeout_at(
-                                        deadline,
-                                        listen_for_tx_confirmation_stream_with_status_check(
-                                            &mut empty_stream,
-                                            hash,
-                                            max_queued_duration,
-                                            poll_interval,
-                                            None,
-                                            || {
-                                                client.transaction_confirmation_status_with_rejection_details(
-                                                    hash_for_check,
-                                                    entrypoint_hash,
-                                                )
-                                            },
-                                        ),
-                                    )
-                                    .await
-                                }
-                            }
-                            Err(error) => Ok(Err(error)),
-                        };
-                        if let Some(iterator) = event_iterator {
-                            let close_timeout = Self::tx_confirmation_connect_timeout(
-                                client.transaction_status_timeout,
-                            );
-                            if !Self::close_tx_confirmation_stream_with_timeout(
-                                close_timeout,
-                                iterator.close(),
-                            )
-                            .await
-                            {
-                                warn!(
-                                    %hash,
-                                    timeout_ms = %close_timeout.as_millis(),
-                                    "timed out closing tx confirmation stream"
-                                );
-                            }
-                        }
-                        match result {
-                                Ok(inner) => match inner {
-                                    Ok(ok) => Ok(ok),
-                                    Err(err) => {
-                                        if !should_fallback_after_confirmation_error(&err) {
-                                            return Err(err);
-                                        }
-                                        let err = err.wrap_err(timeout_err());
-                                        warn!(
-                                        %hash,
-                                        ?err,
-                                        "tx confirmation stream returned error; falling back to pipeline status query"
-                                    );
-                                    Self::resolve_global_status_fallback(
-                                        || {
-                                            client.transaction_confirmation_status_with_rejection_details(
-                                                hash,
-                                                entrypoint_hash,
-                                            )
-                                        },
-                                        hash,
-                                        Duration::from_millis(200),
-                                        3,
-                                        "transaction confirmation stream failed; fallback status check failed",
-                                        err,
-                                        outcome_unknown.get(),
-                                    )
-                                    .await
-                                }
-                            },
-                            Err(_elapsed) => {
-                                warn!(
-                                    %hash,
-                                    "tx confirmation timed out; falling back to pipeline status query"
-                                );
-                                Self::resolve_global_status_fallback(
-                                    || {
-                                        client.transaction_confirmation_status_with_rejection_details(
-                                            hash,
-                                            entrypoint_hash,
-                                        )
-                                    },
-                                    hash,
-                                    Duration::from_millis(200),
-                                    3,
-                                    "transaction confirmation timed out; fallback status check failed",
-                                    timeout_err(),
-                                    outcome_unknown.get(),
-                                )
-                                .await
-                            }
-                        }
-                    })
-                })
-                .join()
-                .unwrap_or_else(|_| Err(eyre!("tx confirmation listener thread panicked")))
-        })
-    }
-    async fn listen_for_tx_confirmation_loop<F>(
-        event_iterator: &mut AsyncEventStream,
-        hash: HashOf<SignedTransaction>,
-        max_queued_duration: Duration,
-        poll_interval: Duration,
-        submit_result_receiver: Option<
-            tokio::sync::oneshot::Receiver<Result<TransactionSubmissionDisposition>>,
-        >,
-        status_check: F,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        F: FnMut() -> Result<Option<TxConfirmationStatus>>,
-    {
-        listen_for_tx_confirmation_stream_with_status_check(
-            event_iterator,
-            hash,
-            max_queued_duration,
-            poll_interval,
-            submit_result_receiver,
-            status_check,
-        )
-        .await
-    }
+    #[cfg(test)]
     fn tx_confirmation_timeout_report(timeout: Duration) -> eyre::Report {
         eyre!(
             "haven't got tx confirmation within {:?} (configured with `transaction.status_timeout_ms`)",
             timeout
         )
     }
+    #[cfg(test)]
     fn tx_confirmation_connect_timeout(timeout: Duration) -> Duration {
         if timeout == Duration::ZERO {
             return Duration::from_millis(500);
@@ -16471,9 +16921,10 @@ impl Client {
         };
         bounded.min(timeout)
     }
+    #[cfg(test)]
     async fn close_tx_confirmation_stream_with_timeout<F>(close_timeout: Duration, close: F) -> bool
     where
-        F: Future<Output = ()>,
+        F: std::future::Future<Output = ()>,
     {
         tokio::time::timeout(close_timeout, close).await.is_ok()
     }
@@ -16492,6 +16943,7 @@ impl Client {
             candidate
         }
     }
+    #[cfg(test)]
     async fn resolve_global_status_fallback<F>(
         check: F,
         hash: HashOf<SignedTransaction>,
@@ -16542,6 +16994,7 @@ impl Client {
             },
         )
     }
+    #[cfg(test)]
     async fn retry_transaction_final_status<F>(
         mut check: F,
         delay: Duration,
@@ -16596,6 +17049,7 @@ impl Client {
         }
         Err(last_err.unwrap_or_else(|| eyre!("retry_transaction_final_status exhausted")))
     }
+    #[cfg(test)]
     fn transaction_confirmation_status(
         &self,
         hash: HashOf<SignedTransaction>,
@@ -16610,6 +17064,7 @@ impl Client {
             }
         })
     }
+    #[cfg(test)]
     fn transaction_confirmation_status_with_rejection_details(
         &self,
         hash: HashOf<SignedTransaction>,
@@ -16652,6 +17107,7 @@ impl Client {
             }
         }
     }
+    #[cfg(test)]
     fn transaction_pipeline_status(
         &self,
         hash: HashOf<SignedTransaction>,
@@ -16702,6 +17158,35 @@ impl Client {
             builder
         };
         let resp = self.send_builder(builder)?;
+        Self::decode_transaction_status_response(resp, hash, scope)
+    }
+
+    async fn fetch_transaction_status_response_with_scope(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        scope: Option<&str>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        let hash_hex = hash.to_string();
+        let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
+        let builder = self
+            .default_request(HttpMethod::GET, url)
+            .param("hash", &hash_hex)
+            .header("Accept", APPLICATION_JSON)
+            .max_response_bytes(PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES);
+        let builder = if let Some(scope) = scope {
+            builder.param("scope", scope)
+        } else {
+            builder
+        };
+        let resp = builder.build()?.send().await?;
+        Self::decode_transaction_status_response(resp, hash, scope)
+    }
+
+    fn decode_transaction_status_response(
+        resp: Response<Vec<u8>>,
+        hash: HashOf<SignedTransaction>,
+        scope: Option<&str>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
         match resp.status() {
             StatusCode::OK => {
                 let payload: PipelineTransactionStatusResponse =
@@ -16755,6 +17240,14 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
+    }
+
+    async fn get_global_transaction_status_response(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.fetch_transaction_status_response_with_scope(hash, Some("global"))
+            .await
     }
     /// Operator-signed GET `/v1/triggers/completed` — list historical trigger completions from
     /// committed blocks.
@@ -16843,16 +17336,7 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(self.wait_for_transaction_applied_async(hash, options))
-    }
-    async fn wait_for_transaction_applied_async(
-        &self,
-        hash: HashOf<SignedTransaction>,
-        options: TransactionWaitOptions,
-    ) -> Result<TransactionWaitOutcome> {
+        crate::blocking::reject_inside_async_runtime()?;
         let TransactionWaitOptions {
             timeout,
             poll_interval,
@@ -16872,27 +17356,19 @@ impl Client {
                 last_status = Some(kind.to_owned());
                 match validate_global_pipeline_status_response(&response, hash)? {
                     TxConfirmationStatus::Applied if response.resolved_from == "state" => {
-                        let block_height = response.status.block_height;
-                        let scope = response.scope.clone();
-                        let resolved_from = response.resolved_from.clone();
-                        return Ok(TransactionWaitOutcome {
-                            hash: response.hash.clone(),
-                            terminal_kind: kind.to_owned(),
+                        return Ok(transaction_wait_outcome(
+                            response,
                             attempts,
-                            elapsed_ms: elapsed_ms_u64(start.elapsed()),
-                            block_height,
-                            scope,
-                            resolved_from,
-                            r#final: response,
-                        });
+                            start.elapsed(),
+                        ));
                     }
                     TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
                         if response.resolved_from == "state" =>
                     {
-                        return Err(eyre!(
+                        return Err(tx_confirmation_final_report(eyre!(
                             "transaction {} reached state-resolved fixed terminal failure status `{kind}`; last_status={kind}",
                             response.hash
-                        ));
+                        )));
                     }
                     TxConfirmationStatus::Applied
                     | TxConfirmationStatus::Rejected(_)
@@ -16905,10 +17381,67 @@ impl Client {
             let elapsed = start.elapsed();
             if elapsed >= timeout {
                 let last_status = last_status.unwrap_or_else(|| "not_observed".to_owned());
-                return Err(eyre!(
+                return Err(tx_confirmation_unresolved_final_report(eyre!(
                     "transaction did not reach state-resolved Applied within {} ms; last_status={last_status}",
                     timeout.as_millis()
-                ));
+                )));
+            }
+            std::thread::sleep(poll_interval.min(timeout.saturating_sub(elapsed)));
+        }
+    }
+    pub(crate) async fn wait_until_transaction_applied(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+    ) -> Result<TransactionWaitOutcome> {
+        let TransactionWaitOptions {
+            timeout,
+            poll_interval,
+        } = options;
+        if poll_interval == Duration::ZERO {
+            return Err(eyre!(
+                "transaction wait poll_interval must be greater than zero"
+            ));
+        }
+        let start = Instant::now();
+        let mut attempts = 0_u64;
+        let mut last_status: Option<String> = None;
+        loop {
+            attempts = attempts.saturating_add(1);
+            if let Some(response) = self.get_global_transaction_status_response(hash).await? {
+                let kind = response.status.kind.as_str();
+                last_status = Some(kind.to_owned());
+                match validate_global_pipeline_status_response(&response, hash)? {
+                    TxConfirmationStatus::Applied if response.resolved_from == "state" => {
+                        return Ok(transaction_wait_outcome(
+                            response,
+                            attempts,
+                            start.elapsed(),
+                        ));
+                    }
+                    TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
+                        if response.resolved_from == "state" =>
+                    {
+                        return Err(tx_confirmation_final_report(eyre!(
+                            "transaction {} reached state-resolved fixed terminal failure status `{kind}`; last_status={kind}",
+                            response.hash
+                        )));
+                    }
+                    TxConfirmationStatus::Applied
+                    | TxConfirmationStatus::Rejected(_)
+                    | TxConfirmationStatus::Expired
+                    | TxConfirmationStatus::Queued
+                    | TxConfirmationStatus::Approved(_)
+                    | TxConfirmationStatus::Committed => {}
+                }
+            }
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
+                let last_status = last_status.unwrap_or_else(|| "not_observed".to_owned());
+                return Err(tx_confirmation_unresolved_final_report(eyre!(
+                    "transaction did not reach state-resolved Applied within {} ms; last_status={last_status}",
+                    timeout.as_millis()
+                )));
             }
             tokio::time::sleep(poll_interval.min(timeout.saturating_sub(elapsed))).await;
         }
@@ -16928,6 +17461,7 @@ impl Client {
             HttpMethod::POST,
             join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
         )
+        .with_transport(self.http_transport.clone())
         .headers(self.transaction_headers_without_content_type())
         .header("Content-Type", APPLICATION_NORITO)
         .header("Accept", self.wire_format_preference.accept_header())
@@ -16938,107 +17472,6 @@ impl Client {
         }
         request
     }
-    /// Submits and waits for globally resolved `Applied` finality.
-    /// Returns rejection reason if the transaction is rejected.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_blocking<I>(
-        &self,
-        instruction: I,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.submit_all_blocking(core::iter::once(instruction), fee_payment)
-    }
-    /// Submits and waits for globally resolved `Applied` finality.
-    /// Returns rejection reason if the transaction is rejected.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_all_blocking<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.submit_all_blocking_with_metadata(instructions, fee_payment, Metadata::default())
-    }
-    /// Submits and waits for globally resolved `Applied` finality.
-    /// Allows to specify [`Metadata`] of [`TransactionBuilder`].
-    /// Returns rejection reason if the transaction is rejected.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_blocking_with_metadata<I>(
-        &self,
-        instruction: I,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        self.submit_all_blocking_with_metadata(core::iter::once(instruction), fee_payment, metadata)
-    }
-    /// Submits and waits for globally resolved `Applied` finality.
-    /// Allows to specify [`Metadata`] of [`TransactionBuilder`].
-    /// Returns rejection reason if the transaction is rejected.
-    ///
-    /// # Errors
-    /// Fails if sending transaction to peer fails or if it response with error
-    pub fn submit_all_blocking_with_metadata<I>(
-        &self,
-        instructions: impl IntoIterator<Item = I>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<HashOf<SignedTransaction>>
-    where
-        I: Into<InstructionBox>,
-    {
-        const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
-        let instructions: Vec<InstructionBox> = instructions.into_iter().map(Into::into).collect();
-        // Guard against reserved multisig role names being registered by regular clients.
-        // Server-side executors should enforce this, but we also short-circuit here to
-        // avoid committing an invalid transaction when the executor is missing the check.
-        for instr in &instructions {
-            if let Some(RegisterBox::Role(register_role)) =
-                instr.as_any().downcast_ref::<RegisterBox>()
-                && {
-                    let name = register_role.object().id().name().as_ref();
-                    name == MULTISIG_SIGNATORY
-                        || name
-                            .strip_prefix(MULTISIG_SIGNATORY)
-                            .is_some_and(|suffix| suffix.starts_with('/'))
-                }
-            {
-                return Err(eyre!(
-                    "reserved multisig role names may not be registered by clients"
-                ));
-            }
-        }
-        let payload =
-            self.try_build_transaction_payload_from_items(instructions, fee_payment, metadata)?;
-        let transaction = self.quote_and_sign_transaction_payload(payload)?;
-        self.submit_transaction_blocking(&transaction)
-    }
-    /// Connect (through `WebSocket`) to listen for `Iroha` `pipeline` and `data` events.
-    /// Pipeline events are emitted from the commit worker thread, so ordering with data events
-    /// is not single-threaded.
-    ///
-    /// # Errors
-    /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from `events_api::EventIterator::new`
-    pub fn listen_for_events(
-        &self,
-        event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>>,
-    ) -> Result<impl Iterator<Item = Result<EventBox>>> {
-        events_api::EventIterator::new(self.events_handler(event_filters)?)
-    }
     /// Connect asynchronously (through `WebSocket`) to listen for `Iroha` `pipeline` and `data` events.
     /// Pipeline events are emitted from the commit worker thread, so ordering with data events
     /// is not single-threaded.
@@ -17046,7 +17479,7 @@ impl Client {
     /// # Errors
     /// - Forwards from [`Self::events_handler`]
     /// - Forwards from `events_api::AsyncEventStream::new`
-    pub async fn listen_for_events_async(
+    pub async fn listen_for_events(
         &self,
         event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>> + Send,
     ) -> Result<AsyncEventStream> {
@@ -17070,20 +17503,6 @@ impl Client {
             url,
         )
     }
-    /// Connect (through `WebSocket`) to listen for full `Iroha` signed blocks.
-    ///
-    /// The configured account must hold `CanReadAllLedgerData`. The WebSocket
-    /// upgrade is authenticated with a fresh canonical account signature.
-    ///
-    /// # Errors
-    /// - Forwards from [`Self::blocks_handler`]
-    /// - Forwards from `blocks_api::BlockIterator::new`
-    pub fn listen_for_blocks(
-        &self,
-        height: NonZeroU64,
-    ) -> Result<impl Iterator<Item = Result<SignedBlock>>> {
-        blocks_api::BlockIterator::new(self.blocks_handler(height)?)
-    }
     /// Connect asynchronously (through `WebSocket`) to listen for full `Iroha` signed blocks.
     ///
     /// The configured account must hold `CanReadAllLedgerData`. The WebSocket
@@ -17092,7 +17511,7 @@ impl Client {
     /// # Errors
     /// - Forwards from [`Self::blocks_handler`]
     /// - Forwards from `blocks_api::AsyncBlockStream::new`
-    pub async fn listen_for_blocks_async(&self, height: NonZeroU64) -> Result<AsyncBlockStream> {
+    pub async fn listen_for_blocks(&self, height: NonZeroU64) -> Result<AsyncBlockStream> {
         blocks_api::AsyncBlockStream::new(self.blocks_handler(height)?).await
     }
     /// Construct a handler for the global-reader-only Blocks API.
@@ -17155,6 +17574,7 @@ impl Client {
             HttpMethod::GET,
             join_torii_url(&self.torii_url, torii_uri::STATUS),
         )
+        .with_transport(self.http_transport.clone())
         .headers(self.headers.clone())
         .max_response_bytes(NODE_STATUS_RESPONSE_MAX_BYTES);
         if self.torii_request_timeout != Duration::ZERO {
@@ -17215,34 +17635,6 @@ impl Client {
         )?;
         decode_lane_lifecycle_status_response(&response)
     }
-    /// Fetch the current lane catalog and submit a consensus-replayed lifecycle update.
-    ///
-    /// The transaction uses `SetParameter(nexus_lane_lifecycle_v1)` and is signed
-    /// by this client's configured account key. A concurrent catalog change is
-    /// surfaced as the normal blocking transaction rejection; this helper never
-    /// retries against newly fetched catalog or incarnation commitments without
-    /// caller review.
-    ///
-    /// # Errors
-    /// Returns an error when status validation fails, the signed transaction
-    /// is rejected (including stale catalog or incarnation
-    /// commitments), or finality cannot be observed.
-    pub fn submit_lane_lifecycle_blocking(
-        &self,
-        plan: LaneLifecyclePlan,
-    ) -> Result<HashOf<SignedTransaction>> {
-        let status = self.get_lane_lifecycle_status()?;
-        let catalog = status
-            .validate()
-            .wrap_err("invalid Nexus lane lifecycle status")?;
-        let parameter = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
-            .wrap_err("failed to bind Nexus lane incarnation commitments")?
-            .into_custom_parameter();
-        self.submit_blocking(
-            SetParameter::new(Parameter::Custom(parameter)),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-    }
     #[cfg(test)]
     fn decode_lane_lifecycle_status_for_test(
         response: &Response<Vec<u8>>,
@@ -17262,7 +17654,7 @@ impl Client {
             )
             .header(http::header::ACCEPT, "text/plain")
             .build()?
-            .send()?;
+            .send_blocking()?;
         Self::ensure_response_status(
             &resp,
             StatusCode::OK,
@@ -17288,7 +17680,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/zk/roots");
         let body = norito::json::to_vec(&norito::json!({
             "asset_id": asset_id,
-            "max": max,
+            "max": max
         }))?;
         let resp = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
@@ -17459,40 +17851,6 @@ impl Client {
         self.verify_alias_setup_plan(plan)?;
         decode_and_verify_alias_setup_plan_for_request(request, plan)
     }
-    /// Verify, locally sign, and submit one alias setup plan.
-    ///
-    /// The complete ordered `EnsureAlias` vector is placed into one ordinary
-    /// transaction and sent through the existing transaction endpoint. The
-    /// planner is never called again and the plan is never split.
-    ///
-    /// # Errors
-    /// Returns an error when plan verification, fee quoting, local signing, or
-    /// transaction submission fails.
-    pub fn submit_alias_setup_plan(
-        &self,
-        plan: &AliasTransactionPlanV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<HashOf<SignedTransaction>> {
-        let instructions = self.verify_alias_setup_plan(plan)?;
-        self.submit_all_with_metadata(instructions, fee_payment, metadata)
-            .wrap_err("submit verified alias setup plan")
-    }
-    /// Verify, locally sign, submit, and wait for one alias setup plan.
-    ///
-    /// # Errors
-    /// Returns an error when plan verification, fee quoting, local signing,
-    /// submission, or final transaction confirmation fails.
-    pub fn submit_alias_setup_plan_blocking(
-        &self,
-        plan: &AliasTransactionPlanV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<HashOf<SignedTransaction>> {
-        let instructions = self.verify_alias_setup_plan(plan)?;
-        self.submit_all_blocking_with_metadata(instructions, fee_payment, metadata)
-            .wrap_err("submit and confirm verified alias setup plan")
-    }
     /// Canonical-account-signed POST `/v1/aliases/lease/renew/plan`.
     ///
     /// # Errors
@@ -17659,46 +18017,6 @@ impl Client {
     ) -> Result<Option<InstructionBox>> {
         self.verify_alias_lifecycle_plan(plan)?;
         decode_and_verify_alias_auto_renew_plan_for_request(request, plan)
-    }
-    /// Verify, locally sign, and submit one alias lifecycle plan.
-    ///
-    /// A verified no-op returns `Ok(None)` without creating a transaction.
-    ///
-    /// # Errors
-    /// Returns an error when plan verification, fee quoting, local signing, or
-    /// transaction submission fails.
-    pub fn submit_alias_lifecycle_plan(
-        &self,
-        plan: &AliasLifecycleTransactionPlanV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<Option<HashOf<SignedTransaction>>> {
-        let Some(instruction) = self.verify_alias_lifecycle_plan(plan)? else {
-            return Ok(None);
-        };
-        self.submit_all_with_metadata([instruction], fee_payment, metadata)
-            .map(Some)
-            .wrap_err("submit verified alias lifecycle plan")
-    }
-    /// Verify, locally sign, submit, and wait for one alias lifecycle plan.
-    ///
-    /// A verified no-op returns `Ok(None)` without creating a transaction.
-    ///
-    /// # Errors
-    /// Returns an error when plan verification, fee quoting, local signing,
-    /// submission, or final transaction confirmation fails.
-    pub fn submit_alias_lifecycle_plan_blocking(
-        &self,
-        plan: &AliasLifecycleTransactionPlanV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<Option<HashOf<SignedTransaction>>> {
-        let Some(instruction) = self.verify_alias_lifecycle_plan(plan)? else {
-            return Ok(None);
-        };
-        self.submit_all_blocking_with_metadata([instruction], fee_payment, metadata)
-            .map(Some)
-            .wrap_err("submit and confirm verified alias lifecycle plan")
     }
     /// Token-authenticated, read-only `POST /v1/accounts/onboard/plan`.
     ///
@@ -18492,165 +18810,10 @@ impl Client {
             ),
         }
     }
-    /// Account-signed `POST /v1/fees/quote` retaining the exact response.
-    ///
-    /// The request carries the exact unsigned non-fee transaction fields plus
-    /// payer, sponsor revision, and gas selection. Torii never accepts an
-    /// out-of-band payer or route override; insert its returned fixed-point
-    /// intent into this payload before signing.
-    ///
-    /// # Errors
-    /// Returns an error if request signing, JSON serialization, construction,
-    /// or the HTTP call fails.
-    pub fn post_fee_quote_response(
-        &self,
+    fn decode_fee_quote_response(
         payload: &TransactionPayload,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(
-            &self.torii_url,
-            torii_uri::FEES_QUOTE.trim_start_matches('/'),
-        );
-        let body = norito::json::to_vec(&FeeQuoteRequest {
-            payload: payload.clone(),
-        })?;
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
-        )?;
-        if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
-            return Err(eyre!(
-                "fee quote response exceeds the {} byte limit",
-                FEE_QUOTE_RESPONSE_MAX_BYTES
-            ));
-        }
-        Ok(response)
-    }
-    /// Quote the exact fee intent that must be inserted before signing a payload.
-    ///
-    /// # Errors
-    /// Returns an error if Torii rejects the payload or the typed response
-    /// cannot be decoded or validated against the exact request payload.
-    pub fn quote_fees(&self, payload: &TransactionPayload) -> Result<FeeQuoteResponse> {
-        let response = self.post_fee_quote_response(payload)?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to quote transaction fees", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        let content_type = exact_single_response_header_bytes(&response, "content-type")
-            .wrap_err("fee quote response has ambiguous content-type")?;
-        if !Self::is_exact_json_content_type_bytes(content_type) {
-            return Err(eyre!(
-                "fee quote response has invalid content-type (expected {APPLICATION_JSON})"
-            ));
-        }
-        let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
-            .wrap_err("failed to decode typed fee quote response")?;
-        quote
-            .validate_for_draft(payload)
-            .map_err(|error| eyre!(error))
-            .wrap_err("fee quote response does not match the requested transaction payload")?;
-        Ok(quote)
-    }
-    /// Quote fees for an exact multisig-authority payload using its detached app-auth witness.
-    ///
-    /// The supplied signatures must be in canonical public-key order and include at least two
-    /// distinct members. This uses the strict hardware-lifecycle authorization floor instead of
-    /// accepting a one-member weighted-threshold witness.
-    ///
-    /// # Errors
-    /// Returns an error if the payload, witness, multisig policy, request binding, signatures,
-    /// Torii response, typed response decoding, or exact-payload validation fails.
-    pub fn quote_fees_with_multisig_witness(
-        &self,
-        payload: &TransactionPayload,
-        witness: &CanonicalRequestWitnessV1,
+        response: &Response<Vec<u8>>,
     ) -> Result<FeeQuoteResponse> {
-        if payload.network_id() != Some(&self.network_id) {
-            return Err(eyre!(
-                "fee-quote payload network differs from the client network"
-            ));
-        }
-        if &witness.subject_account != payload.authority() {
-            return Err(eyre!(
-                "fee-quote witness subject differs from the payload authority"
-            ));
-        }
-        let AccountController::Multisig(policy) = payload.authority().controller() else {
-            return Err(eyre!(
-                "multisig-witness fee quoting requires a multisig payload authority"
-            ));
-        };
-        if witness.signatures.len() < 2 || witness.signatures.len() > policy.members().len() {
-            return Err(eyre!(
-                "fee-quote witness must contain at least two and no more than the policy member count"
-            ));
-        }
-        if witness
-            .signatures
-            .windows(2)
-            .any(|pair| pair[0].signer >= pair[1].signer)
-        {
-            return Err(eyre!(
-                "fee-quote witness signers must be distinct and in canonical public-key order"
-            ));
-        }
-        let message = canonical_request_witness_message(witness)?;
-        let mut total_weight = 0_u32;
-        for entry in &witness.signatures {
-            let member = policy
-                .members()
-                .iter()
-                .find(|member| member.public_key() == &entry.signer)
-                .ok_or_else(|| eyre!("fee-quote witness includes a nonmember signer"))?;
-            iroha_crypto::verify_signature_for_admission(&entry.signature, &entry.signer, &message)
-                .wrap_err("fee-quote witness signature failed verification")?;
-            total_weight = total_weight
-                .checked_add(u32::from(member.weight()))
-                .ok_or_else(|| eyre!("fee-quote witness weight overflow"))?;
-        }
-        if total_weight < u32::from(policy.threshold()) {
-            return Err(eyre!(
-                "fee-quote witness signatures do not satisfy the multisig threshold"
-            ));
-        }
-
-        let url = join_torii_url(
-            &self.torii_url,
-            torii_uri::FEES_QUOTE.trim_start_matches('/'),
-        );
-        let body = norito::json::to_vec(&FeeQuoteRequest {
-            payload: payload.clone(),
-        })?;
-        let expected_hash =
-            canonical_network_request_hash(&self.network_id, &HttpMethod::POST, &url, &body)?;
-        if witness.canonical_request_hash != expected_hash {
-            return Err(eyre!(
-                "fee-quote witness does not bind the exact canonical request"
-            ));
-        }
-        let witness_header = canonical_request_witness_header_value(witness)?;
-        let cleartext = url.scheme() == "http";
-        if !cleartext && url.scheme() != "https" {
-            return Err(eyre!("fee-quote transport requires HTTPS or local HTTP"));
-        }
-        let request = self
-            .request_without_canonical_account_auth(HttpMethod::POST, url)
-            .header(HEADER_WITNESS, &witness_header)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES);
-        let request = if cleartext {
-            request.direct_loopback()
-        } else {
-            request
-        };
-        let response = self.send_builder(request)?;
         if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
             return Err(eyre!(
                 "fee quote response exceeds the {} byte limit",
@@ -18659,12 +18822,12 @@ impl Client {
         }
         if response.status() != StatusCode::OK {
             return Err(
-                ResponseReport::with_msg("failed to quote transaction fees", &response)
+                ResponseReport::with_msg("failed to quote transaction fees", response)
                     .unwrap_or_else(core::convert::identity)
                     .into(),
             );
         }
-        let content_type = exact_single_response_header_bytes(&response, "content-type")
+        let content_type = exact_single_response_header_bytes(response, "content-type")
             .wrap_err("fee quote response has ambiguous content-type")?;
         if !Self::is_exact_json_content_type_bytes(content_type) {
             return Err(eyre!(
@@ -18690,7 +18853,7 @@ impl Client {
             .header("Content-Type", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()
+            .send_blocking()
     }
     /// Convenience: account-signed, selector-explicit POST `/v1/multisig/spec`.
     ///
@@ -18855,7 +19018,7 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()?;
+            .send_blocking()?;
         if response.status() != StatusCode::OK {
             return Err(ResponseReport::with_msg(
                 "failed to propose multisig instruction batch",
@@ -18895,41 +19058,9 @@ impl Client {
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()?;
+            .send_blocking()?;
         self.enforce_alias_policy(&response)?;
         Ok(response)
-    }
-    /// Convenience: POST `/v1/sorafs/pin/register` to submit a manifest to the pin registry.
-    /// # Errors
-    /// Returns an error for invalid Norito, local signing, construction, or Torii rejection.
-    pub fn post_sorafs_pin_register(
-        &self,
-        params: SorafsPinRegisterArgs<'_>,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/pin/register");
-        let instruction = Self::build_sorafs_pin_register_instruction(params)?;
-        let payload = self.try_build_transaction_payload_from_items(
-            [InstructionBox::from(instruction)],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )?;
-        let payload = TransactionBuilder::from_payload(payload)?
-            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-            .into_payload()?;
-        let transaction = self.quote_and_sign_transaction_payload(payload)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", APPLICATION_JSON)
-            .body(transaction.encode_versioned())
-            .build()?;
-        let resp = self.send_prepared_request(resp)?;
-        Self::decode_json_response(
-            resp,
-            StatusCode::ACCEPTED,
-            "Failed to register pin manifest",
-            " ",
-        )
     }
     /// Build a signed DA ingest request using the client's key pair.
     ///
@@ -19307,7 +19438,7 @@ impl Client {
         self.default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()
+            .send_blocking()
     }
     fn send_da_json_post(&self, path: &str, body: Vec<u8>) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, path);
@@ -19316,7 +19447,7 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()
+            .send_blocking()
     }
     fn decode_da_json_response<T: norito::json::JsonDeserialize>(
         response: &Response<Vec<u8>>,
@@ -19816,7 +19947,7 @@ impl Client {
         self.default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()
+            .send_blocking()
     }
     /// Fetch the payload-free no-show projection for one finalized moderation case.
     /// # Errors
@@ -19836,35 +19967,12 @@ impl Client {
         self.default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()
+            .send_blocking()
     }
     sorafs_filtered_get_methods!(
         get_sorafs_moderation_ballot_events(filter: SorafsModerationBallotEventsFilter)
             => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/ballots/events"),
     );
-    /// Build an exact caller-signed native `SoraFS` moderation transaction with
-    /// quorum-certified `QueuePlan` admission.
-    /// # Errors
-    /// Returns an error if the configured signing key cannot sign the exact V1 envelope.
-    pub fn try_build_sorafs_moderation_transaction<I>(
-        &self,
-        instruction: I,
-    ) -> Result<SignedTransaction>
-    where
-        I: Into<InstructionBox>,
-    {
-        let mut builder = TransactionBuilder::new(
-            self.network_id,
-            self.account.clone(),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .with_metadata(Metadata::default())
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
-        builder.set_ttl(SORAFS_MODERATION_TRANSACTION_TTL);
-        self.try_sign_transaction(builder)
-            .wrap_err("sign exact caller-owned native SoraFS moderation transaction")
-    }
     sorafs_transaction_submitter!(
         post_sorafs_moderation_transaction(route: SorafsModerationCommandRoute),
         moderation::validate_transaction_route,
@@ -20382,7 +20490,7 @@ impl Client {
             .header(HEADER_SORA_CLIENT, client_id)
             .header(HEADER_SORA_NONCE, nonce)
             .build()?
-            .send()
+            .send_blocking()
     }
     /// Convenience: POST a ZK verify-batch request to `/v1/zk/verify-batch` with a
     /// Norito-encoded `Vec<OpenVerifyEnvelope>` in the body. Returns JSON `{ ok, statuses }`.
@@ -20510,13 +20618,13 @@ impl Client {
         Self::require_governance_selector_v1(election_id, "election_id")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/vote/tally");
         let body = norito::json::to_vec(&norito::json!({
-            "election_id": election_id,
+            "election_id": election_id
         }))?;
         let resp = self
             .account_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
             .build()?
-            .send()?;
+            .send_blocking()?;
         Self::decode_json_http_status(
             resp,
             StatusCode::OK,
@@ -21330,21 +21438,6 @@ impl Client {
         let _ = validate_validation_fee_draft_response(&result, request)?;
         Ok(result)
     }
-    /// Draft, locally sign, and submit one native validation-fee proposal.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if strict draft validation or normal transaction
-    /// submission fails.
-    pub fn submit_validation_fee_proposal(
-        &self,
-        request: &ValidationFeeProposalDraftRequestV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<HashOf<SignedTransaction>> {
-        let response = self.post_validation_fee_proposal_draft(request)?;
-        let instruction = validate_validation_fee_draft_response(&response, request)?;
-        self.submit(instruction, fee_payment)
-    }
     /// Draft a ZK ballot instruction via `/v1/gov/ballots/zk-v1`.
     ///
     /// The body must carry this client's exact [`NetworkId`] and canonical account authority. The
@@ -21416,7 +21509,7 @@ impl Client {
             .header("Content-Type", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()?;
+            .send_blocking()?;
         Self::decode_json_ok(resp, "Failed to apply protected namespaces")
     }
     /// GET `/v1/gov/proposals/{id}`
@@ -21574,6 +21667,9 @@ impl Client {
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         Self::decode_json_ok(resp, "Failed to get contract manifest")
     }
+}
+
+impl AccountClient {
     /// POST `/v1/contracts/call` with a JSON body.
     ///
     /// Torii prepares and quotes the canonical unsigned transaction payload. This
@@ -21593,7 +21689,7 @@ impl Client {
         clippy::too_many_lines,
         reason = "the contract-call workflow keeps prepare, quote, bind, sign, and submit checks in order"
     )]
-    pub fn post_contract_call_json(
+    pub async fn post_contract_call_json(
         &self,
         authority: &iroha_data_model::account::AccountId,
         private_key: Option<&iroha_crypto::PrivateKey>,
@@ -21607,6 +21703,17 @@ impl Client {
         fee_payment: &FeePaymentIntent,
         draft_intent: &ContractCallDraftIntent,
     ) -> Result<norito::json::Value> {
+        let client = self.client();
+        if authority != self.authority() {
+            return Err(eyre!(
+                "contract call authority does not match the bound account context"
+            ));
+        }
+        if private_key.is_some() && self.signing_capability != AccountSigningCapability::Direct {
+            return Err(eyre!(
+                "a multisignature account context cannot create a direct transaction signature"
+            ));
+        }
         if draft_intent.invocation.entrypoint != entrypoint {
             return Err(eyre!(
                 "contract call draft intent entrypoint does not match the request"
@@ -21643,7 +21750,7 @@ impl Client {
                 "contract call transaction_ttl_ms must be positive when provided"
             ));
         }
-        let url = join_torii_url(&self.torii_url, "v1/contracts/call");
+        let url = join_torii_url(&client.torii_url, "v1/contracts/call");
         let mut body = norito::json::Map::new();
         body.insert("authority".into(), authority.to_string().into());
         if let Some(contract_address) = contract_address {
@@ -21673,14 +21780,18 @@ impl Client {
         }
         body.insert("fee_payment".into(), norito::json::to_value(fee_payment)?);
         let request_body = norito::json::to_vec(&norito::json::Value::Object(body))?;
-        let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(request_body),
-        )?;
+        let response = client
+            .dispatch_request(
+                client
+                    .default_request(HttpMethod::POST, url)
+                    .header("Content-Type", APPLICATION_JSON)
+                    .header("Accept", APPLICATION_JSON)
+                    .body(request_body)
+                    .build()?,
+            )
+            .await?;
         let mut response_value =
-            Self::parse_json_ok_response(&response, "contract call prepare request")?;
+            Client::parse_json_ok_response(&response, "contract call prepare request")?;
         for retired in ["transaction_scaffold_b64", "signed_transaction_b64"] {
             if response_value.get(retired).is_some() {
                 return Err(eyre!(
@@ -21749,7 +21860,7 @@ impl Client {
             ));
         }
         if builder.payload().domain
-            != iroha_data_model::transaction::TransactionDomain::Network(self.network_id)
+            != iroha_data_model::transaction::TransactionDomain::Network(client.network_id)
             || &builder.payload().authority != authority
         {
             return Err(eyre!(
@@ -21829,7 +21940,7 @@ impl Client {
             ));
         }
         let mut expected_builder =
-            TransactionBuilder::new(self.network_id, authority.clone(), response_fee_payment);
+            TransactionBuilder::new(client.network_id, authority.clone(), response_fee_payment);
         expected_builder.set_creation_time(Duration::from_millis(response_creation_time_ms));
         if let Some(transaction_ttl_ms) = transaction_ttl_ms {
             expected_builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
@@ -21859,6 +21970,7 @@ impl Client {
             let tx_hash_hex = hex::encode(signed.hash().as_ref());
             let entrypoint_hash_hex = hex::encode(signed.hash_as_entrypoint().as_ref());
             self.submit_transaction(&signed)
+                .await
                 .wrap_err("submit exact contract call transaction")?;
             let response_object = response_value
                 .as_object_mut()
@@ -21894,6 +22006,9 @@ impl Client {
         }
         Ok(response_value)
     }
+}
+
+impl Client {
     /// POST `/v1/contracts/view` with a JSON body.
     ///
     /// # Errors
@@ -21946,7 +22061,7 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/contracts/aliases/resolve");
         let payload = norito::json::to_vec(&norito::json!({
-            "contract_alias": contract_alias,
+            "contract_alias": contract_alias
         }))?;
         self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, payload)?
@@ -21969,7 +22084,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/contracts/deployment-state");
         let payload = norito::json::to_vec(&norito::json!({
             "authority": (self.account.to_string()),
-            "contract_alias": contract_alias,
+            "contract_alias": contract_alias
         }))?;
         self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, payload)?
@@ -22245,7 +22360,7 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()?;
+            .send_blocking()?;
         Self::decode_json_ok(resp, "Failed to simulate contract call")
     }
     /// GET `/v1/runtime/abi/hash`
@@ -22265,23 +22380,40 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
-        self.get_node_capabilities_json_with_transport(false)
+        let response = self.send_prepared_request(self.node_capabilities_request()?)?;
+        Self::decode_node_capabilities_response(&response)
     }
-    fn get_node_capabilities_json_with_transport(
-        &self,
-        direct_loopback: bool,
-    ) -> Result<norito::json::Value> {
+
+    /// Refresh this context's cached node compatibility decision.
+    ///
+    /// Concurrent refreshes and submissions share one context-local probe. A
+    /// transport, HTTP, or decoding failure is returned to those callers but is
+    /// not cached; a later call probes again.
+    ///
+    /// # Errors
+    /// Returns a typed compatibility error or [`CapabilityProbeError`].
+    pub async fn refresh_capabilities(&self) -> Result<()> {
+        self.ensure_compatibility(CompatibilityRequirement::Submission, true)
+            .await
+    }
+
+    fn node_capabilities_request(&self) -> Result<DefaultRequest> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
         let request = self
             .account_signed_get_request(url)?
             .header(http::header::ACCEPT, APPLICATION_JSON)
-            .max_response_bytes(NODE_CAPABILITIES_RESPONSE_MAX_BYTES);
-        let request = if direct_loopback {
-            request.direct_loopback()
-        } else {
-            request
-        };
-        let resp = self.send_builder(request)?;
+            .max_response_bytes(NODE_CAPABILITIES_RESPONSE_MAX_BYTES)
+            .build()?;
+        Ok(request)
+    }
+
+    async fn fetch_node_capabilities(&self) -> Result<norito::json::Value> {
+        let response = self.node_capabilities_request()?.send().await?;
+        self.enforce_alias_policy(&response)?;
+        Self::decode_node_capabilities_response(&response)
+    }
+
+    fn decode_node_capabilities_response(resp: &Response<Vec<u8>>) -> Result<norito::json::Value> {
         Self::ensure_response_status(
             &resp,
             StatusCode::OK,
@@ -23066,7 +23198,7 @@ impl Client {
             .header("Content-Type", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()?;
+            .send_blocking()?;
         Self::decode_json_ok(resp, "Failed to propose runtime upgrade")
     }
     /// POST `/v1/runtime/upgrades/activate/:id` (id hex in path)
@@ -23166,23 +23298,34 @@ impl Client {
             "Failed to fetch proof with HTTP status",
         )
     }
+}
+
+impl OperatorClient {
     /// Inspect node-local proof retention configuration and live counters as an authenticated
     /// operator via `/v1/proofs/retention`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_proof_retention_status(&self) -> Result<iroha_torii_shared::ProofRetentionStatus> {
+    pub async fn get_proof_retention_status(
+        &self,
+    ) -> Result<iroha_torii_shared::ProofRetentionStatus> {
+        let client = &self.context;
         let url = join_torii_url(
-            &self.torii_url,
+            &client.torii_url,
             iroha_torii_shared::uri::PROOF_RETENTION_STATUS.trim_start_matches('/'),
         );
-        let resp =
-            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        Self::decode_json_http_status(
+        let request = client
+            .identity_signed_request(&self.operator_key_pair, HttpMethod::GET, url, Vec::new())?
+            .build()?;
+        let resp = client.dispatch_request(request).await?;
+        Client::decode_json_http_status(
             resp,
             StatusCode::OK,
             "Failed to fetch proof retention status with HTTP status",
         )
     }
+}
+
+impl Client {
     /// Fetch attachment bytes by id via `/v1/zk/attachments/{id}`.
     /// Returns the raw bytes and optional content-type.
     /// # Errors
@@ -23304,6 +23447,7 @@ impl Client {
         Self::decode_json_http_status(resp, StatusCode::OK, "Failed to get VK with HTTP status")
     }
 }
+#[cfg(test)]
 fn rejection_reason_from_transaction_details(
     details: &PipelineTransactionDetailsResponse,
     signed_hash: HashOf<SignedTransaction>,
@@ -23426,6 +23570,7 @@ fn validate_global_pipeline_status_response(
 fn elapsed_ms_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
+#[cfg(test)]
 fn authoritative_tx_confirmation_result(
     status: TxConfirmationStatus,
     hash: HashOf<SignedTransaction>,
@@ -23446,6 +23591,7 @@ fn authoritative_tx_confirmation_result(
         | TxConfirmationStatus::Committed => None,
     }
 }
+#[cfg(test)]
 async fn await_transaction_submission_disposition(
     hash: HashOf<SignedTransaction>,
     submit_result_receiver: tokio::sync::oneshot::Receiver<
@@ -23471,6 +23617,7 @@ async fn await_transaction_submission_disposition(
         ))),
     }
 }
+#[cfg(test)]
 #[allow(clippy::too_many_lines)]
 async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
     event_iterator: &mut S,
@@ -25043,6 +25190,7 @@ mod tx_confirmation_stream_tests {
         assert!(super::should_fallback_after_confirmation_error(&transient));
     }
 }
+#[cfg(test)]
 fn tx_rejection_to_report(
     reason: &crate::data_model::transaction::error::TransactionRejectionReason,
 ) -> eyre::Report {
@@ -25113,7 +25261,7 @@ fn join_torii_url_with_path_segments(url: &Url, path: &str, segments: &[&str]) -
 mod url_join_tests {
     include!("client/url_join_tests.rs");
 }
-/// Logic for `sync` and `async` Iroha websocket streams
+/// Logic for asynchronous Iroha WebSocket streams.
 pub mod stream_api {
     use super::*;
     use crate::{
@@ -25134,125 +25282,6 @@ pub mod stream_api {
             ))
         }
     }
-    /// Iterator for getting messages from the `WebSocket` stream.
-    pub(super) struct SyncIterator<E> {
-        stream: WebSocketStream,
-        handler: E,
-        terminated: bool,
-    }
-    impl<E> SyncIterator<E> {
-        /// Construct `SyncIterator` and send the subscription request.
-        ///
-        /// # Errors
-        /// - Request failed to build
-        /// - `connect` failed
-        /// - Sending failed
-        /// - Message not received in stream during connection or subscription
-        /// - Message is an error
-        pub fn new<I: Init<DefaultWebSocketRequestBuilder>>(
-            handler: I,
-        ) -> Result<SyncIterator<I::Next>> {
-            trace!("Creating `SyncIterator`");
-            let InitData {
-                first_message,
-                req,
-                next: next_handler,
-            } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
-            let (mut stream, response) = req.build()?.connect_with_response()?;
-            validate_selected_subprotocol(&response)?;
-            stream.send(WebSocketMessage::Binary(first_message.into()))?;
-            trace!("`SyncIterator` created successfully");
-            Ok(SyncIterator {
-                stream,
-                handler: next_handler,
-                terminated: false,
-            })
-        }
-    }
-    impl<E: Events> Iterator for SyncIterator<E> {
-        type Item = Result<E::Event>;
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.terminated {
-                return None;
-            }
-            loop {
-                match self.stream.read() {
-                    Ok(WebSocketMessage::Binary(message)) => {
-                        match self.handler.message(message.to_vec()) {
-                            Ok(event) => return Some(Ok(event)),
-                            Err(err) => {
-                                self.terminated = true;
-                                return Some(Err(eyre!(
-                                    "failed to decode Torii WebSocket binary message: {err}"
-                                )));
-                            }
-                        }
-                    }
-                    Ok(WebSocketMessage::Close(frame)) => {
-                        self.terminated = true;
-                        return match frame {
-                            Some(frame) if u16::from(frame.code) == 1000 => None,
-                            Some(frame) => Some(Err(eyre!(
-                                "Torii WebSocket stream closed with code {}: {}",
-                                u16::from(frame.code),
-                                frame.reason
-                            ))),
-                            None => Some(Err(eyre!(
-                                "Torii WebSocket stream closed without a status code"
-                            ))),
-                        };
-                    }
-                    Ok(WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_)) => (),
-                    Ok(WebSocketMessage::Text(_)) => {
-                        self.terminated = true;
-                        return Some(Err(eyre!(
-                            "Torii WebSocket sent an unexpected text data frame"
-                        )));
-                    }
-                    Ok(WebSocketMessage::Frame(_)) => {
-                        self.terminated = true;
-                        return Some(Err(eyre!(
-                            "Torii WebSocket exposed an unexpected raw frame"
-                        )));
-                    }
-                    Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                        self.terminated = true;
-                        return None;
-                    }
-                    Err(err) => {
-                        self.terminated = true;
-                        return Some(Err(err.into()));
-                    }
-                }
-            }
-        }
-    }
-    impl<E> Drop for SyncIterator<E> {
-        fn drop(&mut self) {
-            let mut close = || -> eyre::Result<()> {
-                match self.stream.close(None) {
-                    Ok(()) => {}
-                    Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                        return Ok(());
-                    }
-                    Err(error) => Err(error)?,
-                }
-                // NOTE: drive close handshake to completion
-                loop {
-                    match self.stream.read() {
-                        Ok(_) => {}
-                        Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                            return Ok(());
-                        }
-                        Err(error) => Err(error)?,
-                    }
-                }
-            };
-            trace!("Closing WebSocket connection");
-            let _ = close().map_err(|e| error!(%e));
-            trace!("WebSocket connection closed");
-        }
-    }
     /// Async stream for getting messages from the `WebSocket` stream.
     pub struct AsyncStream<E> {
         stream: AsyncWebSocketStream,
@@ -25264,7 +25293,7 @@ pub mod stream_api {
         ///
         /// # Errors
         /// - Request failed to build
-        /// - `connect_async` failed
+        /// - the asynchronous WebSocket connection failed
         /// - Sending failed
         /// - Message not received in stream during connection or subscription
         /// - Message is an error
@@ -25278,7 +25307,7 @@ pub mod stream_api {
                 req,
                 next: next_handler,
             } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
-            let (mut stream, response) = req.build()?.connect_async_with_response().await?;
+            let (mut stream, response) = req.build()?.connect_with_response().await?;
             validate_selected_subprotocol(&response)?;
             stream
                 .send(WebSocketMessage::Binary(first_message.into()))
@@ -25482,8 +25511,6 @@ pub mod events_api {
             }
         }
     }
-    /// Iterator for getting events from the `WebSocket` stream.
-    pub(super) type EventIterator = stream_api::SyncIterator<flow::Events>;
     /// Async stream for getting events from the `WebSocket` stream.
     pub type AsyncEventStream = stream_api::AsyncStream<flow::Events>;
 }
@@ -25549,8 +25576,6 @@ mod blocks_api {
             }
         }
     }
-    /// Iterator for getting blocks from the `WebSocket` stream.
-    pub(super) type BlockIterator = stream_api::SyncIterator<flow::Events>;
     /// Async stream for getting blocks from the `WebSocket` stream.
     pub type AsyncBlockStream = stream_api::AsyncStream<flow::Events>;
 }
@@ -25567,11 +25592,14 @@ mod tests {
         *,
     };
     use crate::http::ws::conn_flow::Events as _;
-    use crate::http_default::{RequestSnapshot, with_real_http};
+    use crate::http_default::RequestSnapshot;
     use crate::{
         config::{BasicAuth, Config},
         da::PDP_COMMITMENT_HEADER,
-        http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
+        http::{
+            HttpTransport, Method as HttpMethod, Response as HttpResponse, StatusCode,
+            TransportFuture, TransportRequest,
+        },
         secrecy::SecretString,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
@@ -25646,7 +25674,7 @@ mod tests {
         io::{Read, Write},
         net::TcpListener,
         sync::{
-            Arc, Mutex,
+            Arc, Barrier, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
         time::{Duration, Instant},
@@ -25663,7 +25691,321 @@ mod tests {
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     #[test]
+    fn http_transport_is_shared_by_clones_and_isolated_between_contexts() {
+        let config = config_factory();
+        let client = Client::new(config.clone());
+        let cloned = client.clone();
+        let separately_constructed = Client::new(config);
+
+        assert!(
+            client
+                .http_transport
+                .shares_pools_with(&cloned.http_transport),
+            "clones of one context must reuse its blocking and async connection pools"
+        );
+        assert!(
+            !client
+                .http_transport
+                .shares_pools_with(&separately_constructed.http_transport),
+            "separately constructed contexts must own independent connection pools"
+        );
+    }
+
+    #[test]
+    fn immutable_authority_context_clones_share_only_their_originating_context() {
+        let config = config_factory();
+        let first_client = Client::new(config.clone());
+        let second_client = Client::new(config);
+        let account = first_client
+            .account_client()
+            .expect("valid account context");
+        let account_clone = account.clone();
+        let independent_account = second_client
+            .account_client()
+            .expect("valid independent account context");
+        assert!(Arc::ptr_eq(&account.context, &account_clone.context));
+        assert!(!Arc::ptr_eq(&account.context, &independent_account.context));
+        assert!(Arc::ptr_eq(
+            &account.context.data_model_compatibility,
+            &account_clone.context.data_model_compatibility
+        ));
+        assert!(
+            !account
+                .context
+                .http_transport
+                .shares_pools_with(&independent_account.context.http_transport)
+        );
+
+        let operator = first_client
+            .operator_client(checked_random_keypair())
+            .expect("valid operator context");
+        let operator_clone = operator.clone();
+        assert!(Arc::ptr_eq(&operator.context, &operator_clone.context));
+    }
+
+    #[test]
+    fn transaction_draft_is_bound_to_each_immutable_account_context() {
+        let first_client = Client::new(config_factory());
+        let mut second_config = config_factory();
+        second_config.network_id = foreign_alias_plan_network_id();
+        let second_client = Client::new(second_config);
+        let draft = AccountTransactionDraft::new(
+            Vec::<InstructionBox>::new(),
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
+
+        let first = account_context(&first_client)
+            .prepare_transaction(draft.clone())
+            .expect("bind draft to first account context");
+        let second = account_context(&second_client)
+            .prepare_transaction(draft)
+            .expect("bind draft to independent account context");
+
+        assert_eq!(first.authority(), &first_client.account);
+        assert_eq!(first.network_id(), Some(&first_client.network_id));
+        assert_eq!(second.authority(), &second_client.account);
+        assert_eq!(second.network_id(), Some(&second_client.network_id));
+        assert_ne!(first.authority(), second.authority());
+        assert_ne!(first.network_id(), second.network_id());
+    }
+
+    #[test]
+    fn authority_context_binding_rejects_ambiguous_or_unbound_identity_state() {
+        let mut client = Client::new(config_factory());
+        client.torii_url = "ftp://example.test/".parse().expect("URL fixture");
+        assert!(matches!(
+            client.account_client(),
+            Err(AuthorityContextError::UnsupportedEndpointScheme { .. })
+        ));
+
+        client.torii_url = "https://user:secret@example.test/"
+            .parse()
+            .expect("URL fixture");
+        assert_eq!(
+            client.account_client().expect_err("embedded credentials"),
+            AuthorityContextError::EmbeddedEndpointCredentials
+        );
+
+        client.torii_url = "https://example.test/api".parse().expect("URL fixture");
+        assert_eq!(
+            client
+                .account_client()
+                .expect_err("directory-form base URL"),
+            AuthorityContextError::EndpointPathMissingTrailingSlash
+        );
+
+        client.torii_url = base_url();
+        client.network_id = test_network_id();
+        client.account = AccountId::new(checked_random_keypair().public_key().clone());
+        assert_eq!(
+            client.account_client().expect_err("unbound account key"),
+            AuthorityContextError::AccountSigningKeyMismatch
+        );
+
+        let nonmember = checked_random_keypair();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(nonmember.public_key().clone(), 1)
+                    .expect("valid multisig member"),
+            ],
+        )
+        .expect("valid multisig policy");
+        client.account = AccountId::new_multisig(policy);
+        assert_eq!(
+            client
+                .account_client()
+                .expect_err("nonmember account key must not bind"),
+            AuthorityContextError::AccountSigningKeyNotMultisigMember
+        );
+    }
+
+    #[test]
+    fn concurrently_injected_client_contexts_do_not_crosstalk() {
+        #[derive(Debug)]
+        struct TaggedTransport {
+            barrier: Arc<Barrier>,
+            expected_path: &'static str,
+            response_body: &'static [u8],
+            sends: Arc<AtomicUsize>,
+        }
+
+        impl TaggedTransport {
+            fn respond(
+                &self,
+                request: crate::http::TransportRequest,
+            ) -> Result<HttpResponse<Vec<u8>>> {
+                self.barrier.wait();
+                assert_eq!(request.url.path(), self.expected_path);
+                self.sends.fetch_add(1, Ordering::Relaxed);
+                Ok(HttpResponse::new(self.response_body.to_vec()))
+            }
+        }
+
+        impl crate::http::HttpTransport for TaggedTransport {
+            fn send_blocking(
+                &self,
+                request: crate::http::TransportRequest,
+            ) -> Result<HttpResponse<Vec<u8>>> {
+                self.respond(request)
+            }
+
+            fn send(
+                &self,
+                request: crate::http::TransportRequest,
+            ) -> crate::http::TransportFuture<'_> {
+                let response = self.respond(request);
+                Box::pin(async move { response })
+            }
+        }
+
+        let barrier = Arc::new(Barrier::new(2));
+        let sends_a = Arc::new(AtomicUsize::new(0));
+        let sends_b = Arc::new(AtomicUsize::new(0));
+        let client_a = Client::with_transport(
+            Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            },
+            Arc::new(TaggedTransport {
+                barrier: Arc::clone(&barrier),
+                expected_path: "/context-a",
+                response_body: b"transport-a",
+                sends: Arc::clone(&sends_a),
+            }),
+        );
+        let client_b = Client::with_transport(
+            Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            },
+            Arc::new(TaggedTransport {
+                barrier,
+                expected_path: "/context-b",
+                response_body: b"transport-b",
+                sends: Arc::clone(&sends_b),
+            }),
+        );
+
+        let (body_a, body_b) = std::thread::scope(|scope| {
+            let request_a = scope.spawn(|| {
+                client_a
+                    .default_request(
+                        HttpMethod::GET,
+                        join_torii_url(&client_a.torii_url, "context-a"),
+                    )
+                    .build()
+                    .expect("context A request")
+                    .send_blocking()
+                    .expect("context A response")
+                    .into_body()
+            });
+            let request_b = scope.spawn(|| {
+                client_b
+                    .default_request(
+                        HttpMethod::GET,
+                        join_torii_url(&client_b.torii_url, "context-b"),
+                    )
+                    .build()
+                    .expect("context B request")
+                    .send_blocking()
+                    .expect("context B response")
+                    .into_body()
+            });
+            (
+                request_a.join().expect("context A thread"),
+                request_b.join().expect("context B thread"),
+            )
+        });
+
+        assert_eq!(body_a, b"transport-a");
+        assert_eq!(body_b, b"transport-b");
+        assert_eq!(sends_a.load(Ordering::Relaxed), 1);
+        assert_eq!(sends_b.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn async_transaction_paths_use_the_injected_context_transport() {
+        #[derive(Debug)]
+        struct AsyncTransactionTransport {
+            sync_sends: Arc<AtomicUsize>,
+            async_paths: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl crate::http::HttpTransport for AsyncTransactionTransport {
+            fn send_blocking(
+                &self,
+                _request: crate::http::TransportRequest,
+            ) -> Result<HttpResponse<Vec<u8>>> {
+                self.sync_sends.fetch_add(1, Ordering::Relaxed);
+                panic!("async transaction submission used the blocking transport path")
+            }
+
+            fn send(
+                &self,
+                request: crate::http::TransportRequest,
+            ) -> crate::http::TransportFuture<'_> {
+                self.async_paths
+                    .lock()
+                    .expect("async path log")
+                    .push(request.url.path().to_owned());
+                let accepted_count = if request.url.path() == torii_uri::TRANSACTIONS_BATCH {
+                    Some("1")
+                } else {
+                    None
+                };
+                Box::pin(async move {
+                    let mut response = HttpResponse::builder().status(StatusCode::ACCEPTED);
+                    if let Some(count) = accepted_count {
+                        response = response.header("x-iroha-transactions-accepted", count);
+                    }
+                    response.body(Vec::new()).map_err(Into::into)
+                })
+            }
+        }
+
+        let sync_sends = Arc::new(AtomicUsize::new(0));
+        let async_paths = Arc::new(Mutex::new(Vec::new()));
+        let client = Client::with_transport(
+            Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            },
+            Arc::new(AsyncTransactionTransport {
+                sync_sends: Arc::clone(&sync_sends),
+                async_paths: Arc::clone(&async_paths),
+            }),
+        );
+        mark_data_model_compatible(&client);
+        let transaction = empty_transaction(&client);
+        let expected_hash = transaction.hash();
+        let account = client.account_client().expect("valid account context");
+
+        assert_eq!(
+            account
+                .submit_transaction(&transaction)
+                .await
+                .expect("single async submission"),
+            expected_hash
+        );
+        let payload = PreparedTransactionPayload::from_transaction(&transaction);
+        assert_eq!(
+            account
+                .submit_prepared_transaction_payload_batch(&[payload])
+                .await
+                .expect("batch async submission"),
+            vec![expected_hash]
+        );
+        assert_eq!(sync_sends.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            *async_paths.lock().expect("async path log"),
+            [torii_uri::TRANSACTION, torii_uri::TRANSACTIONS_BATCH]
+        );
+    }
+    #[test]
     fn owned_async_http_client_does_not_follow_signed_body_redirects() {
+        let client = client_with_base_url(base_url());
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -25718,9 +26060,15 @@ mod tests {
             });
             let response = runtime
                 .block_on(async {
-                    bounded_async_response::build_client()
-                        .post(format!("http://{redirect_addr}/transaction"))
+                    client
+                        .default_request(
+                            HttpMethod::POST,
+                            Url::parse(&format!("http://{redirect_addr}/transaction"))
+                                .expect("redirect URL"),
+                        )
                         .body(vec![0x01, 0x02, 0x03])
+                        .build()
+                        .expect("build redirect request")
                         .send()
                         .await
                 })
@@ -25733,6 +26081,7 @@ mod tests {
     }
     #[test]
     fn owned_async_http_client_does_not_retry_signed_body_after_server_response() {
+        let client = client_with_base_url(base_url());
         let listener = TcpListener::bind("127.0.0.1:0").expect("test listener");
         let address = listener.local_addr().expect("test address");
         let server = std::thread::spawn(move || {
@@ -25769,14 +26118,19 @@ mod tests {
             .expect("build async HTTP test runtime");
         let response = runtime
             .block_on(async {
-                bounded_async_response::build_client()
-                    .post(format!("http://{address}/transaction"))
+                client
+                    .default_request(
+                        HttpMethod::POST,
+                        Url::parse(&format!("http://{address}/transaction")).expect("test URL"),
+                    )
                     .body(vec![0x01, 0x02, 0x03])
+                    .build()
+                    .expect("build signed request")
                     .send()
                     .await
             })
             .expect("server response");
-        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(
             !server.join().expect("test server"),
             "signed body was retried"
@@ -25809,13 +26163,12 @@ mod tests {
     #[test]
     fn governance_client_rejects_noncanonical_targets_before_http() {
         fn assert_no_http(call: impl FnOnce() -> Result<JsonValue>) {
-            let _ = with_mock_http(
-                |_| panic!("invalid governance input reached HTTP transport"),
-                call,
-            )
-            .expect_err("invalid governance input must fail locally");
+            let _ = call().expect_err("invalid governance input must fail locally");
         }
-        let client = client_with_base_url(base_url());
+        let client = with_mock_http(
+            |_| panic!("invalid governance input reached HTTP transport"),
+            |transport| client_with_base_url(base_url()).with_test_http_transport(transport),
+        );
         assert_no_http(|| client.post_zk_vote_tally_json("election/alias"));
         assert_no_http(|| {
             client.post_gov_ballot_zk_v1_json(&norito::json!({
@@ -25835,14 +26188,14 @@ mod tests {
     #[test]
     fn governance_ballot_clients_require_exact_network_and_authenticated_authority() {
         fn assert_no_http(call: impl FnOnce() -> Result<JsonValue>) -> String {
-            with_mock_http(
-                |_| panic!("invalid governance ballot identity reached HTTP transport"),
-                call,
-            )
-            .expect_err("invalid governance ballot identity must fail locally")
-            .to_string()
+            call()
+                .expect_err("invalid governance ballot identity must fail locally")
+                .to_string()
         }
-        let client = client_with_base_url(base_url());
+        let client = with_mock_http(
+            |_| panic!("invalid governance ballot identity reached HTTP transport"),
+            |transport| client_with_base_url(base_url()).with_test_http_transport(transport),
+        );
         let authority = client
             .account
             .canonical_i105()
@@ -25901,7 +26254,11 @@ mod tests {
         ] {
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let response = json_response(StatusCode::OK, "{}");
-            with_mock_http(respond_with(&store, response), || {
+            with_mock_http(respond_with(&store, response), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 if is_zk {
                     client
                         .post_gov_ballot_zk_v1_json(&norito::json!({
@@ -26016,7 +26373,11 @@ mod tests {
             to_bytes(&expected).expect("encode Hijiri quote fixture"),
             Some(APPLICATION_NORITO),
         );
-        let (actual, snapshot) = capture_request(response, || {
+        let (actual, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.post_validation_fee_hijiri_quote(&request)
         });
         assert_eq!(actual.expect("valid Hijiri quote response"), expected);
@@ -26052,7 +26413,12 @@ mod tests {
         };
         let error = with_mock_http(
             |_| panic!("invalid Hijiri quote request reached HTTP transport"),
-            || client.post_validation_fee_hijiri_quote(&zero_count),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_validation_fee_hijiri_quote(&zero_count)
+            },
         )
         .expect_err("zero-count Hijiri quote request must fail locally");
         assert!(
@@ -26075,7 +26441,11 @@ mod tests {
             br#"{"error":"authenticated caller is not a direct multisig member"}"#.to_vec(),
             Some(APPLICATION_JSON),
         );
-        let (result, snapshot) = capture_request(response, || {
+        let (result, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.post_validation_fee_hijiri_quote(&other_account_request)
         });
         let error = result.expect_err("server authorization rejection must surface");
@@ -26166,7 +26536,11 @@ mod tests {
             ),
         ];
         for (case, response, expected_error) in cases {
-            let (result, snapshot) = capture_request(response, || {
+            let (result, snapshot) = capture_request(response, |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.post_validation_fee_hijiri_quote(&request)
             });
             let error = result.expect_err("hostile Hijiri quote response must fail");
@@ -26901,48 +27275,55 @@ mod tests {
             })
             .expect("encode aliases-by-account response"),
         };
-        let ((), snapshot) = capture_request(json_response(StatusCode::OK, &response_body), || {
-            match (fixture, authenticated) {
-                (AliasReadFixture::Alias, false) => {
-                    let resolved = client
-                        .resolve_account_alias_unsigned(&alias)
-                        .expect("unsigned alias resolve request")
-                        .expect("alias exists");
-                    assert_eq!(resolved.alias(), &alias);
-                    assert_eq!(resolved.index(), Some(AliasIndex(7)));
+        let ((), snapshot) = capture_request(
+            json_response(StatusCode::OK, &response_body),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                match (fixture, authenticated) {
+                    (AliasReadFixture::Alias, false) => {
+                        let resolved = client
+                            .resolve_account_alias_unsigned(&alias)
+                            .expect("unsigned alias resolve request")
+                            .expect("alias exists");
+                        assert_eq!(resolved.alias(), &alias);
+                        assert_eq!(resolved.index(), Some(AliasIndex(7)));
+                    }
+                    (AliasReadFixture::Alias, true) => {
+                        client
+                            .resolve_account_alias_authenticated(&alias)
+                            .expect("signed alias resolve request")
+                            .expect("alias exists");
+                    }
+                    (AliasReadFixture::Index, false) => {
+                        client
+                            .resolve_account_alias_index_unsigned(AliasIndex(42))
+                            .expect("unsigned alias-index resolve request")
+                            .expect("index exists");
+                    }
+                    (AliasReadFixture::Index, true) => {
+                        client
+                            .resolve_account_alias_index_authenticated(AliasIndex(42))
+                            .expect("signed alias-index resolve request")
+                            .expect("index exists");
+                    }
+                    (AliasReadFixture::Account, false) => {
+                        client
+                            .list_account_aliases_unsigned(&by_account)
+                            .expect("unsigned alias-by-account request")
+                            .expect("account aliases exist");
+                    }
+                    (AliasReadFixture::Account, true) => {
+                        client
+                            .list_account_aliases_authenticated(&by_account)
+                            .expect("signed alias-by-account request")
+                            .expect("account aliases exist");
+                    }
                 }
-                (AliasReadFixture::Alias, true) => {
-                    client
-                        .resolve_account_alias_authenticated(&alias)
-                        .expect("signed alias resolve request")
-                        .expect("alias exists");
-                }
-                (AliasReadFixture::Index, false) => {
-                    client
-                        .resolve_account_alias_index_unsigned(AliasIndex(42))
-                        .expect("unsigned alias-index resolve request")
-                        .expect("index exists");
-                }
-                (AliasReadFixture::Index, true) => {
-                    client
-                        .resolve_account_alias_index_authenticated(AliasIndex(42))
-                        .expect("signed alias-index resolve request")
-                        .expect("index exists");
-                }
-                (AliasReadFixture::Account, false) => {
-                    client
-                        .list_account_aliases_unsigned(&by_account)
-                        .expect("unsigned alias-by-account request")
-                        .expect("account aliases exist");
-                }
-                (AliasReadFixture::Account, true) => {
-                    client
-                        .list_account_aliases_authenticated(&by_account)
-                        .expect("signed alias-by-account request")
-                        .expect("account aliases exist");
-                }
-            }
-        });
+            },
+        );
         let (path, body) = match fixture {
             AliasReadFixture::Alias => (
                 "/v1/aliases/resolve",
@@ -26957,7 +27338,7 @@ mod tests {
                 norito::json!({
                     "account_id": TEST_WORKER_I105,
                     "dataspace": "sbp",
-                    "domain": "ubl",
+                    "domain": "ubl"
                 }),
             ),
         };
@@ -27242,7 +27623,11 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
         let request = AliasSetupPlanRequestV1::new(Vec::new());
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_alias_setup_plan(&request)
                 .expect("signed alias setup planning request");
@@ -27275,7 +27660,11 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response_body = norito::json::to_json(&plan).expect("encode plan response");
         let response = json_response(StatusCode::OK, &response_body);
-        let actual = with_mock_http(respond_with(&store, response), || {
+        let actual = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .plan_alias_setup(&request)
                 .expect("verified typed alias setup plan")
@@ -27318,12 +27707,12 @@ mod tests {
             .verify_alias_setup_plan(&wrong_network)
             .expect_err("a plan for another exact network must fail");
         assert!(error.to_string().contains("NetworkId"));
-        let payload = client
-            .try_build_transaction_payload_from_items(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 instructions,
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build one normal alias setup transaction payload");
         let Executable::Instructions(payload_instructions) = payload.instructions else {
             panic!("alias setup apply must use an ordinary instruction transaction");
@@ -27366,7 +27755,11 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
         let renewal = alias_renewal_request_fixture(&client);
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_alias_lease_renew_plan(&renewal)
                 .expect("signed alias renewal planning request");
@@ -27388,7 +27781,11 @@ mod tests {
             None,
         ));
         let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_alias_auto_renew_plan(&auto_request)
                 .expect("signed alias auto-renew planning request");
@@ -27477,7 +27874,11 @@ mod tests {
         );
         let response_body = norito::json::to_json(&report).expect("encode readiness report");
         let response = json_response(StatusCode::OK, &response_body);
-        let actual = with_mock_http(respond_with(&store, response), || {
+        let actual = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_account_onboarding_readiness(&token)
                 .expect("fetch onboarding readiness")
@@ -27556,7 +27957,11 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response_body = norito::json::to_json(&receipt).expect("encode onboarding receipt");
         let response = json_response(StatusCode::OK, &response_body);
-        let actual = with_mock_http(respond_with(&store, response), || {
+        let actual = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .plan_account_onboarding(&request, &token)
                 .expect("plan sponsored onboarding")
@@ -27582,7 +27987,11 @@ mod tests {
         let token = "A".repeat(32);
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_account_onboarding_prepare(&request, &receipt, &binding, &fee_payment, &token)
                 .expect("prepare sponsored onboarding receipt")
@@ -27609,7 +28018,11 @@ mod tests {
         let policy = faucet_policy_fixture();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_account_faucet_prepare(
                     &prepared.claim,
@@ -27638,7 +28051,11 @@ mod tests {
         substituted_request.permissions.clear();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let error = with_mock_http(respond_with(&store, response), || {
+        let error = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_account_onboarding_prepare(
                     &substituted_request,
@@ -27718,7 +28135,11 @@ mod tests {
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::ACCEPTED, "{}");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let _ = client
                 .post_prepared_account_onboarding(
                     &substituted_request,
@@ -27985,7 +28406,12 @@ mod tests {
                 &snapshots,
                 onboarding_current_state_http_response(&response),
             ),
-            || client.prove_account_onboarding_current_state(&account_id, &alias),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.prove_account_onboarding_current_state(&account_id, &alias)
+            },
         )
         .expect("exact atomic onboarding state");
         assert_eq!(
@@ -28036,7 +28462,12 @@ mod tests {
                     &snapshots,
                     onboarding_current_state_http_response(&response),
                 ),
-                || client.prove_account_onboarding_current_state(&account_id, &alias),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.prove_account_onboarding_current_state(&account_id, &alias)
+                },
             )
             .expect("alias state is a typed atomic result");
             let expected = if conflict {
@@ -28099,7 +28530,12 @@ mod tests {
                     &snapshots,
                     onboarding_current_state_http_response(&response),
                 ),
-                || client.prove_account_onboarding_current_state(&account_id, &alias),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.prove_account_onboarding_current_state(&account_id, &alias)
+                },
             )
             .expect_err(label);
             assert_eq!(
@@ -28167,7 +28603,11 @@ mod tests {
             ),
         ] {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let _ = with_mock_http(respond_with(&snapshots, response), || {
+            let _ = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.prove_account_onboarding_current_state(&account_id, &alias)
             })
             .expect_err(label);
@@ -28198,16 +28638,23 @@ mod tests {
 
         let onboarding_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::ACCEPTED, "{}");
-        let error = with_mock_http(respond_with(&onboarding_store, response), || {
-            client
-                .post_prepared_account_onboarding(
-                    &request,
-                    &onboarding,
-                    &onboarding.fee_payment,
-                    &"E".repeat(32),
-                )
-                .expect_err("expired onboarding submit must fail")
-        });
+        let error = with_mock_http(
+            respond_with(&onboarding_store, response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client
+                    .post_prepared_account_onboarding(
+                        &request,
+                        &onboarding,
+                        &onboarding.fee_payment,
+                        &"E".repeat(32),
+                    )
+                    .expect_err("expired onboarding submit must fail")
+            },
+        );
         assert!(error.to_string().contains("expired"));
         assert!(
             onboarding_store
@@ -28234,7 +28681,11 @@ mod tests {
 
         let faucet_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::ACCEPTED, "{}");
-        let error = with_mock_http(respond_with(&faucet_store, response), || {
+        let error = with_mock_http(respond_with(&faucet_store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_prepared_account_faucet(&faucet, &faucet.fee_payment, &faucet_policy)
                 .expect_err("expired faucet submit must fail")
@@ -28340,7 +28791,11 @@ mod tests {
         ] {
             let error = with_mock_http(
                 respond_with(&snapshots, empty_response(StatusCode::OK)),
-                || {
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
                     client.post_account_onboarding_prepare(
                         &request,
                         &tampered,
@@ -28416,7 +28871,11 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_account_permissions_response(&client.account)
                 .expect("signed exact account-permissions read");
@@ -28451,7 +28910,11 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, r#"{"schema_version":1}"#);
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_soracloud_status_response()
                 .expect("signed Soracloud status read");
@@ -28472,7 +28935,11 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_account_permissions_page_response(&client.account, 17, 34)
                 .expect("signed exact account-permissions page read");
@@ -28511,7 +28978,11 @@ mod tests {
             client.account.clone(),
             "retail".parse().expect("canonical program name"),
         );
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_fee_sponsor_program_by_id(&program_id)
                 .expect("signed exact fee-sponsor-program read");
@@ -28529,7 +29000,7 @@ mod tests {
         assert_eq!(
             body,
             norito::json!({
-                "program_id": (program_id.to_string()),
+                "program_id": (program_id.to_string())
             })
         );
         assert_canonical_account_signed_json_request(&client, snapshot);
@@ -28546,7 +29017,12 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let decoded = with_mock_http(
             respond_with(&store, json_response(StatusCode::OK, &body)),
-            || client.find_fee_sponsor_program_by_id(&program_id),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.find_fee_sponsor_program_by_id(&program_id)
+            },
         )
         .expect("decode exact fee sponsor program");
         assert_eq!(decoded, Some(program));
@@ -28596,7 +29072,12 @@ mod tests {
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let error = with_mock_http(
                 respond_with(&store, json_response(StatusCode::OK, &body)),
-                || client.find_fee_sponsor_program_by_id(&requested_id),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.find_fee_sponsor_program_by_id(&requested_id)
+                },
             )
             .expect_err("substituted fee sponsor program id must be rejected");
             assert!(
@@ -28645,7 +29126,12 @@ mod tests {
                     &store,
                     mk_response(StatusCode::OK, body, Some(APPLICATION_JSON)),
                 ),
-                || client.find_fee_sponsor_program_by_id(&program_id),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.find_fee_sponsor_program_by_id(&program_id)
+                },
             )
             .expect_err("zero sponsor-program lifecycle values must be rejected");
             assert!(
@@ -28676,7 +29162,12 @@ mod tests {
                     &store,
                     mk_response(StatusCode::OK, body, Some(APPLICATION_JSON)),
                 ),
-                || client.find_fee_sponsor_program_by_id(&program_id),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.find_fee_sponsor_program_by_id(&program_id)
+                },
             )
             .expect_err("explicit-null optional sponsor fields must be rejected");
             assert!(
@@ -28697,7 +29188,12 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let missing = with_mock_http(
             respond_with(&store, empty_response(StatusCode::NOT_FOUND)),
-            || client.find_fee_sponsor_program_by_id(&program_id),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.find_fee_sponsor_program_by_id(&program_id)
+            },
         )
         .expect("404 must map to an absent program");
         assert!(missing.is_none());
@@ -28710,7 +29206,12 @@ mod tests {
                 &store,
                 mk_response(StatusCode::OK, body, Some("text/plain")),
             ),
-            || client.find_fee_sponsor_program_by_id(&program_id),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.find_fee_sponsor_program_by_id(&program_id)
+            },
         )
         .expect_err("non-JSON success response must be rejected");
         assert!(
@@ -28725,7 +29226,11 @@ mod tests {
             "text/plain".parse().expect("conflicting media type"),
         );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&store, duplicate_media), || {
+        let error = with_mock_http(respond_with(&store, duplicate_media), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.find_fee_sponsor_program_by_id(&program_id)
         })
         .expect_err("duplicate sponsor-program response media type must be rejected");
@@ -28752,7 +29257,12 @@ mod tests {
                     &store,
                     mk_response(status, exact_body.clone(), Some(APPLICATION_JSON)),
                 ),
-                || client.post_fee_sponsor_program_by_id(&program_id),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.post_fee_sponsor_program_by_id(&program_id)
+                },
             )
             .expect("an exact-limit sponsor-program response must be retained");
             assert_eq!(response.status(), status);
@@ -28768,7 +29278,12 @@ mod tests {
                         Some(APPLICATION_JSON),
                     ),
                 ),
-                || client.post_fee_sponsor_program_by_id(&program_id),
+                |mock_transport| {
+                    client
+                        .clone()
+                        .with_test_http_transport(mock_transport)
+                        .post_fee_sponsor_program_by_id(&program_id)
+                },
             )
             .expect_err("an oversized sponsor-program response must be rejected for every status");
             assert!(
@@ -28780,33 +29295,35 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn fee_quote_preserves_the_exact_unsigned_payload_and_is_canonically_signed() {
+    #[tokio::test]
+    async fn fee_quote_preserves_the_exact_unsigned_payload_and_is_canonically_signed() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
-        let signed = client
-            .try_sign_transaction_payload(payload.clone())
+        let signed = account_context(&client)
+            .sign_transaction(payload.clone())
             .expect("sign exact quoted payload");
         assert_eq!(signed.payload(), &payload);
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_fee_quote_response(&payload)
-                .expect("signed exact fee quote request");
-        });
+        let quote = authority_fee_quote_for_draft(&payload);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&quote).expect("encode exact fee quote"),
+        );
+        quote_fees_with_response(&client, &payload, &store, response)
+            .await
+            .expect("signed exact fee quote request");
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.path(), "/v1/fees/quote");
         assert_eq!(snapshot.max_response_bytes, FEE_QUOTE_RESPONSE_MAX_BYTES);
-        let decoded: FeeQuoteRequest =
+        let decoded: FeeQuoteWireRequest =
             norito::json::from_slice(&snapshot.body).expect("decode fee quote body");
         assert_eq!(decoded.payload, payload);
         assert_canonical_account_signed_json_request(&client, snapshot);
@@ -28829,35 +29346,240 @@ mod tests {
             },
         }
     }
-    #[test]
-    fn quote_fees_accepts_response_bound_to_exact_draft() {
+    async fn quote_fees_with_response(
+        client: &Client,
+        payload: &TransactionPayload,
+        store: &SnapshotStore,
+        response: HttpResponse<Vec<u8>>,
+    ) -> Result<FeeQuoteResponse> {
+        let transport = DefaultHttpTransport::mock(Arc::new(respond_with(store, response)));
+        let client = client.clone().with_test_http_transport(transport);
+        account_context(&client)
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload })
+            .await
+    }
+    #[tokio::test]
+    async fn account_quote_then_sign_uses_async_context_transport_and_exact_payload() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
+            ))
+            .expect("build exact unsigned account payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&quote).expect("encode exact fee quote"),
+        );
+        let requests: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let transport = DefaultHttpTransport::mock(Arc::new(respond_with(&requests, response)));
+        let client = client.with_test_http_transport(transport);
+        let account = account_context(&client);
+
+        let quote = account
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await
+            .expect("quote exact payload asynchronously");
+        let mut quoted_payload = payload.clone();
+        apply_fee_quote_intent(&mut quoted_payload, quote.intent)
+            .expect("apply exact fee quote to payload");
+        let signed = account
+            .sign_transaction(quoted_payload)
+            .expect("sign the exact quoted payload");
+
+        assert_eq!(signed.payload(), &payload);
+        signed
+            .verify_signature()
+            .expect("account signature remains valid");
+        let requests = requests.lock().expect("fee quote request store");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.path(), torii_uri::FEES_QUOTE);
+    }
+    #[tokio::test]
+    async fn account_multisig_fee_quote_checks_exact_witness_and_uses_one_async_request() {
+        let mut config = config_factory();
+        let signer_key_pairs = vec![
+            config.key_pair.clone(),
+            checked_random_keypair(),
+            checked_random_keypair(),
+        ];
+        let members = signer_key_pairs
+            .iter()
+            .map(|key_pair| {
+                MultisigMember::new(key_pair.public_key().clone(), 1)
+                    .expect("valid multisig member")
+            })
+            .collect();
+        config.account = AccountId::new_multisig(
+            MultisigPolicy::new(3, members).expect("three-member threshold policy"),
+        );
+        config.torii_api_url = "http://127.0.0.1:8080/"
+            .parse()
+            .expect("loopback fee-quote URL");
+        let client = Client::new(config);
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .expect("build exact multisig fee-quote payload");
+        let url = join_torii_url(
+            &client.torii_url,
+            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+        );
+        let body = norito::json::to_vec(&FeeQuoteWireRequest {
+            payload: payload.clone(),
+        })
+        .expect("encode exact multisig fee-quote body");
+        let mut witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: client.account.clone(),
+            timestamp_ms: 42,
+            nonce: "fee-quote-multisig".to_owned(),
+            canonical_request_hash: canonical_network_request_hash(
+                &client.network_id,
+                &HttpMethod::POST,
+                &url,
+                &body,
             )
+            .expect("hash exact canonical fee-quote request"),
+            signatures: Vec::new(),
+        };
+        let message = canonical_request_witness_message(&witness)
+            .expect("encode multisig fee-quote witness message");
+        witness.signatures = signer_key_pairs
+            .iter()
+            .map(
+                |key_pair| iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                    signer: key_pair.public_key().clone(),
+                    signature: Signature::try_new(key_pair.private_key(), &message)
+                        .expect("sign multisig fee-quote witness"),
+                },
+            )
+            .collect();
+        witness
+            .signatures
+            .sort_unstable_by(|left, right| left.signer.cmp(&right.signer));
+
+        let quote = authority_fee_quote_for_draft(&payload);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&quote).expect("encode exact fee quote"),
+        );
+        let requests: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let transport = DefaultHttpTransport::mock(Arc::new(respond_with(&requests, response)));
+        let client = client.with_test_http_transport(transport);
+        let account = account_context(&client);
+        let decoded = account
+            .quote_fees(FeeQuoteRequest::MultisigWitness {
+                payload: &payload,
+                witness: &witness,
+            })
+            .await
+            .expect("quote exact multisig payload");
+        assert_eq!(decoded, quote);
+        let requests_guard = requests.lock().expect("fee quote request store");
+        assert_eq!(requests_guard.len(), 1, "fee quote must not be replayed");
+        let request = &requests_guard[0];
+        assert_eq!(request.body, body);
+        assert_eq!(request.max_response_bytes, FEE_QUOTE_RESPONSE_MAX_BYTES);
+        let has_header = |name: &str| {
+            request
+                .headers
+                .iter()
+                .any(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        };
+        assert!(has_header(HEADER_WITNESS));
+        assert!(!has_header(HEADER_ACCOUNT));
+        assert!(!has_header(HEADER_SIGNATURE));
+        drop(requests_guard);
+
+        let mut out_of_order = witness.clone();
+        out_of_order.signatures.reverse();
+        let order_error = account
+            .quote_fees(FeeQuoteRequest::MultisigWitness {
+                payload: &payload,
+                witness: &out_of_order,
+            })
+            .await
+            .expect_err("noncanonical witness order must fail before transport");
+        assert!(
+            order_error
+                .to_string()
+                .contains("canonical public-key order")
+        );
+
+        let mut below_threshold = witness.clone();
+        below_threshold.signatures.pop();
+        let threshold_error = account
+            .quote_fees(FeeQuoteRequest::MultisigWitness {
+                payload: &payload,
+                witness: &below_threshold,
+            })
+            .await
+            .expect_err("insufficient witness weight must fail before transport");
+        assert!(threshold_error.to_string().contains("multisig threshold"));
+
+        let nonmember = checked_random_keypair();
+        let mut nonmember_witness = witness.clone();
+        nonmember_witness.signatures[0] =
+            iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                signer: nonmember.public_key().clone(),
+                signature: Signature::try_new(nonmember.private_key(), &message)
+                    .expect("sign nonmember witness fixture"),
+            };
+        nonmember_witness
+            .signatures
+            .sort_unstable_by(|left, right| left.signer.cmp(&right.signer));
+        let member_error = account
+            .quote_fees(FeeQuoteRequest::MultisigWitness {
+                payload: &payload,
+                witness: &nonmember_witness,
+            })
+            .await
+            .expect_err("nonmember witness must fail before transport");
+        assert!(member_error.to_string().contains("nonmember signer"));
+        assert_eq!(
+            requests.lock().expect("fee quote request store").len(),
+            1,
+            "invalid witnesses must not dispatch or replay a request"
+        );
+    }
+    #[tokio::test]
+    async fn quote_fees_accepts_response_bound_to_exact_draft() {
+        let client = client_with_base_url(base_url());
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
         let body = norito::json::to_json(&quote).expect("encode bound fee quote response");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let decoded = with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, &body)),
-            || client.quote_fees(&payload),
+        let decoded = quote_fees_with_response(
+            &client,
+            &payload,
+            &store,
+            json_response(StatusCode::OK, &body),
         )
+        .await
         .expect("accept fee quote response bound to the exact draft");
         assert_eq!(decoded, quote);
     }
-    #[test]
-    fn quote_fees_accepts_obs_text_in_a_quoted_media_parameter() {
+    #[tokio::test]
+    async fn quote_fees_accepts_obs_text_in_a_quoted_media_parameter() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
         let body = norito::json::to_vec(&quote).expect("encode bound fee quote response");
@@ -28868,44 +29590,42 @@ mod tests {
                 .expect("valid HTTP obs-text media parameter"),
         );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client.quote_fees(&payload)
-        })
-        .expect("accept an RFC 9110 obs-text quoted media parameter");
+        let decoded = quote_fees_with_response(&client, &payload, &store, response)
+            .await
+            .expect("accept an RFC 9110 obs-text quoted media parameter");
         assert_eq!(decoded, quote);
     }
-    #[test]
-    fn quote_fees_rejects_non_json_success_media_type() {
+    #[tokio::test]
+    async fn quote_fees_rejects_non_json_success_media_type() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
         let body = norito::json::to_json(&quote).expect("encode bound fee quote response");
         let response = mk_response(StatusCode::OK, body.into_bytes(), Some("text/plain"));
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&store, response), || {
-            client.quote_fees(&payload)
-        })
-        .expect_err("non-JSON fee quote response media type must be rejected");
+        let error = quote_fees_with_response(&client, &payload, &store, response)
+            .await
+            .expect_err("non-JSON fee quote response media type must be rejected");
         assert!(
             error.to_string().contains("invalid content-type"),
             "unexpected media-type error: {error:#}"
         );
     }
-    #[test]
-    fn quote_fees_rejects_duplicate_success_content_type() {
+    #[tokio::test]
+    async fn quote_fees_rejects_duplicate_success_content_type() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
         let body = norito::json::to_vec(&quote).expect("encode bound fee quote response");
@@ -28915,10 +29635,9 @@ mod tests {
             "text/plain".parse().expect("conflicting media type"),
         );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&store, response), || {
-            client.quote_fees(&payload)
-        })
-        .expect_err("duplicate fee quote response media type must be rejected");
+        let error = quote_fees_with_response(&client, &payload, &store, response)
+            .await
+            .expect_err("duplicate fee quote response media type must be rejected");
         assert!(
             error
                 .chain()
@@ -28926,15 +29645,15 @@ mod tests {
             "unexpected duplicate-media error: {error:#}"
         );
     }
-    #[test]
-    fn quote_fees_rejects_comma_folded_success_content_type() {
+    #[tokio::test]
+    async fn quote_fees_rejects_comma_folded_success_content_type() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
         let body = norito::json::to_vec(&quote).expect("encode bound fee quote response");
@@ -28944,24 +29663,23 @@ mod tests {
             Some("application/json; charset=utf-8, text/plain"),
         );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(respond_with(&store, response), || {
-            client.quote_fees(&payload)
-        })
-        .expect_err("comma-folded fee quote response media type must be rejected");
+        let error = quote_fees_with_response(&client, &payload, &store, response)
+            .await
+            .expect_err("comma-folded fee quote response media type must be rejected");
         assert!(
             error.to_string().contains("invalid content-type"),
             "unexpected folded-media error: {error:#}"
         );
     }
-    #[test]
-    fn quote_fees_rejects_duplicate_response_keys_before_semantic_validation() {
+    #[tokio::test]
+    async fn quote_fees_rejects_duplicate_response_keys_before_semantic_validation() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
         let canonical = norito::json::to_json(&quote).expect("encode bound fee quote response");
@@ -28972,37 +29690,42 @@ mod tests {
         );
         assert_ne!(duplicate, canonical, "duplicate response fixture");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let error = with_mock_http(
-            respond_with(&store, json_response(StatusCode::OK, &duplicate)),
-            || client.quote_fees(&payload),
+        let error = quote_fees_with_response(
+            &client,
+            &payload,
+            &store,
+            json_response(StatusCode::OK, &duplicate),
         )
+        .await
         .expect_err("duplicate response key must be rejected before semantic validation");
         assert!(
             format!("{error:#}").contains("duplicate field `next_block_height`"),
             "unexpected duplicate-key error: {error:#}"
         );
     }
-    #[test]
-    fn fee_quote_response_cap_is_exact_and_status_independent() {
+    #[tokio::test]
+    async fn fee_quote_response_cap_is_exact_and_status_independent() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
 
         for status in [StatusCode::OK, StatusCode::BAD_REQUEST] {
             let exact_body = vec![b'x'; FEE_QUOTE_RESPONSE_MAX_BYTES];
             let exact_response = mk_response(status, exact_body.clone(), Some(APPLICATION_JSON));
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let response = with_mock_http(respond_with(&store, exact_response), || {
-                client.post_fee_quote_response(&payload)
-            })
-            .expect("an exact-limit fee quote response must be retained");
-            assert_eq!(response.status(), status);
-            assert_eq!(response.body(), &exact_body);
+            let exact_error = quote_fees_with_response(&client, &payload, &store, exact_response)
+                .await
+                .expect_err("an invalid exact-limit response must reach status or typed decoding");
+            assert!(
+                !format!("{exact_error:#}")
+                    .contains(&format!("{} byte limit", FEE_QUOTE_RESPONSE_MAX_BYTES)),
+                "an exact-limit response was rejected as oversized for {status}: {exact_error:#}"
+            );
 
             let oversized_response = mk_response(
                 status,
@@ -29010,27 +29733,25 @@ mod tests {
                 Some(APPLICATION_JSON),
             );
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let error = with_mock_http(respond_with(&store, oversized_response), || {
-                client.post_fee_quote_response(&payload)
-            })
-            .expect_err("an oversized fee quote response must be rejected for every status");
+            let error = quote_fees_with_response(&client, &payload, &store, oversized_response)
+                .await
+                .expect_err("an oversized fee quote response must be rejected for every status");
             assert!(
-                error
-                    .to_string()
+                format!("{error:#}")
                     .contains(&format!("{} byte limit", FEE_QUOTE_RESPONSE_MAX_BYTES)),
                 "unexpected oversized-response error for {status}: {error:#}"
             );
         }
     }
-    #[test]
-    fn quote_fees_rejects_semantically_tampered_typed_responses() {
+    #[tokio::test]
+    async fn quote_fees_rejects_semantically_tampered_typed_responses() {
         let client = client_with_base_url(base_url());
-        let payload = client
-            .try_build_transaction_payload(
+        let payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
         let quote = authority_fee_quote_for_draft(&payload);
 
@@ -29054,10 +29775,13 @@ mod tests {
             let body =
                 norito::json::to_json(&tampered).expect("encode tampered fee quote response");
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let error = with_mock_http(
-                respond_with(&store, json_response(StatusCode::OK, &body)),
-                || client.quote_fees(&payload),
+            let error = quote_fees_with_response(
+                &client,
+                &payload,
+                &store,
+                json_response(StatusCode::OK, &body),
             )
+            .await
             .expect_err(label);
             assert!(
                 error.to_string().contains(
@@ -29070,32 +29794,31 @@ mod tests {
     #[test]
     fn quote_to_sign_rejects_authority_substitution() {
         let client = client_with_base_url(base_url());
-        let mut payload = client
-            .try_build_transaction_payload(
+        let mut payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .expect("build unsigned quote payload");
         payload.authority = AccountId::new(checked_random_keypair().public_key().clone());
-        let error = client
-            .try_sign_transaction_payload(payload)
+        let error = account_context(&client)
+            .sign_transaction(payload)
             .expect_err("client must not normalize a quoted authority substitution");
-        assert!(
-            error
-                .to_string()
-                .contains("does not match the client signing key")
-        );
+        assert!(matches!(
+            error,
+            SdkError::TransactionSigning(TransactionSigningError::AuthorityMismatch { .. })
+        ));
     }
     #[test]
     fn applying_fee_quote_preserves_selected_payer_and_gas_bound() {
         let client = client_with_base_url(base_url());
-        let mut payload = client
-            .try_build_transaction_payload(
+        let mut payload = account_context(&client)
+            .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10)),
                 Metadata::default(),
-            )
+            ))
             .expect("build unsigned quote payload");
         let original = payload.clone();
         let error = apply_fee_quote_intent(
@@ -29118,7 +29841,11 @@ mod tests {
         let response = json_response(StatusCode::OK, "{}");
         let alias: iroha_data_model::smart_contract::ContractAlias =
             "router::universal".parse().expect("contract alias");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_contract_alias_resolve(&alias)
                 .expect("signed contract alias resolve request");
@@ -29139,7 +29866,11 @@ mod tests {
         let response = json_response(StatusCode::OK, "{}");
         let alias: iroha_data_model::smart_contract::ContractAlias =
             "router::universal".parse().expect("contract alias");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_contract_deployment_state(&alias)
                 .expect("signed contract deployment-state request");
@@ -29155,7 +29886,7 @@ mod tests {
             body,
             norito::json!({
                 "authority": (client.account.to_string()),
-                "contract_alias": alias,
+                "contract_alias": alias
             })
         );
         assert_canonical_account_signed_json_request(&client, snapshot);
@@ -29172,7 +29903,11 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_gov_contract_json(&contract_address)
                 .expect("signed governed contract read");
@@ -29203,7 +29938,11 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let response = with_mock_http(respond_with(&store, response), || {
+        let response = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_gov_contract_response(&contract_address)
                 .expect("signed raw governed contract read")
@@ -29221,7 +29960,11 @@ mod tests {
         let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
         let response = json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_contract_code_bytes(&code_hash)
                 .expect("signed exact contract artifact read")
@@ -29250,7 +29993,11 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         with_mock_http(
             respond_with(&store, json_response(StatusCode::OK, "{}")),
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 for invalid in [
                     format!("A{}", &code_hash[1..]),
                     format!(" {code_hash}"),
@@ -29279,7 +30026,11 @@ mod tests {
             let response = json_response(StatusCode::OK, &hostile);
             with_mock_http(
                 move |_| Ok(response.clone()),
-                || {
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
                     let _ = client
                         .get_contract_code_bytes(&code_hash)
                         .expect_err("hostile artifact response must fail closed");
@@ -29305,7 +30056,11 @@ mod tests {
             cursor: None,
             limit: Some(10),
         };
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_multisig_proposals_query(&request)
                 .expect("signed multisig read");
@@ -29339,7 +30094,11 @@ mod tests {
             let response = json_response(StatusCode::OK, &hostile);
             with_mock_http(
                 move |_| Ok(response.clone()),
-                || {
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
                     let _ = client
                         .post_multisig_proposals_query(&request)
                         .expect_err("confused or extended multisig response must fail closed");
@@ -29350,74 +30109,59 @@ mod tests {
     #[test]
     fn transaction_nonce_reports_rng_failure() {
         let mut rng = FailingClientRng;
-        let error =
-            Client::transaction_nonce_with_rng(&mut rng).expect_err("RNG failure must report");
+        let error = AccountClient::transaction_nonce_with_rng(&mut rng)
+            .expect_err("RNG failure must report");
+        assert!(matches!(
+            error,
+            TransactionPreparationError::NonceEntropy { .. }
+        ));
         let message = error.to_string();
-        assert!(message.contains("transaction nonce OS RNG failed"));
+        assert!(message.contains("nonce entropy source failed"));
         assert!(message.contains("failing client RNG"));
     }
     #[test]
-    fn try_build_transaction_reports_nonce_rng_failure_when_enabled() {
+    fn prepare_transaction_reports_nonce_rng_failure_when_enabled() {
         let client = Client::new(Config {
             transaction_add_nonce: true,
             ..config_factory()
         });
         let mut rng = FailingClientRng;
-        let error = match client.try_build_transaction_with_rng(
-            Vec::<InstructionBox>::new(),
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-            &mut rng,
-        ) {
-            Ok(transaction) => panic!(
-                "transaction nonce RNG unexpectedly succeeded with hash `{}`",
-                transaction.hash()
-            ),
-            Err(error) => error,
-        };
+        let error = account_context(&client)
+            .prepare_transaction_with_rng(
+                AccountTransactionDraft::new(
+                    Vec::<InstructionBox>::new(),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ),
+                &mut rng,
+            )
+            .expect_err("transaction nonce RNG must fail closed");
+        assert!(matches!(
+            error,
+            SdkError::TransactionPreparation(TransactionPreparationError::NonceEntropy { .. })
+        ));
         let message = error.to_string();
-        assert!(message.contains("transaction nonce OS RNG failed"));
+        assert!(message.contains("nonce entropy source failed"));
         assert!(message.contains("failing client RNG"));
     }
     #[test]
-    fn try_build_transaction_from_items_reports_nonce_rng_failure_when_enabled() {
-        let client = Client::new(Config {
-            transaction_add_nonce: true,
-            ..config_factory()
-        });
-        let mut rng = FailingClientRng;
-        let error = match client.try_build_transaction_from_items_with_rng(
-            Vec::<InstructionBox>::new(),
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-            &mut rng,
-        ) {
-            Ok(transaction) => panic!(
-                "transaction item nonce RNG unexpectedly succeeded with hash `{}`",
-                transaction.hash()
-            ),
-            Err(error) => error,
-        };
-        let message = error.to_string();
-        assert!(message.contains("transaction nonce OS RNG failed"));
-        assert!(message.contains("failing client RNG"));
-    }
-    #[test]
-    fn try_build_transaction_skips_rng_when_nonce_disabled() {
+    fn prepare_transaction_skips_rng_when_nonce_disabled() {
         let client = Client::new(Config {
             transaction_add_nonce: false,
             ..config_factory()
         });
         let mut rng = FailingClientRng;
-        let transaction = client
-            .try_build_transaction_with_rng(
-                Vec::<InstructionBox>::new(),
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
+        let transaction = account_context(&client)
+            .prepare_transaction_with_rng(
+                AccountTransactionDraft::new(
+                    Vec::<InstructionBox>::new(),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ),
                 &mut rng,
             )
-            .expect("transaction builder should not read RNG when nonce is disabled");
-        assert_eq!(transaction.nonce(), None);
+            .expect("transaction preparation should not read RNG when nonce is disabled");
+        assert_eq!(transaction.nonce, None);
     }
     fn sample_sumeragi_v2_status(height: u64, view: u64, leader: u32) -> SumeragiV2Status {
         SumeragiV2Status {
@@ -29545,7 +30289,12 @@ mod tests {
         let client = client_with_base_url(base_url());
         capture_request(
             encoded_sumeragi_diagnostics_response(status, content_type, context),
-            || client.get_sumeragi_diagnostics(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_diagnostics()
+            },
         )
         .0
     }
@@ -29557,7 +30306,12 @@ mod tests {
         let client = client_with_base_url(base_url());
         capture_request(
             encoded_sumeragi_diagnostics_response(status, content_type, context),
-            || client.get_cross_lane_transfer_proofs(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_cross_lane_transfer_proofs()
+            },
         )
         .0
     }
@@ -29613,12 +30367,33 @@ mod tests {
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),
-            connect_queue_root: crate::config::default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: default_alias_policy(),
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: RolloutPhase::Canary,
         }
+    }
+    fn account_context(client: &Client) -> AccountClient {
+        client
+            .account_client()
+            .expect("bind client test account context")
+    }
+    fn build_transaction<Exec: Into<Executable>>(
+        client: &Client,
+        executable: Exec,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> SignedTransaction {
+        {
+            let account = account_context(client);
+            account
+                .prepare_transaction(AccountTransactionDraft::new(
+                    executable,
+                    fee_payment,
+                    metadata,
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build client test transaction")
     }
     #[derive(Debug)]
     struct CapturedWebSocketRequestBuilder {
@@ -30074,7 +30849,11 @@ mod tests {
             .body(response_body)
             .expect("build accepted response");
 
-        let (result, snapshots) = capture_requests(response, || {
+        let (result, snapshots) = capture_requests(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.authorize_and_retry_da_ingest(&request, &scope)
         });
         let result = result.expect("authorize and retry DA ingest");
@@ -30117,7 +30896,11 @@ mod tests {
             .body(response_body)
             .expect("build substituted response");
 
-        let (result, _) = capture_request(response, || {
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.authorize_and_retry_da_ingest(&request, &scope)
         });
         let error = result
@@ -30164,7 +30947,11 @@ mod tests {
             .header(PDP_COMMITMENT_HEADER, commitment_b64)
             .body(response_body.clone())
             .expect("response build");
-        let result = with_mock_http(respond_with(&snapshots, response), || {
+        let result = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.submit_da_blob(payload.clone(), &params, metadata.clone(), None)
         })
         .expect("submit da blob");
@@ -30224,7 +31011,11 @@ mod tests {
             .body(response_body)
             .expect("build unscoped accepted response");
 
-        let error = capture_request(response, || {
+        let error = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.submit_da_blob(payload, &params, metadata, None)
         })
         .0
@@ -30262,7 +31053,11 @@ mod tests {
             .body(response_body)
             .expect("build substituted accepted response");
 
-        let error = capture_request(response, || {
+        let error = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.submit_da_blob(payload, &params, metadata, None)
         })
         .0
@@ -30326,7 +31121,12 @@ mod tests {
                     Ok(accepted_response.clone())
                 }
             },
-            || client.submit_da_blob(payload, &params, metadata, None),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.submit_da_blob(payload, &params, metadata, None)
+            },
         )
         .expect("submit and finalize DA blob");
 
@@ -30395,7 +31195,12 @@ mod tests {
                     Ok(substituted_response.clone())
                 }
             },
-            || client.submit_da_blob(payload, &params, metadata, None),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.submit_da_blob(payload, &params, metadata, None)
+            },
         )
         .err()
         .expect("scope substitution must fail closed");
@@ -30431,7 +31236,11 @@ mod tests {
             .expect("build pending response");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
-        let result = with_mock_http(respond_with(&snapshots, response), || {
+        let result = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.submit_da_blob(payload, &params, metadata, None)
         })
         .expect("submit DA blob with a still-pending finalize response");
@@ -30524,7 +31333,11 @@ mod tests {
                     Ok(accepted_response.clone())
                 }
             },
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.submit_da_blob_to_dir(
                     payload.clone(),
                     &params,
@@ -30593,7 +31406,12 @@ mod tests {
         let client = client_with_base_url(base_url());
         let (fetched, snapshot) = capture_request(
             json_ok_response(&expected, "encode DA manifest response"),
-            || client.get_da_manifest_json(&storage_ticket_hex),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_da_manifest_json(&storage_ticket_hex)
+            },
         );
         assert_eq!(fetched.expect("fetch manifest"), expected);
         assert_eq!(
@@ -30606,10 +31424,16 @@ mod tests {
     fn get_da_proof_policies_fetches_bundle() {
         let client = client_with_base_url(base_url());
         let expected = sample_da_proof_policy_bundle();
-        let (actual, snapshot) =
-            capture_request(json_ok_response(&expected, "encode proof policies"), || {
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode proof policies"),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.get_da_proof_policies()
-            });
+            },
+        );
         let actual = actual.expect("fetch proof policies");
         assert_eq!(actual, expected);
         assert_request(&snapshot, &HttpMethod::GET, "/v1/da/proof-policies");
@@ -30620,7 +31444,12 @@ mod tests {
         let expected = sample_da_proof_policy_bundle();
         let (actual, snapshot) = capture_request(
             json_ok_response(&expected, "encode proof policy snapshot"),
-            || client.get_da_proof_policy_snapshot(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_da_proof_policy_snapshot()
+            },
         );
         let actual = actual.expect("fetch proof policy snapshot");
         assert_eq!(actual, expected);
@@ -30642,10 +31471,16 @@ mod tests {
             commitments: vec![sample_da_commitment_with_location()],
             next_cursor: None,
         };
-        let (actual, snapshot) =
-            capture_request(json_ok_response(&expected, "encode list response"), || {
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode list response"),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.list_da_commitments(&request)
-            });
+            },
+        );
         let actual = actual.expect("list commitments");
         assert_eq!(actual, expected);
         assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments");
@@ -30666,10 +31501,16 @@ mod tests {
             policies: sample_da_proof_policy_bundle(),
             proof: sample_da_commitment_proof(),
         });
-        let (actual, snapshot) =
-            capture_request(json_ok_response(&expected, "encode prove response"), || {
+        let (actual, snapshot) = capture_request(
+            json_ok_response(&expected, "encode prove response"),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client.prove_da_commitment(&request)
-            });
+            },
+        );
         let actual = actual.expect("prove commitment");
         assert_eq!(actual, expected);
         assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments/prove");
@@ -30684,7 +31525,12 @@ mod tests {
         };
         let (actual, snapshot) = capture_request(
             json_ok_response(&expected, "encode verify response"),
-            || client.verify_da_commitment(&proof),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.verify_da_commitment(&proof)
+            },
         );
         let actual = actual.expect("verify commitment");
         assert!(actual.valid);
@@ -30707,7 +31553,12 @@ mod tests {
         };
         let (actual, snapshot) = capture_request(
             json_ok_response(&expected, "encode pin intent list"),
-            || client.list_da_pin_intents(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.list_da_pin_intents(&request)
+            },
         );
         let actual = actual.expect("list pin intents");
         assert_eq!(actual, expected);
@@ -30730,7 +31581,12 @@ mod tests {
         let expected = Some(sample_da_pin_intent_proof());
         let (actual, snapshot) = capture_request(
             json_ok_response(&expected, "encode prove pin intent"),
-            || client.prove_da_pin_intent(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.prove_da_pin_intent(&request)
+            },
         );
         let actual = actual.expect("prove pin intent");
         assert_eq!(actual, expected);
@@ -30746,7 +31602,12 @@ mod tests {
         };
         let (actual, snapshot) = capture_request(
             json_ok_response(&expected, "encode verify pin response"),
-            || client.verify_da_pin_intent(&proof),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.verify_da_pin_intent(&proof)
+            },
         );
         let actual = actual.expect("verify pin intent");
         assert!(actual.valid);
@@ -30815,9 +31676,14 @@ mod tests {
   ]
 }}"#
         );
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
-            client.get_uaid_portfolio(&format!("uaid:{uaid_hex}"))
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, &payload), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_uaid_portfolio(&format!("uaid:{uaid_hex}"))
+            });
         let result = result.expect("portfolio call succeeds");
         assert_eq!(result.uaid, format!("uaid:{uaid_hex}"));
         assert_eq!(result.totals.accounts, 1);
@@ -30866,14 +31732,19 @@ mod tests {
   "dataspaces":[]
 }}"#
         );
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
-            client.get_uaid_portfolio_with_query(
-                &format!("uaid:{uaid_hex}"),
-                Some(UaidPortfolioQuery {
-                    asset_id: Some(asset_id.clone()),
-                }),
-            )
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, &payload), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_uaid_portfolio_with_query(
+                    &format!("uaid:{uaid_hex}"),
+                    Some(UaidPortfolioQuery {
+                        asset_id: Some(asset_id.clone()),
+                    }),
+                )
+            });
         result.expect("portfolio call succeeds");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert!(
@@ -30905,9 +31776,14 @@ mod tests {
   ]
 }}"#
         );
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
-            client.get_uaid_bindings(&format!("uaid:{uaid_hex}"))
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, &payload), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_uaid_bindings(&format!("uaid:{uaid_hex}"))
+            });
         let result = result.expect("bindings call succeeds");
         assert_eq!(result.dataspaces.len(), 2);
         assert_eq!(result.dataspaces[1].accounts.len(), 1);
@@ -30953,9 +31829,14 @@ mod tests {
             offset: Some(2),
             count_mode: Some(UaidManifestCountMode::Exact),
         };
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
-            client.get_uaid_manifests(&format!("uaid:{uaid_hex}"), Some(query))
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, &payload), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_uaid_manifests(&format!("uaid:{uaid_hex}"), Some(query))
+            });
         let result = result.expect("manifests call succeeds");
         assert_eq!(result.total, 1);
         assert!(!result.has_more);
@@ -31085,7 +31966,11 @@ mod tests {
     fn get_public_lane_validators_omits_query_params() {
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":7,"total":0,"items":[]}"#);
-        let (payload, snapshot) = capture_request(response, || {
+        let (payload, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.get_public_lane_validators(LaneId::new(7))
         });
         let payload = payload.expect("request succeeds");
@@ -31098,9 +31983,14 @@ mod tests {
         let client = client_with_base_url(base_url());
         let expected = lifecycle_status_fixture();
         let body = norito::json::to_string(&expected).expect("lifecycle status JSON");
-        let (actual, snapshot) = capture_request(json_response(StatusCode::OK, &body), || {
-            client.get_lane_lifecycle_status()
-        });
+        let (actual, snapshot) =
+            capture_request(json_response(StatusCode::OK, &body), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_lane_lifecycle_status()
+            });
         let actual = actual.expect("lifecycle status request succeeds");
         assert_eq!(actual, expected);
         assert_eq!(snapshot.url.path(), torii_uri::NEXUS_LANE_LIFECYCLE);
@@ -31113,7 +32003,11 @@ mod tests {
     fn get_public_lane_stake_filters_validator() {
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":1,"total":0,"items":[]}"#);
-        let (payload, snapshot) = capture_request(response, || {
+        let (payload, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.get_public_lane_stake(
                 LaneId::new(1),
                 Some("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
@@ -31132,7 +32026,11 @@ mod tests {
     fn get_public_lane_pending_rewards_sets_filters() {
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":0,"total":0,"items":[]}"#);
-        let (payload, snapshot) = capture_request(response, || {
+        let (payload, snapshot) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.get_public_lane_pending_rewards(
                 LaneId::new(0),
                 "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
@@ -31169,9 +32067,14 @@ mod tests {
   "svg":"<svg i105 />"
 }}"#
         );
-        let (qr, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
-            client.get_explorer_account_qr(&account_id)
-        });
+        let (qr, snapshot) =
+            capture_request(json_response(StatusCode::OK, &payload), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_explorer_account_qr(&account_id)
+            });
         let qr = qr.expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
         assert_eq!(qr.literal, i105_literal);
@@ -31200,7 +32103,8 @@ mod tests {
             ..config_factory()
         });
         let build_transaction = || {
-            client.build_transaction(
+            build_transaction(
+                &client,
                 Vec::<InstructionBox>::new(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
@@ -31209,27 +32113,58 @@ mod tests {
         let tx1 = build_transaction();
         let tx2 = build_transaction();
         assert_ne!(tx1.hash(), tx2.hash());
-        let tx2 = client
-            .try_sign_transaction_payload(tx1.payload().clone())
+        let tx2 = account_context(&client)
+            .sign_transaction(tx1.payload().clone())
             .expect("re-sign exact transaction payload");
         assert_eq!(tx1.hash(), tx2.hash());
     }
     #[test]
-    fn try_sign_transaction_attaches_verifiable_signature() {
+    fn sign_transaction_attaches_verifiable_signature() {
         let client = client_with_base_url(base_url());
-        let builder = TransactionBuilder::new(
+        let payload = TransactionBuilder::new(
             client.network_id,
             client.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "client checked signing".into())])
-        .with_metadata(Metadata::default());
-        let tx = client
-            .try_sign_transaction(builder)
+        .with_metadata(Metadata::default())
+        .into_payload()
+        .expect("canonical transaction payload");
+        let expected = TransactionBuilder::from_payload(payload.clone())
+            .expect("rebuild the exact payload")
+            .try_sign(client.key_pair.private_key())
+            .expect("sign the exact payload directly");
+        let tx = account_context(&client)
+            .sign_transaction(payload)
             .expect("client transaction signing should succeed");
+        assert_eq!(
+            tx.encode_versioned(),
+            expected.encode_versioned(),
+            "account signing must preserve the exact canonical signed bytes"
+        );
         tx.verify_signature()
             .expect("client transaction signature must verify");
         assert_eq!(tx.authority(), &client.account);
+    }
+    #[test]
+    fn account_signing_rejects_a_foreign_authority() {
+        let client = client_with_base_url(base_url());
+        let payload = TransactionBuilder::new(
+            client.network_id,
+            AccountId::new(checked_random_keypair().public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(Vec::<InstructionBox>::new())
+        .with_metadata(Metadata::default())
+        .into_payload()
+        .expect("foreign-authority payload remains structurally valid");
+        let error = account_context(&client)
+            .sign_transaction(payload)
+            .expect_err("account context must reject a foreign transaction authority");
+        assert!(matches!(
+            error,
+            SdkError::TransactionSigning(TransactionSigningError::AuthorityMismatch { .. })
+        ));
     }
     #[test]
     fn client_signing_rejects_foreign_and_genesis_transaction_domains() {
@@ -31251,41 +32186,41 @@ mod tests {
                 TransactionBuilder::new_genesis(client.account.clone(), fee_payment()),
             ),
         ];
+        let account = account_context(&client);
         for (label, builder) in cases {
             let payload = builder
-                .clone()
                 .into_payload()
                 .expect("hostile-domain payload remains structurally valid");
-            for result in [
-                client.try_sign_transaction(builder),
-                client.try_sign_transaction_payload(payload),
-            ] {
-                let error = result.expect_err("client must reject a hostile transaction domain");
-                assert!(
-                    error
-                        .to_string()
-                        .contains("does not match the client network"),
-                    "unexpected {label} rejection: {error}"
-                );
-            }
+            let error = account
+                .sign_transaction(payload)
+                .expect_err("client must reject a hostile transaction domain");
+            assert!(
+                matches!(
+                    error,
+                    SdkError::TransactionSigning(TransactionSigningError::NetworkMismatch { .. })
+                ),
+                "unexpected {label} rejection: {error}"
+            );
         }
     }
     #[test]
     fn submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = capability_gated_responder(&store, StatusCode::OK);
-        with_mock_http(responder, || {
-            let mut client = client_with_base_url(base_url());
+        with_mock_http(responder, |mock_transport| {
+            let mut client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client
                 .headers
                 .insert("Content-Type".to_string(), "text/plain".to_string());
-            let tx = client.build_transaction(
+            let tx = build_transaction(
+                &client,
                 Vec::<InstructionBox>::new(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             client
-                .submit_transaction(&tx)
+                .submit_transaction_for_test(&tx)
                 .expect("transaction submission succeeds");
         });
         let store_guard = store.lock().expect("snapshot lock");
@@ -31331,8 +32266,9 @@ mod tests {
     fn get_node_capabilities_json_requests_json_accept() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &compatible_capabilities_body());
-        with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             let capabilities = client
                 .get_node_capabilities_json()
                 .expect("node capabilities should decode");
@@ -31361,8 +32297,10 @@ mod tests {
             .header("content-type", APPLICATION_JSON_UTF8)
             .body(compatible_capabilities_body().into_bytes())
             .expect("build node capabilities response");
-        let (result, snapshots) = capture_requests(response, || {
-            client_with_base_url(base_url()).get_node_capabilities_json()
+        let (result, snapshots) = capture_requests(response, |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_node_capabilities_json()
         });
         result.expect("Torii's canonical UTF-8 JSON response should decode");
         assert_eq!(snapshots.len(), 1);
@@ -31382,8 +32320,10 @@ mod tests {
             .body(body)
             .unwrap();
         for response in [missing, duplicated] {
-            let (result, snapshots) = capture_requests(response, || {
-                client_with_base_url(base_url()).get_node_capabilities_json()
+            let (result, snapshots) = capture_requests(response, |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_node_capabilities_json()
             });
             assert!(result.is_err());
             assert_eq!(snapshots.len(), 1);
@@ -31400,8 +32340,10 @@ mod tests {
                 .header("content-type", content_type)
                 .body(compatible_capabilities_body().into_bytes())
                 .expect("build hostile node capabilities response");
-            let (result, snapshots) = capture_requests(response, || {
-                client_with_base_url(base_url()).get_node_capabilities_json()
+            let (result, snapshots) = capture_requests(response, |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_node_capabilities_json()
             });
             assert!(
                 result.is_err(),
@@ -31413,12 +32355,13 @@ mod tests {
     #[test]
     fn prepared_transaction_payload_preserves_hash_and_versioned_bytes() {
         let client = client_with_base_url(base_url());
-        let tx = client.build_transaction(
+        let tx = build_transaction(
+            &client,
             Vec::<InstructionBox>::new(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
-        let prepared = Client::prepare_transaction_payload(&tx);
+        let prepared = PreparedTransactionPayload::from_transaction(&tx);
         assert_eq!(prepared.hash(), tx.hash());
         SignedTransaction::decode_all_versioned(prepared.as_bytes())
             .expect("prepared payload must be a versioned SignedTransaction");
@@ -31443,7 +32386,7 @@ mod tests {
         .with_instructions(Vec::<InstructionBox>::new())
         .try_sign(keypair.private_key())
         .expect("foreign-network fixture transaction should sign");
-        let prepared = Client::prepare_transaction_payload(&tx);
+        let prepared = PreparedTransactionPayload::from_transaction(&tx);
         assert_eq!(prepared.hash(), tx.hash());
         let decoded = SignedTransaction::decode_all_versioned(prepared.as_bytes())
             .expect("prepared payload must decode as the original signed transaction");
@@ -31453,19 +32396,21 @@ mod tests {
     fn submit_prepared_transaction_payload_reuses_encoded_body() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = capability_gated_responder(&store, StatusCode::OK);
-        let expected_hash = with_mock_http(responder, || {
-            let mut client = client_with_base_url(base_url());
+        let expected_hash = with_mock_http(responder, |mock_transport| {
+            let mut client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client
                 .headers
                 .insert("Content-Type".to_string(), "text/plain".to_string());
-            let tx = client.build_transaction(
+            let tx = build_transaction(
+                &client,
                 Vec::<InstructionBox>::new(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
-            let prepared = Client::prepare_transaction_payload(&tx);
+            let prepared = PreparedTransactionPayload::from_transaction(&tx);
             let hash = client
-                .submit_prepared_transaction_payload(&prepared)
+                .submit_prepared_transaction_payload_for_test(&prepared)
                 .expect("prepared transaction submission succeeds");
             assert_eq!(hash, prepared.hash());
             hash
@@ -31484,13 +32429,229 @@ mod tests {
             TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
         );
     }
+
+    #[test]
+    fn multisig_account_context_submits_a_fully_signed_transaction() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = capability_gated_responder(&store, StatusCode::OK);
+        let expected_hash = with_mock_http(responder, |mock_transport| {
+            let mut config = config_factory();
+            let member = MultisigMember::new(config.key_pair.public_key().clone(), 1)
+                .expect("valid multisig member");
+            config.account = AccountId::new_multisig(
+                MultisigPolicy::new(1, vec![member]).expect("valid multisig policy"),
+            );
+            let client = Client::new(config).with_test_http_transport(mock_transport.clone());
+            let account = client
+                .account_client()
+                .expect("a configured multisig member can bind the account context");
+            assert_eq!(
+                account.signing_capability(),
+                AccountSigningCapability::MultisigMember
+            );
+            let transaction = TransactionBuilder::new(
+                client.network_id.clone(),
+                client.account.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions(Vec::<InstructionBox>::new())
+            .sign_multisig([client.key_pair.private_key()]);
+            transaction
+                .verify_signature()
+                .expect("multisig fixture must carry a complete valid signature bundle");
+            let expected_hash = transaction.hash();
+            let submitted_hash = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("multisig submission runtime")
+                .block_on(account.submit_transaction(&transaction))
+                .expect("fully signed multisig transaction submission succeeds");
+            assert_eq!(submitted_hash, expected_hash);
+            expected_hash
+        });
+        let snapshots = store.lock().expect("snapshot lock");
+        let submitted = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .expect("multisig transaction request captured");
+        let decoded = SignedTransaction::decode_all_versioned(&submitted.body)
+            .expect("captured multisig transaction is canonical versioned bytes");
+        assert_eq!(decoded.hash(), expected_hash);
+        decoded
+            .verify_signature()
+            .expect("submitted multisig signature bundle remains valid");
+    }
+
+    #[test]
+    fn multisig_account_context_builds_unsigned_payload_but_rejects_direct_signing() {
+        let mut config = config_factory();
+        let member = MultisigMember::new(config.key_pair.public_key().clone(), 1)
+            .expect("valid multisig member");
+        config.account = AccountId::new_multisig(
+            MultisigPolicy::new(1, vec![member]).expect("valid multisig policy"),
+        );
+        let client = Client::new(config);
+        let account = client
+            .account_client()
+            .expect("configured multisig member binds an account context");
+        let payload = account
+            .prepare_transaction(AccountTransactionDraft::new(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .expect("multisig contexts can prepare an unsigned payload");
+        assert_eq!(payload.authority(), account.authority());
+
+        let direct_payload_error = account
+            .sign_transaction(payload.clone())
+            .expect_err("one member must not create a direct account signature");
+        assert!(matches!(
+            direct_payload_error,
+            SdkError::TransactionSigning(TransactionSigningError::DirectSigningUnavailable { .. })
+        ));
+    }
+
     fn empty_transaction(client: &Client) -> SignedTransaction {
-        client.build_transaction(
+        build_transaction(
+            client,
             Vec::<InstructionBox>::new(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
     }
+
+    #[derive(Debug)]
+    struct DelayedCapabilityTransport {
+        capability_requests: Arc<AtomicUsize>,
+    }
+
+    impl HttpTransport for DelayedCapabilityTransport {
+        fn send_blocking(&self, _request: TransportRequest) -> Result<HttpResponse<Vec<u8>>> {
+            panic!("asynchronous compatibility probing must not use blocking transport")
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            assert_eq!(request.url.path(), "/v1/node/capabilities");
+            self.capability_requests.fetch_add(1, Ordering::SeqCst);
+            let body = compatible_capabilities_body().into_bytes();
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                Ok(HttpResponse::builder()
+                    .status(StatusCode::OK)
+                    .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                    .body(body)
+                    .expect("capability response"))
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct RetryCapabilityTransport {
+        capability_requests: Arc<AtomicUsize>,
+        transaction_requests: Arc<AtomicUsize>,
+    }
+
+    impl HttpTransport for RetryCapabilityTransport {
+        fn send_blocking(&self, _request: TransportRequest) -> Result<HttpResponse<Vec<u8>>> {
+            panic!("asynchronous submission must not use blocking transport")
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            match request.url.path() {
+                "/v1/node/capabilities" => {
+                    let attempt = self.capability_requests.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        Box::pin(async { Err(eyre!("transient capability transport failure")) })
+                    } else {
+                        let body = compatible_capabilities_body().into_bytes();
+                        Box::pin(async move {
+                            Ok(HttpResponse::builder()
+                                .status(StatusCode::OK)
+                                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                                .body(body)
+                                .expect("capability response"))
+                        })
+                    }
+                }
+                path if path == torii_uri::TRANSACTION => {
+                    self.transaction_requests.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async {
+                        Ok(HttpResponse::builder()
+                            .status(StatusCode::ACCEPTED)
+                            .body(Vec::new())
+                            .expect("transaction response"))
+                    })
+                }
+                path => panic!("unexpected async request path: {path}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_capability_refreshes_are_single_flight() {
+        let capability_requests = Arc::new(AtomicUsize::new(0));
+        let client = Client::with_transport(
+            Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            },
+            Arc::new(DelayedCapabilityTransport {
+                capability_requests: Arc::clone(&capability_requests),
+            }),
+        );
+        let clone = client.clone();
+        let (first, second) =
+            tokio::join!(client.refresh_capabilities(), clone.refresh_capabilities());
+        first.expect("first compatibility check");
+        second.expect("second compatibility check");
+        assert_eq!(capability_requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn async_compatibility_transport_failures_are_not_cached() {
+        let capability_requests = Arc::new(AtomicUsize::new(0));
+        let transaction_requests = Arc::new(AtomicUsize::new(0));
+        let client = Client::with_transport(
+            Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            },
+            Arc::new(RetryCapabilityTransport {
+                capability_requests: Arc::clone(&capability_requests),
+                transaction_requests: Arc::clone(&transaction_requests),
+            }),
+        );
+        let transaction = empty_transaction(&client);
+        let account = client.account_client().expect("valid account context");
+        let error = account
+            .submit_transaction(&transaction)
+            .await
+            .expect_err("first transient probe must fail");
+        let probe = error
+            .downcast_ref::<CapabilityProbeError>()
+            .expect("typed capability probe error");
+        assert!(
+            probe
+                .details()
+                .contains("transient capability transport failure")
+        );
+        assert!(matches!(
+            &*client
+                .data_model_compatibility
+                .lock()
+                .expect("compatibility cache"),
+            DataModelCompatibility::Unchecked
+        ));
+
+        account
+            .submit_transaction(&transaction)
+            .await
+            .expect("later submission must retry and succeed");
+        assert_eq!(capability_requests.load(Ordering::SeqCst), 2);
+        assert_eq!(transaction_requests.load(Ordering::SeqCst), 1);
+    }
+
     fn exact_queue_plan_outcome_unknown_response(
         identity: &QueuePlanOutcomeUnknownIdentity,
     ) -> HttpResponse<Vec<u8>> {
@@ -31599,8 +32760,8 @@ mod tests {
             server,
         )
     }
-    #[test]
-    fn fresh_submit_compatibility_probe_replaces_cached_failures() {
+    #[tokio::test]
+    async fn refresh_capabilities_replaces_cached_failures() {
         let stale_states = [
             DataModelCompatibility::Incompatible(DataModelCompatibilityError::Mismatch {
                 expected: DATA_MODEL_VERSION,
@@ -31613,17 +32774,23 @@ mod tests {
             ),
         ];
         for stale in stale_states {
-            let client = client_with_base_url(base_url());
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let responder = respond_with(
+                &snapshots,
+                json_response(StatusCode::OK, &compatible_capabilities_body()),
+            );
+            let client = with_mock_http(responder, |mock_transport| {
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone())
+            });
             *client
                 .data_model_compatibility
                 .lock()
                 .expect("compatibility cache lock") = stale;
-            let (result, snapshots) = capture_requests(
-                json_response(StatusCode::OK, &compatible_capabilities_body()),
-                || client.ensure_transaction_submit_compatibility_with_transport(false, true),
-            );
-
-            result.expect("fresh probe should recover from stale incompatibility");
+            client
+                .refresh_capabilities()
+                .await
+                .expect("fresh probe should recover from stale incompatibility");
+            let snapshots = snapshots.lock().expect("snapshot lock");
             assert_eq!(snapshots.len(), 1);
             assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
             assert!(matches!(
@@ -31654,9 +32821,14 @@ mod tests {
                 .data_model_compatibility
                 .lock()
                 .expect("compatibility cache lock") = stale;
-            let (result, snapshots) = capture_requests(empty_response(StatusCode::OK), || {
-                client.ensure_transaction_submit_compatibility_with_transport(false, false)
-            });
+            let (result, snapshots) =
+                capture_requests(empty_response(StatusCode::OK), |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
+                    client.ensure_transaction_submit_compatibility()
+                });
 
             let _ = result.expect_err("cached incompatibility should remain a no-I/O fast failure");
             assert!(snapshots.is_empty());
@@ -31670,11 +32842,14 @@ mod tests {
         }
     }
     fn rejected_transaction_submission(capabilities_body: &str) -> eyre::Report {
-        let (result, snapshots) =
-            capture_requests(json_response(StatusCode::OK, capabilities_body), || {
-                let client = client_with_base_url(base_url());
-                client.submit_transaction(&empty_transaction(&client))
-            });
+        let (result, snapshots) = capture_requests(
+            json_response(StatusCode::OK, capabilities_body),
+            |mock_transport| {
+                let client = client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone());
+                client.submit_transaction_for_test(&empty_transaction(&client))
+            },
+        );
         assert_eq!(
             snapshots.len(),
             1,
@@ -31700,10 +32875,11 @@ mod tests {
                 })
             }
         };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(responder, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             let error = client
-                .submit_transaction(&empty_transaction(&client))
+                .submit_transaction_for_test(&empty_transaction(&client))
                 .expect_err("failed capability probe must reject transaction submission");
             let rendered = format!("{error:#}");
             assert!(
@@ -31877,11 +33053,12 @@ mod tests {
                 }
             }
         };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(responder, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             let transaction = empty_transaction(&client);
             let _ = client
-                .submit_transaction(&transaction)
+                .submit_transaction_for_test(&transaction)
                 .expect_err("first capability probe must fail closed");
             assert!(matches!(
                 &*client
@@ -31891,7 +33068,7 @@ mod tests {
                 DataModelCompatibility::Unchecked
             ));
             client
-                .submit_transaction(&transaction)
+                .submit_transaction_for_test(&transaction)
                 .expect("recovered capability probe should permit submission");
         });
         let snapshots = store.lock().expect("snapshot lock");
@@ -31901,7 +33078,7 @@ mod tests {
         assert_eq!(snapshots[2].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
-    fn submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout() {
+    fn blocking_facade_returns_submit_rejection_without_waiting_for_timeout() {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         };
@@ -31945,18 +33122,22 @@ mod tests {
                 Ok(response)
             }
         };
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
             let mut client =
-                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"))
+                    .with_test_http_transport(mock_transport.clone());
             client.transaction_status_timeout = Duration::from_secs(2);
-            let tx = client.build_transaction(
+            let tx = build_transaction(
+                &client,
                 Vec::<InstructionBox>::new(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
+            let client = crate::blocking::Client::from_client(client)
+                .expect("blocking client runtime should initialize");
             let started = Instant::now();
             let err = client
-                .submit_transaction_blocking(&tx)
+                .submit_transaction_and_wait(&tx)
                 .expect_err("transaction submission should fail immediately");
             let elapsed = started.elapsed();
             assert!(
@@ -31970,7 +33151,7 @@ mod tests {
         });
     }
     #[test]
-    fn submit_transaction_blocking_applies_configured_torii_request_timeout() {
+    fn blocking_facade_applies_configured_torii_request_timeout() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let snapshots = Arc::clone(&snapshots);
@@ -31990,15 +33171,18 @@ mod tests {
             }
         };
         let configured_timeout = Duration::from_millis(1_234);
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
             let mut client =
-                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"))
+                    .with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
             client.torii_request_timeout = configured_timeout;
             client.transaction_status_timeout = Duration::from_millis(50);
             let transaction = empty_transaction(&client);
+            let client = crate::blocking::Client::from_client(client)
+                .expect("blocking client runtime should initialize");
             let _ = client
-                .submit_transaction_blocking(&transaction)
+                .submit_transaction_and_wait(&transaction)
                 .expect_err("the mock rejection must terminate blocking submission");
         });
 
@@ -32054,8 +33238,13 @@ mod tests {
             }
         };
 
-        let resolved = with_mock_http(responder, || {
-            client.submit_transaction_blocking(&transaction)
+        let resolved = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            crate::blocking::Client::from_client(client)
+                .expect("blocking client runtime should initialize")
+                .submit_transaction_and_wait(&transaction)
         })
         .expect("state-resolved Applied must finish blocking confirmation");
         assert_eq!(resolved, hash);
@@ -32077,8 +33266,12 @@ mod tests {
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let response = exact_queue_plan_outcome_unknown_response(&identity);
-        let (result, snapshots) =
-            capture_requests(response, || client.submit_transaction(&transaction));
+        let (result, snapshots) = capture_requests(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.submit_transaction_for_test(&transaction)
+        });
         let error = result.expect_err("nonblocking admission must remain ambiguous");
         let ambiguity = error
             .downcast_ref::<QueuePlanOutcomeUnknownError>()
@@ -32096,12 +33289,16 @@ mod tests {
         let client = client_with_base_url(base_url());
         mark_data_model_compatible(&client);
         let transaction = empty_transaction(&client);
-        let payload = Client::prepare_transaction_payload(&transaction);
+        let payload = PreparedTransactionPayload::from_transaction(&transaction);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let response = exact_queue_plan_outcome_unknown_response(&identity);
-        let (result, snapshots) = capture_requests(response, || {
-            client.submit_prepared_transaction_payload(&payload)
+        let (result, snapshots) = capture_requests(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
+            client.submit_prepared_transaction_payload_for_test(&payload)
         });
         let error = result.expect_err("prepared admission must remain ambiguous");
         let ambiguity = error
@@ -32128,8 +33325,12 @@ mod tests {
                 .parse()
                 .expect("forged hash header"),
         );
-        let (result, snapshots) =
-            capture_requests(response, || client.submit_transaction(&transaction));
+        let (result, snapshots) = capture_requests(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.submit_transaction_for_test(&transaction)
+        });
         let error = result.expect_err("invalid claimed evidence cannot prove non-admission");
         let ambiguity = error
             .downcast_ref::<QueuePlanOutcomeUnknownError>()
@@ -32161,8 +33362,13 @@ mod tests {
                 ))
             }
         };
-        let error = with_mock_http(responder, || client.submit_transaction(&transaction))
-            .expect_err("post-dispatch transport failure must remain ambiguous");
+        let error = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.submit_transaction_for_test(&transaction)
+        })
+        .expect_err("post-dispatch transport failure must remain ambiguous");
         let ambiguity = error
             .downcast_ref::<QueuePlanOutcomeUnknownError>()
             .expect("transport ambiguity must be a structured public error");
@@ -32202,9 +33408,10 @@ mod tests {
             client.torii_url = url;
             client.torii_request_timeout = Duration::from_secs(2);
             mark_data_model_compatible(&client);
+            let account = client.account_client().expect("valid account context");
 
-            let error = client
-                .submit_transaction_async(&transaction)
+            let error = account
+                .submit_transaction(&transaction)
                 .await
                 .expect_err("QueuePlan ambiguity must not be reported as definite admission");
             let ambiguity = error
@@ -32219,7 +33426,9 @@ mod tests {
                 assert!(format!("{error:#}").contains("invalid evidence"));
             }
             if scenario == "truncated" {
-                assert!(format!("{error:#}").contains("Failed to read transaction response"));
+                assert!(
+                    format!("{error:#}").contains("Failed to read bounded async response bytes")
+                );
             }
             assert!(
                 !server.join().expect("async transaction response server"),
@@ -32277,13 +33486,13 @@ mod tests {
             client.torii_request_timeout = Duration::from_secs(2);
             mark_data_model_compatible(&client);
 
-            let (error, retried) = with_real_http(|| {
+            let (error, retried) = {
                 let error = client
-                    .submit_transaction(&transaction)
+                    .submit_transaction_for_test(&transaction)
                     .expect_err("duplicate QueuePlan evidence cannot be exact");
                 let retried = server.join().expect("raw transaction response server");
                 (error, retried)
-            });
+            };
             let ambiguity = error
                 .downcast_ref::<QueuePlanOutcomeUnknownError>()
                 .expect("duplicate QueuePlan evidence must remain a structured ambiguity");
@@ -32337,8 +33546,13 @@ mod tests {
                 }
             }
         };
-        let resolved = with_mock_http(responder, || {
-            client.submit_transaction_blocking(&transaction)
+        let resolved = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            crate::blocking::Client::from_client(client)
+                .expect("blocking client runtime should initialize")
+                .submit_transaction_and_wait(&transaction)
         })
         .expect("state-resolved global Applied must resolve transport ambiguity");
         assert_eq!(resolved, hash);
@@ -32368,8 +33582,12 @@ mod tests {
             StatusCode::BAD_REQUEST,
             r#"{"code":"transaction_rejected","message":"definite pre-admission rejection"}"#,
         );
-        let (result, snapshots) =
-            capture_requests(response, || client.submit_transaction(&transaction));
+        let (result, snapshots) = capture_requests(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.submit_transaction_for_test(&transaction)
+        });
         let error = result.expect_err("definite rejection must fail immediately");
         assert!(
             error
@@ -32381,49 +33599,33 @@ mod tests {
         assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
     }
     #[test]
-    fn compatibility_cache_is_scoped_by_exact_network_id() {
-        let config = config_factory();
-        let local = data_model_compatibility_cache_key(
-            &config.network_id,
-            &config.torii_api_url,
-            &config.account,
-        );
-        let foreign = data_model_compatibility_cache_key(
-            &foreign_alias_plan_network_id(),
-            &config.torii_api_url,
-            &config.account,
-        );
-        assert_ne!(
-            local, foreign,
-            "same-label deployments must not share compatibility state"
-        );
-    }
-    #[test]
-    fn submit_transaction_reuses_compatibility_cache_across_equivalent_clients() {
+    fn submit_transaction_shares_compatibility_cache_with_clones_only() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = capability_gated_responder(&store, StatusCode::OK);
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
             let config = Config {
                 torii_api_url: base_url(),
                 ..config_factory()
             };
-            let client_a = Client::new(config.clone());
-            let client_b = Client::new(config);
-            let tx_a = client_a.build_transaction(
+            let client_a = Client::new(config).with_test_http_transport(mock_transport.clone());
+            let client_b = client_a.clone();
+            let tx_a = build_transaction(
+                &client_a,
                 Vec::<InstructionBox>::new(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             client_a
-                .submit_transaction(&tx_a)
+                .submit_transaction_for_test(&tx_a)
                 .expect("first transaction submission succeeds");
-            let tx_b = client_b.build_transaction(
+            let tx_b = build_transaction(
+                &client_b,
                 Vec::<InstructionBox>::new(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             client_b
-                .submit_transaction(&tx_b)
+                .submit_transaction_for_test(&tx_b)
                 .expect("second transaction submission succeeds");
         });
         let store_guard = store.lock().expect("snapshot lock");
@@ -32437,12 +33639,52 @@ mod tests {
             .count();
         assert_eq!(
             capability_requests, 1,
-            "capabilities probe should be shared"
+            "clones of one client context must share one capabilities probe"
         );
         assert_eq!(
             tx_requests, 2,
             "both transaction submissions should be sent"
         );
+    }
+    #[test]
+    fn separately_constructed_clients_do_not_share_compatibility_cache() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = capability_gated_responder(&store, StatusCode::OK);
+        with_mock_http(responder, |mock_transport| {
+            let config = Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            };
+            let clients = [
+                Client::new(config.clone()).with_test_http_transport(mock_transport.clone()),
+                Client::new(config).with_test_http_transport(mock_transport.clone()),
+            ];
+            for client in clients {
+                let transaction = build_transaction(
+                    &client,
+                    Vec::<InstructionBox>::new(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                );
+                client
+                    .submit_transaction_for_test(&transaction)
+                    .expect("transaction submission succeeds");
+            }
+        });
+        let store_guard = store.lock().expect("snapshot lock");
+        let capability_requests = store_guard
+            .iter()
+            .filter(|snapshot| snapshot.url.path() == "/v1/node/capabilities")
+            .count();
+        let transaction_requests = store_guard
+            .iter()
+            .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .count();
+        assert_eq!(
+            capability_requests, 2,
+            "separately constructed contexts must probe independently"
+        );
+        assert_eq!(transaction_requests, 2);
     }
     #[test]
     fn authorization_header() {
@@ -32543,9 +33785,14 @@ mod tests {
     fn get_config_includes_operator_signature_headers_when_key_configured() {
         let mut client = client_with_base_url(base_url());
         client.set_operator_key_pair(checked_random_keypair());
-        let (result, snapshot) = capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
-            client.get_config()
-        });
+        let (result, snapshot) =
+            capture_request(empty_response(StatusCode::UNAUTHORIZED), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_config()
+            });
         let _ = result.expect_err("mocked unauthorized response should fail");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
@@ -32555,17 +33802,22 @@ mod tests {
     fn trigger_completion_history_uses_operator_signature_bound_to_query() {
         let mut client = client_with_base_url(base_url());
         client.set_operator_key_pair(checked_random_keypair());
-        let (result, snapshot) = capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
-            client.get_trigger_completions(
-                Some("timer"),
-                Some("abcd"),
-                Some("failure"),
-                Some(10),
-                Some(20),
-                Some(5),
-                Some(100),
-            )
-        });
+        let (result, snapshot) =
+            capture_request(empty_response(StatusCode::UNAUTHORIZED), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_trigger_completions(
+                    Some("timer"),
+                    Some("abcd"),
+                    Some("failure"),
+                    Some(10),
+                    Some(20),
+                    Some(5),
+                    Some(100),
+                )
+            });
         let _ = result.expect_err("mocked unauthorized response should fail");
         assert_request(&snapshot, &HttpMethod::GET, "/v1/triggers/completed");
         assert_operator_signature_headers(&snapshot);
@@ -32579,9 +33831,14 @@ mod tests {
     #[test]
     fn debug_witness_json_uses_exact_operator_authentication_boundary() {
         let client = client_with_base_url(base_url());
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-            client.get_debug_witness_json()
-        });
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_debug_witness_json()
+            });
 
         result.expect("mocked witness JSON should decode");
         assert_request(&snapshot, &HttpMethod::GET, "/v1/debug/witness");
@@ -32594,7 +33851,12 @@ mod tests {
         let expected = vec![0x4e, 0x52, 0x54, 0x30];
         let (result, snapshot) = capture_request(
             mk_response(StatusCode::OK, expected.clone(), Some(APPLICATION_NORITO)),
-            || client.get_debug_witness_norito(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_debug_witness_norito()
+            },
         );
 
         assert_eq!(
@@ -32615,7 +33877,12 @@ mod tests {
                 b"witness unavailable".to_vec(),
                 Some("text/plain"),
             ),
-            || client.get_debug_witness_norito(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_debug_witness_norito()
+            },
         );
 
         let error = result.expect_err("mocked non-OK witness response must fail");
@@ -32636,9 +33903,13 @@ mod tests {
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
         ];
         for (path, request) in cases {
-            let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-                request(&client_with_base_url(base_url()))
-            });
+            let (result, snapshot) =
+                capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
+                    request(
+                        &client_with_base_url(base_url())
+                            .with_test_http_transport(mock_transport.clone()),
+                    )
+                });
             result.expect("JSON endpoint request should decode mocked payload");
             assert_sumeragi_json_request(&snapshot, path);
         }
@@ -32651,10 +33922,15 @@ mod tests {
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
         ];
         for (path, request) in cases {
-            let (result, snapshot) =
-                capture_request(json_response(StatusCode::OK, r#"{"broken":"#), || {
-                    request(&client_with_base_url(base_url()))
-                });
+            let (result, snapshot) = capture_request(
+                json_response(StatusCode::OK, r#"{"broken":"#),
+                |mock_transport| {
+                    request(
+                        &client_with_base_url(base_url())
+                            .with_test_http_transport(mock_transport.clone()),
+                    )
+                },
+            );
             let err = result.expect_err("malformed successful JSON payload should fail");
             assert!(
                 err.to_string().contains("failed to decode JSON payload"),
@@ -32685,7 +33961,12 @@ mod tests {
         for (path, context, request) in cases {
             let (result, snapshot) = capture_request(
                 json_response(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
-                || request(&client_with_base_url(base_url())),
+                |mock_transport| {
+                    request(
+                        &client_with_base_url(base_url())
+                            .with_test_http_transport(mock_transport.clone()),
+                    )
+                },
             );
             let err = result.expect_err("non-OK JSON endpoint response should fail");
             assert_endpoint_error(&err, path, context, "429", "rate limited");
@@ -32830,9 +34111,16 @@ mod tests {
         let client = client_with_base_url(base_url());
         let norito_body = norito::to_bytes(&status).expect("serialize status");
         let norito_response = mk_response(StatusCode::OK, norito_body, Some(APPLICATION_NORITO));
-        let decoded = with_mock_http(respond_with(&snapshots, norito_response), || {
-            client.get_sumeragi_status()
-        })
+        let decoded = with_mock_http(
+            respond_with(&snapshots, norito_response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_sumeragi_status()
+            },
+        )
         .expect("call succeeds");
         assert_eq!(decoded, status);
         let snapshot = snapshots
@@ -32849,9 +34137,16 @@ mod tests {
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status to JSON payload");
         let json_response = mk_response(StatusCode::OK, json_body, Some(APPLICATION_JSON));
-        let decoded_json = with_mock_http(respond_with(&json_snapshots, json_response), || {
-            client.get_sumeragi_status()
-        })
+        let decoded_json = with_mock_http(
+            respond_with(&json_snapshots, json_response),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
+                client.get_sumeragi_status()
+            },
+        )
         .expect("json call succeeds");
         assert_eq!(decoded_json, status);
         for content_type in [
@@ -32866,7 +34161,12 @@ mod tests {
             );
             let error = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client.get_sumeragi_status(),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.get_sumeragi_status()
+                },
             )
             .expect_err("undeclared or noncanonical media types must fail closed");
             assert!(
@@ -32890,7 +34190,12 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.get_sumeragi_status(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_status()
+            },
         )
         .expect_err("wrong protocol must be rejected after Norito decode");
         assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
@@ -32904,7 +34209,12 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.get_sumeragi_status(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_status()
+            },
         )
         .expect_err("inconsistent commit frontier must be rejected after JSON decode");
         assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
@@ -32915,7 +34225,12 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.get_sumeragi_status_json(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_status_json()
+            },
         )
         .expect_err("JSON projection helper must validate the typed snapshot");
         assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
@@ -32934,9 +34249,14 @@ mod tests {
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status endpoint JSON payload");
         let json_response = mk_response(StatusCode::OK, json_body, Some(APPLICATION_JSON));
-        let decoded_json = with_mock_http(respond_with(&json_snapshots, json_response), || {
-            client_with_base_url(base_url()).get_sumeragi_status_json()
-        })
+        let decoded_json = with_mock_http(
+            respond_with(&json_snapshots, json_response),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sumeragi_status_json()
+            },
+        )
         .expect("json call succeeds");
         assert_eq!(decoded_json, expected_json);
         let json_snapshot = json_snapshots
@@ -32962,7 +34282,11 @@ mod tests {
                     &Arc::new(Mutex::new(Vec::new())),
                     mk_response(StatusCode::OK, body, content_type),
                 ),
-                || client_with_base_url(base_url()).get_sumeragi_status_json(),
+                |mock_transport| {
+                    client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone())
+                        .get_sumeragi_status_json()
+                },
             )
             .expect_err("the JSON-specific helper must not guess or fall back");
             assert!(
@@ -33134,7 +34458,12 @@ mod tests {
                 br#"{"lane_relay_envelopes":["#.to_vec(),
                 Some(APPLICATION_JSON),
             ),
-            || client.get_sumeragi_diagnostics(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_diagnostics()
+            },
         );
         assert!(result.is_err(), "malformed json should be rejected");
     }
@@ -33154,7 +34483,12 @@ mod tests {
                 norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"),
                 Some(APPLICATION_JSON),
             ),
-            || client.get_sumeragi_diagnostics(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_diagnostics()
+            },
         );
         assert!(result.is_err(), "unknown nested fields must be rejected");
     }
@@ -33184,7 +34518,12 @@ mod tests {
         let body = norito::json::to_vec(&status).expect("encode status payload as json");
         let (decoded, _) = capture_request(
             mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
-            || client.get_sumeragi_diagnostics(),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_sumeragi_diagnostics()
+            },
         );
         let decoded = decoded.expect("decode declared current diagnostics JSON");
         assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);
@@ -33198,7 +34537,12 @@ mod tests {
                     &Arc::new(Mutex::new(Vec::new())),
                     mk_response(StatusCode::OK, body.clone(), content_type),
                 ),
-                || client.get_sumeragi_diagnostics(),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.get_sumeragi_diagnostics()
+                },
             )
             .expect_err("undeclared or noncanonical diagnostics media must fail closed");
             assert!(
@@ -33476,7 +34820,11 @@ mod tests {
             expected_finalized_height: Some(9),
             expected_finalized_block_hash_hex: Some("bb"),
         };
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_sorafs_repair_status(&finalized)
                 .expect("repair status request");
@@ -33496,7 +34844,11 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::NOT_FOUND, "{}");
         let finalized = SorafsRepairFinalizedAnchor::default();
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_sorafs_repair_task("REP-9", &finalized)
                 .expect("repair task request");
@@ -33541,7 +34893,11 @@ mod tests {
         let request_nonce = "55".repeat(32);
         let proof = SorafsBillingAcknowledgementProof::try_from_hex(&request_nonce, vec![0xA5; 48])
             .expect("canonical acknowledgement proof");
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .get_sorafs_billing_status()
                 .expect("billing status request");
@@ -33708,7 +35064,11 @@ mod tests {
         let cycle_id = format!("0x{}", "AB".repeat(16));
         let entry_cycle_id = format!("0x{}", "AA".repeat(16));
         let entry_id = "BB".repeat(16);
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             for response in [
                 client.get_sorafs_moderation_quarantine(SorafsModerationQuarantineFilter {
                     limit: Some(7),
@@ -33797,7 +35157,10 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         with_mock_http(
             respond_with(&store, json_response(status, response_body)),
-            || send(&client),
+            |mock_transport| {
+                let injected = client.clone().with_test_http_transport(mock_transport);
+                send(&injected)
+            },
         )
         .expect("SoraFS endpoint request");
         let snapshot = store
@@ -33850,7 +35213,11 @@ mod tests {
         let response = json_response(StatusCode::ACCEPTED, "{}");
         let repro_manifest: &[u8] = b"canonical repro manifest bytes";
         let corpus_manifest: &[u8] = b"canonical corpus manifest bytes";
-        with_mock_http(respond_with(&store, response), || {
+        with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_sorafs_moderation_model_registry_repro_manifest(repro_manifest)
                 .expect("moderation model registry repro request");
@@ -34023,17 +35390,27 @@ mod tests {
         use iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit;
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
-        let expected_hash = with_mock_http(responder, || {
-            let mut client = client_with_base_url(base_url());
+        let expected_hash = with_mock_http(responder, |mock_transport| {
+            let mut client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client.add_transaction_nonce = true;
             client.transaction_ttl = Some(Duration::from_secs(1));
             let commit = moderation_ballot_commit_fixture();
             let commit_payload = to_bytes(&commit).expect("encode canonical commit");
-            let transaction = client
-                .try_build_sorafs_moderation_transaction(SubmitSorafsModerationCommit::new(
-                    commit_payload.clone(),
-                ))
-                .expect("build exact moderation transaction");
+            let account = account_context(&client);
+            let payload = account
+                .prepare_transaction(
+                    AccountTransactionDraft::new(
+                        [SubmitSorafsModerationCommit::new(commit_payload.clone())],
+                        FeePaymentIntent::authority(Vec::new(), None),
+                        Metadata::default(),
+                    )
+                    .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
+                )
+                .expect("prepare exact moderation transaction");
+            let transaction = account
+                .sign_transaction(payload)
+                .expect("sign exact moderation transaction");
             transaction
                 .verify_signature()
                 .expect("moderation transaction signature");
@@ -34045,7 +35422,7 @@ mod tests {
                 transaction.admission_intent(),
                 TransactionAdmissionIntent::QueuePlanSynced
             );
-            assert!(transaction.nonce().is_none());
+            assert!(transaction.nonce().is_some());
             assert!(transaction.metadata().is_empty());
             let Executable::Instructions(instructions) = transaction.instructions() else {
                 panic!("moderation transaction must contain instructions");
@@ -34303,9 +35680,11 @@ mod tests {
     fn sorafs_repair_signed_transaction_routes_use_versioned_norito() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
-        let expected_hash = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            let transaction = client.build_transaction(
+        let expected_hash = with_mock_http(responder, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
+            let transaction = build_transaction(
+                &client,
                 [iroha_data_model::isi::sorafs::SubmitSorafsRepairTask::new(
                     [0x51; 32],
                     vec![0x01],
@@ -34340,10 +35719,12 @@ mod tests {
         let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
         let movement_id = [0x62; 32];
         let appeal_id = [0x63; 32];
-        let expected_hash = with_mock_http(responder, || {
-            let mut client = client_with_base_url(base_url());
+        let expected_hash = with_mock_http(responder, |mock_transport| {
+            let mut client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client.transaction_ttl = Some(Duration::from_secs(300));
-            let transaction = client.build_transaction(
+            let transaction = build_transaction(
+                &client,
                 [
                     iroha_data_model::isi::sorafs::RequestSorafsReserveMovement::new(
                         movement_id,
@@ -34839,8 +36220,10 @@ mod tests {
             norito::to_bytes(&payload).expect("encode privacy capabilities"),
             Some(APPLICATION_NORITO),
         );
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).get_privacy_capabilities()
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_privacy_capabilities()
         })
         .expect("typed privacy capabilities");
         assert_eq!(decoded, payload);
@@ -34860,8 +36243,10 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&payload).expect("encode privacy capabilities JSON"),
         );
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).get_privacy_capabilities_json()
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_privacy_capabilities_json()
         })
         .expect("validated privacy capabilities JSON");
         assert_eq!(
@@ -34886,7 +36271,11 @@ mod tests {
             );
             with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_privacy_capabilities_json(),
+                |mock_transport| {
+                    client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone())
+                        .get_privacy_capabilities_json()
+                },
             )
         };
         let mut wrong_version = valid.clone();
@@ -34922,7 +36311,11 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_privacy_capabilities_json(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_privacy_capabilities_json()
+            },
         )
         .expect_err("unknown top-level field must reject");
         assert!(
@@ -34938,7 +36331,11 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_privacy_capabilities_json(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_privacy_capabilities_json()
+            },
         )
         .expect_err("JSON suffix media type must not weaken the exact endpoint contract");
         assert!(
@@ -34950,7 +36347,11 @@ mod tests {
         let response = mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO));
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_privacy_capabilities(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_privacy_capabilities()
+            },
         )
         .expect_err("trailing Norito bytes must reject");
         assert!(
@@ -34970,8 +36371,10 @@ mod tests {
             norito::to_bytes(&payload).expect("encode capabilities"),
             Some(APPLICATION_NORITO),
         );
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).get_sccp_capabilities()
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_sccp_capabilities()
         })
         .expect("SCCP capabilities");
         assert_eq!(decoded, payload);
@@ -35113,8 +36516,9 @@ mod tests {
                     .expect("JSON response build"))
             }
         };
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+        with_mock_http(responder, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client
                 .get_sccp_capabilities_json()
                 .expect("SCCP capabilities JSON");
@@ -35314,8 +36718,10 @@ mod tests {
         let payload_json = norito::json::to_json(&payload).expect("encode capabilities JSON");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &payload_json);
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).get_sccp_capabilities_json()
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_sccp_capabilities_json()
         })
         .expect("typed SCCP capabilities JSON");
         assert_eq!(
@@ -35331,7 +36737,11 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_capabilities_json(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_capabilities_json()
+            },
         )
         .expect_err("unsupported capability version must reject");
         assert!(error.to_string().contains("invalid SCCP capabilities"));
@@ -35342,7 +36752,11 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_capabilities_json(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_capabilities_json()
+            },
         )
         .expect_err("wrong capabilities content type must reject");
         assert!(error.to_string().contains("invalid content type"));
@@ -35361,7 +36775,11 @@ mod tests {
         );
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_capabilities_json(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_capabilities_json()
+            },
         )
         .expect_err("unknown capability fields must reject");
         let mut recent =
@@ -35382,7 +36800,11 @@ mod tests {
         );
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_recent_messages_json(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_recent_messages_json()
+            },
         )
         .expect_err("unknown nested recent-message fields must reject");
         let request = sample_sccp_governance_draft_request();
@@ -35402,7 +36824,11 @@ mod tests {
         );
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .post_sccp_route_governance_draft(&request)
+            },
         )
         .expect_err("unknown nested governance response fields must reject");
     }
@@ -35425,7 +36851,11 @@ mod tests {
         );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &response_json);
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.post_deploy_contract_proposal_draft(&request)
         })
         .expect("valid typed deploy-contract proposal draft");
@@ -35526,7 +36956,12 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.post_deploy_contract_proposal_draft(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_deploy_contract_proposal_draft(&request)
+            },
         )
         .expect_err("substituted instruction code hash must reject");
         assert!(
@@ -35547,7 +36982,12 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.post_deploy_contract_proposal_draft(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_deploy_contract_proposal_draft(&request)
+            },
         )
         .expect_err("manifest provenance mismatch must reject");
         assert!(error.to_string().contains("does not match"));
@@ -35561,7 +37001,12 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.post_deploy_contract_proposal_draft(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_deploy_contract_proposal_draft(&request)
+            },
         )
         .expect_err("wrong deploy proposal id must reject");
         assert!(
@@ -35577,8 +37022,10 @@ mod tests {
             norito::json::to_json(&response_payload).expect("encode SCCP governance response");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &response_json);
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).post_sccp_route_governance_draft(&request)
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .post_sccp_route_governance_draft(&request)
         })
         .expect("valid SCCP governance draft");
         assert_eq!(decoded, response_payload);
@@ -35692,7 +37139,11 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .post_sccp_route_governance_draft(&request)
+            },
         )
         .expect_err("retired lifecycle controls in the instruction must reject");
         assert!(error.to_string().contains("does not match"));
@@ -35705,7 +37156,11 @@ mod tests {
         );
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .post_sccp_route_governance_draft(&request)
+            },
         )
         .expect_err("wrong proposal id must reject");
     }
@@ -35718,8 +37173,10 @@ mod tests {
             norito::to_bytes(&registry).expect("encode registry"),
             Some(APPLICATION_NORITO),
         );
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).get_sccp_registry()
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_sccp_registry()
         })
         .expect("SCCP registry");
         assert_eq!(decoded, registry);
@@ -35744,7 +37201,11 @@ mod tests {
         );
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_registry(),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_registry()
+            },
         )
         .expect_err("invalid registry must fail");
         assert!(error.to_string().contains("invalid SCCP registry"));
@@ -35788,14 +37249,14 @@ mod tests {
             norito::to_bytes(&payload).expect("encode recent messages"),
             Some(APPLICATION_NORITO),
         );
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).get_sccp_recent_messages_with_query(
-                SccpRecentMessagesQuery {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .get_sccp_recent_messages_with_query(SccpRecentMessagesQuery {
                     from: Some(42),
                     after_index: Some(12),
                     limit: Some(7),
-                },
-            )
+                })
         })
         .expect("recent SCCP messages");
         assert_eq!(decoded, payload);
@@ -35839,7 +37300,11 @@ mod tests {
             assert!(query.validate().is_err());
             let error = with_mock_http(
                 |_| panic!("invalid SCCP history window must fail before HTTP"),
-                || client_with_base_url(base_url()).get_sccp_recent_messages_with_query(query),
+                |mock_transport| {
+                    client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone())
+                        .get_sccp_recent_messages_with_query(query)
+                },
             )
             .expect_err("invalid SCCP history window must reject");
             assert!(error.to_string().contains("SCCP recent query"));
@@ -36025,8 +37490,9 @@ mod tests {
         ] {
             let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let response = json_response(StatusCode::OK, &body);
-            let value = with_mock_http(respond_with(&store, response), || {
-                let client = client_with_base_url(base_url());
+            let value = with_mock_http(respond_with(&store, response), |mock_transport| {
+                let client = client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone());
                 if is_bundle {
                     client.get_sccp_message_bundle_json(&format!("0x{}", message_id.to_uppercase()))
                 } else {
@@ -36069,8 +37535,9 @@ mod tests {
                     .expect("response build"))
             }
         };
-        let (bundle, request) = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+        let (bundle, request) = with_mock_http(responder, |mock_transport| {
+            let client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             (
                 client.get_sccp_message_bundle(&message_id),
                 client.get_sccp_groth16_proof_request(&format!("0X{}", message_id.to_uppercase())),
@@ -36108,7 +37575,11 @@ mod tests {
         let response = mk_response(StatusCode::OK, request_bytes, Some(APPLICATION_NORITO));
         let decoded = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_groth16_proof_request(&message_id),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_groth16_proof_request(&message_id)
+            },
         )
         .expect("typed TON proof-request readback");
         assert_eq!(decoded, expected);
@@ -36119,7 +37590,11 @@ mod tests {
         );
         let decoded = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_groth16_proof_request_json(&message_id),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_groth16_proof_request_json(&message_id)
+            },
         )
         .expect("JSON TON proof-request readback");
         let backend = decoded
@@ -36144,7 +37619,11 @@ mod tests {
         let response = mk_response(StatusCode::OK, bundle_bytes, Some(APPLICATION_NORITO));
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_message_bundle(&different_message_id),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_message_bundle(&different_message_id)
+            },
         )
         .expect_err("cross-message bundle must fail");
         assert!(error.to_string().contains("different message id"));
@@ -36155,10 +37634,12 @@ mod tests {
         let response = mk_response(StatusCode::OK, request_bytes, Some(APPLICATION_NORITO));
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || {
-                client_with_base_url(base_url()).get_sccp_groth16_proof_request(&hex::encode(
-                    fixture.request.public_inputs.message_id,
-                ))
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_groth16_proof_request(&hex::encode(
+                        fixture.request.public_inputs.message_id,
+                    ))
             },
         )
         .expect_err("trailing proof-request bytes must fail");
@@ -36203,7 +37684,11 @@ mod tests {
             );
             let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
+                |mock_transport| {
+                    client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone())
+                        .get_sccp_message_bundle(&message_id)
+                },
             )
             .expect_err("adversarial SCCP bundle must fail closed");
         }
@@ -36212,7 +37697,11 @@ mod tests {
         let response = mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO));
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
+            |mock_transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(mock_transport.clone())
+                    .get_sccp_message_bundle(&message_id)
+            },
         )
         .expect_err("trailing SCCP bundle bytes must fail closed");
     }
@@ -36375,7 +37864,11 @@ mod tests {
             &norito::json::to_json(&response_payload).expect("encode submit response"),
         );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.post_sccp_destination_proof(&request)
         })
         .expect("exact signed SCCP payload submits");
@@ -36398,7 +37891,12 @@ mod tests {
         );
         let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client.post_sccp_destination_proof(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_sccp_destination_proof(&request)
+            },
         )
         .expect_err("server cannot substitute a transaction hash");
     }
@@ -36425,7 +37923,12 @@ mod tests {
             let panic_message = format!("{label} must reject before HTTP");
             let _ = with_mock_http(
                 move |_| panic!("{panic_message}"),
-                || client.post_sccp_destination_proof(candidate),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.post_sccp_destination_proof(candidate)
+                },
             )
             .expect_err(label);
         };
@@ -36543,14 +38046,24 @@ mod tests {
         client.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
         let _ = with_mock_http(
             |_| panic!("wrong configured chain must reject before HTTP"),
-            || client.post_sccp_destination_proof(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_sccp_destination_proof(&request)
+            },
         )
         .expect_err("non-Taira client chain must reject");
         let client = sccp_client_with_base_url(base_url());
         request.transaction_payload_b64 = None;
         let _ = with_mock_http(
             |_| panic!("mixed signing state must reject before HTTP"),
-            || client.post_sccp_destination_proof(&request),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.post_sccp_destination_proof(&request)
+            },
         )
         .expect_err("signature without payload must reject");
     }
@@ -36705,7 +38218,11 @@ mod tests {
             norito::json::to_json(&response_payload).expect("encode prepared response");
         let response = json_response(StatusCode::OK, &response_json);
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let decoded = with_mock_http(respond_with(&store, response), || {
+        let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.post_sccp_destination_proof(&request)
         })
         .expect("exact destination proof preparation");
@@ -36927,8 +38444,13 @@ mod tests {
                 Ok(response)
             }
         };
-        let decoded = with_mock_http(responder, || client.post_sccp_native_message(&request))
-            .expect("exact governed native preparation");
+        let decoded = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_sccp_native_message(&request)
+        })
+        .expect("exact governed native preparation");
         assert_eq!(decoded, response_payload);
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
@@ -36964,8 +38486,10 @@ mod tests {
                     .expect("inactive registry response"))
             }
         };
-        let error = with_mock_http(responder, || {
-            sccp_client_with_base_url(base_url()).post_sccp_native_message(&request)
+        let error = with_mock_http(responder, |mock_transport| {
+            sccp_client_with_base_url(base_url())
+                .with_test_http_transport(mock_transport.clone())
+                .post_sccp_native_message(&request)
         })
         .expect_err("inactive governed route must reject before POST");
         assert!(
@@ -37494,6 +39018,34 @@ mod response_report {
         assert!(text.contains(&format!("entrypoint_hash={}", "11".repeat(32))));
         assert!(text.contains(&format!("tx_hash={}", "22".repeat(32))));
         assert!(text.contains("transaction queue is at capacity"));
+    }
+    #[test]
+    fn with_msg_decodes_shared_error_envelope_fee_details() {
+        let body = br#"{
+            "code":"fee_payment_rejected",
+            "message":"program capacity exhausted",
+            "details":{"fee":{
+                "code":"program_block_limit_exceeded",
+                "retryable":true,
+                "required":"12",
+                "available":"7",
+                "remediation":"retry in the next block"
+            }}
+        }"#;
+        let response = Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(body.to_vec())
+            .unwrap();
+        let report = match ResponseReport::with_msg("Fee quote was rejected", &response) {
+            Ok(report) => report,
+            Err(error) => panic!("expected fee rejection envelope, got error: {}", error.0),
+        };
+        let text = report.0.to_string();
+        assert!(text.contains("fee_code=program_block_limit_exceeded"));
+        assert!(text.contains("fee_required=12"));
+        assert!(text.contains("fee_available=7"));
+        assert!(text.contains("fee_remediation=retry in the next block"));
     }
     #[test]
     fn with_msg_decodes_shared_error_envelope_axt_details_without_reject_code() {

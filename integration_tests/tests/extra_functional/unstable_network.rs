@@ -1298,12 +1298,13 @@ impl UnstableNetwork {
             .filter_map(|peer_id| peers_by_id.get(peer_id))
             .cloned()
             .collect();
-        let mut builder_client = primary_peer.client();
-        if let Some(ttl) = builder_client.transaction_ttl {
-            if ttl < min_ttl {
-                builder_client.transaction_ttl = Some(min_ttl);
-            }
-        }
+        let builder_client = primary_peer.client();
+        let builder_client =
+            integration_tests::sync::rebind_blocking_client(&builder_client, |client| {
+                if client.transaction_ttl.is_some_and(|ttl| ttl < min_ttl) {
+                    client.transaction_ttl = Some(min_ttl);
+                }
+            });
         let mint_asset = Mint::asset_quantity(
             1_u32,
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
@@ -1321,11 +1322,22 @@ impl UnstableNetwork {
                 .expect("valid metadata key"),
             target_height,
         );
-        let tx = Arc::new(builder_client.build_transaction_from_items(
-            vec![mint_asset],
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            tx_metadata,
-        ));
+        let tx = Arc::new(
+            {
+                let account = builder_client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        vec![mint_asset],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        tx_metadata,
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction"),
+        );
         let partition_submit_window = relay_pause
             .min(
                 network
@@ -1391,9 +1403,11 @@ impl UnstableNetwork {
                         );
                         let tx = Arc::clone(&tx);
                         submissions.push(async move {
-                            let res =
-                                timeout(attempt_timeout, client.submit_transaction_async(&tx))
-                                    .await;
+                            let res = timeout(
+                                attempt_timeout,
+                                client.account_client().submit_transaction(&tx),
+                            )
+                            .await;
                             (mnemonic, res)
                         });
                     }
@@ -1522,28 +1536,29 @@ impl UnstableNetwork {
                 let client = peer.client();
                 let asset_id =
                     AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone());
-                let asset =
-                    match spawn_blocking(move || client.query_single(FindAssetById::new(asset_id)))
-                        .await
-                    {
-                        Ok(Ok(asset)) => Some(asset),
-                        Ok(Err(err)) => {
-                            iroha_logger::debug!(
-                                ?err,
-                                peer = peer.mnemonic(),
-                                "exact asset query did not resolve during supply check"
-                            );
-                            None
-                        }
-                        Err(err) => {
-                            iroha_logger::warn!(
-                                ?err,
-                                peer = peer.mnemonic(),
-                                "asset query task failed during supply check"
-                            );
-                            None
-                        }
-                    };
+                let asset = match spawn_blocking(move || {
+                    client.client().query_single(FindAssetById::new(asset_id))
+                })
+                .await
+                {
+                    Ok(Ok(asset)) => Some(asset),
+                    Ok(Err(err)) => {
+                        iroha_logger::debug!(
+                            ?err,
+                            peer = peer.mnemonic(),
+                            "exact asset query did not resolve during supply check"
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            peer = peer.mnemonic(),
+                            "asset query task failed during supply check"
+                        );
+                        None
+                    }
+                };
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
                     if asset.value() == &expected_supply {
@@ -1660,28 +1675,29 @@ impl UnstableNetwork {
                 }
                 let client = peer.client();
                 let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-                let asset =
-                    match spawn_blocking(move || client.query_single(FindAssetById::new(asset_id)))
-                        .await
-                    {
-                        Ok(Ok(asset)) => Some(asset),
-                        Ok(Err(err)) => {
-                            iroha_logger::debug!(
-                                ?err,
-                                peer = peer.mnemonic(),
-                                "exact asset query did not resolve during final supply check"
-                            );
-                            None
-                        }
-                        Err(err) => {
-                            iroha_logger::warn!(
-                                ?err,
-                                peer = peer.mnemonic(),
-                                "asset query task failed during final supply check"
-                            );
-                            None
-                        }
-                    };
+                let asset = match spawn_blocking(move || {
+                    client.client().query_single(FindAssetById::new(asset_id))
+                })
+                .await
+                {
+                    Ok(Ok(asset)) => Some(asset),
+                    Ok(Err(err)) => {
+                        iroha_logger::debug!(
+                            ?err,
+                            peer = peer.mnemonic(),
+                            "exact asset query did not resolve during final supply check"
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            peer = peer.mnemonic(),
+                            "asset query task failed during final supply check"
+                        );
+                        None
+                    }
+                };
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
                     let supply_matches = asset.value() == &expected;

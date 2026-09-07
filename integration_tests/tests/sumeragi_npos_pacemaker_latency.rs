@@ -50,7 +50,7 @@ async fn npos_v2_stays_within_round_envelope_under_250ms_links() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let start_status = client.get_status()?;
+    let start_status = client.client().get_status()?;
     let target_height = start_status.blocks + SAMPLE_BLOCKS;
     let start = Instant::now();
     for idx in 0..SAMPLE_BLOCKS {

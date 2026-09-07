@@ -531,6 +531,8 @@ sccp.message.list_recent	GET	/v1/sccp/messages/recent	public	torii_default	publi
 sccp.message_proof.read	GET	/v1/sccp/proofs/message/{message_id}	public	torii_default	public	read	http	always	true	true	false	false
 sccp.proof_request.read	GET	/v1/sccp/proof-requests/{message_id}	public	torii_default	public	read	http	always	true	true	false	false
 sccp.registry.read	GET	/v1/sccp/registry	public	torii_default	public	read	http	always	true	true	false	false
+sccp.replay.root.read	GET	/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root	public	torii_default	public	read	http	always	true	true	false	false
+sccp.replay.witness.read	GET	/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}	public	torii_default	public	read	http	always	true	true	false	false
 sccp.sora_outbound_material.read	GET	/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material	public	torii_default	public	read	http	always	true	true	false	false
 soradns.directory.events	GET	/v1/soradns/directory/events	public	torii_default	public	read	http	feature(app_api)	false	true	false	false
 soradns.directory.latest	GET	/v1/soradns/directory/latest	public	torii_default	public	read	http	feature(app_api)	false	true	false	false

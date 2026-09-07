@@ -1400,9 +1400,8 @@ fn validate_native_amx_attestation_qc(
     }
     let participant_descriptor = &leg.participant_proposal.descriptor;
     let participant_settlement_hash =
-        compute_native_amx_participant_settlement_hash(&leg.participant_settlement).map_err(
-            |_| "native AMX participant settlement cannot be hashed".to_owned(),
-        )?;
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
+            .map_err(|_| "native AMX participant settlement cannot be hashed".to_owned())?;
     if participant_descriptor.lane_id != leg.lane_id
         || participant_descriptor.dataspace_id != leg.dataspace_id
         || participant_descriptor.lane_incarnation != body.participant_lane_incarnation
@@ -28485,10 +28484,9 @@ mod tests {
             participant_lane_block_height,
             participant_lane_block_view,
             participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
-                0;
-                Hash::LENGTH
-            ])),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -29071,10 +29069,8 @@ mod tests {
             .descriptor
             .lane_incarnation;
         coordinator_leg.participant_settlement_hash =
-            compute_native_amx_participant_settlement_hash(
-                &coordinator_leg.participant_settlement,
-            )
-            .expect("fixture participant settlement hash");
+            compute_native_amx_participant_settlement_hash(&coordinator_leg.participant_settlement)
+                .expect("fixture participant settlement hash");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,
@@ -29084,8 +29080,7 @@ mod tests {
                 .descriptor
                 .lane_incarnation;
             body.participant_proposal_hash = coordinator_leg.participant_proposal.proposal_hash;
-            body.participant_settlement_commitment =
-                coordinator_leg.participant_settlement_hash;
+            body.participant_settlement_commitment = coordinator_leg.participant_settlement_hash;
         }
         assert!(matches!(
             ValidBlock::validate_native_amx_participant_groups(&bundle),
@@ -29697,10 +29692,9 @@ mod tests {
         stale_leg.participant_proposal.proposal_hash =
             stale_leg.participant_proposal.computed_proposal_hash();
         stale_leg.participant_settlement.lane_incarnation = stale_incarnation;
-        stale_leg.participant_settlement_hash = compute_native_amx_participant_settlement_hash(
-            &stale_leg.participant_settlement,
-        )
-        .expect("fixture participant settlement hash");
+        stale_leg.participant_settlement_hash =
+            compute_native_amx_participant_settlement_hash(&stale_leg.participant_settlement)
+                .expect("fixture participant settlement hash");
         for body in [
             &mut stale_leg.prepare_qc.body,
             &mut stale_leg.commit_qc.body,
@@ -29839,10 +29833,8 @@ mod tests {
         unexpected_leg.participant_settlement.lane_id = unexpected_leg.lane_id;
         unexpected_leg.participant_settlement.dataspace_id = unexpected_leg.dataspace_id;
         unexpected_leg.participant_settlement_hash =
-            compute_native_amx_participant_settlement_hash(
-                &unexpected_leg.participant_settlement,
-            )
-            .expect("fixture participant settlement hash");
+            compute_native_amx_participant_settlement_hash(&unexpected_leg.participant_settlement)
+                .expect("fixture participant settlement hash");
         for body in [
             &mut unexpected_leg.prepare_qc.body,
             &mut unexpected_leg.commit_qc.body,
@@ -29850,8 +29842,7 @@ mod tests {
             body.participant_lane_id = unexpected_leg.lane_id;
             body.participant_dataspace_id = unexpected_leg.dataspace_id;
             body.participant_proposal_hash = unexpected_leg.participant_proposal.proposal_hash;
-            body.participant_settlement_commitment =
-                unexpected_leg.participant_settlement_hash;
+            body.participant_settlement_commitment = unexpected_leg.participant_settlement_hash;
         }
         assert!(
             validate(&unexpected_participant)

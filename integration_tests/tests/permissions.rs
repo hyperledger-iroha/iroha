@@ -3,7 +3,7 @@
 use eyre::Result;
 use integration_tests::{metrics::MetricsReader, sandbox, sync::sync_after_submission};
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::KeyPair,
     data_model::{
         permission::Permission, prelude::*, role::RoleId,
@@ -69,7 +69,7 @@ fn wait_for_role_permission_state(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "role was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.query(FindRoles::new()).execute_all() {
+        match client.client().query(FindRoles::new()).execute_all() {
             Ok(roles) => {
                 if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
                     let present = role
@@ -106,6 +106,7 @@ fn wait_for_account_permission_state(
     let mut last_observed = "account permissions were not queried".to_owned();
     while Instant::now() < deadline {
         match client
+            .client()
             .query(FindPermissionsByAccountId::new(account_id.clone()))
             .execute_all()
         {
@@ -266,6 +267,7 @@ async fn genesis_transactions_are_validated_by_executor() {
 }
 fn get_assets(iroha: &Client, id: &AccountId) -> Vec<Asset> {
     iroha
+        .client()
         .query(FindAssets::new())
         .execute_all()
         .expect("Failed to execute request.")
@@ -304,7 +306,7 @@ fn permissions_disallow_asset_transfer() {
     let mouse_keypair = KeyPair::random();
     let alice_start_assets = get_assets(&iroha, &alice_id);
     iroha
-        .submit_blocking(
+        .submit(
             create_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -315,7 +317,7 @@ fn permissions_disallow_asset_transfer() {
         AssetId::new(asset_definition_id.clone(), bob_id.clone()),
     );
     iroha
-        .submit_blocking(
+        .submit(
             mint_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -334,7 +336,7 @@ fn permissions_disallow_asset_transfer() {
     .with_instructions([transfer_asset])
     .sign(mouse_keypair.private_key());
     let err = iroha
-        .submit_transaction_blocking(&transfer_tx)
+        .submit_transaction_and_wait(&transfer_tx)
         .expect_err("Transaction was not rejected.");
     let rejection_reason = err
         .downcast_ref::<TransactionRejectionReason>()
@@ -366,11 +368,11 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let metrics_url = client.torii_url.join("/metrics")?;
-    let mut status = client.get_status()?;
+    let metrics_url = client.client().torii_url.join("/metrics")?;
+    let mut status = client.client().get_status()?;
     let mut last_non_empty_height = status.blocks_non_empty;
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    client.submit_blocking(
+    client.submit(
         Register::account(Account::new(mouse_id.clone())),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -386,7 +388,7 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         account: mouse_id.clone(),
     }
     .into();
-    client.submit_blocking(
+    client.submit(
         Grant::account_permission(perm.clone(), ALICE_ID.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -406,9 +408,10 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     )
     .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
     .sign(ALICE_KEYPAIR.private_key());
-    client.submit_transaction_blocking(&tx)?;
+    client.submit_transaction_and_wait(&tx)?;
     let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
     let permissions = client
+        .client()
         .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
         .execute_all()?;
     assert!(
@@ -458,7 +461,7 @@ fn permissions_disallow_asset_burn() {
     let mouse_keypair = KeyPair::random();
     let alice_start_assets = get_assets(&iroha, &alice_id);
     iroha
-        .submit_blocking(
+        .submit(
             create_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -469,7 +472,7 @@ fn permissions_disallow_asset_burn() {
         AssetId::new(asset_definition_id.clone(), bob_id),
     );
     iroha
-        .submit_blocking(
+        .submit(
             mint_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -486,7 +489,7 @@ fn permissions_disallow_asset_burn() {
     .with_instructions([burn_asset])
     .sign(mouse_keypair.private_key());
     let err = iroha
-        .submit_transaction_blocking(&burn_tx)
+        .submit_transaction_and_wait(&burn_tx)
         .expect_err("Transaction was not rejected.");
     let rejection_reason = err
         .downcast_ref::<TransactionRejectionReason>()
@@ -519,6 +522,7 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
     // Alice can query the domain in which her account exists.
     assert!(
         client
+            .client()
             .query(FindDomains::new())
             .execute_all()
             .unwrap()
@@ -528,6 +532,7 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
     // Alice cannot query other domains.
     assert!(
         !client
+            .client()
             .query(FindDomains::new())
             .execute_all()
             .unwrap()
@@ -560,7 +565,7 @@ fn permissions_differ_not_only_by_names() {
         )
         .with_instructions([isi])
         .sign(authority_keypair.private_key());
-        client.submit_transaction_blocking(&tx)
+        client.submit_transaction_and_wait(&tx)
     };
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
@@ -569,7 +574,7 @@ fn permissions_differ_not_only_by_names() {
     // Registering mouse
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     client
-        .submit_all_blocking::<InstructionBox>(
+        .submit_all::<InstructionBox>(
             [register_mouse_account.into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -587,7 +592,7 @@ fn permissions_differ_not_only_by_names() {
     );
     let register_shoes_nft = Register::nft(Nft::new(shoes_nft_id.clone(), Metadata::default()));
     client
-        .submit_all_blocking::<InstructionBox>(
+        .submit_all::<InstructionBox>(
             [
                 register_hat_nft.into(),
                 register_shoes_nft.into(),
@@ -664,7 +669,7 @@ fn stored_vs_granted_permission_payload() {
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     iroha
-        .submit_all_blocking::<InstructionBox>(
+        .submit_all::<InstructionBox>(
             [register_mouse_account.into(), create_asset.into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -689,12 +694,12 @@ fn stored_vs_granted_permission_payload() {
     .sign(mouse_keypair.private_key());
     assert!(
         iroha
-            .submit_transaction_blocking(&attempted_holder_grant)
+            .submit_transaction_and_wait(&attempted_holder_grant)
             .is_err(),
         "an asset holder must not manufacture mint authority for another definition"
     );
     iroha
-        .submit_blocking(
+        .submit(
             allow_alice_to_mint_mouse_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -702,7 +707,7 @@ fn stored_vs_granted_permission_payload() {
     // Check that alice can indeed mint mouse asset
     let mint_asset = Mint::asset_quantity(1_u32, mouse_asset);
     iroha
-        .submit_blocking(
+        .submit(
             mint_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -733,13 +738,13 @@ fn permissions_are_unified() {
     };
     let allow_alice_to_transfer_rose_2 = Grant::account_permission(permission2, alice_id);
     iroha
-        .submit_blocking(
+        .submit(
             allow_alice_to_transfer_rose_1,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect("failed to grant permission");
     let _ = iroha
-        .submit_blocking(
+        .submit(
             allow_alice_to_transfer_rose_2,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -756,7 +761,10 @@ fn associated_permissions_removed_on_unregister() {
         return;
     };
     let iroha = network.client();
-    let mut status = iroha.get_status().expect("failed to read initial status");
+    let mut status = iroha
+        .client()
+        .get_status()
+        .expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
     let bob_id = BOB_ID.clone();
     let bob_to_set_kv_in_domain = CanModifyDomainMetadata {
@@ -766,7 +774,7 @@ fn associated_permissions_removed_on_unregister() {
     let allow_bob_to_set_kv_in_domain =
         Grant::account_permission(bob_to_set_kv_in_domain.clone(), bob_id.clone());
     iroha
-        .submit_all_blocking::<InstructionBox>(
+        .submit_all::<InstructionBox>(
             [allow_bob_to_set_kv_in_domain.into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -790,7 +798,7 @@ fn associated_permissions_removed_on_unregister() {
     );
     // unregister kingdom
     iroha
-        .submit_blocking(
+        .submit(
             Unregister::domain(kingdom_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -823,7 +831,10 @@ fn associated_permissions_removed_from_role_on_unregister() {
         return;
     };
     let iroha = network.client();
-    let mut status = iroha.get_status().expect("failed to read initial status");
+    let mut status = iroha
+        .client()
+        .get_status()
+        .expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
     let role_id: RoleId = "role".parse().expect("Valid");
     let set_kv_in_domain = CanModifyDomainMetadata {
@@ -834,7 +845,7 @@ fn associated_permissions_removed_from_role_on_unregister() {
         Role::new(role_id.clone(), ALICE_ID.clone()).add_permission(set_kv_in_domain.clone()),
     );
     iroha
-        .submit_all_blocking::<InstructionBox>(
+        .submit_all::<InstructionBox>(
             [register_role.into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -857,7 +868,7 @@ fn associated_permissions_removed_from_role_on_unregister() {
     );
     // unregister kingdom
     iroha
-        .submit_blocking(
+        .submit(
             Unregister::domain(kingdom_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

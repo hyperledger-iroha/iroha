@@ -1,3 +1,4 @@
+//! Native JSON values preserve exact numeric, structural and derived decoding semantics.
 #![cfg(feature = "json")]
 use norito::json::{
     self, CoerceKey, JsonDeserialize, MapVisitor, Number, RawValue, SeqVisitor, Value,
@@ -592,4 +593,45 @@ fn u128_and_f64_equality_requires_the_same_exact_integer() {
 
     assert_eq!(Number::U128(i64::MAX as u128).as_i64(), Some(i64::MAX));
     assert_eq!(Number::U128(i64::MAX as u128 + 1).as_i64(), None);
+}
+
+#[test]
+fn integer_float_equality_rejects_saturation_and_non_integer_values() {
+    let signed_limit = f64::from_bits((1023_u64 + 63) << 52);
+    let unsigned_limit = f64::from_bits((1023_u64 + 64) << 52);
+    let wide_limit = f64::from_bits((1023_u64 + 128) << 52);
+
+    for (integer, float) in [
+        (Number::I64(i64::MAX), signed_limit),
+        (Number::I64(i64::MIN), -signed_limit * 2.0),
+        (Number::U64(u64::MAX), unsigned_limit),
+        (Number::U128(u128::MAX), wide_limit),
+        (Number::U64(0), -1.0),
+        (Number::U128(0), -1.0),
+    ] {
+        assert_ne!(integer, Number::F64(float));
+        assert_ne!(Number::F64(float), integer);
+    }
+
+    for integer in [Number::I64(0), Number::U64(0), Number::U128(0)] {
+        assert_eq!(integer, Number::F64(-0.0));
+        assert_eq!(Number::F64(-0.0), integer);
+        for float in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5, -0.5] {
+            assert_ne!(integer, Number::F64(float));
+            assert_ne!(Number::F64(float), integer);
+        }
+    }
+
+    let signed_max_float = f64::from_bits(signed_limit.to_bits() - 1);
+    let unsigned_max_float = f64::from_bits(unsigned_limit.to_bits() - 1);
+    let wide_max_float = f64::from_bits(wide_limit.to_bits() - 1);
+    for (integer, float) in [
+        (Number::I64(i64::MIN), -signed_limit),
+        (Number::I64(signed_max_float as i64), signed_max_float),
+        (Number::U64(unsigned_max_float as u64), unsigned_max_float),
+        (Number::U128(wide_max_float as u128), wide_max_float),
+    ] {
+        assert_eq!(integer, Number::F64(float));
+        assert_eq!(Number::F64(float), integer);
+    }
 }

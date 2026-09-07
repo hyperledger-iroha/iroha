@@ -88,6 +88,10 @@ truth for compact per-value lengths; decoders must not infer compactness from
 the version or from payload heuristics. Fixed-width per-value prefixes are a
 distinct advertised V1 mode when a caller explicitly encodes with
 `flags = 0x00`.
+Nested tuple and metadata-entry serializers inherit that exact selection.
+They do not merge defaults into an active layout: changing length formats
+after an enclosing field has been written would make the frame internally
+inconsistent. Defaults apply only when no layout context is active.
 
 ## Length Prefixes
 
@@ -183,6 +187,12 @@ temporary storage and returns typed resource-limit errors on violation.
 Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
+
+Derived packed structures validate the complete boundary after their declared
+fields, for both offset tables and field-bitset layouts. A valid checksum does
+not make trailing bytes part of a structure. Explicit prefix-field decoding
+reports only the bytes belonging to that field so the enclosing decoder can
+read its following fields.
 
 Nested decode scopes may tighten but never relax an outer budget. Binary value
 decoding is sequential in V1, so its budget counters stay in the calling decode
@@ -601,10 +611,10 @@ An entrypoint value schema is limited to 256 nodes and aggregate depth 256.
 `EntrypointValueTypeV1` validates the complete tape during binary and JSON
 deserialization, so truncated trees, trailing trees, over-limit depths, and
 otherwise invalid schemas are never returned as decoded values.
-The dynamic JSON `Value` parser permits 257 structural levels: the extra level
-covers the required outer entrypoint parameter object around a value at
-the full V1 type depth. Recursively owned typed JSON decoders retain their
-independent 256-level guard.
+The logical 256-level schema remains flat on wire and therefore does not consume
+one JSON parser frame per logical type level. The dynamic JSON `Value` parser
+admits 33 structural levels, including one boundary-envelope level, while
+recursively owned typed JSON decoders enforce the codec's 32-level limit.
 The built-in `QueryPage<View>` product uses the canonical nominal schema name
 `QueryPage`; its `items` list child is followed by the exact `View`
 specialization, so

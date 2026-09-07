@@ -115,9 +115,7 @@ fn embedded_signature_owner_and_discriminant_fail_closed() {
 
     let canonical = AccountAddress::from_account_id(&AccountId::new(keypair(seed).public_key().clone())).unwrap();
     let mut alternate = hex::decode(canonical.canonical_hex().unwrap().trim_start_matches("0x")).unwrap(); alternate[0] ^= 0b0010_0000;
-    let alternate = AccountAddress::from_canonical_bytes(&alternate).unwrap().to_i105_for_discriminant(DISCRIMINANT).unwrap().into_bytes();
-    let alternate = signed(vec![order_instruction(alternate, seed)], seed);
-    assert_eq!(inspect_sorafs_orderbook_submission_for_discriminant_v1(&alternate.encode_wire_v1().unwrap(), Route::SubmitOrder, &network(NETWORK_SEED), DISCRIMINANT), Err(Error::InvalidEmbeddedPayload));
+    assert!(matches!(AccountAddress::from_canonical_bytes(&alternate), Err(crate::account::AccountAddressError::InvalidHeaderVersion(1))));
 }
 #[test]
 #[rustfmt::skip]

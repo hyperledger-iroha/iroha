@@ -39,7 +39,7 @@ fn find_roles() -> Result<()> {
         .map(|role_id| Register::role(Role::new(role_id, ALICE_ID.clone())))
         .collect::<Vec<_>>();
     if sandbox::handle_result(
-        test_client.submit_all_blocking(
+        test_client.submit_all(
             register_roles,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -56,6 +56,7 @@ fn find_roles() -> Result<()> {
     loop {
         let found_role_ids = match sandbox::handle_result(
             test_client
+                .client()
                 .query(FindRoles::new())
                 .execute_all()
                 .map_err(Into::into),
@@ -94,7 +95,7 @@ fn find_role_ids() -> Result<()> {
         .map(|role_id| Register::role(Role::new(role_id, ALICE_ID.clone())))
         .collect::<Vec<_>>();
     if sandbox::handle_result(
-        test_client.submit_all_blocking(
+        test_client.submit_all(
             register_roles,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -108,6 +109,7 @@ fn find_role_ids() -> Result<()> {
     // Checking results
     let found_role_ids = match sandbox::handle_result(
         test_client
+            .client()
             .query(FindRoleIds::new())
             .execute_all()
             .map_err(Into::into),
@@ -131,7 +133,7 @@ fn find_role_by_id() -> Result<()> {
     // Registering role
     let register_role = Register::role(new_role.clone());
     if sandbox::handle_result(
-        test_client.submit_blocking(
+        test_client.submit(
             register_role,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -143,6 +145,7 @@ fn find_role_by_id() -> Result<()> {
     }
     let found_role = match sandbox::handle_result(
         test_client
+            .client()
             .query(FindRoles::new())
             .execute_all()
             .map_err(Into::into), // lightweight DSL: filter in client
@@ -166,6 +169,7 @@ fn find_unregistered_role_by_id() {
     let test_client = network.client();
     let role_id: RoleId = "root".parse().expect("Valid");
     let found_role = test_client
+        .client()
         .query(FindRoles::new())
         .execute_all()
         .unwrap()
@@ -195,7 +199,7 @@ fn find_roles_by_account_id() -> Result<()> {
         })
         .collect::<Vec<_>>();
     if sandbox::handle_result(
-        test_client.submit_all_blocking(
+        test_client.submit_all(
             register_roles,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -209,6 +213,7 @@ fn find_roles_by_account_id() -> Result<()> {
     // Checking results
     let found_role_ids = match sandbox::handle_result(
         test_client
+            .client()
             .query(FindRolesByAccountId::new(alice_id))
             .execute_all()
             .map_err(Into::into),

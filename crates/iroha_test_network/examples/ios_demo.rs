@@ -2,7 +2,7 @@ use color_eyre::{
     Result,
     eyre::{Context, eyre},
 };
-use iroha::{client::Client, data_model::prelude::*};
+use iroha::{blocking::Client, data_model::prelude::*};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, init_instruction_registry, submit_ensure_domain,
@@ -152,6 +152,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
 }
 fn find_existing_domains(client: &Client) -> Result<HashSet<DomainId>> {
     let domains = client
+        .client()
         .query(FindDomains::new())
         .execute_all()
         .wrap_err("Failed to query existing domains")?;
@@ -162,6 +163,7 @@ fn find_existing_domains(client: &Client) -> Result<HashSet<DomainId>> {
 }
 fn find_existing_asset_defs(client: &Client) -> Result<HashSet<AssetDefinitionId>> {
     let definitions = client
+        .client()
         .query(FindAssetsDefinitions::new())
         .execute_all()
         .wrap_err("Failed to query existing asset definitions")?;
@@ -172,6 +174,7 @@ fn find_existing_asset_defs(client: &Client) -> Result<HashSet<AssetDefinitionId
 }
 fn find_existing_accounts(client: &Client) -> Result<HashSet<AccountId>> {
     let accounts = client
+        .client()
         .query(FindAccounts::new())
         .execute_all()
         .wrap_err("Failed to query existing accounts")?;
@@ -267,7 +270,7 @@ fn main() -> Result<()> {
                 None,
             );
             client
-                .submit_blocking(
+                .submit(
                     Register::asset_definition(definition),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -283,7 +286,7 @@ fn main() -> Result<()> {
                 account_builder = account_builder.with_metadata(metadata);
             }
             client
-                .submit_blocking(
+                .submit(
                     Register::account(account_builder),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -292,7 +295,7 @@ fn main() -> Result<()> {
         let amount = parse_quantity(&initial_balance, &account_id.to_string())?;
         let asset_instance = AssetId::new(asset_def_id.clone(), account_id.clone());
         client
-            .submit_blocking(
+            .submit(
                 Mint::asset_quantity(amount, asset_instance.clone()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

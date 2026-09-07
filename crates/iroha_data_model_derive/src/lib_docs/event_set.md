@@ -7,6 +7,7 @@ For this event enum:
 ```rust
 # use iroha_data_model_derive::EventSet;
 #[derive(EventSet)]
+#[event_set(schema_name = "example::TestEventSet")]
 pub enum TestEvent {
     Event1,
     Event2,
@@ -16,6 +17,13 @@ pub struct AnotherEvent;
 ```
 
 The macro will generate a `TestEventSet` struct.
+
+Every caller declares the generated set's own nominal Norito identity with
+`#[event_set(schema_name = "...")]`. The identity must be a nonempty string
+literal without surrounding whitespace or control characters. Missing,
+duplicate or unknown options are compile errors. A parent enum's identity is
+never reused for the set. For an existing wire type, use its compiler-captured
+identity so relocation preserves its frame contract.
 
 It will have associated constants that correspond to a singleton set for each event that can be accessed like `TestEventSet::Event1`.
 
@@ -53,6 +61,7 @@ Implemented traits:
     Hash,
     norito::codec::Decode,
     norito::codec::Encode,
+    norito::NoritoSchema,
     iroha_schema::IntoSchema,
 )]
 

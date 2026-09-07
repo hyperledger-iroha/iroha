@@ -326,7 +326,12 @@ fn instruction_box_direct_serialize_matches_tuple_wire_layout() {
         level: Level::INFO,
         msg: "tuple layout".to_string(),
     });
-    for flags in [0, norito::core::default_encode_flags()] {
+    for flags in [
+        0,
+        norito::core::header_flags::COMPACT_LEN,
+        norito::core::header_flags::PACKED_SEQ,
+        norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN,
+    ] {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let (name, payload) =
             super::encoded_instruction_pair_payload(&boxed).expect("instruction pair payload");

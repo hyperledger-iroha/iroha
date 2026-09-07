@@ -1,5 +1,7 @@
 //! Typed construction of the shared Musubi SDK V1 fixture.
-use crate::musubi_fixture_values::{account, fixture_network_id, keypair};
+use crate::musubi_fixture_values::{
+    account, fixture_network_id, fixture_replication_order, keypair,
+};
 use iroha_crypto::SignatureOf;
 use iroha_data_model::{
     account::AccountId,
@@ -39,7 +41,6 @@ use iroha_data_model::{
         pin_registry::{
             ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
             ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
-            ReplicationOrderId,
         },
     },
 };
@@ -234,7 +235,7 @@ fn signed_provider_attestation(
                 policy_digest: [0xF1; 32],
             },
         ),
-        replication_order: ReplicationOrderId::new([0x42; 32]),
+        replication_order: fixture_replication_order(),
         assignment_revision: 1,
         completion_epoch: 600,
         finalized_anchor: ProviderIngestFinalizedAnchorV1 {

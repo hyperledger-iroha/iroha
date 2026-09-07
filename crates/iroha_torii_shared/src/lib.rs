@@ -34,10 +34,10 @@ pub mod route_catalog;
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.
 pub mod sorafs_moderation_api;
-/// Canonical response envelopes for the Sumeragi evidence audit API.
-pub mod sumeragi_evidence_api;
 /// Canonical node status response and capability snapshots.
 pub mod status;
+/// Canonical response envelopes for the Sumeragi evidence audit API.
+pub mod sumeragi_evidence_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 /// Response header binding a hosted Soracloud response to the served service name.

@@ -20,6 +20,9 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[event_set(
+        schema_name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeEventSet"
+    )]
     pub enum RuntimeUpgradeEvent {
         Proposed(RuntimeUpgradeProposed),
         Activated(RuntimeUpgradeActivated),

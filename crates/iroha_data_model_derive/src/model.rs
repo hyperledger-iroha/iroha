@@ -563,7 +563,6 @@ mod tests {
     }
     #[test]
     fn standalone_ffi_helpers_match_export_derive_predicate() {
-        const EXPECTED_DIRECT_FFI_TYPES: usize = 102;
         let data_model_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_data_model");
         if !data_model_root.join("Cargo.toml").is_file() {
             // Registry packages contain only this derive crate. The complete
@@ -588,17 +587,49 @@ mod tests {
             }
         }
         sources.sort();
-        let mut direct_derives = 0;
+        let mut direct_derives = Vec::new();
         for path in sources {
             let source = fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
             let file = syn::parse_file(&source)
                 .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-            audit_standalone_ffi_predicates(&path, &file.items, false, &mut direct_derives);
+            let relative = path
+                .strip_prefix(&data_model_root)
+                .expect("data-model source");
+            audit_standalone_ffi_predicates(relative, &file.items, false, "", &mut direct_derives);
         }
+        direct_derives.sort();
+        let expected: Vec<_> = include_str!("../tests/fixtures/direct_ffi_exports.txt")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_owned)
+            .collect();
         assert_eq!(
-            direct_derives, EXPECTED_DIRECT_FFI_TYPES,
+            direct_derives, expected,
             "the direct data-model FFI surface changed; review every new or removed type explicitly"
+        );
+    }
+    #[test]
+    fn standalone_ffi_inventory_tracks_names_and_scopes() {
+        let file: syn::File = parse_quote! {
+            #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), derive(iroha_ffi::FfiType))]
+            struct SharedName;
+            mod nested {
+                #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), derive(iroha_ffi::FfiType))]
+                struct SharedName;
+            }
+        };
+        let mut inventory = Vec::new();
+        audit_standalone_ffi_predicates(
+            Path::new("src/test.rs"),
+            &file.items,
+            false,
+            "",
+            &mut inventory,
+        );
+        assert_eq!(
+            inventory,
+            ["src/test.rs::SharedName", "src/test.rs::nested::SharedName"]
         );
     }
     fn collect_rust_sources(directory: &Path, sources: &mut Vec<PathBuf>) {
@@ -628,7 +659,8 @@ mod tests {
         path: &Path,
         items: &[Item],
         items_are_model_children: bool,
-        direct_derives: &mut usize,
+        module_prefix: &str,
+        direct_derives: &mut Vec<String>,
     ) {
         let export_only: Meta =
             parse_quote!(all(feature = "ffi_export", not(feature = "ffi_import")));
@@ -648,6 +680,7 @@ mod tests {
                             path,
                             items,
                             children_are_model_owned,
+                            &format!("{module_prefix}{}::", item.ident),
                             direct_derives,
                         );
                     }
@@ -667,7 +700,10 @@ mod tests {
                 );
                 continue;
             }
-            *direct_derives += 1;
+            direct_derives.push(format!(
+                "{}::{module_prefix}{name}",
+                path.to_string_lossy().replace('\\', "/")
+            ));
             assert_eq!(
                 derive_predicates.len(),
                 1,

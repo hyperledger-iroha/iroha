@@ -2,7 +2,7 @@
 //! Tests for transferring assets between accounts.
 use integration_tests::{sandbox, sync::sync_after_submission};
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{
         Registered,
         account::{Account, AccountId},
@@ -53,7 +53,7 @@ fn wait_for_asset_value(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "assets were not queried".to_owned();
     while Instant::now() < deadline {
-        match client.query(FindAssets::new()).execute_all() {
+        match client.client().query(FindAssets::new()).execute_all() {
             Ok(assets) => {
                 let mut matching_values = Vec::new();
                 for asset in assets {
@@ -94,7 +94,10 @@ fn simulate_transfer(
         return;
     };
     let iroha = network.client();
-    let mut status = iroha.get_status().expect("failed to read initial status");
+    let mut status = iroha
+        .client()
+        .get_status()
+        .expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());
@@ -114,7 +117,7 @@ fn simulate_transfer(
         mint_asset.into(),
     ];
     iroha
-        .submit_all_blocking(
+        .submit_all(
             instructions,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -135,7 +138,7 @@ fn simulate_transfer(
         mouse_id.clone(),
     );
     iroha
-        .submit_blocking(
+        .submit(
             transfer_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -191,7 +194,7 @@ fn should_fail_if_asset_not_found() {
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
     let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());
     let instructions: [InstructionBox; 2] = [create_asset_definition.into(), transfer_asset.into()];
-    let result = iroha.submit_all_blocking(
+    let result = iroha.submit_all(
         instructions,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );

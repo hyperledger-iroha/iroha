@@ -1574,6 +1574,10 @@ fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
 }
 #[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::nominal_name(),
+        "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+    );
     let source_id = [0xC7; 32];
     let fifo_sources = [[0xC8; 32], source_id];
     let body = sample_native_amx_qc(
@@ -1647,6 +1651,87 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
         "the participant settlement decoder must reject a nested Native AMX receipt field"
     );
 }
+#[test]
+fn native_amx_v2_leg_rejects_removed_recursive_settlement_layout() {
+    use norito::core::{DecodeFlagsGuard, header_flags};
+
+    // This encode-only fixture supplies the removed field at its original nested boundary.
+    // Current QCs are retained so rejection cannot be attributed to stale QC validation.
+    #[derive(norito::codec::Encode)]
+    struct RemovedSettlementLeg {
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        participant_proposal: LaneBlockProposalV1,
+        participant_settlement: LaneBlockCommitment,
+        participant_settlement_hash: HashOf<LaneBlockCommitment>,
+        prepare_qc: NativeAmxAttestationQcV2,
+        commit_qc: NativeAmxAttestationQcV2,
+    }
+
+    let leg = sample_native_amx_leg(
+        [0xC9; 32],
+        Hash::new(b"native-amx-removed-settlement-layout"),
+        (LaneId::new(1), DataSpaceId::new(7)),
+        (LaneId::new(2), DataSpaceId::new(8)),
+        &sample_roster(),
+    );
+    let settlement = &leg.participant_settlement;
+    let removed = RemovedSettlementLeg {
+        lane_id: leg.lane_id,
+        dataspace_id: leg.dataspace_id,
+        participant_proposal: leg.participant_proposal.clone(),
+        participant_settlement: LaneBlockCommitment {
+            block_height: settlement.block_height,
+            lane_id: settlement.lane_id,
+            lane_incarnation: settlement.lane_incarnation,
+            dataspace_id: settlement.dataspace_id,
+            tx_count: settlement.tx_count,
+            total_local_amount: settlement.total_local_amount.clone(),
+            total_xor_due: settlement.total_xor_due.clone(),
+            total_xor_after_haircut: settlement.total_xor_after_haircut.clone(),
+            total_xor_variance: settlement.total_xor_variance.clone(),
+            swap_metadata: settlement.swap_metadata.clone(),
+            receipts: settlement.receipts.clone(),
+            nexus_fee_receipts: settlement.nexus_fee_receipts.clone(),
+            native_amx_receipts: Vec::new(),
+        },
+        participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::from(
+            leg.participant_settlement_hash,
+        )),
+        prepare_qc: leg.prepare_qc.clone(),
+        commit_qc: leg.commit_qc.clone(),
+    };
+
+    for requested in [
+        0,
+        header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ,
+        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT
+            | header_flags::PACKED_SEQ
+            | header_flags::COMPACT_LEN
+            | header_flags::FIELD_BITSET,
+    ] {
+        let _flags = DecodeFlagsGuard::enter(requested);
+        let canonical = norito::to_bytes(&leg).expect("encode the current finite leg");
+        assert_eq!(
+            norito::decode_from_bytes::<NativeAmxLegRecordV2>(&canonical)
+                .expect("current finite leg must decode in the advertised layout"),
+            leg
+        );
+        let (payload, flags) = norito::codec::encode_with_header_flags(&removed);
+        // Use the current root identity to exercise the nested layout check itself.
+        let framed =
+            norito::core::frame_bare_with_header_flags::<NativeAmxLegRecordV2>(&payload, flags)
+                .expect("frame the removed leg layout");
+        assert!(
+            norito::decode_from_bytes::<NativeAmxLegRecordV2>(&framed).is_err(),
+            "accepted removed recursive settlement layout {flags:#x}"
+        );
+    }
+}
+
 #[test]
 fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() {
     let body = sample_native_amx_qc(

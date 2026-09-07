@@ -1301,6 +1301,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
     let (malformed_kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&malformed_config, &lane_config)
             .expect("initialize malformed temporary Kura");
+    establish_configured_lane_markers_for_test(&malformed_kura, &lane_config);
     let malformed_entry = malformed_kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("malformed temporary primary lane entry");
@@ -1338,6 +1339,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
         let (oversized_kura, _) =
             Kura::open_test_kura_with_configured_lane_config(&oversized_config, &lane_config)
                 .expect("initialize oversized publication temporary Kura");
+        establish_configured_lane_markers_for_test(&oversized_kura, &lane_config);
         let oversized_entry = oversized_kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("oversized publication temporary primary lane entry");
@@ -1442,6 +1444,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
+    establish_configured_lane_markers_for_test(&kura, &lane_config);
     let latest_path =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
     drop(kura);
@@ -1453,7 +1456,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("symlinked")
+        error.to_string().contains("symlink")
             || error.to_string().contains("non-regular")
             || error.to_string().contains("multi-link")
             || error.to_string().contains("single-link regular file"),

@@ -38,9 +38,7 @@ use norito::{
     json::{self, Map, Number, Value},
     to_bytes,
 };
-use sorafs_car::{
-    ChunkStore, FilePayload, PorProof, fetch_plan::chunk_fetch_plan_from_json,
-};
+use sorafs_car::{ChunkStore, FilePayload, PorProof, fetch_plan::chunk_fetch_plan_from_json};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
@@ -1832,8 +1830,6 @@ mod tests {
                 transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
-                connect_queue_root: config::default_connect_queue_root(),
-                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

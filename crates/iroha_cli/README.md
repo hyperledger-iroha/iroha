@@ -84,6 +84,22 @@ For a custom network, set `[account].chain_discriminant` explicitly instead.
 The corresponding environment overrides are `ACCOUNT_PROFILE` and
 `ACCOUNT_CHAIN_DISCRIMINANT`.
 
+The CLI owns two optional filesystem settings that are deliberately absent from
+the reusable Rust SDK configuration:
+
+```toml
+[connect]
+queue_root = "/var/lib/iroha/connect"
+
+[soracloud]
+http_witness_file = "/run/iroha/canonical-request-witness.json"
+```
+
+`connect.queue_root` defaults to `~/.iroha/connect`. Soracloud mutation commands
+load the witness through a bounded, change-detecting reader and validate its
+schema, account, exact network request hash, and signer set before sending it.
+Configured relative paths resolve from the directory containing the client TOML file.
+
 ### Transaction waits
 
 Use the built-in wait flow instead of shell polling:

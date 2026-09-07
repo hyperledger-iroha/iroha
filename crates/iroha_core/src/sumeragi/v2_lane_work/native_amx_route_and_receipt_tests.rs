@@ -350,7 +350,7 @@ fn native_request_claims_reject_recomputed_source_and_slot_bodies_within_view() 
     changed_slot.source_id = [0xD4; Hash::LENGTH];
     changed_slot.participant_proposal_hash = Hash::new(b"recomputed participant proposal");
     changed_slot.participant_settlement_commitment =
-        Hash::new(b"recomputed participant settlement");
+        HashOf::from_untyped_unchecked(Hash::new(b"recomputed participant settlement"));
     assert!(
         !adapter.authorize_native_request_bodies(&[changed_slot]),
         "distinct sources cannot race incompatible claims for one participant slot"

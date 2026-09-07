@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::{KeyPair, Signature},
     data_model::{
         isi::sorafs::{
@@ -91,10 +91,11 @@ fn unix_time_ms() -> Result<u64> {
     .wrap_err("current Unix time does not fit u64 milliseconds")
 }
 
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = TRANSACTION_TIMEOUT;
-    client.transaction_ttl = Some(Duration::from_secs(300));
-    client
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = TRANSACTION_TIMEOUT;
+        client.transaction_ttl = Some(Duration::from_secs(300));
+    })
 }
 
 fn bob_client(peer: &iroha_test_network::NetworkPeer) -> Client {
@@ -506,10 +507,12 @@ async fn wait_for_appeals(
         let mut appeals = Vec::with_capacity(network.peers().len());
         let mut failures = Vec::new();
         for (index, peer) in network.peers().iter().enumerate() {
-            match bob_client(peer).query_single(FindSorafsModerationAppeal::new(
-                CASE_ID.to_owned(),
-                ROUND_ID.to_owned(),
-            )) {
+            match bob_client(peer)
+                .client()
+                .query_single(FindSorafsModerationAppeal::new(
+                    CASE_ID.to_owned(),
+                    ROUND_ID.to_owned(),
+                )) {
                 Ok(appeal) => appeals.push(appeal),
                 Err(error) => failures.push(format!("peer {index}: {error}")),
             }
@@ -609,6 +612,7 @@ fn voting_asset_balance(
     account: &AccountId,
 ) -> Result<Quantity> {
     Ok(client
+        .client()
         .query(FindAssetsByAccountId::new(account.clone()))
         .execute_all()?
         .into_iter()
@@ -621,22 +625,26 @@ fn settlement_observation(
     voting_asset_id: &AssetDefinitionId,
     include_carpenter_challenge: bool,
 ) -> Result<SettlementObservation> {
-    let case = client.query_single(FindSorafsModerationCase::new(
+    let case = client.client().query_single(FindSorafsModerationCase::new(
         CASE_ID.to_owned(),
         ROUND_ID.to_owned(),
     ))?;
-    let alice_challenge = client.query_single(FindSorafsModerationChallenge::new(
-        CASE_ID.to_owned(),
-        ROUND_ID.to_owned(),
-        ALICE_CHALLENGE_ID.to_owned(),
-    ))?;
+    let alice_challenge = client
+        .client()
+        .query_single(FindSorafsModerationChallenge::new(
+            CASE_ID.to_owned(),
+            ROUND_ID.to_owned(),
+            ALICE_CHALLENGE_ID.to_owned(),
+        ))?;
     let carpenter_challenge = include_carpenter_challenge
         .then(|| {
-            client.query_single(FindSorafsModerationChallenge::new(
-                CASE_ID.to_owned(),
-                ROUND_ID.to_owned(),
-                CARPENTER_CHALLENGE_ID.to_owned(),
-            ))
+            client
+                .client()
+                .query_single(FindSorafsModerationChallenge::new(
+                    CASE_ID.to_owned(),
+                    ROUND_ID.to_owned(),
+                    CARPENTER_CHALLENGE_ID.to_owned(),
+                ))
         })
         .transpose()?;
     let balances = [
@@ -646,6 +654,7 @@ fn settlement_observation(
         voting_asset_balance(client, voting_asset_id, &SAMPLE_GENESIS_ACCOUNT_ID)?,
     ];
     let total_quantity = client
+        .client()
         .query_single(FindAssetDefinitionById::new(voting_asset_id.clone()))?
         .total_quantity()
         .clone();
@@ -744,6 +753,7 @@ async fn wait_for_settlement_convergence(
 
 fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
     let block = client
+        .client()
         .query(FindBlocks)
         .filter_with(|block| block.equals("height", height).into_predicate())
         .execute_single()
@@ -833,7 +843,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     let now_epoch = unix_time_ms()? / 1_000;
     let pop_policy = pop_policy(&BOB_KEYPAIR);
     let moderation_policy = moderation_policy();
-    bob.submit_all_blocking(
+    bob.submit_all(
         [
             InstructionBox::from(SetSorafsPopIssuerPolicy::new(pop_policy)),
             InstructionBox::from(CommitSorafsPopCredentialBatch::new(
@@ -846,7 +856,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     )?;
 
     let registration_deadline_unix_ms = unix_time_ms()?.saturating_add(30_000);
-    alice_client(&network.peers()[0]).submit_blocking(
+    alice_client(&network.peers()[0]).submit(
         SubmitSorafsModerationAppeal::new(appeal_intake(registration_deadline_unix_ms)),
         no_fee(),
     )?;
@@ -857,7 +867,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     sleep(Duration::from_millis(wait_ms)).await;
     // An idle test network need not create empty blocks. This transaction starts the first
     // post-deadline QueuePlan sequence whose earliest committed carrier must pin the anchor.
-    bob.submit_blocking(
+    bob.submit(
         Log::new(Level::INFO, "pin due moderation anchor".to_owned()),
         no_fee(),
     )?;
@@ -880,7 +890,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
 
     // Carry an unrelated transaction after the anchor before preparing sortition. The final
     // QueuePlan carrier must still consume the pinned draw rather than whichever parent is latest.
-    bob.submit_blocking(
+    bob.submit(
         Log::new(
             Level::INFO,
             "delayed moderation sortition carrier".to_owned(),
@@ -900,7 +910,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
     );
 
     let appeal = &delayed[0];
-    bob.submit_blocking(
+    bob.submit(
         FinalizeSorafsModerationSortition::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -995,7 +1005,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     let material = pop_material(&BOB_KEYPAIR, published_at_epoch);
     let policy = moderation_policy_with_custody(BOB_ID.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone());
     let policy_digest = policy.digest().expect("fixture moderation policy digest");
-    bob.submit_all_blocking(
+    bob.submit_all(
         [
             InstructionBox::from(SetSorafsPopIssuerPolicy::new(pop_policy(&BOB_KEYPAIR))),
             InstructionBox::from(CommitSorafsPopCredentialBatch::new(
@@ -1018,7 +1028,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         "fixture credential must remain valid beyond the mandatory 24-hour reveal schedule"
     );
     alice_client(&network.peers()[0])
-        .submit_blocking(SubmitSorafsModerationAppeal::new(intake), no_fee())?;
+        .submit(SubmitSorafsModerationAppeal::new(intake), no_fee())?;
 
     let submitted = wait_for_appeals(&network, "wait for settlement appeal intake", |appeal| {
         appeal.status == ModerationAppealStatusV1::RegisteringJurors
@@ -1037,7 +1047,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         proof.challenge_digest == challenge && proof.verifier_context == verifier_context,
         "fixture PoP proof must bind the admitted appeal challenge and verifier context"
     );
-    carpenter_client(&network.peers()[0]).submit_blocking(
+    carpenter_client(&network.peers()[0]).submit(
         RegisterSorafsModerationJurorEligibility::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1052,7 +1062,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     .await?;
 
     sleep_past(registration_deadline_unix_ms).await?;
-    bob.submit_blocking(
+    bob.submit(
         Log::new(Level::INFO, "pin settlement moderation anchor".to_owned()),
         no_fee(),
     )?;
@@ -1071,7 +1081,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         "four peers did not retain one byte-identical settlement sortition anchor"
     );
     assert_exact_first_post_deadline_anchor(&network, anchor, registration_deadline_unix_ms)?;
-    bob.submit_blocking(
+    bob.submit(
         FinalizeSorafsModerationSortition::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1095,7 +1105,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         .as_ref()
         .ok_or_else(|| eyre!("settlement appeal lost its panel selection"))?
         .sortition_digest;
-    carpenter_client(&network.peers()[0]).submit_blocking(
+    carpenter_client(&network.peers()[0]).submit(
         AcceptSorafsModerationJurorAssignment::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1113,7 +1123,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     )
     .await?;
     sleep_past(acceptance_deadline_unix_ms).await?;
-    bob.submit_blocking(
+    bob.submit(
         ActivateSorafsModerationCase::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1128,7 +1138,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     .await?;
     sleep_past(commit_deadline_unix_ms).await?;
 
-    alice_client(&network.peers()[0]).submit_blocking(
+    alice_client(&network.peers()[0]).submit(
         RaiseSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1168,7 +1178,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
         },
     )
     .await?;
-    bob.submit_blocking(
+    bob.submit(
         ResolveSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1208,7 +1218,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     )
     .await?;
 
-    carpenter_client(&network.peers()[0]).submit_blocking(
+    carpenter_client(&network.peers()[0]).submit(
         RaiseSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),
@@ -1256,7 +1266,7 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds(
     .await?;
     // Expiry still belongs to the core synthetic-time regression: this real network cannot wait
     // out the mandatory 24-hour resolution grace during an integration run.
-    bob.submit_blocking(
+    bob.submit(
         ResolveSorafsModerationChallenge::new(
             CASE_ID.to_owned(),
             ROUND_ID.to_owned(),

@@ -1,28 +1,93 @@
 //! Defaults for various items used in communication over http(s).
 //!
 //! These implementations rely on the `reqwest` and `tungstenite` crates and
-//! provide a simple, feature-complete transport layer used by the client. The
-//! module does not yet expose configuration hooks for alternative backends.
-use crate::http::{Method, RequestBuilder, Response};
+//! provide the default transport layer used by the client. Callers can inject
+//! alternative HTTP backends through [`crate::http::HttpTransport`].
+use crate::http::{
+    HttpTransport, Method, RequestBuilder, Response, TransportFuture, TransportRequest,
+};
 use eyre::{Error, Result, WrapErr, eyre};
 use http::header::{HeaderName, HeaderValue};
 use reqwest::blocking::Client as BlockingClient;
-use std::{net::TcpStream, sync::OnceLock, thread};
+use std::sync::{Arc, OnceLock};
+pub use tungstenite::Message as WebSocketMessage;
+use tungstenite::client::IntoClientRequest;
 pub use tungstenite::handshake::client::Response as WebSocketResponse;
-pub use tungstenite::{Error as WebSocketError, Message as WebSocketMessage};
-use tungstenite::{WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
 use url::Url;
 type Bytes = Vec<u8>;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const RESPONSE_INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
 const RESPONSE_READ_BUFFER_BYTES: usize = 16 * 1024;
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
+/// Shareable handle to one context-local HTTP transport implementation.
+#[derive(Clone)]
+pub struct DefaultHttpTransport {
+    inner: Arc<dyn HttpTransport>,
+}
+
+impl std::fmt::Debug for DefaultHttpTransport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DefaultHttpTransport")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Reqwest connection pools owned by one immutable client context.
+///
+#[derive(Debug)]
+struct ReqwestHttpTransport {
+    blocking: OnceLock<BlockingClient>,
+    blocking_direct_loopback: OnceLock<BlockingClient>,
+    asynchronous: reqwest::Client,
+    asynchronous_direct_loopback: reqwest::Client,
+}
+
+impl DefaultHttpTransport {
+    /// Construct isolated lazy blocking and eager asynchronous HTTP connection pools.
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Arc::new(ReqwestHttpTransport {
+                // Building reqwest's blocking client briefly enters an internal
+                // runtime. Defer that work until a checked blocking send so
+                // constructing an async SDK context inside Tokio stays safe.
+                blocking: OnceLock::new(),
+                blocking_direct_loopback: OnceLock::new(),
+                asynchronous: build_async_http_client(),
+                asynchronous_direct_loopback: build_direct_loopback_async_http_client(),
+            }),
+        }
+    }
+
+    pub(crate) fn from_shared(transport: Arc<dyn HttpTransport>) -> Self {
+        Self { inner: transport }
+    }
+
+    fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
+        self.inner.send_blocking(request)
+    }
+
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        self.inner.send(request)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_pools_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mock(
+        responder: Arc<dyn Fn(RequestSnapshot) -> Result<Response<Bytes>> + Send + Sync + 'static>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(MockHttpTransport { responder }),
+        }
+    }
+}
 fn header_name_from_str(str: &str) -> Result<HeaderName> {
     str.parse::<HeaderName>()
         .wrap_err_with(|| format!("Failed to parse header name {str}"))
 }
-#[derive(Debug)]
 struct PendingRequest {
     method: Method,
     url: Url,
@@ -32,20 +97,36 @@ struct PendingRequest {
     max_response_bytes: usize,
     direct_loopback: bool,
 }
-#[derive(Debug)]
-struct PreparedRequest {
-    method: Method,
-    url: Url,
-    headers: Vec<(HeaderName, HeaderValue)>,
-    body: Vec<u8>,
-    timeout: Option<std::time::Duration>,
-    max_response_bytes: usize,
-    direct_loopback: bool,
+
+impl std::fmt::Debug for PendingRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingRequest")
+            .field("method", &self.method)
+            .field("url_origin", &self.url.origin().ascii_serialization())
+            .field(
+                "header_names",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .field(
+                "body_len",
+                &self.body.as_ref().map_or(0, std::vec::Vec::len),
+            )
+            .field("timeout", &self.timeout)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .field("direct_loopback", &self.direct_loopback)
+            .finish()
+    }
 }
 /// Default request builder implemented on top of `reqwest`.
 #[derive(Debug)]
 pub struct DefaultRequestBuilder {
     inner: Result<PendingRequest>,
+    transport: Option<DefaultHttpTransport>,
 }
 impl DefaultRequestBuilder {
     /// Apply `.and_then()` semantics to the inner `Result` with underlying request state.
@@ -55,12 +136,23 @@ impl DefaultRequestBuilder {
     {
         Self {
             inner: self.inner.and_then(fun),
+            transport: self.transport,
         }
+    }
+
+    /// Bind the request to the connection pools owned by its client context.
+    #[must_use]
+    pub(crate) fn with_transport(mut self, transport: DefaultHttpTransport) -> Self {
+        self.transport = Some(transport);
+        self
     }
     /// Build request by consuming self.
     pub fn build(self) -> Result<DefaultRequest> {
+        let transport = self
+            .transport
+            .ok_or_else(|| eyre!("HTTP request has no owning client transport"))?;
         self.inner.map(|pending| DefaultRequest {
-            prepared: PreparedRequest {
+            prepared: TransportRequest {
                 method: pending.method,
                 url: pending.url,
                 headers: pending.headers,
@@ -69,6 +161,7 @@ impl DefaultRequestBuilder {
                 max_response_bytes: pending.max_response_bytes,
                 direct_loopback: pending.direct_loopback,
             },
+            transport,
         })
     }
     /// Apply per-request timeout (overrides the client default when set).
@@ -116,7 +209,8 @@ impl DefaultRequestBuilder {
 /// Request built by [`DefaultRequestBuilder`].
 #[derive(Debug)]
 pub struct DefaultRequest {
-    prepared: PreparedRequest,
+    prepared: TransportRequest,
+    transport: DefaultHttpTransport,
 }
 #[cfg(test)]
 #[derive(Clone, Debug)]
@@ -128,52 +222,6 @@ pub struct RequestSnapshot {
     pub timeout: Option<std::time::Duration>,
     pub max_response_bytes: usize,
     pub direct_loopback: bool,
-}
-#[cfg(test)]
-type SendHook = Arc<dyn Fn(RequestSnapshot) -> Result<Response<Bytes>> + Send + Sync + 'static>;
-#[cfg(test)]
-fn send_hook_slot() -> &'static Mutex<Option<SendHook>> {
-    static HOOK: OnceLock<Mutex<Option<SendHook>>> = OnceLock::new();
-    HOOK.get_or_init(|| Mutex::new(None))
-}
-#[cfg(test)]
-pub fn set_send_hook(hook: Option<SendHook>) {
-    *send_hook_slot().lock().expect("set send hook") = hook;
-}
-#[cfg(test)]
-fn send_hook_guard() -> &'static Mutex<()> {
-    static HOOK_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-    HOOK_MUTEX.get_or_init(|| Mutex::new(()))
-}
-#[cfg(test)]
-fn with_scoped_send_hook<R>(hook: Option<SendHook>, f: impl FnOnce() -> R) -> R {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    let guard = send_hook_guard().lock().expect("hook guard");
-    set_send_hook(hook);
-    let outcome = catch_unwind(AssertUnwindSafe(f));
-    set_send_hook(None);
-    drop(guard);
-    match outcome {
-        Ok(result) => result,
-        Err(panic) => std::panic::resume_unwind(panic),
-    }
-}
-#[cfg(test)]
-pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
-    with_scoped_send_hook(Some(hook), f)
-}
-#[cfg(test)]
-pub fn with_real_http<R>(f: impl FnOnce() -> R) -> R {
-    with_scoped_send_hook(None, f)
-}
-#[cfg(test)]
-fn try_send_with_hook(request: &DefaultRequest) -> Option<Result<Response<Bytes>>> {
-    let hook_opt = send_hook_slot()
-        .lock()
-        .expect("lock send hook")
-        .as_ref()
-        .cloned();
-    hook_opt.map(|hook| hook(request.snapshot()))
 }
 #[cfg(test)]
 impl DefaultRequest {
@@ -212,27 +260,51 @@ impl DefaultRequest {
     ///
     /// # Errors
     /// Fails if request building and sending fails or response transformation fails
-    pub fn send(self) -> Result<Response<Bytes>> {
-        #[cfg(test)]
-        if let Some(result) = try_send_with_hook(&self) {
-            return result;
-        }
-        // If we are running inside a Tokio runtime, offload the blocking reqwest call to
-        // a dedicated thread to avoid nested-runtime drops in a non-blocking context.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let flavor = handle.runtime_flavor();
-            return thread::spawn(move || self.into_response())
-                .join()
-                .unwrap_or_else(|_| {
-                    Err(eyre!(
-                        "blocking HTTP request thread panicked; runtime {flavor:?}"
-                    ))
-                });
-        }
-        self.into_response()
+    pub(crate) fn send_blocking(self) -> Result<Response<Bytes>> {
+        crate::blocking::reject_inside_async_runtime()?;
+        let maximum = self.prepared.max_response_bytes;
+        let response = self.transport.send_blocking(self.prepared)?;
+        enforce_transport_response_bound(response, maximum)
     }
-    fn into_response(self) -> Result<Response<Bytes>> {
-        let PreparedRequest {
+
+    /// Send this request asynchronously through its owning client context.
+    pub(crate) async fn send(self) -> Result<Response<Bytes>> {
+        let maximum = self.prepared.max_response_bytes;
+        let response = self.transport.send(self.prepared).await?;
+        enforce_transport_response_bound(response, maximum)
+    }
+}
+
+fn enforce_transport_response_bound(
+    response: Response<Bytes>,
+    maximum: usize,
+) -> Result<Response<Bytes>> {
+    if maximum == 0 {
+        return Err(eyre!("HTTP response byte limit must be positive"));
+    }
+    if response.body().len() > maximum {
+        return Err(eyre!(
+            "HTTP response exceeds the {maximum} byte limit: transport returned {} bytes",
+            response.body().len()
+        ));
+    }
+    if response
+        .headers()
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > u64::try_from(maximum).unwrap_or(u64::MAX))
+    {
+        return Err(eyre!(
+            "HTTP response exceeds the {maximum} byte limit according to transport Content-Length"
+        ));
+    }
+    Ok(response)
+}
+
+impl HttpTransport for ReqwestHttpTransport {
+    fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
+        let TransportRequest {
             method,
             url,
             headers,
@@ -240,13 +312,12 @@ impl DefaultRequest {
             timeout,
             max_response_bytes,
             direct_loopback,
-        } = self.prepared;
-        let direct_client = direct_loopback
-            .then(|| build_direct_loopback_http_client(&url))
-            .transpose()?;
-        let client = match &direct_client {
-            Some(client) => client,
-            None => http_client(),
+        } = request;
+        let client = if direct_loopback {
+            self.blocking_direct_loopback
+                .get_or_init(build_direct_loopback_http_client)
+        } else {
+            self.blocking.get_or_init(build_http_client)
         };
         let mut builder = client.request(method.clone(), url.clone());
         for (name, value) in &headers {
@@ -267,6 +338,93 @@ impl DefaultRequest {
         }
         .try_into()
     }
+
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move {
+            let TransportRequest {
+                method,
+                url,
+                headers,
+                body,
+                timeout,
+                max_response_bytes,
+                direct_loopback,
+            } = request;
+            let client = if direct_loopback {
+                &self.asynchronous_direct_loopback
+            } else {
+                &self.asynchronous
+            };
+            let mut builder = client.request(method.clone(), url.clone());
+            for (name, value) in headers {
+                builder = builder.header(name, value);
+            }
+            if !body.is_empty() {
+                builder = builder.body(body);
+            }
+            if let Some(timeout) = timeout {
+                builder = builder.timeout(timeout);
+            }
+            let response = builder
+                .send()
+                .await
+                .wrap_err_with(|| format!("Failed to send http {method} request to {url}"))?;
+            crate::client::bounded_async_response::into_response(response, max_response_bytes).await
+        })
+    }
+}
+
+#[cfg(test)]
+struct MockHttpTransport {
+    responder: Arc<dyn Fn(RequestSnapshot) -> Result<Response<Bytes>> + Send + Sync + 'static>,
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for MockHttpTransport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MockHttpTransport")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+impl HttpTransport for MockHttpTransport {
+    fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
+        (self.responder)(RequestSnapshot::from(&request))
+    }
+
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        let response = (self.responder)(RequestSnapshot::from(&request));
+        Box::pin(async move { response })
+    }
+}
+
+#[cfg(test)]
+impl From<&TransportRequest> for RequestSnapshot {
+    fn from(request: &TransportRequest) -> Self {
+        let headers = request
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.to_string(),
+                    std::str::from_utf8(value.as_bytes())
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+            })
+            .collect();
+        Self {
+            method: request.method.clone(),
+            url: request.url.clone(),
+            headers,
+            body: request.body.clone(),
+            timeout: request.timeout,
+            max_response_bytes: request.max_response_bytes,
+            direct_loopback: request.direct_loopback,
+        }
+    }
 }
 impl RequestBuilder for DefaultRequestBuilder {
     fn new(method: Method, url: Url) -> Self {
@@ -280,6 +438,7 @@ impl RequestBuilder for DefaultRequestBuilder {
                 max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
                 direct_loopback: false,
             }),
+            transport: None,
         }
     }
     fn header<K: AsRef<str>, V: ToString + ?Sized>(self, key: K, value: &V) -> Self {
@@ -336,24 +495,13 @@ impl DefaultWebSocketRequestBuilder {
 /// `WebSocket` request built by [`DefaultWebSocketRequestBuilder`]
 pub struct DefaultWebSocketStreamRequest(http::Request<()>);
 impl DefaultWebSocketStreamRequest {
-    /// Open [`WebSocketStream`] synchronously.
-    pub fn connect(self) -> Result<WebSocketStream> {
-        let (stream, _) = self.connect_with_response()?;
-        Ok(stream)
-    }
-    /// Open [`WebSocketStream`] synchronously and retain the HTTP upgrade response.
-    pub fn connect_with_response(self) -> Result<(WebSocketStream, WebSocketResponse)> {
-        Ok(tungstenite::connect(self.0)?)
-    }
     /// Open [`AsyncWebSocketStream`].
-    pub async fn connect_async(self) -> Result<AsyncWebSocketStream> {
-        let (stream, _) = self.connect_async_with_response().await?;
+    pub async fn connect(self) -> Result<AsyncWebSocketStream> {
+        let (stream, _) = self.connect_with_response().await?;
         Ok(stream)
     }
     /// Open [`AsyncWebSocketStream`] and retain the HTTP upgrade response.
-    pub async fn connect_async_with_response(
-        self,
-    ) -> Result<(AsyncWebSocketStream, WebSocketResponse)> {
+    pub async fn connect_with_response(self) -> Result<(AsyncWebSocketStream, WebSocketResponse)> {
         Ok(tokio_tungstenite::connect_async(self.0).await?)
     }
 }
@@ -379,13 +527,8 @@ impl RequestBuilder for DefaultWebSocketRequestBuilder {
         })
     }
 }
-pub type WebSocketStream = WebSocket<MaybeTlsStream<TcpStream>>;
 pub type AsyncWebSocketStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-fn http_client() -> &'static BlockingClient {
-    static CLIENT: OnceLock<BlockingClient> = OnceLock::new();
-    CLIENT.get_or_init(build_http_client)
-}
 fn blocking_http_client_builder() -> reqwest::blocking::ClientBuilder {
     BlockingClient::builder()
         // This transport carries one-shot signed requests. Following a redirect
@@ -400,23 +543,40 @@ fn build_http_client() -> BlockingClient {
         .build()
         .expect("Failed to build blocking HTTP client")
 }
-fn build_direct_loopback_http_client(url: &Url) -> Result<BlockingClient> {
-    let mut builder = blocking_http_client_builder().no_proxy();
-    match url.host() {
-        Some(url::Host::Domain("localhost")) => {
-            let addresses = [
-                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
-                std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
-            ];
-            builder = builder.resolve_to_addrs("localhost", &addresses);
-        }
-        Some(url::Host::Ipv4(address)) if address.is_loopback() => {}
-        Some(url::Host::Ipv6(address)) if address.is_loopback() => {}
-        _ => return Err(eyre!("direct HTTP client requires an exact loopback URL")),
-    }
-    builder
+fn build_async_http_client() -> reqwest::Client {
+    async_http_client_builder()
         .build()
-        .wrap_err("failed to build direct loopback HTTP client")
+        .expect("Failed to build async HTTP client")
+}
+fn async_http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        // A redirect can arrive after ingress admitted a one-shot signed transaction.
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+}
+fn build_direct_loopback_http_client() -> BlockingClient {
+    let addresses = [
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
+    ];
+    blocking_http_client_builder()
+        .no_proxy()
+        .resolve_to_addrs("localhost", &addresses)
+        .build()
+        .expect("Failed to build direct loopback HTTP client")
+}
+fn build_direct_loopback_async_http_client() -> reqwest::Client {
+    let addresses = [
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
+    ];
+    async_http_client_builder()
+        .no_proxy()
+        .resolve_to_addrs("localhost", &addresses)
+        .build()
+        .expect("Failed to build direct loopback async HTTP client")
 }
 struct ClientResponse {
     response: reqwest::blocking::Response,
@@ -542,12 +702,36 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::header::AUTHORIZATION;
     use std::{
         io::{ErrorKind, Read, Write},
         net::TcpListener,
         sync::Arc,
+        thread,
         time::{Duration, Instant},
     };
+
+    fn owned_request_builder(method: Method, url: Url) -> DefaultRequestBuilder {
+        DefaultRequestBuilder::new(method, url).with_transport(DefaultHttpTransport::new())
+    }
+
+    fn mocked_request_builder(
+        method: Method,
+        url: Url,
+        responder: impl Fn(RequestSnapshot) -> Result<Response<Bytes>> + Send + Sync + 'static,
+    ) -> DefaultRequestBuilder {
+        DefaultRequestBuilder::new(method, url)
+            .with_transport(DefaultHttpTransport::mock(Arc::new(responder)))
+    }
+
+    #[tokio::test]
+    async fn default_transport_construction_is_safe_inside_async_runtime() {
+        let transport = DefaultHttpTransport::new();
+        let clone = transport.clone();
+        assert!(transport.shares_pools_with(&clone));
+        drop(clone);
+        drop(transport);
+    }
 
     #[test]
     fn direct_loopback_builder_is_fail_closed_and_leaves_https_proxy_capable() {
@@ -556,7 +740,7 @@ mod tests {
             "http://127.44.55.66:8080/v1/fees/quote",
             "http://[::1]:8080/v1/fees/quote",
         ] {
-            let request = DefaultRequestBuilder::new(
+            let request = owned_request_builder(
                 crate::http::Method::POST,
                 Url::parse(allowed).expect("loopback URL"),
             )
@@ -571,7 +755,7 @@ mod tests {
             "https://localhost:8080/v1/fees/quote",
         ] {
             assert!(
-                DefaultRequestBuilder::new(
+                owned_request_builder(
                     crate::http::Method::POST,
                     Url::parse(rejected).expect("rejected URL"),
                 )
@@ -581,7 +765,7 @@ mod tests {
                 "direct-loopback mode admitted {rejected}"
             );
         }
-        let https = DefaultRequestBuilder::new(
+        let https = owned_request_builder(
             crate::http::Method::POST,
             Url::parse("https://fees.example/v1/fees/quote").expect("HTTPS URL"),
         )
@@ -599,7 +783,7 @@ mod tests {
         const TARGET: &str = "IROHA_LOOPBACK_PROXY_TEST_TARGET";
         if std::env::var_os(CHILD).is_some() {
             let url = std::env::var(TARGET).expect("child target URL");
-            let response = DefaultRequestBuilder::new(
+            let response = owned_request_builder(
                 crate::http::Method::POST,
                 Url::parse(&url).expect("child target URL parse"),
             )
@@ -608,7 +792,7 @@ mod tests {
             .timeout(Duration::from_secs(2))
             .build()
             .expect("child direct request")
-            .send()
+            .send_blocking()
             .expect("child direct response");
             assert_eq!(response.status(), http::StatusCode::OK);
             return;
@@ -795,32 +979,46 @@ mod tests {
         );
     }
     #[test]
-    fn send_is_safe_inside_tokio_runtime_multi_thread() {
-        let request = DefaultRequestBuilder::new(
+    fn blocking_send_rejects_tokio_multi_thread_runtime() {
+        let request = mocked_request_builder(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
-        )
-        .build()
-        .expect("build request");
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let result = with_send_hook(
-            Arc::new(|snapshot| {
+            |snapshot| {
                 assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
                 assert_eq!(snapshot.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .body(Vec::new())
                     .map_err(Into::into)
-            }),
-            || rt.block_on(async { request.send() }),
+            },
+        )
+        .build()
+        .expect("build request");
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let error = rt
+            .block_on(async { request.send_blocking() })
+            .expect_err("blocking send inside Tokio must reject");
+        let typed = error
+            .downcast_ref::<crate::blocking::BlockingCallError>()
+            .expect("typed blocking error");
+        assert_eq!(
+            typed.async_runtime_flavor(),
+            Some(crate::blocking::AsyncRuntimeFlavor::MultiThread)
         );
-        assert!(result.is_ok());
     }
     #[test]
-    fn send_is_safe_inside_current_thread_runtime() {
-        let request = DefaultRequestBuilder::new(
+    fn blocking_send_rejects_tokio_current_thread_runtime() {
+        let request = mocked_request_builder(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
+            |snapshot| {
+                assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
+                assert_eq!(snapshot.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
+                Response::builder()
+                    .status(http::StatusCode::OK)
+                    .body(Vec::new())
+                    .map_err(Into::into)
+            },
         )
         .build()
         .expect("build request");
@@ -828,67 +1026,142 @@ mod tests {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let result = with_send_hook(
-            Arc::new(|snapshot| {
-                assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
-                assert_eq!(snapshot.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
-                Response::builder()
-                    .status(http::StatusCode::OK)
-                    .body(Vec::new())
-                    .map_err(Into::into)
-            }),
-            || rt.block_on(async { request.send() }),
+        let error = rt
+            .block_on(async { request.send_blocking() })
+            .expect_err("blocking send inside Tokio must reject");
+        let typed = error
+            .downcast_ref::<crate::blocking::BlockingCallError>()
+            .expect("typed blocking error");
+        assert_eq!(
+            typed.async_runtime_flavor(),
+            Some(crate::blocking::AsyncRuntimeFlavor::CurrentThread)
         );
-        assert!(result.is_ok());
     }
     #[test]
     fn builder_timeout_is_forwarded() {
         let timeout = std::time::Duration::from_secs(2);
-        let request = DefaultRequestBuilder::new(
+        let request = mocked_request_builder(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
-        )
-        .timeout(timeout)
-        .build()
-        .expect("build request");
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let result = with_send_hook(
-            Arc::new(move |snapshot| {
+            move |snapshot| {
                 assert_eq!(snapshot.timeout, Some(timeout));
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .body(Vec::new())
                     .map_err(Into::into)
-            }),
-            || rt.block_on(async { request.send() }),
-        );
+            },
+        )
+        .timeout(timeout)
+        .build()
+        .expect("build request");
+        let result = request.send_blocking();
         assert!(result.is_ok());
     }
     #[test]
     fn builder_response_limit_is_forwarded() {
-        let request = DefaultRequestBuilder::new(
+        let request = mocked_request_builder(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
-        )
-        .max_response_bytes(4096)
-        .build()
-        .expect("build request");
-        let result = with_send_hook(
-            Arc::new(|snapshot| {
+            |snapshot| {
                 assert_eq!(snapshot.max_response_bytes, 4096);
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .body(Vec::new())
                     .map_err(Into::into)
-            }),
-            || request.send(),
-        );
+            },
+        )
+        .max_response_bytes(4096)
+        .build()
+        .expect("build request");
+        let result = request.send_blocking();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn request_debug_redacts_credentials_url_details_and_body() {
+        const PASSWORD: &str = "transport-password-secret";
+        const PATH_SECRET: &str = "private-account-42";
+        const QUERY_SECRET: &str = "query-token-secret";
+        const FRAGMENT_SECRET: &str = "fragment-secret";
+        const HEADER_SECRET: &str = "Bearer authorization-secret";
+        const BODY_SECRET: &[u8] = b"signed-body-secret";
+
+        let url = Url::parse(&format!(
+            "https://sdk-user:{PASSWORD}@example.com/{PATH_SECRET}?token={QUERY_SECRET}#{FRAGMENT_SECRET}"
+        ))
+        .expect("secret-bearing URL");
+        let pending =
+            mocked_request_builder(Method::POST, url.clone(), |_| Ok(Response::new(Vec::new())))
+                .header(AUTHORIZATION.as_str(), HEADER_SECRET)
+                .body(BODY_SECRET.to_vec());
+        let pending_debug = format!("{pending:?}");
+        let request = mocked_request_builder(Method::POST, url, |_| Ok(Response::new(Vec::new())))
+            .header(AUTHORIZATION.as_str(), HEADER_SECRET)
+            .body(BODY_SECRET.to_vec())
+            .build()
+            .expect("built request");
+        let request_debug = format!("{request:?}");
+
+        for rendered in [&pending_debug, &request_debug] {
+            assert!(rendered.contains("https://example.com"));
+            assert!(rendered.contains("authorization"));
+            assert!(rendered.contains(&format!("body_len: {}", BODY_SECRET.len())));
+            for secret in [
+                "sdk-user",
+                PASSWORD,
+                PATH_SECRET,
+                QUERY_SECRET,
+                FRAGMENT_SECRET,
+                HEADER_SECRET,
+                std::str::from_utf8(BODY_SECRET).expect("ASCII body"),
+            ] {
+                assert!(
+                    !rendered.contains(secret),
+                    "request Debug exposed secret {secret:?}: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn injected_transport_cannot_bypass_response_bounds_sync_or_async() {
+        let build_adversarial_request = || {
+            mocked_request_builder(
+                Method::GET,
+                Url::parse("https://example.com/status").expect("test URL"),
+                |_| Ok(Response::new(vec![0x5a; 9])),
+            )
+            .max_response_bytes(8)
+            .build()
+            .expect("built adversarial request")
+        };
+
+        let sync_error = build_adversarial_request()
+            .send_blocking()
+            .expect_err("sync custom transport response must be bounded by the SDK");
+        assert!(
+            sync_error
+                .to_string()
+                .contains("transport returned 9 bytes")
+        );
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("async test runtime");
+        let async_error = runtime
+            .block_on(build_adversarial_request().send())
+            .expect_err("async custom transport response must be bounded by the SDK");
+        assert!(
+            async_error
+                .to_string()
+                .contains("transport returned 9 bytes")
+        );
     }
     #[test]
     fn request_snapshot_preserves_utf8_header_bytes_used_by_account_ids() {
         let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-        let request = DefaultRequestBuilder::new(
+        let request = owned_request_builder(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
         )
@@ -903,7 +1176,7 @@ mod tests {
     }
     #[test]
     fn builder_rejects_zero_response_limit() {
-        let error = DefaultRequestBuilder::new(
+        let error = owned_request_builder(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
         )

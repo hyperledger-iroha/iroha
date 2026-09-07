@@ -15,7 +15,7 @@ boundaries and where to make changes.
 | [`iroha_service_model`](../crates/iroha_service_model) | State-independent SoraNet policy records and SoraFS defaults. No aggregate ledger, node, SDK, or runtime dependency is allowed. |
 | [`iroha_data_model`](../crates/iroha_data_model) | Ledger transactions, blocks, aggregate instructions/events/queries, and built-in model composition. Privacy and most service records still await extraction. |
 | [`iroha_torii_shared`](../crates/iroha_torii_shared) | HTTP contracts, canonical route descriptions, configuration projections, and status records. Node-owned code converts runtime state into these records. |
-| [`iroha`](../crates/iroha) | Rust SDK. Uses protocol models and HTTP contracts. Telemetry, storage, and Musubi runtime ownership still await extraction; the architecture check reports those edges. |
+| [`iroha`](../crates/iroha) | Rust SDK. Uses protocol models and shared HTTP contracts without Core, Torii, daemon, IVM, storage-runtime, or telemetry-implementation dependencies. Canonical async context migration remains active. |
 | [`iroha_cli`](../crates/iroha_cli) | The `iroha` executable, CLI configuration and command flows. Owns `iroha app sorafs toolkit compile` and archive packing. |
 | [`iroha_config`](../crates/iroha_config), `iroha_config_base` | Node configuration versus shared configuration-reading infrastructure. Client code uses the infrastructure directly, without importing node configuration. |
 | [`iroha_core`](../crates/iroha_core) | Ledger execution, World state, block coordination, consensus, persistence integration, and node invariant enforcement. |
@@ -23,20 +23,23 @@ boundaries and where to make changes.
 | [`irohad`](../crates/irohad) | The `iroha3d` process: configuration, startup, node runtime ownership, and shutdown. |
 | `ivm`, `ivm_abi`, `kotodama_lang` | Deterministic VM execution, its single V1 ABI, and the Kotodama compiler. SDK consumers do not depend on these execution packages. |
 | `iroha_executor*`, `iroha_smart_contract*`, `iroha_trigger*` | Executor, contract, and trigger implementation/model/derive boundaries. |
-| `sorafs_chunker`, `sorafs_manifest`, `sorafs_car`, `sorafs_orchestrator`, `sorafs_node` | Chunking and records, archive/fetch primitives, orchestration, and storage runtime ownership. CLI feature-bundle retirement remains outstanding. |
+| `sorafs_chunker`, `sorafs_manifest`, `sorafs_car`, `sorafs_orchestrator`, `sorafs_node` | Chunking and records, archive primitives, orchestration, and storage runtime ownership. CLI feature-bundle retirement remains outstanding. |
+| [`iroha_storage_client`](../crates/iroha_storage_client) | Client-side archive construction, filesystem persistence, orchestrated fetch, and DA workflows above the Rust SDK and storage libraries. Its shipping feature graphs are checked against node-runtime dependencies. |
 | [`soranet_incentives`](../crates/soranet_incentives) | Deterministic reward calculation and payout accounting consumed by Core and the orchestrator. It does not depend on either runtime. |
 | `soranet_pq`, `tools/soranet-*`, `tools/sora-vpn-*` | SoraNet cryptographic primitives and separately owned relay, handshake, puzzle, and VPN runtimes. |
-| `musubi`, `iroha_sccp`, `settlement_router`, `kaigi_zk` | Publication workflows, cross-chain protocol handling, settlement, and capability-specific proof support. |
+| [`iroha_musubi_service`](../crates/iroha_musubi_service), `musubi` | Publication service runtime, durable clock and replay journal versus publisher-side package and publication workflows. Shared control records live in `iroha_torii_shared`. |
+| `iroha_sccp`, `settlement_router`, `kaigi_zk` | Cross-chain protocol handling, settlement, and capability-specific proof support. |
 | `iroha_p2p`, `iroha_logger`, `iroha_telemetry` | Node networking, logging, and runtime metrics. Shared wire records belong below these implementations. |
 | `iroha_zkp_halo2`, `fastpq_prover`, `zk_ace_prover` | Proof primitives or execution engines according to their feature-resolved graph. Shipping SDK checks reject node proof-execution features. |
 | `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI artifacts explicitly. |
 | [`mochi`](../mochi), [`xtask`](../xtask), [`tools`](../tools) | Local applications, repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
 
-The approved `iroha_model_base`, `iroha_privacy_model`, `iroha_storage_client`,
-and `iroha_musubi_service` extractions are tracked in
-[the redesign record](../specs/first_release_architecture_redesign.md). Their
-boundaries are not yet implemented. The service-model crate currently owns only
-the policies described above.
+The approved `iroha_model_base` and `iroha_privacy_model` physical extractions
+remain pending and are tracked in
+[the redesign record](../specs/first_release_architecture_redesign.md).
+`iroha_storage_client` and `iroha_musubi_service` are implemented boundaries;
+`iroha_service_model` still owns only the state-independent policies described
+above while the remaining service records await migration.
 
 ## SDK and native delivery
 

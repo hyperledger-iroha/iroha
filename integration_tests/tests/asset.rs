@@ -6,7 +6,7 @@ use integration_tests::{
     sync::{get_status_with_retry_or_storage, sync_after_submission},
 };
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::KeyPair,
     data_model::{ValidationFail, prelude::*},
     query::QueryError,
@@ -135,6 +135,7 @@ fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Quantity>
     retry_query(|| {
         let client = clients.next();
         client
+            .client()
             .query_single(FindAssetById {
                 id: asset_id.clone(),
             })
@@ -145,7 +146,7 @@ fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Quantity>
 fn asset_exists(clients: &mut ClientPool, asset_id: &AssetId) -> Result<bool> {
     retry_query(|| {
         let client = clients.next();
-        match client.query_single(FindAssetById {
+        match client.client().query_single(FindAssetById {
             id: asset_id.clone(),
         }) {
             Ok(_) => Ok(true),
@@ -167,7 +168,11 @@ fn wait_for_asset_definition_owner(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        let last_err = match client.query(FindAssetsDefinitions::new()).execute_all() {
+        let last_err = match client
+            .client()
+            .query(FindAssetsDefinitions::new())
+            .execute_all()
+        {
             Ok(definitions) => definitions
                 .into_iter()
                 .find(|asset_definition| asset_definition.id() == asset_definition_id)
@@ -206,7 +211,9 @@ fn wait_for_asset_value(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        if let Ok(asset) = client.query_single(FindAssetById::new(asset_id.clone()))
+        if let Ok(asset) = client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
             && asset.value() == expected
         {
             return Ok(());
@@ -229,7 +236,9 @@ fn wait_for_asset_absent(
         let client = clients.next();
         if let Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) = client.query_single(FindAssetById::new(asset_id.clone()))
+        ))) = client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
         {
             return Ok(());
         }
@@ -319,11 +328,17 @@ fn submit_or_tolerate_timeout(
     context: &str,
 ) -> Result<Option<()>> {
     let instruction = instruction.into();
-    let tx = clients.current().build_transaction(
-        [instruction.clone()],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let tx = {
+        let account = clients.current().account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction.clone()],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_tx_or_skip(clients, &tx, context)
 }
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
@@ -453,7 +468,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     };
     let env_dir = network.env_dir().to_path_buf();
     let mut clients = ClientPool::new(&network);
-    let torii = clients.current().torii_url.clone();
+    let torii = clients.current().client().torii_url.clone();
     if status_or_skip(
         get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
@@ -468,7 +483,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         decimal_definition.clone(),
     ] {
         let register_instruction: InstructionBox = Register::asset_definition(definition).into();
-        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        if let Err(err) = clients.next().submit::<InstructionBox>(
             register_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ) {
@@ -506,7 +521,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let mint_instruction: InstructionBox =
         Mint::asset_quantity(quantity.clone(), asset_id.clone()).into();
-    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+    if let Err(err) = clients.next().submit::<InstructionBox>(
         mint_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
@@ -522,7 +537,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let big_asset_id = AssetId::new(big_asset_definition_id.clone(), account_id.clone());
     let mint_instruction: InstructionBox =
         Mint::asset_quantity(big_quantity.clone(), big_asset_id.clone()).into();
-    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+    if let Err(err) = clients.next().submit::<InstructionBox>(
         mint_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
@@ -545,7 +560,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let decimal_asset_id = AssetId::new(decimal_definition_id.clone(), account_id.clone());
     let mint_instruction: InstructionBox =
         Mint::asset_quantity(decimal_quantity.clone(), decimal_asset_id.clone()).into();
-    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+    if let Err(err) = clients.next().submit::<InstructionBox>(
         mint_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
@@ -571,7 +586,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let sum = decimal_quantity
         .checked_add(&quantity2)
         .map_err(|_| eyre::eyre!("overflow"))?;
-    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+    if let Err(err) = clients.next().submit::<InstructionBox>(
         mint,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
@@ -642,7 +657,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                     None,
                 ))
                 .into();
-            if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+            if let Err(err) = clients.next().submit::<InstructionBox>(
                 register_instruction,
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ) {
@@ -657,11 +672,17 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Mint::asset_quantity(10_u32, seller_btc.clone()).into(),
             Mint::asset_quantity(200_u32, buyer_eth.clone()).into(),
         ];
-        let seed_tx = clients.current().build_transaction(
-            seed_instructions,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let seed_tx = {
+            let account = clients.current().account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    seed_instructions,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         if submit_tx_or_skip(&mut clients, &seed_tx, "seed exchange balances")?.is_none() {
             return Ok(());
         }
@@ -745,11 +766,17 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Transfer::asset_quantity(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_quantity(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
-        let transfer_tx = clients.current().build_transaction(
-            transfer_instructions,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let transfer_tx = {
+            let account = clients.current().account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    transfer_instructions,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         if submit_tx_or_skip(&mut clients, &transfer_tx, "exchange transfers")?.is_none() {
             return Ok(());
         }
@@ -825,7 +852,7 @@ fn transfer_asset_definition() -> Result<()> {
             None,
         ))
         .into();
-    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+    if let Err(err) = clients.next().submit::<InstructionBox>(
         register_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
@@ -889,7 +916,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         };
         let env_dir = network.env_dir().to_path_buf();
         let mut clients = ClientPool::new(&network);
-        let torii = clients.current().torii_url.clone();
+        let torii = clients.current().client().torii_url.clone();
         if status_or_skip(
             get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
             "initial status",
@@ -906,7 +933,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         }
         let register_instruction: InstructionBox =
             Register::asset_definition(asset_definition.clone()).into();
-        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        if let Err(err) = clients.next().submit::<InstructionBox>(
             register_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ) {
@@ -947,7 +974,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let dest_asset_id = AssetId::new(asset_definition_id.clone(), dest_id.clone());
         for op in isi(fractional_value) {
             let client = clients.next();
-            match client.submit_blocking::<InstructionBox>(
+            match client.submit::<InstructionBox>(
                 op,
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ) {
@@ -979,7 +1006,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             .map_err(|_| eyre!("integer transfer underflow"))?;
         let mint_instruction: InstructionBox =
             Mint::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
-        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        if let Err(err) = clients.next().submit::<InstructionBox>(
             mint_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ) {
@@ -994,7 +1021,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         )?;
         let burn_instruction: InstructionBox =
             Burn::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
-        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        if let Err(err) = clients.next().submit::<InstructionBox>(
             burn_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ) {
@@ -1004,7 +1031,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         wait_for_asset_value(&mut clients, &asset_id, &before, "integer burn")?;
         let transfer_instruction: InstructionBox =
             Transfer::asset_quantity(asset_id.clone(), integer_quantity, dest_id.clone()).into();
-        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        if let Err(err) = clients.next().submit::<InstructionBox>(
             transfer_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ) {

@@ -85,7 +85,9 @@ impl Client {
             .iter()
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
         });
-        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        let mut builder = DefaultRequestBuilder::new(method, url)
+            .with_transport(self.http_transport.clone())
+            .headers(headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
@@ -113,7 +115,9 @@ impl Client {
             .iter()
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
         });
-        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        let mut builder = DefaultRequestBuilder::new(method, url)
+            .with_transport(self.http_transport.clone())
+            .headers(headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }

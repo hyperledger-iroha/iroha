@@ -569,6 +569,87 @@ fn decode_vec_u8_from_slice_serial_reports_prefix_used() {
     reset_decode_state();
 }
 #[test]
+fn decode_generic_u8_sequence_preserves_element_lengths_and_prefix_boundary() {
+    reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
+    let value = [3_u8, 5, 8, 13];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    for byte in value {
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.push(byte);
+    }
+    let sequence_len = bytes.len();
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) = decode_element_sequence_from_slice_serial::<u8>(&bytes)
+        .expect("decode generic byte element sequence");
+    assert_eq!(decoded, value);
+    assert_eq!(used, sequence_len);
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&bytes[..sequence_len]),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
+#[test]
+fn generic_sequence_decode_charges_count_once_and_has_an_exact_allocation_boundary() {
+    reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
+    let value = [3_u16, 5, 8, 13];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    for element in value {
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&element.to_le_bytes());
+    }
+
+    let permissive = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        usize::MAX,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let (decoded, usage) = with_decode_limits_measured(permissive, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    });
+    assert_eq!(decoded.expect("decode measured generic sequence").0, value);
+    assert_eq!(usage.total_elements(), value.len());
+    let allocation_bytes = usage.total_allocated_bytes();
+    assert!(allocation_bytes > 0);
+
+    let exact = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        allocation_bytes,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let decoded = with_decode_limits(exact, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    })
+    .expect("the measured allocation budget must be sufficient");
+    assert_eq!(decoded.0, value);
+
+    let one_byte_short = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        allocation_bytes - 1,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let error = with_decode_limits(one_byte_short, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    })
+    .expect_err("one byte less than the measured allocation must fail");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == allocation_bytes as u64 && limit == (allocation_bytes - 1) as u64
+    ));
+    reset_decode_state();
+}
+#[test]
 fn decode_vec_u8_from_slice_reports_prefix_used() {
     reset_decode_state();
     let value = vec![3_u8, 5, 8, 13];
@@ -1933,6 +2014,76 @@ fn array_and_tuple_serialization_use_compact_element_lengths() {
     assert_eq!(tuple_bytes, [1, 5, 1, 7]);
     assert_eq!(tuple.encoded_len_hint(), Some(tuple_bytes.len()));
     assert_eq!(tuple.encoded_len_exact(), Some(tuple_bytes.len()));
+    reset_decode_state();
+}
+#[test]
+fn tuple_serialization_preserves_explicit_flags_in_nested_containers() {
+    type NestedTuple = (Vec<Vec<u16>>, Vec<String>);
+
+    fn serialize(value: &dyn NoritoSerialize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        serialize_to_buffer(value, &mut bytes).expect("serialize nested tuple fixture");
+        bytes
+    }
+
+    let value: NestedTuple = (
+        vec![vec![0x0102, 0x0304], vec![0x0506]],
+        vec![String::from("alpha"), String::from("beta")],
+    );
+
+    reset_decode_state();
+    let default_payload = serialize(&value);
+    reset_decode_state();
+    let explicit_default_payload = {
+        let _guard = DecodeFlagsGuard::enter(default_encode_flags());
+        serialize(&value)
+    };
+    assert_eq!(
+        default_payload, explicit_default_payload,
+        "an absent layout override must retain the canonical default bytes"
+    );
+
+    for flags in [
+        0,
+        header_flags::PACKED_SEQ,
+        header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT,
+        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT,
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+    ] {
+        reset_decode_state();
+        let (tuple_payload, expected_payload) = {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            assert_eq!(tuple_serialization_flags(), flags);
+
+            let first = serialize(&value.0);
+            let second = serialize(&value.1);
+            let tuple_payload = serialize(&value);
+            assert_eq!(value.encoded_len_hint(), Some(tuple_payload.len()));
+            assert_eq!(value.encoded_len_exact(), Some(tuple_payload.len()));
+
+            let mut expected = Vec::new();
+            write_len_to_vec_with_flags(&mut expected, first.len() as u64, flags);
+            expected.extend_from_slice(&first);
+            write_len_to_vec_with_flags(&mut expected, second.len() as u64, flags);
+            expected.extend_from_slice(&second);
+            (tuple_payload, expected)
+        };
+        assert_eq!(
+            tuple_payload, expected_payload,
+            "tuple fields changed the explicit nested layout for flags 0x{flags:02x}"
+        );
+
+        let frame = frame_bare_with_header_flags::<NestedTuple>(&tuple_payload, flags)
+            .expect("frame nested tuple with its explicit flags");
+        let archived = from_bytes::<NestedTuple>(&frame)
+            .expect("validate nested tuple frame with its explicit flags");
+        let decoded = NestedTuple::try_deserialize(archived)
+            .expect("decode nested tuple with its explicit flags");
+        assert_eq!(decoded, value, "roundtrip changed flags 0x{flags:02x}");
+    }
     reset_decode_state();
 }
 #[test]

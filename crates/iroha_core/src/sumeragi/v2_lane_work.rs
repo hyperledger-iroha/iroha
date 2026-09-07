@@ -27054,10 +27054,9 @@ pub(super) mod tests {
             participant_lane_block_height: 1,
             participant_lane_block_view: 0,
             participant_proposal_hash: Hash::new(b"native-amx-test-participant-proposal"),
-            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed([
-                0;
-                Hash::LENGTH
-            ])),
+            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),

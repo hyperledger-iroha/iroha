@@ -217,9 +217,10 @@ pub enum MusubiCursorFailureV1 {
     LastKeyStale,
 }
 macro_rules! musubi_page_type {
-    ($name:ident, $item:ty, $doc:literal, $noncanonical_order:expr) => {
+    ($name:ident, $schema_name:literal, $item:ty, $doc:literal, $noncanonical_order:expr) => {
         #[doc = $doc]
-        #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+        #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+        #[norito_schema(name = $schema_name)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
         #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
         pub struct $name {
@@ -262,12 +263,14 @@ macro_rules! musubi_page_type {
 }
 musubi_page_type!(
     MusubiPackagePageV1,
+    "iroha_data_model::musubi::MusubiPackagePageV1",
     MusubiPackageRecordV1,
     "Ordered page of exact package records.",
     |pair: &[MusubiPackageRecordV1]| pair[0].package >= pair[1].package
 );
 musubi_page_type!(
     MusubiReleasePageV1,
+    "iroha_data_model::musubi::MusubiReleasePageV1",
     MusubiReleaseRecordV1,
     "Ordered page of release records with yank, takedown, and revision projections.",
     |pair: &[MusubiReleaseRecordV1]| pair[0].manifest.release >= pair[1].manifest.release

@@ -4,7 +4,7 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::{blocking::Client, client::FeeQuoteRequest};
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::jindo::{
@@ -19,6 +19,7 @@ use iroha_data_model::{
     isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
     metadata::Metadata,
     permission::Permission,
+    prelude::QueryBuilderExt,
     privacy::{
         PrivacyCapabilityReadinessV1, PrivacyCapabilityRowV1, PrivacyCapabilityUnavailableReasonV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
@@ -26,7 +27,10 @@ use iroha_data_model::{
         PrivacyParameterDigestV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
+    query::transaction::prelude::FindTransactions,
+    transaction::{
+        FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent, TransactionEntrypoint,
+    },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -56,11 +60,12 @@ const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CANONICAL_GENESIS_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-    client.transaction_ttl = Some(TRANSACTION_TTL);
-    client.torii_request_timeout = Duration::from_secs(20);
-    client
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        client.transaction_ttl = Some(TRANSACTION_TTL);
+        client.torii_request_timeout = Duration::from_secs(20);
+    })
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -167,7 +172,8 @@ fn assert_exact_jindo_row(
 async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
         let mut blocks = client
-            .listen_for_blocks_async(NonZeroU64::MIN)
+            .client()
+            .listen_for_blocks(NonZeroU64::MIN)
             .await
             .wrap_err("subscribe to canonical block replay from genesis")?;
         blocks
@@ -191,6 +197,7 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
 }
 fn committed_height(client: &Client, context: &str) -> Result<u64> {
     Ok(client
+        .client()
         .get_privacy_capabilities()
         .wrap_err_with(|| format!("{context}: query committed height"))?
         .committed_height)
@@ -243,8 +250,8 @@ fn build_jindo_action(
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock is before the Unix epoch")?;
     let mut context = JindoPrivacyActionTransactionContextV1 {
-        network_id: client.network_id,
-        authority: client.account.clone(),
+        network_id: client.client().network_id,
+        authority: client.client().account.clone(),
         creation_time,
         time_to_live: Some(Duration::from_secs(3_600)),
         nonce: NonZeroU32::new(nonce),
@@ -262,7 +269,9 @@ fn build_jindo_action(
         "provisional Jindo action did not bind QueuePlanSynced admission"
     );
     let quote = client
-        .quote_fees(provisional.transaction_payload_for_fee_quote_v1())
+        .quote_fees(FeeQuoteRequest::AccountSignature {
+            payload: provisional.transaction_payload_for_fee_quote_v1(),
+        })
         .wrap_err("quote canonical Jindo action fee")?;
     ensure!(
         context
@@ -287,14 +296,17 @@ fn build_jindo_action(
         .map_err(|error| eyre!(error))
         .wrap_err("validate quoted intent against final Jindo payload")?;
     let final_quote = client
-        .quote_fees(prepared.transaction_payload_for_fee_quote_v1())
+        .quote_fees(FeeQuoteRequest::AccountSignature {
+            payload: prepared.transaction_payload_for_fee_quote_v1(),
+        })
         .wrap_err("re-quote final canonical Jindo action")?;
     ensure!(
         final_quote.intent == quote.intent,
         "Jindo fee quote changed after fixed-size proof regeneration"
     );
-    let signed = sign_prepared_jindo_privacy_action_v1(prepared, client.key_pair.private_key())
-        .wrap_err("sign canonical native Jindo action")?;
+    let signed =
+        sign_prepared_jindo_privacy_action_v1(prepared, client.client().key_pair.private_key())
+            .wrap_err("sign canonical native Jindo action")?;
     ensure!(
         signed.effect() == JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly,
         "first-release Jindo action unexpectedly inferred a ledger mutation"
@@ -311,12 +323,28 @@ async fn submit_instruction(
     context: &str,
 ) -> Result<SignedTransaction> {
     let instruction = instruction.into();
-    let payload = client
-        .try_build_transaction_payload([instruction], no_fee(), Metadata::default())
+    let mut payload = client
+        .account_client()
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [instruction],
+            no_fee(),
+            Metadata::default(),
+        ))
         .wrap_err_with(|| format!("{context}: build QueuePlanSynced instruction payload"))?;
+    let quote = client
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+        .wrap_err_with(|| format!("{context}: quote QueuePlanSynced instruction"))?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "{context}: fee quote changed the selected payer, sponsor revision, or gas bound"
+    );
+    payload.fee_payment = quote.intent;
     let transaction = client
-        .quote_and_sign_transaction_payload(payload)
-        .wrap_err_with(|| format!("{context}: quote and sign QueuePlanSynced instruction"))?;
+        .account_client()
+        .sign_transaction(payload)
+        .wrap_err_with(|| format!("{context}: sign QueuePlanSynced instruction"))?;
     ensure!(
         transaction.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced,
         "{context}: client builder did not bind QueuePlanSynced admission"
@@ -337,12 +365,72 @@ async fn submit_signed_transaction(
     let transaction = transaction.clone();
     timeout(
         SUBMISSION_TASK_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_blocking(&transaction)),
+        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TASK_TIMEOUT:?}"))?
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
+}
+fn exact_applied_transaction_visible(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<bool> {
+    let expected_hash = transaction.hash_as_entrypoint();
+    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let transactions = client
+        .client()
+        .query(FindTransactions::new())
+        .execute_all()
+        .wrap_err("query finalized Jindo preflight transactions")?;
+    let Some(committed) = transactions
+        .iter()
+        .find(|committed| committed.entrypoint_hash() == &expected_hash)
+    else {
+        return Ok(false);
+    };
+    ensure!(
+        committed.entrypoint() == &expected_entrypoint,
+        "Jindo preflight entrypoint hash matched different transaction bytes"
+    );
+    ensure!(
+        committed.result().0.is_ok(),
+        "Jindo preflight transaction is visible but finalized as rejected"
+    );
+    Ok(true)
+}
+async fn wait_for_transaction_on_peers(
+    clients: &[Client],
+    transaction: &SignedTransaction,
+    context: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
+    let mut last_observed = Vec::new();
+    loop {
+        let mut visible = 0_usize;
+        last_observed.clear();
+        for (index, client) in clients.iter().enumerate() {
+            match exact_applied_transaction_visible(client, transaction) {
+                Ok(true) => {
+                    visible += 1;
+                    last_observed.push(format!("peer {index}: exact transaction visible"));
+                }
+                Ok(false) => last_observed.push(format!("peer {index}: transaction absent")),
+                Err(error) => last_observed.push(format!("peer {index}: {error}")),
+            }
+        }
+        if visible == clients.len() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{context}: finalized Jindo preflight transaction did not converge within \
+                 {PEER_CONVERGENCE_TIMEOUT:?}; {}",
+                last_observed.join("; ")
+            ));
+        }
+        sleep(POLL_INTERVAL).await;
+    }
 }
 async fn wait_for_all_peer_activations(
     network: &sandbox::SerializedNetwork,
@@ -358,7 +446,7 @@ async fn wait_for_all_peer_activations(
         last_observed.clear();
         for (index, peer) in network.peers().iter().enumerate() {
             let client = bounded_client(peer.client());
-            match client.get_privacy_capabilities() {
+            match client.client().get_privacy_capabilities() {
                 Ok(snapshot) => {
                     let row = jindo_row(&snapshot)?;
                     if snapshot.committed_height < minimum_height {
@@ -772,7 +860,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             "unqualified Jindo action rejected for the wrong reason: {qualification_error:?}"
         );
         let rejection_height = client
-            .get_privacy_capabilities()
+            .client().get_privacy_capabilities()
             .wrap_err("query height after unqualified Jindo rejection")?
             .committed_height;
         wait_for_all_peer_activations(

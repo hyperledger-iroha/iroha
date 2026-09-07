@@ -562,14 +562,30 @@ def check_rust_wire_contract():
         and "submitted_epoch" not in client_args,
         "Rust pin-register arguments must not transport signing material or caller time",
     )
+    pin_register_start = client_source.find("    pub async fn post_sorafs_pin_register(")
+    require(pin_register_start >= 0, "Rust client missing canonical account pin-register operation")
+    pin_register_end = client_source.find(
+        "\n    /// Submit a prebuilt transaction", pin_register_start
+    )
+    require(pin_register_end >= 0, "Rust client pin-register operation is not structurally bounded")
+    pin_register_source = client_source[pin_register_start:pin_register_end]
     for needle, label in (
-        ("quote_and_sign_transaction_payload(payload)?", "local quote and signing"),
+        (
+            ".quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })",
+            "typed account fee quote",
+        ),
+        (
+            "apply_fee_quote_intent(&mut payload, quote.intent)",
+            "fee-quote binding validation",
+        ),
+        ("self.sign_transaction(payload)?", "local account signing"),
         ('.header("Content-Type", APPLICATION_NORITO)', "Norito content type"),
         (".body(transaction.encode_versioned())", "versioned signed body"),
-        ("resp.status() != StatusCode::ACCEPTED", "HTTP 202 admission"),
+        ("Client::decode_json_response(", "canonical response decoding"),
+        ("StatusCode::ACCEPTED", "HTTP 202 admission"),
         ("InstructionBox::from(instruction)", "typed instruction assembly"),
     ):
-        require(needle in client_source, f"Rust pin-register client missing {label}")
+        require(needle in pin_register_source, f"Rust pin-register client missing {label}")
 
     torii_path = "crates/iroha_torii/src/routing.rs"
     torii_source = read(torii_path)

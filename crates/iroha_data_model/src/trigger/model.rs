@@ -53,6 +53,8 @@ mod model {
     #[derive(Debug, Display, Clone, IdEqOrdHash, IntoSchema)]
     #[display("{id}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::trigger::model::model::Trigger")]
     pub struct Trigger {
         /// Unique identifier of this trigger.
         pub id: TriggerId,

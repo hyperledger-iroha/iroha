@@ -1755,8 +1755,13 @@ mod tests {
             (&destination.payload, 3),
         ] {
             let encoded = payload.encode();
-            let decoded_index =
-                u32::decode(&mut encoded.as_slice()).expect("bridge payload variant index decodes");
+            // Decode consumes a complete payload; the enum tag is only its fixed-width prefix.
+            let tag_bytes = encoded
+                .get(..4)
+                .expect("bridge payload contains its variant tag")
+                .try_into()
+                .expect("four-byte variant tag");
+            let decoded_index = u32::from_le_bytes(tag_bytes);
             assert_eq!(decoded_index, expected_index);
         }
     }

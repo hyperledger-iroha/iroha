@@ -3,6 +3,7 @@ mod audit;
 #[cfg(feature = "bridge")]
 mod bridge;
 mod cli_output;
+mod client_config;
 mod commands;
 mod compute;
 mod confidential;
@@ -35,15 +36,17 @@ use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
 use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha::{
-    client::Client,
+    blocking::Client as BlockingClient,
+    client::{Client, FeeQuoteRequest},
     config::{Config, LoadPath},
     data_model::{prelude::*, transaction::IvmBytecode},
 };
 use iroha_config::parameters::defaults;
+use iroha_config_base::toml::{FromFileError, TomlSource};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_i18n::{Bundle, Localizer, detect_language};
 use iroha_service_model::soranet::RolloutPhase;
-use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
+use iroha_torii_shared::FeeQuoteResponse;
 use std::num::NonZeroU64;
 use std::{
     fmt::Display,
@@ -141,101 +144,28 @@ pub(crate) fn apply_cli_gas_limit_override(
         ),
     })
 }
-fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> String {
-    let Ok(envelope) = norito::json::from_slice::<ErrorEnvelope>(body) else {
-        let fallback = String::from_utf8_lossy(body);
-        return format!(
-            "fee quote request failed with HTTP {status}: {}",
-            fallback.trim()
-        );
-    };
-    let mut message = format!(
-        "fee quote rejected with HTTP {status} [{}]: {}",
-        envelope.code, envelope.message
-    );
-    if let Some(fee) = envelope
-        .details
-        .as_ref()
-        .and_then(|details| details.fee.as_ref())
-    {
-        use std::fmt::Write as _;
-        let _ = write!(
-            message,
-            "; fee_code={}; retryable={}",
-            fee.code, fee.retryable
-        );
-        if let Some(program_id) = &fee.program_id {
-            let _ = write!(message, "; program={program_id}");
-        }
-        if let Some(revision) = fee.program_revision {
-            let _ = write!(message, "; revision={revision}");
-        }
-        if let Some(asset_definition_id) = &fee.asset_definition_id {
-            let _ = write!(message, "; asset={asset_definition_id}");
-        }
-        if let Some(required) = &fee.required {
-            let _ = write!(message, "; required={required}");
-        }
-        if let Some(available) = &fee.available {
-            let _ = write!(message, "; available={available}");
-        }
-        if let Some(rule_id) = &fee.rule_id {
-            let _ = write!(message, "; rule={rule_id}");
-        }
-        if let Some(height) = fee.observation_height {
-            let _ = write!(message, "; observation_height={height}");
-        }
-        if let Some(remediation) = &fee.remediation {
-            let _ = write!(message, "; remediation: {remediation}");
-        }
-    }
-    message
-}
 pub(crate) fn quote_and_sign_transaction(
-    client: &Client,
+    client: &BlockingClient,
     executable: Executable,
     requested_fee_payment: FeePaymentIntent,
     metadata: Metadata,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     validate_executable_fee_payment(&executable, &requested_fee_payment)?;
-    let mut payload = client
-        .try_build_transaction_payload(executable.clone(), requested_fee_payment.clone(), metadata)
+    let account = client.account_client();
+    let mut payload = account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            executable.clone(),
+            requested_fee_payment.clone(),
+            metadata,
+        ))
         .wrap_err("Failed to build exact unsigned transaction payload for fee quoting")?;
-    let response = client
-        .post_fee_quote_response(&payload)
+    let quote = client
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("Failed to request an exact transaction fee quote")?;
-    if !response.status().is_success() {
-        return Err(eyre!(fee_quote_rejection_message(
-            response.status(),
-            response.body(),
-        )));
-    }
-    let mut content_types = response.headers().get_all("content-type").iter();
-    let content_type = content_types
-        .next()
-        .ok_or_else(|| eyre!("Fee quote response Content-Type must be application/json"))?
-        .to_str()
-        .map_err(|_| eyre!("Fee quote response Content-Type must be application/json"))?;
-    if content_types.next().is_some()
-        || !content_type
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .eq_ignore_ascii_case("application/json")
-    {
-        eyre::bail!("Fee quote response Content-Type must be application/json");
-    }
-    let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
-        .wrap_err("Failed to decode the exact transaction fee quote")?;
-    quote
-        .validate_for_draft(&payload)
-        .map_err(|error| eyre!(error))
-        .wrap_err("Fee quote response does not match the requested transaction payload")?;
     validate_executable_fee_payment(&executable, &quote.intent)?;
     payload.fee_payment = quote.intent.clone();
-    let transaction = client
-        .try_sign_transaction_payload(payload)
+    let transaction = account
+        .sign_transaction(payload)
         .wrap_err("Failed to sign the exact quoted transaction payload")?;
     Ok((transaction, quote))
 }
@@ -464,6 +394,12 @@ enum Command {
 /// Context inside which commands run
 trait RunContext {
     fn config(&self) -> &Config;
+    fn connect_queue_root(&self) -> PathBuf {
+        client_config::default_connect_queue_root()
+    }
+    fn soracloud_http_witness_file(&self) -> Option<&Path> {
+        None
+    }
     fn transaction_metadata(&self) -> Option<&Metadata>;
     fn transaction_fee_payment(&self) -> Result<FeePaymentIntent> {
         eyre::bail!("this command context has no explicit fee payment selection")
@@ -599,8 +535,10 @@ trait RunContext {
         };
         let fee_payment = apply_cli_gas_limit_override(self.transaction_fee_payment()?, gas_limit)?;
         let client = self.client_from_config();
+        let blocking_client = BlockingClient::from_client(client.clone())
+            .wrap_err("failed to initialize blocking transaction client")?;
         let (transaction, fee_quote) =
-            quote_and_sign_transaction(&client, executable, fee_payment, metadata)?;
+            quote_and_sign_transaction(&blocking_client, executable, fee_payment, metadata)?;
         let i18n = self.i18n().clone();
         let err_msg = if cfg!(debug_assertions) {
             let tx = format!("{transaction:?}");
@@ -612,14 +550,14 @@ trait RunContext {
             i18n.t("error.submit_transaction")
         };
         let (hash, confirmation_msg) = if wait_for_confirmation {
-            let hash = client
-                .submit_transaction_blocking(&transaction)
+            let hash = blocking_client
+                .submit_transaction_and_wait(&transaction)
                 .map_err(|err| map_account_admission_error(err, &i18n))
                 .wrap_err(err_msg.clone())?;
             (hash, i18n.t("info.tx_submitted"))
         } else {
             let hash = transaction.hash();
-            client
+            blocking_client
                 .submit_transaction(&transaction)
                 .map_err(|err| map_account_admission_error(err, &i18n))
                 .wrap_err(err_msg.clone())?;
@@ -1176,21 +1114,19 @@ fn run() -> ReportResult<(), MainError> {
         || (LoadPath::Default(PathBuf::from("client.toml")), false),
         |path| (LoadPath::Explicit(resolve_config_path(path)), true),
     );
-    let config_path = match &load_path {
-        LoadPath::Explicit(path) | LoadPath::Default(path) => Some(path.clone()),
-    };
-    let mut config = match Config::load(load_path) {
-        Ok(cfg) => cfg,
+    let (config, filesystem_config) = match load_cli_client_config(load_path) {
+        Ok(loaded) => loaded,
         Err(_)
             if !config_was_explicit
                 && args.command.allows_fallback_config()
                 && (!args.machine || args.command.allows_fallback_config_in_machine_mode()) =>
         {
-            try_fallback_config().map_err(|err| {
+            let config = try_fallback_config().map_err(|err| {
                 Report::new(MainError::Config)
                     .attach("failed to derive offline fallback signing key")
                     .attach(err.to_string())
-            })?
+            })?;
+            (config, client_config::FilesystemConfig::default())
         }
         Err(report) => {
             let mut report = report
@@ -1204,18 +1140,14 @@ fn run() -> ReportResult<(), MainError> {
             return Err(report);
         }
     };
-    if let Some(path) = config_path
-        && let Ok(raw) = read_cli_text_file_bounded(&path, "client configuration")
-        && let Ok(value) = toml::from_str::<toml::Value>(&raw)
-    {
-        apply_transaction_overrides(&mut config, &value);
-    }
     if args.verbose {
-        let config_json = config_to_json(&config).into_report().map_err(|report| {
-            report
-                .change_context(MainError::SerializeConfig)
-                .attach("caused by `--verbose` argument")
-        })?;
+        let config_json = config_to_json(&config, &filesystem_config)
+            .into_report()
+            .map_err(|report| {
+                report
+                    .change_context(MainError::SerializeConfig)
+                    .attach("caused by `--verbose` argument")
+            })?;
         let rendered = norito::json::to_json_pretty(&config_json)
             .change_context(MainError::SerializeConfig)
             .attach("caused by `--verbose` argument")?;
@@ -1244,6 +1176,7 @@ fn run() -> ReportResult<(), MainError> {
         write: io::stdout(),
         err_write: io::stderr(),
         config,
+        filesystem_config,
         operator_key_pair,
         transaction_metadata: None,
         output_format: effective_output_format(&args),
@@ -1443,6 +1376,48 @@ fn resolve_config_path(path: &Path) -> PathBuf {
     }
     path.to_path_buf()
 }
+fn load_cli_client_config(
+    load_path: LoadPath<PathBuf>,
+) -> ReportResult<(Config, client_config::FilesystemConfig), MainError> {
+    let (path, required) = match load_path {
+        LoadPath::Explicit(path) => (path, true),
+        LoadPath::Default(path) => (path, false),
+    };
+    let mut source = match TomlSource::from_file(&path) {
+        Ok(source) => source,
+        Err(error) if !required && matches!(error.current_context(), FromFileError::Read) => {
+            let config = Config::load(LoadPath::Default(&path))
+                .change_context(MainError::Config)
+                .attach("failed to load SDK client configuration from environment")?;
+            return Ok((config, client_config::FilesystemConfig::default()));
+        }
+        Err(error) => {
+            return Err(error.change_context(MainError::Config).attach(format!(
+                "failed to read client configuration `{}`",
+                path.display()
+            )));
+        }
+    };
+    let source_path = source.path().to_path_buf();
+    let filesystem_config =
+        client_config::FilesystemConfig::take_from(source.table_mut(), &source_path)
+            .into_report()
+            .change_context(MainError::Config)
+            .attach("failed to validate CLI-owned filesystem configuration")?;
+    let transaction = source.table_mut().get("transaction").cloned();
+    let table = source.table_mut().clone();
+    let mut config = Config::load_table(&source_path, table)
+        .change_context(MainError::Config)
+        .attach("failed to validate SDK client configuration")?;
+    if let Some(transaction) = transaction {
+        let raw = toml::Value::Table(toml::Table::from_iter([(
+            "transaction".to_owned(),
+            transaction,
+        )]));
+        apply_transaction_overrides(&mut config, &raw);
+    }
+    Ok((config, filesystem_config))
+}
 fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
     match raw {
         toml::Value::Integer(ms) if *ms >= 0 => u64::try_from(*ms).ok().map(Duration::from_millis),
@@ -1500,8 +1475,6 @@ fn try_fallback_config() -> Result<Config> {
         transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
         transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-        connect_queue_root: iroha::config::default_connect_queue_root(),
-        soracloud_http_witness_file: None,
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: RolloutPhase::Default,
@@ -1519,7 +1492,10 @@ static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         .unwrap_or(&manifest_dir)
         .to_path_buf()
 });
-fn config_to_json(config: &Config) -> Result<norito::json::Value> {
+fn config_to_json(
+    config: &Config,
+    filesystem_config: &client_config::FilesystemConfig,
+) -> Result<norito::json::Value> {
     json_utils::json_object(vec![
         ("chain", json_utils::json_value(&config.chain)?),
         ("network_id", json_utils::json_value(&config.network_id)?),
@@ -1551,8 +1527,12 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
             json_utils::json_value(&config.transaction_add_nonce)?,
         ),
         (
+            "connect_queue_root",
+            json_utils::json_value(&filesystem_config.connect_queue_root)?,
+        ),
+        (
             "soracloud_http_witness_file",
-            json_utils::json_value(&config.soracloud_http_witness_file)?,
+            json_utils::json_value(&filesystem_config.soracloud_http_witness_file)?,
         ),
     ])
 }
@@ -1858,30 +1838,30 @@ mod events {
     ) -> Result<()> {
         let filter = filter.into();
         let client = context.client_from_config();
-        let i18n = context.i18n();
-        eprintln!("{}", listen_events_message(&filter, timeout, i18n));
-        if let Some(timeout) = timeout {
-            let timeout_message = i18n.t("warning.timeout_expired");
-            let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-            rt.block_on(async {
-                let mut stream = client
-                    .listen_for_events_async([filter])
-                    .await
-                    .wrap_err("Failed to listen for events")?;
+        let i18n = context.i18n().clone();
+        eprintln!("{}", listen_events_message(&filter, timeout, &i18n));
+        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
+        rt.block_on(async {
+            let mut stream = client
+                .listen_for_events([filter])
+                .await
+                .wrap_err("Failed to listen for events")?;
+            if let Some(timeout) = timeout {
+                let timeout_message = i18n.t("warning.timeout_expired");
                 drive_try_stream_until_timeout(
                     &mut stream,
                     |event| context.print_data(&event),
                     timeout,
                     timeout_message.as_str(),
                 )
-                .await
-            })?;
-        } else {
-            client
-                .listen_for_events([filter])
-                .wrap_err("Failed to listen for events")?
-                .try_for_each(|event| context.print_data(&event?))?;
-        }
+                .await?;
+            } else {
+                while let Some(event) = stream.try_next().await? {
+                    context.print_data(&event)?;
+                }
+            }
+            Ok::<(), eyre::Report>(())
+        })?;
         Ok(())
     }
 }
@@ -1910,30 +1890,30 @@ mod blocks {
         timeout: Option<Duration>,
     ) -> Result<()> {
         let client = context.client_from_config();
-        let i18n = context.i18n();
-        eprintln!("{}", listen_blocks_message(height, timeout, i18n));
-        if let Some(timeout) = timeout {
-            let timeout_message = i18n.t("warning.timeout_expired");
-            let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-            rt.block_on(async {
-                let mut stream = client
-                    .listen_for_blocks_async(height)
-                    .await
-                    .wrap_err("Failed to listen for blocks")?;
+        let i18n = context.i18n().clone();
+        eprintln!("{}", listen_blocks_message(height, timeout, &i18n));
+        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
+        rt.block_on(async {
+            let mut stream = client
+                .listen_for_blocks(height)
+                .await
+                .wrap_err("Failed to listen for blocks")?;
+            if let Some(timeout) = timeout {
+                let timeout_message = i18n.t("warning.timeout_expired");
                 drive_try_stream_until_timeout(
                     &mut stream,
                     |event| context.print_data(&event),
                     timeout,
                     timeout_message.as_str(),
                 )
-                .await
-            })?;
-        } else {
-            client
-                .listen_for_blocks(height)
-                .wrap_err("Failed to listen for blocks")?
-                .try_for_each(|event| context.print_data(&event?))?;
-        }
+                .await?;
+            } else {
+                while let Some(block) = stream.try_next().await? {
+                    context.print_data(&block)?;
+                }
+            }
+            Ok::<(), eyre::Report>(())
+        })?;
         Ok(())
     }
 }
@@ -4859,6 +4839,7 @@ mod transaction {
                     let i18n = i18n.clone();
                     let base_msg = base_msg.clone();
                     let first_quote = Arc::clone(&first_quote_for_workers);
+                    let mut blocking_client = None;
                     move |index| {
                         let message = ping_message(&base_msg, index, count, no_index);
                         let instruction = Log::new(log_level, message);
@@ -4869,8 +4850,18 @@ mod transaction {
                         let executable = Executable::Instructions(
                             vec![InstructionBox::from(instruction)].into(),
                         );
+                        let blocking_client = match blocking_client
+                            .get_or_insert_with(|| BlockingClient::from_client(client.clone()))
+                        {
+                            Ok(client) => client,
+                            Err(error) => {
+                                return Err(eyre!(
+                                    "failed to initialize blocking transaction client: {error:#}"
+                                ));
+                            }
+                        };
                         let (transaction, quote) = quote_and_sign_transaction(
-                            &client,
+                            blocking_client,
                             executable,
                             fee_payment.clone(),
                             metadata,
@@ -4882,9 +4873,11 @@ mod transaction {
                         }
                         drop(quote_slot);
                         let submit = if no_wait {
-                            client.submit_transaction(&transaction).map(|_| ())
+                            blocking_client.submit_transaction(&transaction).map(|_| ())
                         } else {
-                            client.submit_transaction_blocking(&transaction).map(|_| ())
+                            blocking_client
+                                .submit_transaction_and_wait(&transaction)
+                                .map(|_| ())
                         };
                         submit.map_err(|err| {
                             let err = map_account_admission_error(err, &i18n);
@@ -5050,9 +5043,11 @@ mod transaction {
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             let fee_payment = context.transaction_fee_payment()?;
             let client = context.client_from_config();
+            let blocking_client = BlockingClient::from_client(client)
+                .wrap_err("failed to initialize blocking transaction client")?;
             let executable = Executable::Instructions(instructions.into());
             let (transaction, fee_quote) =
-                quote_and_sign_transaction(&client, executable, fee_payment, metadata)
+                quote_and_sign_transaction(&blocking_client, executable, fee_payment, metadata)
                     .wrap_err("Failed to quote and sign transaction for exact size measurement")?;
             let signed_transaction_bytes = u64::try_from(
                 norito::to_bytes(&transaction)
@@ -5486,11 +5481,13 @@ mod trigger {
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             let fee_payment = context.transaction_fee_payment()?;
             let client = context.client_from_config();
+            let blocking_client = BlockingClient::from_client(client.clone())
+                .wrap_err("failed to initialize blocking transaction client")?;
             let (transaction, fee_quote) =
-                quote_and_sign_transaction(&client, executable, fee_payment, metadata)
+                quote_and_sign_transaction(&blocking_client, executable, fee_payment, metadata)
                     .wrap_err("Failed to quote and sign trigger execution transaction")?;
             let hash = transaction.hash();
-            client
+            blocking_client
                 .submit_transaction(&transaction)
                 .wrap_err("Failed to submit trigger execution transaction")?;
             let mut pairs = vec![
@@ -5659,13 +5656,19 @@ mod trigger {
             let timeout = self.timeout_ms.map(Duration::from_millis);
             if timeout.is_none() && self.limit.is_none() {
                 let client = context.client_from_config();
-                client
-                    .listen_for_events([filter])
-                    .wrap_err("Failed to listen for trigger completion events")?
-                    .try_for_each(|event| {
-                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) = event?
-                        {
-                            context.print_data(&event)?;
+                Runtime::new()
+                    .wrap_err("Failed to create runtime")?
+                    .block_on(async {
+                        let mut stream = client
+                            .listen_for_events([filter])
+                            .await
+                            .wrap_err("Failed to listen for trigger completion events")?;
+                        while let Some(event) = stream.try_next().await? {
+                            if let iroha::data_model::events::EventBox::TriggerCompleted(event) =
+                                event
+                            {
+                                context.print_data(&event)?;
+                            }
                         }
                         Ok::<(), eyre::Report>(())
                     })?;
@@ -5749,7 +5752,7 @@ mod trigger {
         let rt = Runtime::new().wrap_err("Failed to create runtime")?;
         rt.block_on(async move {
             let mut stream = client
-                .listen_for_events_async([filter])
+                .listen_for_events([filter])
                 .await
                 .wrap_err("Failed to listen for trigger completion events")?;
             let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);

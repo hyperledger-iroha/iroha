@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, MutableMapping, Sequence
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 OBJECT_FORMAT = "sha1"
 OID_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -61,26 +61,16 @@ REQUIRED_SELECTED_ORIGINS = {
     "scripts/tests/check_source_file_budget_test.py": "donor",
     "scripts/tests/profile_cargo_build_test.py": "protected_integration",
 }
-HISTORICAL_SOURCE_BUDGET = {
-    "path": "ci/source_file_budget.json",
-    "schema_version": 1,
-    "baseline": 5_067_263,
-    "ceiling": 4_540_000,
-    "ratchet_ceiling": 5_014_603,
-    "working_target": 4_500_000,
-    "excluded_prefixes": (
-        "docs/portal/node_modules/",
-        "target/",
-        "vendor/",
-    ),
-    "commit_role": "source_budget_baseline",
-}
 REQUIRED_SOURCE_BUDGET = {
     "path": "ci/source_file_budget.json",
     "schema_version": 2,
     "production_limit": 5_000,
     "test_limit": 3_000,
-    "excluded_prefixes": HISTORICAL_SOURCE_BUDGET["excluded_prefixes"],
+    "excluded_prefixes": (
+        "docs/portal/node_modules/",
+        "target/",
+        "vendor/",
+    ),
 }
 REQUIRED_LOCK_PATH = "Cargo.lock"
 REQUIRED_SIGNATURE_KIND = "openpgp_v4_issuer_structure"
@@ -704,7 +694,6 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
             "selected_paths",
             "signed_lock_anchor",
             "source_budget",
-            "historical_source_budget",
         },
         "provenance manifest",
     )
@@ -841,18 +830,13 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
     validate_source_budget_contract(
         manifest["source_budget"], REQUIRED_SOURCE_BUDGET, "source_budget"
     )
-    validate_source_budget_contract(
-        manifest["historical_source_budget"],
-        HISTORICAL_SOURCE_BUDGET,
-        "historical_source_budget",
-    )
     return manifest
 
 
 def validate_source_budget_contract(
     payload: Any, expected: Mapping[str, Any], label: str
 ) -> None:
-    """Pin active file policy or historical facts without conflating them."""
+    """Pin the active per-file source policy."""
     contract = require_object(payload, label)
     require_exact_keys(contract, set(expected), label)
     for key, required in expected.items():
@@ -1012,7 +996,7 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int |
         observed_paths, observed_lines = historical_rust_count(
             store,
             commit,
-            tuple(manifest["historical_source_budget"]["excluded_prefixes"]),
+            tuple(manifest["source_budget"]["excluded_prefixes"]),
             line_cache,
         )
         total_historical_paths += observed_paths
@@ -1097,12 +1081,6 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int |
     )
     head_lock_bytes = verified_blobs[head_lock.oid]
 
-    historical_budget = manifest["historical_source_budget"]
-    baseline_role = historical_budget["commit_role"]
-    if lineage[baseline_role]["rust"]["lines"] != historical_budget["baseline"]:
-        raise ProvenanceError(
-            "historical source budget baseline does not equal its pinned commit's Rust count"
-        )
     verify_current_source_budget(root, manifest["source_budget"])
     return {
         "roles": len(lineage),
@@ -1138,8 +1116,6 @@ def main() -> int:
         f"head_cargo_lock_bytes={report['head_cargo_lock_bytes']} "
         f"head_cargo_lock_sha256={report['head_cargo_lock_sha256']} "
         "structural_signature_only=true "
-        f"historical_baseline={HISTORICAL_SOURCE_BUDGET['baseline']} "
-        f"historical_ceiling={HISTORICAL_SOURCE_BUDGET['ceiling']} "
         f"production_limit={REQUIRED_SOURCE_BUDGET['production_limit']} "
         f"test_limit={REQUIRED_SOURCE_BUDGET['test_limit']}"
     )

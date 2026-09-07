@@ -1466,12 +1466,16 @@ fn validate_entry(
     })
 }
 
-fn canonical_sorafs_checkpoint_manifest<'a>(
+fn canonical_sorafs_checkpoint_manifest<I, B>(
     finality: SccpReplayArchiveHeadFinalityV1,
     inventory_sha256: [u8; 32],
     snapshot_total_bytes: u64,
-    snapshot_bytes: impl IntoIterator<Item = &'a [u8]>,
-) -> Result<ManifestV1, ToriiSccpReplayStartupErrorV1> {
+    snapshot_bytes: I,
+) -> Result<ManifestV1, ToriiSccpReplayStartupErrorV1>
+where
+    I: IntoIterator<Item = B>,
+    B: AsRef<[u8]>,
+{
     let expected_len = usize::try_from(snapshot_total_bytes)
         .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
     let mut payload = Vec::new();
@@ -1479,6 +1483,7 @@ fn canonical_sorafs_checkpoint_manifest<'a>(
         .try_reserve_exact(expected_len)
         .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
     for snapshot in snapshot_bytes {
+        let snapshot = snapshot.as_ref();
         payload
             .len()
             .checked_add(snapshot.len())
@@ -1537,11 +1542,15 @@ fn canonical_sorafs_checkpoint_manifest<'a>(
         .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)
 }
 
-fn validate_sorafs_checkpoint_manifest<'a>(
+fn validate_sorafs_checkpoint_manifest<I, B>(
     bytes: &[u8],
     body: &iroha_sccp::SccpReplayArchiveCheckpointSetBodyV1,
-    snapshot_bytes: impl IntoIterator<Item = &'a [u8]>,
-) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    snapshot_bytes: I,
+) -> Result<(), ToriiSccpReplayStartupErrorV1>
+where
+    I: IntoIterator<Item = B>,
+    B: AsRef<[u8]>,
+{
     let binding = body.sorafs_manifest;
     if bytes.is_empty()
         || u64::try_from(bytes.len()).ok() != Some(binding.manifest_size_bytes)

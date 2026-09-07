@@ -484,7 +484,7 @@ fn annotate_scoreboard_with_gateway_context(
 mod tests {
     use super::*;
     use iroha::{
-        config::{Config, DEFAULT_TORII_REQUEST_TIMEOUT, default_connect_queue_root},
+        config::{Config, DEFAULT_TORII_REQUEST_TIMEOUT},
         crypto::{Algorithm, Hash, HashOf, KeyPair},
         data_model::{NetworkId, account::AccountId, block::BlockHeader, prelude::ChainId},
     };
@@ -661,8 +661,6 @@ mod tests {
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),
             transaction_add_nonce: false,
-            connect_queue_root: default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: alias_cache,
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: RolloutPhase::Canary,

@@ -1,6 +1,59 @@
 use manyhow::{Error as ManyhowError, ToTokensError};
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
+
+/// Parse the one explicit nominal identity owned by a generated child type.
+///
+/// The child identity is independent of its parent's identity. Missing, duplicate,
+/// unknown, nonliteral, and malformed declarations fail before code generation.
+pub fn required_child_schema_name(
+    input: &syn::DeriveInput,
+    attribute_name: &str,
+    derive_name: &str,
+    child_description: &str,
+) -> syn::Result<syn::LitStr> {
+    let mut name = None;
+    let mut declaration_seen = false;
+    for attribute in &input.attrs {
+        if !attribute.path().is_ident(attribute_name) {
+            continue;
+        }
+        if declaration_seen {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                format!("duplicate {child_description} identity declaration"),
+            ));
+        }
+        declaration_seen = true;
+        attribute.parse_nested_meta(|nested| {
+            if !nested.path.is_ident("schema_name") {
+                return Err(nested.error(format!("unsupported {child_description} identity option")));
+            }
+            if name.is_some() {
+                return Err(nested.error(format!("duplicate {child_description} schema_name")));
+            }
+            let literal: syn::LitStr = nested.value()?.parse()?;
+            let value = literal.value();
+            if value.is_empty()
+                || value.trim() != value
+                || value.chars().any(char::is_control)
+            {
+                return Err(syn::Error::new_spanned(
+                    literal,
+                    format!("{child_description} schema_name must be nonempty without surrounding whitespace or control characters"),
+                ));
+            }
+            name = Some(literal);
+            Ok(())
+        })?;
+    }
+    name.ok_or_else(|| {
+        syn::Error::new_spanned(
+            &input.ident,
+            format!("{derive_name} requires #[{attribute_name}(schema_name = \"captured child identity\")]"),
+        )
+    })
+}
 /// Extension trait for [`darling::Error`] adding a `with_spans` helper.
 #[allow(dead_code)]
 pub trait DarlingErrorExt: Sized {
@@ -25,13 +78,18 @@ impl DarlingErrorExt for darling::Error {
 /// Returns `None` if no attributes with specified name are found.
 /// Emits an error into accumulator if multiple attributes with specified name are found.
 pub fn find_single_attr_opt<'a>(
-    _accumulator: &mut darling::error::Accumulator,
+    accumulator: &mut darling::error::Accumulator,
     attr_name: &str,
     attrs: &'a [syn::Attribute],
 ) -> Option<&'a syn::Attribute> {
     let mut iter = attrs.iter().filter(|a| a.path().is_ident(attr_name));
     let attr = iter.next()?;
-    // Ignore duplicates beyond the first to keep existing call sites tolerant of repeated attrs.
+    if let Some(duplicate) = iter.next() {
+        accumulator.push(
+            darling::Error::custom(format!("Only one #[{attr_name}] attribute is allowed!"))
+                .with_span(duplicate),
+        );
+    }
     Some(attr)
 }
 /// Parses a single attribute of the form `#[attr_name(...)]` for darling using a `syn::parse::Parse` implementation.
@@ -117,12 +175,97 @@ mod tests {
     use super::*;
     use syn::parse_quote;
     #[test]
+    fn generated_child_identity_is_explicit_and_distinct_from_parent() {
+        let input = parse_quote! {
+            #[norito_schema(name = "fixture::Parent")]
+            #[event_set(schema_name = "fixture::Child")]
+            enum Parent { A }
+        };
+        let identity = required_child_schema_name(&input, "event_set", "EventSet", "event set")
+            .expect("explicit child identity");
+        assert_eq!(identity.value(), "fixture::Child");
+    }
+    #[test]
+    fn generated_child_identity_rejects_ambiguous_or_invalid_metadata() {
+        for (attributes, expected) in [
+            ("", "requires #[event_set"),
+            (
+                "#[norito_schema(name = \"fixture::Parent\")]",
+                "requires #[event_set",
+            ),
+            ("#[event_set()]", "requires #[event_set"),
+            ("#[event_set]", "expected attribute arguments"),
+            (
+                "#[event_set(schema_name = \"First\")] #[event_set(schema_name = \"Second\")]",
+                "duplicate event set identity declaration",
+            ),
+            (
+                "#[event_set(schema_name = \"First\", schema_name = \"Second\")]",
+                "duplicate event set schema_name",
+            ),
+            (
+                "#[event_set(other = \"Child\")]",
+                "unsupported event set identity option",
+            ),
+            ("#[event_set(schema_name = 4)]", "expected string literal"),
+            (
+                "#[event_set(schema_name = concat!(\"fixture\", \"::Child\"))]",
+                "expected string literal",
+            ),
+            ("#[event_set(schema_name = \"\")]", "must be nonempty"),
+            ("#[event_set(schema_name = \" Child\")]", "must be nonempty"),
+            (
+                "#[event_set(schema_name = \"Child \" )]",
+                "must be nonempty",
+            ),
+            (
+                r#"#[event_set(schema_name = "Child\u{0}Identity")]"#,
+                "must be nonempty",
+            ),
+        ] {
+            let input = syn::parse_str(&format!("{attributes} enum Parent {{ A }}"))
+                .expect("syntactically valid fixture");
+            let error = required_child_schema_name(&input, "event_set", "EventSet", "event set")
+                .expect_err(attributes);
+            assert!(
+                error.to_string().contains(expected),
+                "{attributes}: {error}"
+            );
+        }
+    }
+    #[test]
     fn find_single_attr_opt_works() {
         let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[test_attr(foo)])];
         let mut acc = darling::error::Accumulator::default();
         let attr = find_single_attr_opt(&mut acc, "test_attr", &attrs).unwrap();
         acc.finish().unwrap();
         assert!(attr.path().is_ident("test_attr"));
+    }
+    #[test]
+    fn find_single_attr_opt_reports_duplicate_declarations() {
+        let attrs = vec![
+            parse_quote!(#[test_attr(first)]),
+            parse_quote!(#[unrelated(value)]),
+            parse_quote!(#[test_attr(second)]),
+        ];
+        let mut accumulator = darling::error::Accumulator::default();
+        assert!(find_single_attr_opt(&mut accumulator, "test_attr", &attrs).is_some());
+        let error = accumulator
+            .finish()
+            .expect_err("duplicates must be reported");
+        assert!(error.to_string().contains("Only one #[test_attr]"));
+    }
+    #[test]
+    fn parse_single_list_attr_opt_rejects_duplicate_declarations() {
+        for duplicate in [
+            parse_quote!(#[test_attr(first)]),
+            parse_quote!(#[test_attr(second)]),
+        ] {
+            let attrs = vec![parse_quote!(#[test_attr(first)]), duplicate];
+            let error = parse_single_list_attr_opt::<syn::Ident>("test_attr", &attrs)
+                .expect_err("even identical declarations are ambiguous");
+            assert!(error.to_string().contains("Only one #[test_attr]"));
+        }
     }
     #[test]
     fn parse_single_list_attr_opt_parses() {

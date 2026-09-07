@@ -19,7 +19,7 @@
 //! ```
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::{
@@ -368,7 +368,17 @@ fn instruction_transaction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
 ) -> SignedTransaction {
-    client.build_transaction([instruction.into()], no_fee(), Metadata::default())
+    {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction.into()],
+                no_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction")
 }
 fn intent_bound_privacy_transaction(
     client: &Client,
@@ -410,7 +420,7 @@ async fn submit_signed_transaction(
     let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_blocking(&transaction)),
+        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
@@ -1175,13 +1185,18 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .expect("static exact-12 duplicate metadata key is valid"),
             activation_height,
         );
-        let fresh_duplicate_registration = client.build_transaction(
+        let fresh_duplicate_registration ={
+    let account = client.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [RegisterPrivacyProtocolActivationV1::new(
                 proposed_records[0],
             )],
             no_fee(),
             duplicate_metadata,
-        );
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
         ensure!(
             fresh_duplicate_registration.hash() != first_proposal_transaction.hash(),
             "fresh duplicate registration must have a distinct signed transaction hash"

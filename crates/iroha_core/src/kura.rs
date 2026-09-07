@@ -113,10 +113,9 @@ use iroha_data_model::{
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, ExecWitness, LaneBlockDescriptorV1,
-            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1,
-            NativeAmxParticipantSettlement, NativeAmxReceipt, SumeragiLanePayloadOwnership,
-            compute_native_amx_participant_settlement_hash,
+            CertPhase, ExecWitness, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LanePayloadAvailabilityBodyV1, NativeAmxParticipantSettlement, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership, compute_native_amx_participant_settlement_hash,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,

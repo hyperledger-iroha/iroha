@@ -3,7 +3,7 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{
         isi::escrow::{
             AcceptAssetEscrow, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
@@ -28,7 +28,10 @@ fn wait_for_escrow_status(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "escrow was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.query_single(FindAssetEscrowById::new(escrow_id)) {
+        match client
+            .client()
+            .query_single(FindAssetEscrowById::new(escrow_id))
+        {
             Ok(record) => {
                 last_observed = format!("{:?}", record.status);
                 if record.status == expected {
@@ -56,7 +59,10 @@ fn wait_for_asset_value(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "asset was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.query_single(FindAssetById::new(asset_id.clone())) {
+        match client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
             Ok(asset) => {
                 last_observed = format!("{}", asset.value());
                 if asset.value() == expected {
@@ -85,6 +91,7 @@ fn wait_for_buyer_escrow(
     let mut last_observed = "buyer escrow index was not queried".to_owned();
     while Instant::now() < deadline {
         match client
+            .client()
             .query(FindAssetEscrowsByBuyer::new(buyer.clone()))
             .execute_all()
         {
@@ -128,7 +135,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             "aitai_xor_native".parse()?,
         );
         let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
-        client.submit_all_blocking(
+        client.submit_all(
             [
                 InstructionBox::from(Register::account(Account::new(buyer.clone()))),
                 Register::asset_definition(AssetDefinition::numeric(
@@ -143,7 +150,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let escrow_id = EscrowId::new(Hash::new("native-aitai-flow"));
-        client.submit_blocking(
+        client.submit(
             OpenAssetEscrow::with_evidence_hashes(
                 escrow_id,
                 asset_definition_id.clone(),
@@ -155,7 +162,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         let opened =
             wait_for_escrow_status(&client, escrow_id, AssetEscrowStatus::Open, "open escrow")?;
         let custody_asset_id = AssetId::of(asset_definition_id.clone(), opened.custody.clone());
-        client.submit_blocking(
+        client.submit(
             Grant::account_permission(
                 Permission::from(CanTransferAsset {
                     asset: custody_asset_id.clone(),
@@ -166,22 +173,22 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         )?;
         assert!(
             client
-                .submit_blocking(
+                .submit(
                     Transfer::asset_quantity(custody_asset_id, 1_u64, seller.clone(),),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
                 )
                 .is_err(),
             "active native escrow custody must not be drainable through generic transfer"
         );
-        buyer_client.submit_blocking(
+        buyer_client.submit(
             AcceptAssetEscrow::new(escrow_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        buyer_client.submit_blocking(
+        buyer_client.submit(
             MarkEscrowPaymentSent::new(escrow_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        client.submit_blocking(
+        client.submit(
             ReleaseAssetEscrow::new(escrow_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -247,7 +254,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             "aitai_xor_lock_native".parse()?,
         );
         let source_asset_id = AssetId::of(asset_definition_id.clone(), source.clone());
-        client.submit_all_blocking(
+        client.submit_all(
             [
                 InstructionBox::from(Register::account(Account::new(destination.clone()))),
                 InstructionBox::from(Register::account(Account::new(release_authority.clone()))),
@@ -263,7 +270,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let trusted_lock_id = EscrowId::new(Hash::new("native-asset-lock-trusted"));
-        client.submit_blocking(
+        client.submit(
             OpenAssetLock::with_options(
                 trusted_lock_id,
                 asset_definition_id.clone(),
@@ -297,7 +304,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             &Quantity::from(40_u64),
             "trusted lock custody credit",
         )?;
-        client.submit_blocking(
+        client.submit(
             Grant::account_permission(
                 Permission::from(CanTransferAsset {
                     asset: custody_asset_id.clone(),
@@ -308,7 +315,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         )?;
         assert!(
             client
-                .submit_blocking(
+                .submit(
                     Transfer::asset_quantity(custody_asset_id.clone(), 1_u64, source.clone(),),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
                 )
@@ -317,7 +324,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         );
         assert!(
             destination_client
-                .submit_blocking(
+                .submit(
                     DrawdownAssetLock::new(
                         trusted_lock_id,
                         Quantity::from(1_u64),
@@ -328,7 +335,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
                 .is_err(),
             "destination cannot draw down when a release authority is set"
         );
-        release_authority_client.submit_blocking(
+        release_authority_client.submit(
             DrawdownAssetLock::new(
                 trusted_lock_id,
                 Quantity::from(15_u64),
@@ -352,7 +359,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         assert_eq!(partially_drawn.remaining_amount, Quantity::from(25_u64));
         assert!(
             release_authority_client
-                .submit_blocking(
+                .submit(
                     DrawdownAssetLock::new(
                         trusted_lock_id,
                         Quantity::from(1_u64),
@@ -363,7 +370,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
                 .is_err(),
             "a stale independently submitted drawdown must not debit custody twice"
         );
-        client.submit_blocking(
+        client.submit(
             CancelAssetLock::new(trusted_lock_id, partially_drawn.remaining_amount.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -381,7 +388,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             "trusted lock cancellation refund",
         )?;
         let expiring_lock_id = EscrowId::new(Hash::new("native-asset-lock-expiring"));
-        client.submit_blocking(
+        client.submit(
             OpenAssetLock::with_options(
                 expiring_lock_id,
                 asset_definition_id.clone(),
@@ -399,7 +406,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             AssetEscrowStatus::Locked,
             "open expiring lock",
         )?;
-        destination_client.submit_blocking(
+        destination_client.submit(
             ExpireAssetLock::new(expiring_lock_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;

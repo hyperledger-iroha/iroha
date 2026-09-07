@@ -19,6 +19,7 @@ fn non_existent_account_is_specific_error() {
     };
     let client = network.client();
     let err = client
+        .client()
         .query(FindAccounts::new())
         .execute_all()
         .unwrap()

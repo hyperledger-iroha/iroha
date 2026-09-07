@@ -33,6 +33,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterPinManifest")]
     pub struct RegisterPinManifest {
         /// Canonical Norito-encoded `sorafs_manifest::ManifestV1` payload.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -46,6 +47,7 @@ isi! {
 impl crate::seal::Instruction for RegisterPinManifest {}
 isi! {
     /// Approve a previously registered manifest digest.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::ApprovePinManifest")]
 pub struct ApprovePinManifest {
     /// Manifest digest previously registered with the pin registry.
     pub digest: ManifestDigest,
@@ -66,6 +68,7 @@ pub struct ApprovePinManifest {
 impl crate::seal::Instruction for ApprovePinManifest {}
 isi! {
     /// Retire a manifest digest from the pin registry.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::RetirePinManifest")]
 pub struct RetirePinManifest {
     /// Manifest digest to retire.
     pub digest: ManifestDigest,
@@ -76,6 +79,7 @@ pub struct RetirePinManifest {
 impl crate::seal::Instruction for RetirePinManifest {}
 isi! {
     /// Bind an approved alias to a manifest digest.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::BindManifestAlias")]
 pub struct BindManifestAlias {
     /// Manifest digest that will be associated with the alias.
     pub digest: ManifestDigest,
@@ -94,6 +98,7 @@ isi! {
     /// Execution requires the transaction authority to be the exact registered provider owner and
     /// the declaration's stake to be covered by the owner-funded native reserve ledger. This
     /// instruction never creates or changes a provider-owner binding.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration")]
 pub struct RegisterCapacityDeclaration {
     /// Declaration record persisted by the capacity registry.
     pub record: CapacityDeclarationRecord,
@@ -102,6 +107,7 @@ pub struct RegisterCapacityDeclaration {
 impl crate::seal::Instruction for RegisterCapacityDeclaration {}
 isi! {
     /// Record a capacity telemetry snapshot for a provider.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::RecordCapacityTelemetry")]
 pub struct RecordCapacityTelemetry {
     /// Telemetry record used to update the fee ledger.
     pub record: CapacityTelemetryRecord,
@@ -110,6 +116,7 @@ pub struct RecordCapacityTelemetry {
 impl crate::seal::Instruction for RecordCapacityTelemetry {}
 isi! {
     /// Register a governance-authored dispute targeting a storage provider.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterCapacityDispute")]
 pub struct RegisterCapacityDispute {
     /// Canonical dispute record that will be persisted in the registry.
     pub record: CapacityDisputeRecord,
@@ -118,6 +125,7 @@ pub struct RegisterCapacityDispute {
 impl crate::seal::Instruction for RegisterCapacityDispute {}
 isi! {
     /// Issue a replication order covering one or more storage providers.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::IssueReplicationOrder")]
 pub struct IssueReplicationOrder {
     /// Deterministic identifier assigned to the replication order.
     pub order_id: ReplicationOrderId,
@@ -135,6 +143,7 @@ pub struct IssueReplicationOrder {
 impl crate::seal::Instruction for IssueReplicationOrder {}
 isi! {
     /// Mark a replication order as completed.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::CompleteReplicationOrder")]
 pub struct CompleteReplicationOrder {
     /// Identifier of the replication order.
     pub order_id: ReplicationOrderId,
@@ -153,6 +162,7 @@ pub struct CompleteReplicationOrder {
 impl crate::seal::Instruction for CompleteReplicationOrder {}
 isi! {
     /// Replace the provider assignment set of a pending replication order.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments")]
 pub struct ReviseReplicationOrderAssignments {
     /// Identifier of the pending replication order.
     pub order_id: ReplicationOrderId,
@@ -167,6 +177,7 @@ pub struct ReviseReplicationOrderAssignments {
 impl crate::seal::Instruction for ReviseReplicationOrderAssignments {}
 isi! {
     /// Mark a pending replication order as expired after its deadline.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::ExpireReplicationOrder")]
 pub struct ExpireReplicationOrder {
     /// Identifier of the replication order.
     pub order_id: ReplicationOrderId,
@@ -180,6 +191,7 @@ isi! {
     ///
     /// Core rejects this instruction unconditionally. Provider ownership is
     /// established only by enacting a [`SorafsProviderGovernanceActionV1`].
+#[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterProviderOwner")]
 pub struct RegisterProviderOwner {
     /// Provider identifier that will be bound.
     pub provider_id: ProviderId,
@@ -193,6 +205,7 @@ isi! {
     ///
     /// Core rejects this instruction unconditionally. Provider ownership is
     /// removed only by enacting a [`SorafsProviderGovernanceActionV1`].
+#[norito_schema(name = "iroha_data_model::isi::sorafs::UnregisterProviderOwner")]
 pub struct UnregisterProviderOwner {
     /// Provider identifier whose binding will be removed.
     pub provider_id: ProviderId,
@@ -332,6 +345,7 @@ impl SorafsProviderGovernanceActionV1 {
 }
 isi! {
     /// Compare-and-set the completion authority for a `SoraFS` provider.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority")]
 pub struct SetProviderIngestCompletionAuthority {
     /// Provider whose completion authority is updated.
     pub provider_id: ProviderId,
@@ -344,6 +358,7 @@ pub struct SetProviderIngestCompletionAuthority {
 impl crate::seal::Instruction for SetProviderIngestCompletionAuthority {}
 isi! {
     /// Revoke the exact current completion authority for a `SoraFS` provider.
+#[norito_schema(name = "iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority")]
 pub struct RevokeProviderIngestCompletionAuthority {
     /// Provider whose completion authority is revoked.
     pub provider_id: ProviderId,
@@ -354,6 +369,7 @@ pub struct RevokeProviderIngestCompletionAuthority {
 impl crate::seal::Instruction for RevokeProviderIngestCompletionAuthority {}
 isi! {
     /// Update the governance-controlled pricing schedule for `SoraFS`.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetPricingSchedule")]
     pub struct SetPricingSchedule {
         /// Pricing schedule record that replaces the previous schedule.
         pub schedule: PricingScheduleRecord,
@@ -367,6 +383,7 @@ isi! {
     /// already exist. Submitted `bonded + slashed` must exactly equal the
     /// locked reserve balance net of treasury-funded principal, and an upsert
     /// cannot reset slash history or create bonded collateral.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::UpsertProviderCredit")]
     pub struct UpsertProviderCredit {
         /// Credit record snapshot used to seed or update governance accounting.
         pub record: ProviderCreditRecord,
@@ -375,6 +392,7 @@ isi! {
 impl crate::seal::Instruction for UpsertProviderCredit {}
 isi! {
     /// Activate the next governance-controlled `PoP` issuer policy revision.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy")]
     pub struct SetSorafsPopIssuerPolicy {
         /// Policy revision to validate and activate.
         pub policy: PopIssuerPolicyV1,
@@ -383,6 +401,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsPopIssuerPolicy {}
 isi! {
     /// Commit a bounded batch of private `PoP` credentials and public roots atomically.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch")]
     pub struct CommitSorafsPopCredentialBatch {
         /// Exact canonical Norito `PopCredentialCommitmentBatchV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -392,6 +411,7 @@ isi! {
 impl crate::seal::Instruction for CommitSorafsPopCredentialBatch {}
 isi! {
     /// Publish a strict signed extension of the active `PoP` revocation list.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList")]
     pub struct PublishSorafsPopRevocationList {
         /// Exact canonical Norito `sorafs_manifest::PopRevocationListV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -407,6 +427,7 @@ isi! {
     ///
     /// This is economic Sybil resistance, not proof of personhood. Consensus
     /// admits the locked value atomically with the new membership-tree leaf.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterSorafsCitizenBond")]
     pub struct RegisterSorafsCitizenBond {
         /// Complete first-release citizen-bond record.
         pub bond: SorafsCitizenBondV1,
@@ -415,6 +436,7 @@ isi! {
 impl crate::seal::Instruction for RegisterSorafsCitizenBond {}
 isi! {
     /// Rotate a citizen bond's authorization commitment by exact compare-and-set.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RotateSorafsCitizenBondAuthorization")]
     pub struct RotateSorafsCitizenBondAuthorization {
         /// Immutable hidden bond serial commitment selecting the record.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -432,6 +454,7 @@ isi! {
 impl crate::seal::Instruction for RotateSorafsCitizenBondAuthorization {}
 isi! {
     /// Begin the immutable delayed exit of one citizen bond.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RequestSorafsCitizenBondExit")]
     pub struct RequestSorafsCitizenBondExit {
         /// Immutable hidden bond serial commitment selecting the record.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -446,6 +469,7 @@ isi! {
 impl crate::seal::Instruction for RequestSorafsCitizenBondExit {}
 isi! {
     /// Activate the next governance-controlled `SoraFS` orderbook policy revision.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy")]
     pub struct SetSorafsOrderbookPolicy {
         /// Policy revision to validate and activate.
         pub policy: OrderbookAdmissionPolicyV1,
@@ -454,6 +478,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsOrderbookPolicy {}
 isi! {
     /// Submit a signed canonical order to the authoritative `SoraFS` orderbook ledger.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder")]
     pub struct SubmitSorafsOrderbookOrder {
         /// Exact canonical Norito `sorafs_manifest::orderbook::OrderRequestV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -466,6 +491,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsOrderbookOrder {}
 isi! {
     /// Commit a signed owner cancellation to the authoritative `SoraFS` orderbook ledger.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder")]
     pub struct CancelSorafsOrderbookOrder {
         /// Exact canonical Norito `sorafs_manifest::orderbook::OrderCancelV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -478,6 +504,7 @@ isi! {
 impl crate::seal::Instruction for CancelSorafsOrderbookOrder {}
 isi! {
     /// Execute one bounded deterministic price-time matching transition.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::MatchSorafsOrderbook")]
     pub struct MatchSorafsOrderbook {
         /// Exact active governance policy digest expected by the matcher.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -491,6 +518,7 @@ isi! {
 impl crate::seal::Instruction for MatchSorafsOrderbook {}
 isi! {
     /// Retire expired orders and channels in one bounded authoritative transition.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::MaintainSorafsOrderbook")]
     pub struct MaintainSorafsOrderbook {
         /// Exact active governance policy digest expected by the caller.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -504,6 +532,7 @@ isi! {
 impl crate::seal::Instruction for MaintainSorafsOrderbook {}
 isi! {
     /// Settle a funded channel lock and record its signed receipt in the authoritative ledger.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt")]
     pub struct RecordSorafsOrderbookSettlementReceipt {
         /// Exact canonical Norito `sorafs_manifest::orderbook::SettlementReceiptV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -516,6 +545,7 @@ isi! {
 impl crate::seal::Instruction for RecordSorafsOrderbookSettlementReceipt {}
 isi! {
     /// Activate the next chain-authoritative reserve/rent policy revision.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsReservePolicy")]
     pub struct SetSorafsReservePolicy {
         /// Governance policy to validate and activate.
         pub policy: ReserveAuthorityPolicyV1,
@@ -524,6 +554,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsReservePolicy {}
 isi! {
     /// Register one provider reserve partition and immutable underwriting terms.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount")]
     pub struct RegisterSorafsReserveAccount {
         /// Provider underwriting terms.
         pub terms: ReserveProviderTermsV1,
@@ -535,6 +566,7 @@ isi! {
 impl crate::seal::Instruction for RegisterSorafsReserveAccount {}
 isi! {
     /// Submit a provider-authenticated reserve top-up or withdrawal request.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RequestSorafsReserveMovement")]
     pub struct RequestSorafsReserveMovement {
         /// Globally unique request identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -555,6 +587,7 @@ isi! {
 impl crate::seal::Instruction for RequestSorafsReserveMovement {}
 isi! {
     /// Decide and atomically apply or reject a pending reserve movement.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::DecideSorafsReserveMovement")]
     pub struct DecideSorafsReserveMovement {
         /// Pending movement identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -573,6 +606,7 @@ isi! {
 impl crate::seal::Instruction for DecideSorafsReserveMovement {}
 isi! {
     /// Charge one or more deterministic rent periods to a provider.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::ChargeSorafsReserveRent")]
     pub struct ChargeSorafsReserveRent {
         /// Provider reserve partition.
         pub provider_id: ProviderId,
@@ -588,6 +622,7 @@ isi! {
 impl crate::seal::Instruction for ChargeSorafsReserveRent {}
 isi! {
     /// Advance a provider's deterministic reserve lifecycle projection.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle")]
     pub struct AdvanceSorafsReserveLifecycle {
         /// Provider reserve partition.
         pub provider_id: ProviderId,
@@ -603,6 +638,7 @@ isi! {
 impl crate::seal::Instruction for AdvanceSorafsReserveLifecycle {}
 isi! {
     /// Draw reserve credit under the provider's tier and global debt caps.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::DrawSorafsReserveCredit")]
     pub struct DrawSorafsReserveCredit {
         /// Provider reserve partition.
         pub provider_id: ProviderId,
@@ -618,6 +654,7 @@ isi! {
 impl crate::seal::Instruction for DrawSorafsReserveCredit {}
 isi! {
     /// Repay accrued reserve interest and then credit principal.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RepaySorafsReserveCredit")]
     pub struct RepaySorafsReserveCredit {
         /// Provider reserve partition.
         pub provider_id: ProviderId,
@@ -633,6 +670,7 @@ isi! {
 impl crate::seal::Instruction for RepaySorafsReserveCredit {}
 isi! {
     /// Submit a bounded provider-authenticated reserve lifecycle appeal.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal")]
     pub struct SubmitSorafsReserveAppeal {
         /// Globally unique appeal identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -659,6 +697,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsReserveAppeal {}
 isi! {
     /// Attach a terminal governance decision to a pending reserve appeal.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal")]
     pub struct DecideSorafsReserveAppeal {
         /// Pending appeal identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -825,6 +864,7 @@ impl SorafsRepairTaskActionV1 {
 }
 isi! {
     /// Admit one exact canonical repair report under a subsystem exactly-once identity.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsRepairTask")]
     pub struct SubmitSorafsRepairTask {
         /// Non-zero source identity. `PoTR` uses the signed receipt digest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -837,6 +877,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsRepairTask {}
 isi! {
     /// Apply one compare-and-set repair lease or terminal transition.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction")]
     pub struct ApplySorafsRepairTaskAction {
         /// Canonical repair ticket identifier.
         pub ticket_id: String,
@@ -849,6 +890,7 @@ isi! {
 impl crate::seal::Instruction for ApplySorafsRepairTaskAction {}
 isi! {
     /// Commit the provider owner's single appeal against an escalated repair slash.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal")]
     pub struct SubmitSorafsRepairAppeal {
         /// Canonical repair ticket identifier.
         pub ticket_id: String,
@@ -937,6 +979,7 @@ pub enum SorafsProofOutcomeSubmissionV1 {
 }
 isi! {
     /// Activate or rotate provider-scoped governed keys for `PDP` and `PoTR` outcome validation.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy")]
     pub struct SetSorafsProofOutcomeSignerPolicy {
         /// Monotonic provider-scoped signer policy.
         pub policy: ProofOutcomeSignerPolicyV1,
@@ -945,6 +988,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsProofOutcomeSignerPolicy {}
 isi! {
     /// Commit one validated `PDP` or `PoTR` terminal outcome.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome")]
     pub struct SubmitSorafsProofOutcome {
         /// Existing canonical proof/archive material; no competing receipt schema is accepted.
         pub submission: SorafsProofOutcomeSubmissionV1,
@@ -953,6 +997,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsProofOutcome {}
 isi! {
     /// Activate the next governed recorder-policy revision for the reputation journal.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy")]
     pub struct SetSorafsReputationJournalAuthorityPolicy {
         /// Strict predecessor-linked recorder policy.
         pub policy: ReputationJournalAuthorityPolicyV1,
@@ -961,6 +1006,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsReputationJournalAuthorityPolicy {}
 isi! {
     /// Commit one terminal native `PoR` projection to the global reputation journal.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry")]
     pub struct AppendSorafsPorReputationJournalEntry {
         /// Canonical policy-bound, content-addressed `PoR` entry carrying authenticated source time.
         ///
@@ -971,6 +1017,7 @@ isi! {
 impl crate::seal::Instruction for AppendSorafsPorReputationJournalEntry {}
 isi! {
     /// Commit one regional-gateway stream-token result to the global reputation journal.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry")]
     pub struct AppendSorafsStreamTokenReputationJournalEntry {
         /// Canonical policy-bound, content-addressed token entry carrying authenticated source time.
         ///
@@ -981,6 +1028,7 @@ isi! {
 impl crate::seal::Instruction for AppendSorafsStreamTokenReputationJournalEntry {}
 isi! {
     /// Resolve one pending authoritative capacity dispute and append its terminal journal revision.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute")]
     pub struct ResolveSorafsCapacityDispute {
         /// Existing authoritative capacity-dispute identity.
         pub dispute_id: CapacityDisputeId,
@@ -999,6 +1047,7 @@ isi! {
 impl crate::seal::Instruction for ResolveSorafsCapacityDispute {}
 isi! {
     /// Activate the next authoritative `SoraFS` moderation-ledger policy revision.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsModerationPolicy")]
     pub struct SetSorafsModerationPolicy {
         /// Policy revision to validate and activate.
         pub policy: ModerationLedgerPolicyV1,
@@ -1007,6 +1056,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsModerationPolicy {}
 isi! {
     /// Admit one appellant-authenticated moderation appeal and pin frozen citizen-bond anchors.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal")]
     pub struct SubmitSorafsModerationAppeal {
         /// Immutable bounded appeal intake.
         pub intake: ModerationAppealIntakeV1,
@@ -1015,6 +1065,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsModerationAppeal {}
 isi! {
     /// Register one authority-bound private `PoP` membership proof for panel eligibility.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility")]
     pub struct RegisterSorafsModerationJurorEligibility {
         /// Appeal case identifier.
         pub case_id: String,
@@ -1028,6 +1079,7 @@ isi! {
 impl crate::seal::Instruction for RegisterSorafsModerationJurorEligibility {}
 isi! {
     /// Close eligibility registration and persist the uniquely deterministic panel draw.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition")]
     pub struct FinalizeSorafsModerationSortition {
         /// Appeal case identifier.
         pub case_id: String,
@@ -1052,6 +1104,7 @@ isi! {
 impl crate::seal::Instruction for FinalizeSorafsModerationSortition {}
 isi! {
     /// Accept one authority-bound primary moderation-juror assignment.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment")]
     pub struct AcceptSorafsModerationJurorAssignment {
         /// Appeal case identifier.
         pub case_id: String,
@@ -1065,6 +1118,7 @@ isi! {
 impl crate::seal::Instruction for AcceptSorafsModerationJurorAssignment {}
 isi! {
     /// Apply deterministic no-show replacements and activate commit/reveal atomically.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::ActivateSorafsModerationCase")]
     pub struct ActivateSorafsModerationCase {
         /// Appeal case identifier.
         pub case_id: String,
@@ -1078,6 +1132,7 @@ isi! {
 impl crate::seal::Instruction for ActivateSorafsModerationCase {}
 isi! {
     /// Submit one canonical juror commitment to an authoritative moderation case.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit")]
     pub struct SubmitSorafsModerationCommit {
         /// Exact canonical Norito `SoraFsModerationBallotCommitV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -1087,6 +1142,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsModerationCommit {}
 isi! {
     /// Raise one bounded, bonded, payload-free public moderation challenge.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge")]
     pub struct RaiseSorafsModerationChallenge {
         /// Moderation case identifier.
         pub case_id: String,
@@ -1108,6 +1164,7 @@ isi! {
 impl crate::seal::Instruction for RaiseSorafsModerationChallenge {}
 isi! {
     /// Resolve one pending authoritative moderation challenge.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge")]
     pub struct ResolveSorafsModerationChallenge {
         /// Moderation case identifier.
         pub case_id: String,
@@ -1122,6 +1179,7 @@ isi! {
 impl crate::seal::Instruction for ResolveSorafsModerationChallenge {}
 isi! {
     /// Permissionlessly expire one unresolved moderation challenge after its resolution grace.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge")]
     pub struct ExpireSorafsModerationChallenge {
         /// Moderation case identifier.
         pub case_id: String,
@@ -1134,6 +1192,7 @@ isi! {
 impl crate::seal::Instruction for ExpireSorafsModerationChallenge {}
 isi! {
     /// Submit one canonical juror reveal to an authoritative moderation case.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal")]
     pub struct SubmitSorafsModerationReveal {
         /// Exact canonical Norito `SoraFsModerationBallotRevealV1` bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -1143,6 +1202,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsModerationReveal {}
 isi! {
     /// Finalize a closed moderation case and atomically record outcome and no-shows.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase")]
     pub struct FinalizeSorafsModerationCase {
         /// Moderation case identifier.
         pub case_id: String,

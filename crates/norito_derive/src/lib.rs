@@ -1890,7 +1890,11 @@ fn derive_struct_deserialize(
                                 let mut __data_off = 0usize;
                                 let mut __sz_i = 0usize;
                                 // Initialize fields in order
-                                Self { #(#packed_named_inits_hybrid),* }
+                                let __value = Self { #(#packed_named_inits_hybrid),* };
+                                __o = __o.checked_add(__data_off)
+                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
+                                __value
                             } else {
                                 // Read the advertised offset-table layout.
                                 let (
@@ -1923,6 +1927,7 @@ fn derive_struct_deserialize(
                                     .checked_add(__packed_data_len_local)
                                     .and_then(|v| v.checked_add(__packed_tail_len_local))
                                     .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
                                 __value
                             }
                         } else {
@@ -2091,6 +2096,9 @@ fn derive_struct_deserialize(
                                 let mut __data_off = 0usize;
                                 let mut __sz_i = 0usize;
                                 #(#packed_unnamed_stmts_hybrid)*
+                                __o = __o.checked_add(__data_off)
+                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
                                 Self( #(#vars),* )
                             } else {
                                 let (
@@ -2123,6 +2131,7 @@ fn derive_struct_deserialize(
                                     .checked_add(__packed_data_len_local)
                                     .and_then(|v| v.checked_add(__packed_tail_len_local))
                                     .ok_or(norito::core::Error::LengthMismatch)?;
+                                norito::core::finish_context_fields(ptr, __o)?;
                                 Self( #(#vars),* )
                             }
                         } else {

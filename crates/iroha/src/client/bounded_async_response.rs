@@ -2,25 +2,8 @@
 
 use eyre::{Result, WrapErr as _, eyre};
 use http::Response;
-use std::sync::OnceLock;
 
-pub(super) fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(build_client)
-}
-
-pub(super) fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        // A redirect can arrive after ingress admitted a one-shot signed transaction.
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .expect("Failed to build async HTTP client")
-}
-
-pub(super) async fn into_response(
+pub async fn into_response(
     mut response: reqwest::Response,
     maximum_body_bytes: usize,
 ) -> Result<Response<Vec<u8>>> {

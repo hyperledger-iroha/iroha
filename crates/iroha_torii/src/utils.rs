@@ -2865,9 +2865,10 @@ pub mod extractors {
                 KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
                 KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
                 KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
-                KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
-                KagemushaOutboxReservationV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
-                KagemushaRedemptionVoucherV1, KagemushaTrustedCommitTimeV1, kagemusha_liability_pool_id_v1,
+                KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1,
+                KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaRedemptionProofV1,
+                KagemushaRedemptionStatementV1, KagemushaRedemptionVoucherV1,
+                KagemushaTrustedCommitTimeV1, kagemusha_liability_pool_id_v1,
             };
 
             assert_eq!(
@@ -2878,9 +2879,10 @@ pub mod extractors {
             let network_id = kagemusha_ingress_network();
             let asset = kagemusha_ingress_asset();
             let asset_incarnation = kagemusha_ingress_asset_incarnation();
-            let commit_evidence = KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
-                time_evidence_commitment: [0x5A; 32],
-            });
+            let commit_evidence =
+                KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
+                    time_evidence_commitment: [0x5A; 32],
+                });
             let statement = KagemushaRedemptionStatementV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
                 lifecycle: KagemushaLifecycleBindingV1 {
@@ -4298,7 +4300,10 @@ pub mod extractors {
 
             let valid = kagemusha_ingress_redemption_fixture();
             let mut changed_certificate = valid.clone();
-            changed_certificate.voucher.commit_certificate.candidate_envelope_digest[0] ^= 1;
+            changed_certificate
+                .voucher
+                .commit_certificate
+                .candidate_envelope_digest[0] ^= 1;
             let mut changed_proof = valid.clone();
             changed_proof.voucher.proof.commit_certificate_digest[0] ^= 1;
             let mut missing_manifest = valid;

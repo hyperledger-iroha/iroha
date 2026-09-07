@@ -3,7 +3,7 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{asset::AssetDefinition, isi::InstructionBox, prelude::*},
 };
 use iroha_data_model::query::dsl::SelectorTuple;
@@ -27,6 +27,7 @@ fn pagination_behaves() -> Result<()> {
     register_assets(&client)?;
     // limits_should_work
     let vec = client
+        .client()
         .query(FindAssetsDefinitions::new())
         .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .execute_all()?;
@@ -35,6 +36,7 @@ fn pagination_behaves() -> Result<()> {
     // first response can stay cheap; the iterator reports the current batch as
     // the lower bound and streams the rest through cursors.
     let mut iter = client
+        .client()
         .query(FindAssetsDefinitions::new())
         .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .with_fetch_size(FetchSize::new(Some(nonzero!(3_u64))))
@@ -66,7 +68,8 @@ fn pagination_behaves() -> Result<()> {
             ),
         )
         .expect("asset-definition query type has a canonical mapping");
-        let (first_batch, remaining_items, _continue_cursor) = client.start_query(query)?;
+        let (first_batch, remaining_items, _continue_cursor) =
+            client.client().start_query(query)?;
         assert_eq!(first_batch.len(), 3);
         assert_eq!(remaining_items, None);
     }
@@ -90,7 +93,7 @@ fn register_assets(client: &Client) -> Result<()> {
         })
         .collect();
     for chunk in register.chunks(MAX_INSTRUCTIONS_PER_TX) {
-        client.submit_all_blocking::<InstructionBox>(
+        client.submit_all::<InstructionBox>(
             chunk.iter().cloned(),
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;

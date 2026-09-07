@@ -6,6 +6,7 @@ use crate::kaigi::{
 use iroha_crypto::Hash;
 isi! {
     /// Create a new Kaigi session anchored to a domain.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::CreateKaigi")]
     pub struct CreateKaigi {
         /// Template describing the call to create.
         pub call: NewKaigi,
@@ -22,6 +23,7 @@ isi! {
 }
 isi! {
     /// Add a participant to an active Kaigi.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::JoinKaigi")]
     pub struct JoinKaigi {
         /// Identifier of the call to join.
         pub call_id: KaigiId,
@@ -43,6 +45,7 @@ isi! {
     ///
     /// Privacy-mode departure is off-chain only in V1, so native execution rejects
     /// every privacy artifact on this instruction.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::LeaveKaigi")]
     pub struct LeaveKaigi {
         /// Identifier of the call to leave.
         pub call_id: KaigiId,
@@ -61,6 +64,7 @@ isi! {
 }
 isi! {
     /// Conclude an active Kaigi.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::EndKaigi")]
     pub struct EndKaigi {
         /// Identifier of the call to end.
         pub call_id: KaigiId,
@@ -82,6 +86,7 @@ isi! {
 }
 isi! {
     /// Record usage metrics for a Kaigi segment.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::RecordKaigiUsage")]
     pub struct RecordKaigiUsage {
     /// Identifier of the call to update.
     pub call_id: KaigiId,
@@ -100,6 +105,7 @@ isi! {
 }
 isi! {
     /// Update the relay manifest advertised for a Kaigi session.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest")]
     pub struct SetKaigiRelayManifest {
         /// Identifier of the call to update.
         pub call_id: KaigiId,
@@ -112,6 +118,7 @@ isi! {
 isi! {
     /// Register or update a Kaigi relay in the governance domain selected by
     /// its live domain-qualified primary account alias.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::RegisterKaigiRelay")]
     pub struct RegisterKaigiRelay {
         /// Registration payload describing the relay capabilities.
         pub relay: KaigiRelayRegistration,
@@ -125,6 +132,7 @@ isi! {
     /// manifest admission; existing manifests remain self-contained and retain
     /// their pinned descriptor until the host refreshes or ends the call, or
     /// until the manifest expires.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::UnregisterKaigiRelay")]
     pub struct UnregisterKaigiRelay {
         /// Relay account whose descriptor should be removed.
         pub relay_id: AccountId,
@@ -132,6 +140,7 @@ isi! {
 }
 isi! {
     /// Report the observed health for a relay participating in a Kaigi session.
+    #[norito_schema(name = "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth")]
     pub struct ReportKaigiRelayHealth {
         /// Identifier of the call where the relay was observed.
         pub call_id: KaigiId,

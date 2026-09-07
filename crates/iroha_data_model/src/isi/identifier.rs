@@ -6,6 +6,7 @@ use crate::{
 };
 isi! {
     /// Register a new identifier policy namespace in the world state.
+    #[norito_schema(name = "iroha_data_model::isi::identifier::RegisterIdentifierPolicy")]
     pub struct RegisterIdentifierPolicy {
         /// Identifier policy record to register.
         pub policy: IdentifierPolicy,
@@ -14,6 +15,7 @@ isi! {
 impl crate::seal::Instruction for RegisterIdentifierPolicy {}
 isi! {
     /// Activate an existing identifier policy namespace.
+    #[norito_schema(name = "iroha_data_model::isi::identifier::ActivateIdentifierPolicy")]
     pub struct ActivateIdentifierPolicy {
         /// Policy namespace to activate.
         pub policy_id: IdentifierPolicyId,
@@ -22,6 +24,7 @@ isi! {
 impl crate::seal::Instruction for ActivateIdentifierPolicy {}
 isi! {
     /// Bind an attested opaque identifier receipt to the UAID attached to an account.
+    #[norito_schema(name = "iroha_data_model::isi::identifier::ClaimIdentifier")]
     pub struct ClaimIdentifier {
         /// Account whose UAID should own the receipt-bound opaque identifier.
         pub account: AccountId,
@@ -32,6 +35,7 @@ isi! {
 impl crate::seal::Instruction for ClaimIdentifier {}
 isi! {
     /// Revoke a previously claimed opaque identifier.
+    #[norito_schema(name = "iroha_data_model::isi::identifier::RevokeIdentifier")]
     pub struct RevokeIdentifier {
         /// Policy namespace under which the opaque identifier was claimed.
         pub policy_id: IdentifierPolicyId,

@@ -142,6 +142,7 @@ pub struct ThresholdKeyLifecycleCertificateV1 {
 super::isi! {
     /// Apply one effective-height-roster-certified threshold-key lifecycle action.
     #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
+    #[norito_schema(name = "iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1")]
     pub struct ApplyThresholdKeyLifecycleCertificateV1 {
         /// Full proof-carrying exact-roster lifecycle certificate.
         pub certificate: ThresholdKeyLifecycleCertificateV1,

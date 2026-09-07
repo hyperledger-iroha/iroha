@@ -999,7 +999,10 @@ pub mod snapshot {
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
     /// Maximum typed-decoder nesting depth for one snapshot payload.
-    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(128_usize);
+    ///
+    /// Keep the default tied to the codec's structural ceiling so a default
+    /// configuration can never advertise a depth that Norito rejects.
+    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(::norito::core::MAX_VALUE_NESTING_DEPTH);
     /// Maximum aggregate collection items decoded from one snapshot payload.
     pub const MAX_DECODE_ITEMS: NonZeroUsize = nonzero!(10_000_000_usize);
     /// Maximum UTF-8 bytes accepted for any individual snapshot string.

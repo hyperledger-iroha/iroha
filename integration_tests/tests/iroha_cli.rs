@@ -14,7 +14,7 @@ use integration_tests::{
     sandbox,
 };
 use iroha::{
-    client::Client,
+    blocking::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
     crypto::{ExposedPrivateKey, Hash, KeyPair},
     data_model::{
@@ -103,7 +103,10 @@ fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
         .expect("test lease asset definition literal should parse")
 }
 fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Result<Option<u128>> {
-    let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
+    let asset = match client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
         Ok(asset) => asset,
         Err(err) => {
             let message = format!("{err:?}");
@@ -135,6 +138,7 @@ fn assert_soracloud_hf_lease_asset_ready(
 ) -> eyre::Result<()> {
     let asset_definition_id = soracloud_hf_lease_asset_definition();
     let asset_definition_exists = client
+        .client()
         .query(FindAssetsDefinitions::new())
         .execute_all()?
         .into_iter()
@@ -350,13 +354,14 @@ fn program_config_for_account(
     let account_domain = DomainId::try_new(account_domain, "universal")
         .expect("account domain literal should parse");
     let ttl = client
+        .client()
         .transaction_ttl
         .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
     ProgramConfig {
-        torii_url: client.torii_url.clone(),
+        torii_url: client.client().torii_url.clone(),
         account_domain,
         key: key.clone(),
-        status_timeout: client.transaction_status_timeout,
+        status_timeout: client.client().transaction_status_timeout,
         ttl,
     }
 }
@@ -369,7 +374,7 @@ struct ProgramConfig {
 }
 impl From<&Client> for ProgramConfig {
     fn from(value: &Client) -> Self {
-        program_config_for_account(value, "wonderland", &value.key_pair)
+        program_config_for_account(value, "wonderland", &value.client().key_pair)
     }
 }
 impl ProgramConfig {
@@ -1045,7 +1050,7 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
     let output = run_bounded_soracloud_command!(
         cli;
         "service", "status",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     assert!(
         output.status.success(),
@@ -1132,7 +1137,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         norito::json::to_vec_pretty(&service_v2).expect("encode service v2"),
     )
     .await?;
-    let torii_url = network.client().torii_url.to_string();
+    let torii_url = network.client().client().torii_url.to_string();
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -1389,7 +1394,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         "--service", over_cap_service_path.to_string_lossy().into_owned(),
         "--bundle-file", bundle_path.to_string_lossy().into_owned(),
         "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     assert!(
         !over_cap_deploy.status.success(),
@@ -1439,7 +1444,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         "--service", no_write_service_path.to_string_lossy().into_owned(),
         "--bundle-file", bundle_path.to_string_lossy().into_owned(),
         "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     assert!(
         !no_write_deploy.status.success(),
@@ -1531,7 +1536,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--service", service_path.to_string_lossy().into_owned(),
         "--bundle-file", bundle_path.to_string_lossy().into_owned(),
         "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let service_name = service.service_name.to_string();
     let model_name = "ops_model";
@@ -1550,7 +1555,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--step-compute-units", "25",
         "--compute-budget-units", "200",
         "--storage-budget-bytes", "8192",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _checkpoint_1a = run_bounded_soracloud_success!(
         cli,
@@ -1561,7 +1566,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--completed-step", "2",
         "--checkpoint-size-bytes", "1024",
         "--metrics-hash", Hash::new(b"metrics-job-001-step-2").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _checkpoint_1b = run_bounded_soracloud_success!(
         cli,
@@ -1572,7 +1577,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--completed-step", "4",
         "--checkpoint-size-bytes", "1536",
         "--metrics-hash", Hash::new(b"metrics-job-001-step-4").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let training_status_1 = run_bounded_soracloud_success!(
         cli,
@@ -1580,7 +1585,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "model", "training-job-status",
         "--service-name", &service_name,
         "--job-id", "job-001",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let training_status_payload_1: Value =
         json::from_slice(&training_status_1.stdout).expect("training-job-status #1 json payload");
@@ -1605,7 +1610,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--training-config-hash", Hash::new(b"training-config-v1").to_string(),
         "--reproducibility-hash", Hash::new(b"repro-v1").to_string(),
         "--provenance-attestation-hash", Hash::new(b"attestation-v1").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _weight_register_1 = run_bounded_soracloud_success!(
         cli,
@@ -1620,7 +1625,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--training-config-hash", Hash::new(b"training-config-v1").to_string(),
         "--reproducibility-hash", Hash::new(b"repro-v1").to_string(),
         "--provenance-attestation-hash", Hash::new(b"attestation-v1").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _training_start_2 = run_bounded_soracloud_success!(
         cli,
@@ -1636,7 +1641,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--step-compute-units", "25",
         "--compute-budget-units", "220",
         "--storage-budget-bytes", "8192",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _checkpoint_2a = run_bounded_soracloud_success!(
         cli,
@@ -1647,7 +1652,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--completed-step", "2",
         "--checkpoint-size-bytes", "1024",
         "--metrics-hash", Hash::new(b"metrics-job-002-step-2").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _checkpoint_2b = run_bounded_soracloud_success!(
         cli,
@@ -1658,7 +1663,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--completed-step", "4",
         "--checkpoint-size-bytes", "1536",
         "--metrics-hash", Hash::new(b"metrics-job-002-step-4").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _artifact_register_2 = run_bounded_soracloud_success!(
         cli,
@@ -1672,7 +1677,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--training-config-hash", Hash::new(b"training-config-v2").to_string(),
         "--reproducibility-hash", Hash::new(b"repro-v2").to_string(),
         "--provenance-attestation-hash", Hash::new(b"attestation-v2").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _weight_register_2 = run_bounded_soracloud_success!(
         cli,
@@ -1688,7 +1693,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--training-config-hash", Hash::new(b"training-config-v2").to_string(),
         "--reproducibility-hash", Hash::new(b"repro-v2").to_string(),
         "--provenance-attestation-hash", Hash::new(b"attestation-v2").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _promote_v2 = run_bounded_soracloud_success!(
         cli,
@@ -1699,7 +1704,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--weight-version", "1.1.0",
         "--gate-approved",
         "--gate-report-hash", Hash::new(b"gate-report-v2").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_after_promote = run_bounded_soracloud_success!(
         cli,
@@ -1707,7 +1712,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "model", "weight-status",
         "--service-name", &service_name,
         "--model-name", model_name,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_after_promote_payload: Value =
         json::from_slice(&status_after_promote.stdout).expect("model-weight-status promote json");
@@ -1735,7 +1740,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--model-name", model_name,
         "--target-version", "1.0.0",
         "--reason", "roll back to baseline",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_after_rollback = run_bounded_soracloud_success!(
         cli,
@@ -1743,7 +1748,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "model", "weight-status",
         "--service-name", &service_name,
         "--model-name", model_name,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_after_rollback_payload: Value =
         json::from_slice(&status_after_rollback.stdout).expect("model-weight-status rollback json");
@@ -1763,7 +1768,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "model", "artifact-status",
         "--service-name", &service_name,
         "--training-job-id", "job-002",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let artifact_status_payload_2: Value =
         json::from_slice(&artifact_status_2.stdout).expect("model-artifact-status #2 json");
@@ -1806,7 +1811,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     };
     assert_soracloud_hf_lease_asset_ready(
         &network.client(),
-        std::slice::from_ref(&network.client().account),
+        std::slice::from_ref(&network.client().client().account),
         100_000,
     )?;
     let config = ProgramConfig::from(&network.client());
@@ -1824,8 +1829,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     let lease_term_ms = "60000".to_string();
     let base_fee = canonical_quantity_literal_from_nanos(10_000);
     let lease_asset_definition = lease_asset_definition.to_string();
-    let torii_url = network.client().torii_url.to_string();
-    let account_id = network.client().account.to_string();
+    let torii_url = network.client().client().torii_url.to_string();
+    let account_id = network.client().client().account.to_string();
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -2108,7 +2113,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     };
     assert_soracloud_hf_lease_asset_ready(
         &network.client(),
-        std::slice::from_ref(&network.client().account),
+        std::slice::from_ref(&network.client().client().account),
         100_000,
     )?;
     let config = ProgramConfig::from(&network.client());
@@ -2127,8 +2132,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let base_fee = canonical_quantity_literal_from_nanos(10_000);
     let renewed_fee = canonical_quantity_literal_from_nanos(12_000);
     let lease_asset_definition = lease_asset_definition.to_string();
-    let torii_url = network.client().torii_url.to_string();
-    let account_id = network.client().account.to_string();
+    let torii_url = network.client().client().torii_url.to_string();
+    let account_id = network.client().client().account.to_string();
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -2400,7 +2405,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     assert_soracloud_hf_lease_asset_ready(
         &network.client(),
         &[
-            network.client().account.clone(),
+            network.client().client().account.clone(),
             BOB_ID.clone(),
             CARPENTER_ID.clone(),
         ],
@@ -2420,13 +2425,13 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     )
     .await?;
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
-    let torii_url = network.client().torii_url.to_string();
+    let torii_url = network.client().client().torii_url.to_string();
     let lease_term_ms = 60_000_u64;
     let lease_term_ms_literal = lease_term_ms.to_string();
     let base_fee_subunits = 10_000_u128;
     let base_fee = canonical_quantity_literal_from_nanos(base_fee_subunits);
     let lease_asset_definition = lease_asset_definition.to_string();
-    let alice_account_id = network.client().account.to_string();
+    let alice_account_id = network.client().client().account.to_string();
     let bob_account_id = BOB_ID.to_string();
     let carpenter_account_id = CARPENTER_ID.to_string();
     let alice_join = run_soracloud_command(
@@ -2930,7 +2935,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--service", site_service_path.to_string_lossy().into_owned(),
         "--bundle-file", site_bundle_path.to_string_lossy().into_owned(),
         "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let site_join_payload: Value =
         json::from_slice(&site_deploy.stdout).expect("site deploy JSON payload");
@@ -2948,7 +2953,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--service", webapp_service_path.to_string_lossy().into_owned(),
         "--bundle-file", webapp_bundle_path.to_string_lossy().into_owned(),
         "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let webapp_join_payload: Value =
         json::from_slice(&webapp_deploy.stdout).expect("webapp deploy JSON payload");
@@ -2974,7 +2979,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--service", site_service_v2_path.to_string_lossy().into_owned(),
         "--bundle-file", site_bundle_path.to_string_lossy().into_owned(),
         "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let site_upgrade_payload: Value =
         json::from_slice(&site_upgrade.stdout).expect("site upgrade JSON payload");
@@ -2996,7 +3001,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--rollout-handle", rollout_handle,
         "--promote-to-percent", "100",
         "--governance-tx-hash", Hash::new(b"site-template-rollout").to_string(),
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let site_rollout_payload: Value =
         json::from_slice(&site_rollout.stdout).expect("site rollout JSON payload");
@@ -3014,7 +3019,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "service", "rollback",
         "--service-name", "docs_portal",
         "--target-version", "1.0.0",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let site_rollback_payload: Value =
         json::from_slice(&site_rollback.stdout).expect("site rollback JSON payload");
@@ -3028,7 +3033,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("status");
         "service", "status",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("CLI should emit soracloud status payload");
@@ -3138,7 +3143,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         "--manifest", manifest_path.to_string_lossy().into_owned(),
         "--lease-blocks", "30",
         "--autonomy-budget-units", "500",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let join_payload: Value = json::from_slice(&deploy.stdout).expect("agent deploy JSON payload");
     assert_eq!(
@@ -3162,7 +3167,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         "--apartment-name", "ops_agent",
         "--artifact-hash", "hash:ABCD0123#01",
         "--provenance-hash", "hash:PROV0001#01",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let allow_payload: Value = json::from_slice(&allow.stdout).expect("agent allow JSON payload");
     assert_eq!(
@@ -3180,7 +3185,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         SoracloudSuccessCase::new("autonomy status");
         "agent", "autonomy-status",
         "--apartment-name", "ops_agent",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("autonomy status JSON payload");
@@ -3207,7 +3212,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         "--apartment-name", "ops_agent",
         "--capability", "agent.autonomy.run",
         "--reason", "manual-review",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let revoke_payload: Value =
         json::from_slice(&revoke.stdout).expect("policy revoke JSON payload");
@@ -3282,7 +3287,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
         "--lease-blocks", "1",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let _recipient_deploy = run_bounded_soracloud_success!(
         cli,
@@ -3290,7 +3295,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
         "--lease-blocks", "30",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let expired_wallet = run_bounded_soracloud_command!(
         cli;
@@ -3299,7 +3304,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "--request-id", "expired-wallet-request-1",
         "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
         "--amount", "0.000001",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     assert!(
         !expired_wallet.status.success(),
@@ -3318,7 +3323,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "agent", "lease-renew",
         "--apartment-name", "ops_agent",
         "--lease-blocks", "20",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let restart = run_bounded_soracloud_success!(
         cli,
@@ -3326,7 +3331,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "agent", "restart",
         "--apartment-name", "ops_agent",
         "--reason", "manual-restart",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let restart_payload: Value = json::from_slice(&restart.stdout).expect("restart JSON payload");
     assert_eq!(
@@ -3338,7 +3343,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("agent status");
         "agent", "status",
         "--apartment-name", "ops_agent",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("agent status JSON payload");
@@ -3369,7 +3374,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "--request-id", request_id,
         "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
         "--amount", "0.001",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let wallet_request_payload: Value =
         json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
@@ -3391,7 +3396,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "agent", "wallet-approve",
         "--apartment-name", "ops_agent",
         "--request-id", request_id,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let wallet_approve_payload: Value =
         json::from_slice(&wallet_approve.stdout).expect("wallet approve JSON payload");
@@ -3409,7 +3414,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "--to-apartment", "worker_agent",
         "--channel", "ops.sync",
         "--payload", "rotate-key-42",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let message_send_payload: Value =
         json::from_slice(&message_send.stdout).expect("message send JSON payload");
@@ -3429,7 +3434,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("mailbox status (queued)");
         "agent", "mailbox-status",
         "--apartment-name", "worker_agent",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let mailbox_status_queued_payload: Value =
         json::from_slice(&mailbox_status_queued.stdout).expect("mailbox status JSON payload");
@@ -3454,7 +3459,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "agent", "message-ack",
         "--apartment-name", "worker_agent",
         "--message-id", message_id,
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let message_ack_payload: Value =
         json::from_slice(&message_ack.stdout).expect("message ack JSON payload");
@@ -3469,7 +3474,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("mailbox status (empty)");
         "agent", "mailbox-status",
         "--apartment-name", "worker_agent",
-        "--torii-url", network.client().torii_url.to_string(),
+        "--torii-url", network.client().client().torii_url.to_string(),
     );
     let mailbox_status_empty_payload: Value =
         json::from_slice(&mailbox_status_empty.stdout).expect("mailbox status JSON payload");

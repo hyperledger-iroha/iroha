@@ -12,11 +12,7 @@ use iroha_primitives::small::SmallStr;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use std::{
-    env,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::Path, time::Duration};
 use url::Url;
 mod user;
 use crate::secrecy::SecretString;
@@ -44,19 +40,6 @@ pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15)
 pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(70);
 /// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
-/// Default Connect queue root (`~/.iroha/connect` on Unix, `%USERPROFILE%\.iroha\connect` on Windows).
-#[must_use]
-pub fn default_connect_queue_root() -> PathBuf {
-    let mut base = if cfg!(windows) {
-        env::var_os("USERPROFILE").map(PathBuf::from)
-    } else {
-        env::var_os("HOME").map(PathBuf::from)
-    }
-    .unwrap_or_else(|| PathBuf::from("."));
-    base.push(".iroha");
-    base.push("connect");
-    base
-}
 /// Valid web auth login string. See [`WebLogin::from_str`]
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
 pub struct WebLogin(SmallStr);
@@ -163,10 +146,6 @@ pub struct Config {
     pub transaction_status_timeout: Duration,
     /// Whether to add a random nonce to transactions.
     pub transaction_add_nonce: bool,
-    /// Root directory containing Connect queue state for diagnostics and offline replay helpers.
-    pub connect_queue_root: PathBuf,
-    /// Optional JSON witness file used for multisig-signed Soracloud HTTP requests.
-    pub soracloud_http_witness_file: Option<PathBuf>,
     /// Alias cache policy applied when validating `SoraFS` proofs.
     pub sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy,
     /// Default `SoraNet` anonymity policy stage for gateway fetches.
@@ -226,6 +205,25 @@ pub enum LoadPath<P> {
     Default(P),
 }
 impl Config {
+    /// Load an already-read TOML table using its original source path.
+    ///
+    /// Applications can use this entry point after removing and validating their own top-level
+    /// sections. The source path remains the provenance and relative-path base for SDK-owned
+    /// parameters, and standard client environment overrides are applied.
+    ///
+    /// # Errors
+    /// Returns an error when the table contains unknown or invalid SDK parameters, environment
+    /// overrides are invalid, or completed client configuration validation fails.
+    pub fn load_table(path: impl AsRef<Path>, table: toml::Table) -> ReportResult<Self, LoadError> {
+        Ok(ConfigReader::new()
+            .with_toml_source(TomlSource::new(path.as_ref().to_path_buf(), table))
+            .with_env(Box::new(iroha_config_base::env::std_env))
+            .read_and_complete::<user::Root>()
+            .change_context(LoadError)?
+            .parse()
+            .change_context(LoadError)?)
+    }
+
     /// Load one required client configuration file without consulting process environment.
     ///
     /// This is intended for security-sensitive tools whose credential provenance must be the
@@ -379,6 +377,27 @@ mod tests {
             .unwrap();
     }
     #[test]
+    fn sdk_config_rejects_cli_owned_filesystem_sections() {
+        for (section, value) in [
+            (
+                "connect",
+                toml::Value::Table(toml::toml! { queue_root = "/tmp/connect" }),
+            ),
+            (
+                "soracloud",
+                toml::Value::Table(toml::toml! { http_witness_file = "/tmp/witness.json" }),
+            ),
+        ] {
+            let mut table = config_sample();
+            table.insert(section.to_owned(), value);
+            let error = ConfigReader::new()
+                .with_toml_source(TomlSource::inline(table))
+                .read_and_complete::<user::Root>()
+                .expect_err("CLI-owned sections must not be accepted by SDK configuration");
+            assert_contains!(format!("{error:?}"), section);
+        }
+    }
+    #[test]
     fn account_private_key_file_populates_signer() {
         let mut table = config_sample();
         let account = table
@@ -402,6 +421,38 @@ mod tests {
             .expect("file-backed client config should complete")
             .parse()
             .expect("file-backed client config should parse");
+        assert_eq!(
+            ExposedPrivateKey(config.key_pair.private_key().clone()).to_string(),
+            private_key
+        );
+    }
+    #[test]
+    fn load_table_preserves_source_path_for_relative_key_files() {
+        let mut table = config_sample();
+        let account = table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table");
+        let private_key = account
+            .remove("private_key")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .expect("inline client private key");
+        let directory = tempfile::tempdir().expect("client configuration directory");
+        let key_path = directory.path().join("account.key");
+        std::fs::write(&key_path, format!("{private_key}\n"))
+            .expect("write relative client private-key file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict client private-key permissions");
+        }
+        account.insert(
+            "private_key_file".into(),
+            toml::Value::String("account.key".to_owned()),
+        );
+        let config = Config::load_table(directory.path().join("client.toml"), table)
+            .expect("relative key path should resolve from supplied source path");
         assert_eq!(
             ExposedPrivateKey(config.key_pair.private_key().clone()).to_string(),
             private_key

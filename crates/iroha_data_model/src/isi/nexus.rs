@@ -17,6 +17,7 @@ isi! {
     /// `nexus.lane_relay_emergency.enabled = true`. When enabled, the transaction authority
     /// must be a multisig account meeting the configured threshold/member minimums
     /// (defaults to 3-of-5).
+    #[norito_schema(name = "iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators")]
     pub struct SetLaneRelayEmergencyValidators {
         /// Lane whose emergency committee fillers are being overridden.
         pub lane_id: LaneId,
@@ -42,6 +43,8 @@ iroha_data_model_derive::model_single! {
     /// Any account may transport the instruction, but execution requires the envelope's commit QC
     /// to satisfy the canonical on-chain lane committee and verifies its aggregate BLS signature.
     /// A pending envelope without a QC can never create contract-visible relay state.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay")]
     pub struct RegisterVerifiedLaneRelay {
         /// Canonical finalized lane relay envelope being registered.
         pub envelope: LaneRelayEnvelope,
@@ -68,6 +71,8 @@ iroha_data_model_derive::model_single! {
     /// Execution requires the sponsor or its delegated program manager, rejects source heights
     /// beyond the executing block, and permits at most one unexpired lease for each
     /// program/revision/asset/source-dataspace route.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation")]
     pub struct RegisterVerifiedFeeSponsorVaultAllocation {
         /// Exact sponsor program authorized to spend the allocation.
         pub program_id: FeeSponsorProgramId,
@@ -103,6 +108,8 @@ iroha_data_model_derive::model_single! {
     ///
     /// Ordinary execution requires the sponsor or its delegated manager. The authenticated
     /// initial genesis may compose the sponsor-owned record before any block is committed.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::CreateFeeSponsorProgram")]
     pub struct CreateFeeSponsorProgram {
         /// Initial fail-closed lifecycle record to persist.
         pub program: FeeSponsorProgram,
@@ -115,6 +122,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Stage one immutable fee sponsor program revision.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision")]
     pub struct StageFeeSponsorProgramRevision {
         /// Immutable revision to validate and stage.
         pub revision: FeeSponsorProgramRevision,
@@ -127,6 +136,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Schedule a staged sponsor-program revision for activation.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::ActivateFeeSponsorProgramRevision")]
     pub struct ActivateFeeSponsorProgramRevision {
         /// Program whose staged revision will become active.
         pub program_id: FeeSponsorProgramId,
@@ -146,6 +157,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Pause an active fee sponsor program.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::PauseFeeSponsorProgram")]
     pub struct PauseFeeSponsorProgram {
         /// Program to pause.
         pub program_id: FeeSponsorProgramId,
@@ -158,6 +171,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Begin the fail-closed drain phase for a fee sponsor program.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::BeginCloseFeeSponsorProgram")]
     pub struct BeginCloseFeeSponsorProgram {
         /// Program that must stop accepting new sponsorship.
         pub program_id: FeeSponsorProgramId,
@@ -170,6 +185,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Permanently close a fully drained fee sponsor program.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::CloseFeeSponsorProgram")]
     pub struct CloseFeeSponsorProgram {
         /// Program to convert into a permanent tombstone.
         pub program_id: FeeSponsorProgramId,
@@ -182,6 +199,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Enroll an exact canonical account in a fee sponsor program.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary")]
     pub struct EnrollFeeSponsorBeneficiary {
         /// Program granting eligibility.
         pub program_id: FeeSponsorProgramId,
@@ -196,6 +215,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Remove an exact canonical account from a fee sponsor program.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary")]
     pub struct UnenrollFeeSponsorBeneficiary {
         /// Program revoking eligibility.
         pub program_id: FeeSponsorProgramId,
@@ -213,6 +234,8 @@ iroha_data_model_derive::model_single! {
     ///
     /// During authenticated initial genesis, funding may debit only the exact sponsor's prefunded
     /// balance. Later execution retains the ordinary sponsor/manager and asset-debit checks.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::FundFeeSponsorProgram")]
     pub struct FundFeeSponsorProgram {
         /// Program receiving the allocation.
         pub program_id: FeeSponsorProgramId,
@@ -234,6 +257,8 @@ iroha_data_model_derive::model_single! {
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[getset(get = "pub")]
     /// Withdraw assets from a paused or closing program vault allocation.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram")]
     pub struct WithdrawFeeSponsorProgram {
         /// Program whose allocation is reduced.
         pub program_id: FeeSponsorProgramId,
@@ -459,6 +484,9 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
 });
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "json")]
+    mod generated_identity;
+
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use crate::{

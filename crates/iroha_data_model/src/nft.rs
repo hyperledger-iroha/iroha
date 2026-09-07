@@ -47,6 +47,8 @@ mod model {
     #[debug("{name}${domain}")]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft::model::NftId")]
     pub struct NftId {
         /// Domain id.
         pub domain: DomainId,
@@ -73,6 +75,8 @@ mod model {
     )]
     #[display("{id}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft::model::Nft")]
     pub struct Nft {
         /// An Identification of the [`Nft`].
         pub id: NftId,
@@ -100,6 +104,8 @@ pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
     )
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nft::NftData")]
 pub struct NftData {
     /// Content of the [`Nft`], as a key-value store.
     pub content: Metadata,

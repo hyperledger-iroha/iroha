@@ -11,6 +11,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::alias_setup::EnsureAlias")]
     pub struct EnsureAlias {
         /// Exact desired resource state.
         pub intent: crate::alias_setup::AliasIntentV1,
@@ -45,6 +46,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::alias_setup::RenewAliasLease")]
     pub struct RenewAliasLease {
         /// Exact resolved lease target.
         pub target: crate::alias_setup::AliasTargetV1,
@@ -83,6 +85,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew")]
     pub struct ConfigureAliasAutoRenew {
         /// Exact resolved lease target.
         pub target: crate::alias_setup::AliasTargetV1,
@@ -116,6 +119,7 @@ isi! {
     ///
     /// This lifecycle operation never changes or accepts lease expiry state.
     #[norito(decode_from_slice)]
+    #[norito_schema(name = "iroha_data_model::isi::alias_setup::RebindAccountAlias")]
     pub struct RebindAccountAlias {
         /// Exact resolved alias being rebound.
         pub alias: crate::alias_setup::ResolvedAccountAliasV1,
@@ -148,6 +152,7 @@ isi! {
     ///
     /// This lifecycle operation never changes or accepts lease expiry state.
     #[norito(decode_from_slice)]
+    #[norito_schema(name = "iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias")]
     pub struct CompareAndSetPrimaryAccountAlias {
         /// Account whose primary alias is changing.
         pub account: AccountId,

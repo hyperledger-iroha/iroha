@@ -11,13 +11,14 @@ fn fixture_receipt() -> NativeAmxReceipt {
         "../../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
     ))
     .expect("decode Rust-owned grouped Native AMX fixture");
-    let commitment: LaneBlockCommitment = norito::json::from_value(
-        document
-            .pointer("/golden/receipt_group")
-            .expect("fixture contains its golden receipt group")
-            .clone(),
-    )
-    .expect("decode grouped Native AMX commitment");
+    let commitment: iroha_data_model::block::consensus::LaneBlockCommitment =
+        norito::json::from_value(
+            document
+                .pointer("/golden/receipt_group")
+                .expect("fixture contains its golden receipt group")
+                .clone(),
+        )
+        .expect("decode grouped Native AMX commitment");
     commitment
         .validate_native_amx_receipts()
         .expect("classification fixture has valid grouped receipt structure");
@@ -47,7 +48,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
     leg.participant_settlement.lane_incarnation = descriptor.lane_incarnation;
     leg.participant_settlement.block_height = descriptor.lane_block_height;
     leg.participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
             .expect("mutated fixture settlement hashes");
     leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
     let descriptor = &leg.participant_proposal.descriptor;
@@ -62,7 +63,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
         body.participant_lane_block_height = descriptor.lane_block_height;
         body.participant_lane_block_view = descriptor.lane_block_view;
         body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
-        body.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
+        body.participant_settlement_commitment = leg.participant_settlement_hash;
     }
 }
 
@@ -191,7 +192,8 @@ const BODY_IDENTITY_MUTATIONS: &[BodyIdentityMutation] = &[
         body.participant_proposal_hash = Hash::new(b"phase-proposal-drift")
     }),
     ("participant settlement", |body| {
-        body.participant_settlement_commitment = Hash::new(b"phase-settlement-drift")
+        body.participant_settlement_commitment =
+            HashOf::from_untyped_unchecked(Hash::new(b"phase-settlement-drift"))
     }),
     ("coordinator lane", |body| {
         body.coordinator_lane_id = LaneId::new(90)

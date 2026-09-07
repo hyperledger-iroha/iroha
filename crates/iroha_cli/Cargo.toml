@@ -85,6 +85,7 @@ iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
 iroha_core = { workspace = true, default-features = false }
 fastpq_prover = { path = "../fastpq_prover" }
 iroha_config = { workspace = true }
+iroha_config_base = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_torii_shared = { workspace = true }

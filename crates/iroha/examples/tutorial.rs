@@ -44,7 +44,8 @@ fn account_definition_test() -> Result<(), Error> {
 fn account_registration_test(config: Config) -> Result<(), Error> {
     // #region register_account_crates
     use iroha::{
-        client::Client,
+        blocking::Client,
+        client::AccountTransactionDraft,
         crypto::KeyPair,
         data_model::{
             metadata::Metadata,
@@ -53,7 +54,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     };
     // #endregion register_account_crates
     // Create an Iroha client
-    let client = Client::new(config);
+    let client = Client::new(config)?;
     // #region register_account_create
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::try_random()
@@ -73,11 +74,16 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // Account's RegisterBox
     let metadata = Metadata::default();
     let instructions: Vec<InstructionBox> = vec![create_account.into()];
-    let tx = client.build_transaction(
-        instructions,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        metadata,
-    );
+    let tx = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(AccountTransactionDraft::new(
+                instructions,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                metadata,
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }?;
     // #endregion register_account_prepare_tx
     // #region register_account_submit_tx
     // Submit a prepared account registration transaction
@@ -89,7 +95,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
 fn asset_registration_test(config: Config) -> Result<(), Error> {
     // #region register_asset_crates
     use iroha::{
-        client::Client,
+        blocking::Client,
         crypto::KeyPair,
         data_model::prelude::{
             AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Quantity, Register,
@@ -97,7 +103,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     };
     // #endregion register_asset_crates
     // Create an Iroha client
-    let client = Client::new(config);
+    let client = Client::new(config)?;
     // #region register_asset_create_asset
     // Create an asset
     let asset_def_id = AssetDefinitionId::derive_from_components(
@@ -146,12 +152,12 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_crates
     use iroha::{
-        client::Client,
+        blocking::Client,
         data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Mint},
     };
     // #endregion mint_asset_crates
     // Create an Iroha client
-    let client = Client::new(config);
+    let client = Client::new(config)?;
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
     let roses = AssetDefinitionId::derive_from_components(
@@ -199,12 +205,12 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 fn asset_burning_test(config: Config) -> Result<(), Error> {
     // #region burn_asset_crates
     use iroha::{
-        client::Client,
+        blocking::Client,
         data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Burn},
     };
     // #endregion burn_asset_crates
     // Create an Iroha client
-    let client = Client::new(config);
+    let client = Client::new(config)?;
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
     let roses = AssetDefinitionId::derive_from_components(

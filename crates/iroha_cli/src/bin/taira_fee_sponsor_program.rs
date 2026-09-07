@@ -2,8 +2,9 @@
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use iroha::{
-    client::Client,
-    config::{self, AnonymityPolicy, Config},
+    blocking::Client,
+    client::FeeQuoteRequest,
+    config::{self, Config},
     crypto::{ExposedPrivateKey, HashOf, KeyPair},
     data_model::{
         ChainId, NetworkId,
@@ -21,9 +22,8 @@ use iroha::{
         transaction::FeePaymentIntent,
     },
 };
-use iroha_config::parameters::defaults;
 use iroha_primitives::numeric::Quantity;
-use iroha_service_model::soranet::RolloutPhase;
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -285,26 +285,26 @@ fn main() -> Result<()> {
         transaction_ttl: Duration::from_secs(900),
         transaction_status_timeout: Duration::from_secs(args.status_timeout_secs),
         transaction_add_nonce: true,
-        connect_queue_root: config::default_connect_queue_root(),
-        soracloud_http_witness_file: None,
         sorafs_alias_cache: default_alias_cache_policy(),
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: RolloutPhase::default(),
-    });
-    let mut payload = client.try_build_transaction_payload_from_items(
-        instructions,
-        fee_payment.clone(),
-        Metadata::default(),
+    })?;
+    let mut payload = client.account_client().prepare_transaction(
+        iroha::client::AccountTransactionDraft::new(
+            instructions,
+            fee_payment.clone(),
+            Metadata::default(),
+        ),
     )?;
-    let quote = client.quote_fees(&payload)?;
+    let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
     if !fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         bail!(
             "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
         );
     }
     payload.fee_payment = quote.intent.clone();
-    let transaction = client.try_sign_transaction_payload(payload)?;
-    let hash = client.submit_transaction_blocking(&transaction)?;
+    let transaction = client.account_client().sign_transaction(payload)?;
+    let hash = client.submit_transaction_and_wait(&transaction)?;
     let receipt = norito::json!({
         "hash": hash,
         "transaction": transaction,

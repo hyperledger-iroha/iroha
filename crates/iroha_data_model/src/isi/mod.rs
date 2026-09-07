@@ -612,23 +612,7 @@ where
     }
 }
 fn instruction_tuple_flags() -> u8 {
-    let defaults = norito::core::default_encode_flags();
-    let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
-    let static_defaults = defaults & !dynamic_mask;
-    match norito::core::effective_decode_flags() {
-        None => defaults,
-        Some(0) => 0,
-        Some(current) => {
-            let current_dynamic = current & dynamic_mask;
-            let current_static = current & !dynamic_mask;
-            let effective_static = if current_static == 0 {
-                static_defaults
-            } else {
-                current_static | static_defaults
-            };
-            current_dynamic | effective_static
-        }
-    }
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
 fn write_instruction_pair_prefix<W: std::io::Write>(
     mut writer: W,
@@ -1672,7 +1656,7 @@ macro_rules! isi {
         iroha_data_model_derive::model_single! {
             #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
             #[derive(getset::Getters)]
-            #[derive(Decode, Encode)]
+            #[derive(Decode, Encode, norito::NoritoSchema)]
             #[derive(iroha_schema::IntoSchema)]
             #[getset(get = "pub")]
             $(#[$meta])*
@@ -1713,6 +1697,7 @@ macro_rules! impl_into_box {
 }
 macro_rules! isi_box {
     ($($meta:meta)* $item:item) => {
+        #[derive(norito::NoritoSchema)]
         #[derive(
             Debug,
             Clone,
@@ -1732,6 +1717,7 @@ macro_rules! isi_box {
 }
 macro_rules! enum_type {
     ($(#[$meta:meta])* $vis:vis enum $name:ident { $( $(#[$variant_meta:meta])* $variant:ident ),+ $(,)? }) => {
+        #[derive(norito::NoritoSchema)]
         #[derive(
             Debug,
             Clone,
@@ -1911,6 +1897,7 @@ isi_box! {
     /// Dev note: despite the "Box" suffix, this is an enum (tagged union),
     /// not a heap allocation. It groups related `SetKeyValue<T>` variants
     /// into a single visitable type that implements [`crate::isi::Instruction`].
+    #[norito_schema(name = "iroha_data_model::isi::SetKeyValueBox")]
     pub enum SetKeyValueBox {
         /// Set key value for [`Domain`].
         Domain(SetKeyValue<Domain>),
@@ -1930,6 +1917,7 @@ impl SetKeyValueBox {
 }
 enum_type! {
     /// Type discriminator for [`SetKeyValueBox`] variants.
+    #[norito_schema(name = "iroha_data_model::isi::SetKeyValueType")]
     pub(crate) enum SetKeyValueType {
         Domain,
         Account,
@@ -1942,6 +1930,7 @@ isi_box! {
     /// Enum with all supported [`RemoveKeyValue`] instructions.
     ///
     /// Dev note: "Box" here means a boxed-up family of variants, not heap allocation.
+    #[norito_schema(name = "iroha_data_model::isi::RemoveKeyValueBox")]
     pub enum RemoveKeyValueBox {
         /// Remove key value from [`Domain`].
         Domain(RemoveKeyValue<Domain>),
@@ -1961,6 +1950,7 @@ impl RemoveKeyValueBox {
 }
 enum_type! {
     /// Type discriminator for [`RemoveKeyValueBox`] variants.
+    #[norito_schema(name = "iroha_data_model::isi::RemoveKeyValueType")]
     pub(crate) enum RemoveKeyValueType {
         Domain,
         Account,
@@ -1974,6 +1964,7 @@ isi_box! {
     ///
     /// Dev note: this enum aggregates concrete `Grant<_, _>` variants into
     /// one type for visiting and serialization; it is not a heap `Box`.
+    #[norito_schema(name = "iroha_data_model::isi::GrantBox")]
     pub enum GrantBox {
         /// Grant [`Permission`] to [`Account`].
         Permission(Grant<Permission, Account>),
@@ -1989,6 +1980,7 @@ impl GrantBox {
 }
 enum_type! {
     /// Type discriminator for [`GrantBox`] variants.
+    #[norito_schema(name = "iroha_data_model::isi::GrantType")]
     pub(crate) enum GrantType {
         Permission,
         Role,
@@ -2000,6 +1992,7 @@ isi_box! {
     ///
     /// Dev note: this is a tagged union of concrete `Revoke<_, _>` variants,
     /// not a heap allocation.
+    #[norito_schema(name = "iroha_data_model::isi::RevokeBox")]
     pub enum RevokeBox {
         /// Revoke [`Permission`] from [`Account`].
         Permission(Revoke<Permission, Account>),
@@ -2015,6 +2008,7 @@ impl RevokeBox {
 }
 enum_type! {
     /// Type discriminator for [`RevokeBox`] variants.
+    #[norito_schema(name = "iroha_data_model::isi::RevokeType")]
     pub(crate) enum RevokeType {
         /// Revoke [`Permission`] from an [`Account`].
         Permission,
@@ -2026,6 +2020,7 @@ enum_type! {
 }
 enum_type! {
     /// All built-in instruction kinds supported by the data model.
+    #[norito_schema(name = "iroha_data_model::isi::InstructionType")]
     pub enum InstructionType {
         /// Modify a system parameter.
         SetParameter,
@@ -2801,3 +2796,15 @@ mod test_support;
 #[cfg(test)]
 #[path = "instruction_enum_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod generated_argument_identity_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod generated_enum_identity_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod generated_box_identity_tests;
+
+#[cfg(all(test, feature = "json"))]
+pub(crate) mod generated_record_identity_tests;

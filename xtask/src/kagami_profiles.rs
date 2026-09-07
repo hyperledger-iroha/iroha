@@ -1471,10 +1471,7 @@ mod tests {
     use super::*;
     use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_crypto::{HashOf, Signature};
-    use iroha_data_model::{
-        account::address::ChainDiscriminantGuard,
-        block::{BlockHeader, consensus_v2::SumeragiV2GenesisContextParameters},
-    };
+    use iroha_data_model::{account::address::ChainDiscriminantGuard, block::BlockHeader};
     use tempfile::tempdir;
     trait CompleteTestGenesisBuilder {
         fn complete_for_test(self) -> Self;

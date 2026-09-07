@@ -8,7 +8,7 @@ use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::HashOf,
     data_model::{
         Level, ValidationFail,
@@ -590,16 +590,22 @@ async fn wait_for_route_probe_approval(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<HashOf<TransactionEntrypoint>> {
-    let transaction = submitter.build_transaction(
-        [instruction],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let hash = transaction.hash();
     let entry_hash = transaction.hash_as_entrypoint();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        submitter.listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -693,15 +699,21 @@ async fn wait_for_route_probe_rejection(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<String> {
-    let transaction = submitter.build_transaction(
-        [instruction],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        submitter.listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;

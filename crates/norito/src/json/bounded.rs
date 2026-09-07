@@ -1,5 +1,5 @@
 //! Count-first, allocation-bounded JSON serialization.
-use super::{JsonSerialize, MAX_JSON_VALUE_NESTING_DEPTH, Value, native};
+use super::{JsonObjectKey, JsonSerialize, MAX_JSON_VALUE_NESTING_DEPTH, Value, native};
 use std::{
     alloc::{Layout, alloc},
     collections::{BTreeMap, BTreeSet},
@@ -347,30 +347,49 @@ pub fn write_json_string_to<S: JsonWriteSink + ?Sized>(
     output.push('"')
 }
 
+enum JsonStringContent<'a> {
+    Character(char),
+    Text(&'a str),
+}
+
+fn visit_json_string_content<E>(
+    value: &str,
+    mut visitor: impl FnMut(JsonStringContent<'_>) -> Result<(), E>,
+) -> Result<(), E> {
+    for character in value.chars() {
+        match character {
+            '"' => visitor(JsonStringContent::Text("\\\""))?,
+            '\\' => visitor(JsonStringContent::Text("\\\\"))?,
+            '\n' => visitor(JsonStringContent::Text("\\n"))?,
+            '\r' => visitor(JsonStringContent::Text("\\r"))?,
+            '\t' => visitor(JsonStringContent::Text("\\t"))?,
+            '\u{08}' => visitor(JsonStringContent::Text("\\b"))?,
+            '\u{0C}' => visitor(JsonStringContent::Text("\\f"))?,
+            control if (control as u32) < 0x20 => {
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let byte = control as u8;
+                visitor(JsonStringContent::Text("\\u00"))?;
+                visitor(JsonStringContent::Character(
+                    HEX[(byte >> 4) as usize] as char,
+                ))?;
+                visitor(JsonStringContent::Character(
+                    HEX[(byte & 0x0f) as usize] as char,
+                ))?;
+            }
+            ordinary => visitor(JsonStringContent::Character(ordinary))?,
+        }
+    }
+    Ok(())
+}
+
 fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
     value: &str,
     output: &mut S,
 ) -> Result<(), BoundedJsonError> {
-    for ch in value.chars() {
-        match ch {
-            '"' => output.push_str("\\\"")?,
-            '\\' => output.push_str("\\\\")?,
-            '\n' => output.push_str("\\n")?,
-            '\r' => output.push_str("\\r")?,
-            '\t' => output.push_str("\\t")?,
-            '\u{08}' => output.push_str("\\b")?,
-            '\u{0C}' => output.push_str("\\f")?,
-            control if (control as u32) < 0x20 => {
-                const HEX: &[u8; 16] = b"0123456789abcdef";
-                let byte = control as u8;
-                output.push_str("\\u00")?;
-                output.push(HEX[(byte >> 4) as usize] as char)?;
-                output.push(HEX[(byte & 0x0f) as usize] as char)?;
-            }
-            ordinary => output.push(ordinary)?,
-        }
-    }
-    Ok(())
+    visit_json_string_content(value, |content| match content {
+        JsonStringContent::Character(character) => output.push(character),
+        JsonStringContent::Text(text) => output.push_str(text),
+    })
 }
 
 /// Stream one [`fmt::Display`] value as a JSON string without staging its text.
@@ -383,14 +402,32 @@ pub fn write_json_display_to<T: fmt::Display + ?Sized, S: JsonWriteSink + ?Sized
     value: &T,
     output: &mut S,
 ) -> Result<(), BoundedJsonError> {
-    struct EscapedDisplaySink<'a, S: ?Sized> {
-        output: &'a mut S,
+    output.push('"')?;
+    visit_json_display_text(value, |chunk| write_json_string_content_to(chunk, output))?;
+    output.push('"')
+}
+
+/// Visit a display value's raw text without allocating an intermediate string.
+///
+/// This helper neither quotes nor escapes the text. It preserves the first
+/// visitor error and stops subsequent visitor calls even if a formatter ignores
+/// its write error. An intrinsic formatting failure returns
+/// [`BoundedJsonError::Unsupported`].
+pub fn visit_json_display_text<T: fmt::Display + ?Sized>(
+    value: &T,
+    visitor: impl FnMut(&str) -> Result<(), BoundedJsonError>,
+) -> Result<(), BoundedJsonError> {
+    struct DisplayVisitor<F> {
+        visitor: F,
         error: Option<BoundedJsonError>,
     }
 
-    impl<S: JsonWriteSink + ?Sized> fmt::Write for EscapedDisplaySink<'_, S> {
+    impl<F: FnMut(&str) -> Result<(), BoundedJsonError>> fmt::Write for DisplayVisitor<F> {
         fn write_str(&mut self, value: &str) -> fmt::Result {
-            match write_json_string_content_to(value, self.output) {
+            if self.error.is_some() {
+                return Err(fmt::Error);
+            }
+            match (self.visitor)(value) {
                 Ok(()) => Ok(()),
                 Err(error) => {
                     self.error = Some(error);
@@ -400,17 +437,73 @@ pub fn write_json_display_to<T: fmt::Display + ?Sized, S: JsonWriteSink + ?Sized
         }
     }
 
-    output.push('"')?;
-    let mut escaped = EscapedDisplaySink {
-        output,
+    let mut streamed = DisplayVisitor {
+        visitor,
         error: None,
     };
-    let formatted = fmt::write(&mut escaped, format_args!("{value}"));
-    if let Some(error) = escaped.error {
+    let formatted = fmt::write(&mut streamed, format_args!("{value}"));
+    if let Some(error) = streamed.error {
         return Err(error);
     }
-    formatted.map_err(|_| BoundedJsonError::Unsupported)?;
+    formatted.map_err(|_| BoundedJsonError::Unsupported)
+}
+fn write_json_string_content(value: &str, output: &mut String) {
+    let result: Result<(), core::convert::Infallible> =
+        visit_json_string_content(value, |content| {
+            match content {
+                JsonStringContent::Character(character) => output.push(character),
+                JsonStringContent::Text(text) => output.push_str(text),
+            }
+            Ok(())
+        });
+    match result {
+        Ok(()) => {}
+        Err(error) => match error {},
+    }
+}
+fn write_json_object_key<K: JsonObjectKey + ?Sized>(key: &K, output: &mut String) {
+    output.push('"');
+    let result: Result<(), core::convert::Infallible> = key.visit_json_key_text(|chunk| {
+        write_json_string_content(chunk, output);
+        Ok(())
+    });
+    match result {
+        Ok(()) => {}
+        Err(error) => match error {},
+    }
+    output.push('"');
+}
+fn write_json_object_key_to<K: JsonObjectKey + ?Sized>(
+    key: &K,
+    output: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    output.push('"')?;
+    key.visit_json_key_text_checked(|chunk| write_json_string_content_to(chunk, output))?;
     output.push('"')
+}
+fn visit_u128_text<E>(
+    mut value: u128,
+    mut visitor: impl FnMut(&str) -> Result<(), E>,
+) -> Result<(), E> {
+    const BUFFER_LEN: usize = 39;
+    let mut buffer = [0_u8; BUFFER_LEN];
+    let mut start = buffer.len();
+    if value == 0 {
+        return visitor("0");
+    }
+    while value > 0 {
+        start -= 1;
+        buffer[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    // SAFETY: the populated suffix contains only ASCII decimal digits.
+    visitor(unsafe { std::str::from_utf8_unchecked(&buffer[start..]) })
+}
+fn visit_i64_text<E>(value: i64, mut visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+    if value < 0 {
+        visitor("-")?;
+    }
+    visit_u128_text(u128::from(value.unsigned_abs()), visitor)
 }
 fn write_u128_to<S: JsonWriteSink + ?Sized>(
     mut value: u128,
@@ -534,6 +627,14 @@ impl JsonSerialize for bool {
         output.push_str(if *self { "true" } else { "false" })
     }
 }
+impl JsonObjectKey for bool {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(if *self { "true" } else { "false" })
+    }
+}
 macro_rules! impl_nonzero_json {
     ($($ty:ty),+ $(,)?) => {$(impl_nonzero_json!(@one $ty);)+};
     (@one $ty:ty) => {
@@ -546,6 +647,14 @@ macro_rules! impl_nonzero_json {
                 output: &mut dyn JsonWriteSink,
             ) -> Result<(), BoundedJsonError> {
                 write_u128_to(u128::from(self.get()), output)
+            }
+        }
+        impl JsonObjectKey for $ty {
+            fn visit_json_key_text<E>(
+                &self,
+                visitor: impl FnMut(&str) -> Result<(), E>,
+            ) -> Result<(), E> {
+                visit_u128_text(u128::from(self.get()), visitor)
             }
         }
     };
@@ -562,6 +671,11 @@ impl JsonSerialize for core::num::NonZeroUsize {
     }
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_u128_to(u128::from(self.get() as u64), output)
+    }
+}
+impl JsonObjectKey for core::num::NonZeroUsize {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        visit_u128_text(u128::from(self.get() as u64), visitor)
     }
 }
 impl JsonSerialize for str {
@@ -652,6 +766,14 @@ macro_rules! impl_unsigned_fast_json {
                 write_u128_to(u128::from(*self), output)
             }
         }
+        impl JsonObjectKey for $ty {
+            fn visit_json_key_text<E>(
+                &self,
+                visitor: impl FnMut(&str) -> Result<(), E>,
+            ) -> Result<(), E> {
+                visit_u128_text(u128::from(*self), visitor)
+            }
+        }
     };
 }
 macro_rules! impl_signed_fast_json {
@@ -668,6 +790,14 @@ macro_rules! impl_signed_fast_json {
                 write_i64_to(i64::from(*self), output)
             }
         }
+        impl JsonObjectKey for $ty {
+            fn visit_json_key_text<E>(
+                &self,
+                visitor: impl FnMut(&str) -> Result<(), E>,
+            ) -> Result<(), E> {
+                visit_i64_text(i64::from(*self), visitor)
+            }
+        }
     };
 }
 impl_unsigned_fast_json!(u8, u16, u32, u64, u128);
@@ -680,12 +810,22 @@ impl FastJsonWrite for usize {
         write_u128_to(u128::from(*self as u64), output)
     }
 }
+impl JsonObjectKey for usize {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        visit_u128_text(u128::from(*self as u64), visitor)
+    }
+}
 impl FastJsonWrite for isize {
     fn write_json(&self, output: &mut String) {
         super::write_i64_json(output, *self as i64);
     }
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_i64_to(*self as i64, output)
+    }
+}
+impl JsonObjectKey for isize {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        visit_i64_text(*self as i64, visitor)
     }
 }
 impl<T: JsonSerialize + Ord> FastJsonWrite for BTreeSet<T> {
@@ -715,7 +855,7 @@ impl<T: JsonSerialize + Ord> FastJsonWrite for BTreeSet<T> {
 }
 impl<K, V> FastJsonWrite for BTreeMap<K, V>
 where
-    K: JsonSerialize + Ord,
+    K: JsonObjectKey + Ord,
     V: JsonSerialize,
 {
     fn write_json(&self, output: &mut String) {
@@ -724,7 +864,7 @@ where
             if index != 0 {
                 output.push(',');
             }
-            key.json_serialize(output);
+            write_json_object_key(key, output);
             output.push(':');
             value.json_serialize(output);
         }
@@ -737,7 +877,7 @@ where
             if index != 0 {
                 output.push(',')?;
             }
-            key.json_serialize_to(output)?;
+            write_json_object_key_to(key, output)?;
             output.push(':')?;
             value.json_serialize_to(output)?;
         }
@@ -784,6 +924,31 @@ impl FastJsonWrite for String {
     }
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_json_string_to(self, output)
+    }
+}
+impl JsonObjectKey for str {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self)
+    }
+}
+impl JsonObjectKey for String {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        self.as_str().visit_json_key_text(visitor)
+    }
+}
+impl<T: JsonObjectKey + ?Sized> JsonObjectKey for &T {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        (**self).visit_json_key_text(visitor)
+    }
+
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), BoundedJsonError>,
+    ) -> Result<(), BoundedJsonError> {
+        (**self).visit_json_key_text_checked(visitor)
     }
 }
 pub(super) fn write_hex_to<S: JsonWriteSink + ?Sized>(

@@ -1,4 +1,4 @@
-//! Tests covering `json_from_map_key` fast-path validation and duplicate detection.
+//! Tests for typed JSON object-key encoding, decoding, and duplicate rejection.
 use norito::json::{self, JsonDeserialize};
 use std::collections::HashMap;
 #[test]
@@ -281,4 +281,264 @@ fn numeric_map_keys_roundtrip_for_deterministic_values() {
             .expect("parser path should decode canonical numeric keys");
         assert_eq!(parsed_from_str, parsed);
     }
+}
+
+#[test]
+fn object_key_scalars_roundtrip_with_canonical_quoted_text() {
+    use norito::json::{JsonObjectKey, JsonObjectKeyOwned};
+    use std::{
+        fmt::Debug,
+        num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize},
+    };
+
+    fn check<K>(key: K, expected_key: &str)
+    where
+        K: JsonObjectKey + JsonObjectKeyOwned + Clone + Debug + Eq + Ord,
+    {
+        let map = std::collections::BTreeMap::from([(key.clone(), 7_u8)]);
+        let expected = format!(r#"{{"{expected_key}":7}}"#);
+        let encoded = json::to_json(&map).expect("serialize typed object key");
+        assert_eq!(encoded, expected);
+        assert_eq!(
+            json::from_json::<std::collections::BTreeMap<K, u8>>(&encoded)
+                .expect("decode typed object key"),
+            map
+        );
+    }
+
+    check(false, "false");
+    check(true, "true");
+    check(0_u8, "0");
+    check(u8::MAX, "255");
+    check(u16::MAX, "65535");
+    check(u32::MAX, "4294967295");
+    check(u64::MAX, "18446744073709551615");
+    check(u128::MAX, "340282366920938463463374607431768211455");
+    check(usize::MAX, &usize::MAX.to_string());
+    check(i8::MIN, "-128");
+    check(i16::MIN, "-32768");
+    check(i32::MIN, "-2147483648");
+    check(i64::MIN, "-9223372036854775808");
+    check(isize::MIN, &isize::MIN.to_string());
+    check(NonZeroU16::new(1).unwrap(), "1");
+    check(NonZeroU32::new(2).unwrap(), "2");
+    check(NonZeroU64::new(3).unwrap(), "3");
+    check(
+        NonZeroU128::new(u128::MAX).unwrap(),
+        "340282366920938463463374607431768211455",
+    );
+    check(
+        NonZeroUsize::new(usize::MAX).unwrap(),
+        &usize::MAX.to_string(),
+    );
+}
+
+#[derive(Debug, PartialEq, Eq, norito::JsonSerialize, norito::JsonDeserialize)]
+struct NestedNumericMap {
+    values: std::collections::BTreeMap<u16, u8>,
+}
+
+#[test]
+fn nested_numeric_map_uses_the_same_bounded_key_writer() {
+    let value = NestedNumericMap {
+        values: std::collections::BTreeMap::from([(3, 4), (17, 18)]),
+    };
+    let expected = r#"{"values":{"3":4,"17":18}}"#;
+    assert_eq!(
+        json::to_json(&value).expect("ordinary nested map"),
+        expected
+    );
+    assert_eq!(
+        json::to_json_bounded(&value, expected.len()).expect("exact bounded nested map"),
+        expected
+    );
+    assert_eq!(
+        json::to_json_bounded(&value, expected.len() - 1),
+        Err(json::BoundedJsonError::BodyTooLarge)
+    );
+    assert_eq!(
+        json::from_json::<NestedNumericMap>(expected).unwrap(),
+        value
+    );
+}
+
+#[test]
+fn string_object_keys_preserve_canonical_escaping_and_bytes() {
+    let key = "quote\" slash\\ line\ncontrol\u{0008} snowman☃".to_owned();
+    let map = std::collections::BTreeMap::from([(key.clone(), 1_u8)]);
+    let encoded = json::to_json(&map).expect("serialize escaped key");
+    assert_eq!(
+        encoded,
+        "{\"quote\\\" slash\\\\ line\\ncontrol\\b snowman☃\":1}"
+    );
+    assert_eq!(
+        json::to_json_bounded(&map, encoded.len()).expect("bounded escaped key"),
+        encoded
+    );
+    assert_eq!(
+        json::from_json::<std::collections::BTreeMap<String, u8>>(&encoded).unwrap(),
+        map
+    );
+}
+
+#[test]
+fn byte_array_object_key_streams_uppercase_hex_at_exact_bound() {
+    let map = std::collections::BTreeMap::from([([0x00_u8, 0xab, 0xff], 9_u8)]);
+    let expected = r#"{"00ABFF":9}"#;
+    assert_eq!(json::to_json(&map).unwrap(), expected);
+    assert_eq!(
+        json::to_json_bounded(&map, expected.len()).unwrap(),
+        expected
+    );
+    assert_eq!(
+        json::to_json_bounded(&map, expected.len() - 1),
+        Err(json::BoundedJsonError::BodyTooLarge)
+    );
+    assert_eq!(
+        json::from_json::<std::collections::BTreeMap<[u8; 3], u8>>(expected).unwrap(),
+        map
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CheckedRejectingKey;
+
+impl json::JsonObjectKey for CheckedRejectingKey {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor("ordinary")
+    }
+
+    fn visit_json_key_text_checked(
+        &self,
+        _visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+    ) -> Result<(), json::BoundedJsonError> {
+        Err(json::BoundedJsonError::Unsupported)
+    }
+}
+
+#[test]
+fn object_key_checked_conversion_errors_propagate() {
+    let map = std::collections::BTreeMap::from([(CheckedRejectingKey, 1_u8)]);
+    assert_eq!(json::to_json(&map).unwrap(), r#"{"ordinary":1}"#);
+    assert_eq!(
+        json::to_json_bounded(&map, usize::MAX),
+        Err(json::BoundedJsonError::Unsupported)
+    );
+
+    let key = CheckedRejectingKey;
+    let borrowed = std::collections::BTreeMap::from([(&key, 1_u8)]);
+    assert_eq!(
+        json::to_json_bounded(&borrowed, usize::MAX),
+        Err(json::BoundedJsonError::Unsupported),
+        "borrowing a key must retain its checked conversion"
+    );
+}
+
+#[test]
+fn borrowed_string_object_keys_use_canonical_escaping() {
+    let map = std::collections::BTreeMap::from([("borrowed\nkey", 1_u8)]);
+    let expected = r#"{"borrowed\nkey":1}"#;
+    assert_eq!(json::to_json(&map).unwrap(), expected);
+    assert_eq!(
+        json::to_json_bounded(&map, expected.len()).unwrap(),
+        expected
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ChunkedEscapedKey;
+
+impl json::JsonObjectKey for ChunkedEscapedKey {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor("quote\"")?;
+        visitor(" slash\\")?;
+        visitor(" line\n")?;
+        visitor(" snowman☃")
+    }
+}
+
+#[test]
+fn chunked_object_key_text_uses_one_canonical_escape_writer() {
+    let map = std::collections::BTreeMap::from([(ChunkedEscapedKey, 1_u8)]);
+    let expected = "{\"quote\\\" slash\\\\ line\\n snowman☃\":1}";
+    assert_eq!(json::to_json(&map).unwrap(), expected);
+    assert_eq!(
+        json::to_json_bounded(&map, expected.len()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn object_key_parser_rejects_invalid_string_grammar_before_typed_decode() {
+    for input in [r#"{"\uD800":1}"#, r#"{"\uDC00":1}"#, r#"{"key"x:1}"#] {
+        assert!(
+            json::from_json::<std::collections::BTreeMap<String, u8>>(input).is_err(),
+            "invalid object key must be rejected: {input}"
+        );
+    }
+}
+
+#[test]
+fn object_key_escaping_matches_string_codec_for_all_control_characters() {
+    let mut key: String = ('\u{0000}'..='\u{001f}').collect();
+    key.push_str("quote\" slash\\ snowman☃ musical𝄞");
+    let expected = format!("{{{}:1}}", json::to_json(&key).unwrap());
+    let map = std::collections::BTreeMap::from([(key, 1_u8)]);
+    assert_eq!(json::to_json(&map).unwrap(), expected);
+    assert_eq!(
+        json::to_json_bounded(&map, expected.len()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn display_key_text_preserves_raw_chunks_and_the_first_visitor_error() {
+    struct DisplayChunks;
+    impl std::fmt::Display for DisplayChunks {
+        fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            out.write_str("quote\"")?;
+            out.write_str("line\n")
+        }
+    }
+    let mut text = String::new();
+    json::visit_json_display_text(&DisplayChunks, |chunk| {
+        text.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(text, "quote\"line\n");
+
+    // Even a formatter that ignores write failures must not resume the visitor.
+    struct IgnoresWriteError;
+    impl std::fmt::Display for IgnoresWriteError {
+        fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let _ = out.write_str("first");
+            let _ = out.write_str("second");
+            Ok(())
+        }
+    }
+    let mut visits = 0;
+    let result = json::visit_json_display_text(&IgnoresWriteError, |_| {
+        visits += 1;
+        Err(json::BoundedJsonError::BodyTooLarge)
+    });
+    assert_eq!(result, Err(json::BoundedJsonError::BodyTooLarge));
+    assert_eq!(visits, 1);
+
+    struct InvalidDisplay;
+    impl std::fmt::Display for InvalidDisplay {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Err(std::fmt::Error)
+        }
+    }
+    assert_eq!(
+        json::visit_json_display_text(&InvalidDisplay, |_| Ok(())),
+        Err(json::BoundedJsonError::Unsupported)
+    );
 }

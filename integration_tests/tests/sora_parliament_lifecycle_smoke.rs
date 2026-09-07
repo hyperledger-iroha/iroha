@@ -12,8 +12,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use eyre::{Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
 use iroha::{
+    blocking::Client,
     client::{
-        Client, ParliamentTimedOvnCastingContextResponseV1, ParliamentTlePartialReleaseShareV1,
+        ParliamentTimedOvnCastingContextResponseV1, ParliamentTlePartialReleaseShareV1,
         ParliamentTleReleaseContextResponseV1,
     },
     crypto::{Algorithm, Hash, KeyPair, Signature},
@@ -270,7 +271,7 @@ fn current_height(client: &Client) -> Result<u64> {
 }
 
 fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
-    client.submit_blocking(Log::new(Level::INFO, label.into()), fee())?;
+    client.submit(Log::new(Level::INFO, label.into()), fee())?;
     current_height(client)
 }
 
@@ -363,7 +364,7 @@ fn submit_transition(
     attempt_id: GovernanceAttemptId,
     transition: ParliamentLifecycleTransitionV1,
 ) -> Result<u64> {
-    client.submit_blocking(
+    client.submit(
         SubmitParliamentLifecycleTransitionV1 {
             governance_attempt_id: attempt_id,
             transition,
@@ -378,7 +379,7 @@ fn submit_transitions(
     attempt_id: GovernanceAttemptId,
     transitions: impl IntoIterator<Item = ParliamentLifecycleTransitionV1>,
 ) -> Result<u64> {
-    client.submit_all_blocking(
+    client.submit_all(
         transitions.into_iter().map(|transition| {
             InstructionBox::from(SubmitParliamentLifecycleTransitionV1 {
                 governance_attempt_id: attempt_id,
@@ -398,7 +399,7 @@ fn assert_transition_rejected_without_state_change(
 ) -> Result<()> {
     let before = client.get_parliament_attempt(attempt_id)?.state_payload_hex;
     if client
-        .submit_blocking(
+        .submit(
             SubmitParliamentLifecycleTransitionV1 {
                 governance_attempt_id: attempt_id,
                 transition,
@@ -883,9 +884,9 @@ fn stage_contract_artifact(
                 chunk_count,
             }));
         }
-        client.submit_all_blocking(instructions, fee())?;
+        client.submit_all(instructions, fee())?;
     }
-    client.submit_blocking(RegisterSmartContractCode { manifest }, fee())?;
+    client.submit(RegisterSmartContractCode { manifest }, fee())?;
     let code_hash = *verified.code_hash.as_ref();
     let abi_hash = *verified.abi_hash.as_ref();
     Ok((
@@ -1157,7 +1158,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         "SORA_PARLIAMENT_LIFECYCLE submit_lifecycle authority_height={submission_authority_height} install_height={install_height} roster_hash={}",
         hex::encode(global_threshold_beacon_roster_hash_v1(&ordered_roster)),
     );
-    client.submit_all_blocking(lifecycle_certificates, fee())?;
+    client.submit_all(lifecycle_certificates, fee())?;
     assert_eq!(current_height(&client)?, install_height);
     let activation_height = install_height
         .checked_add(1)
@@ -1186,7 +1187,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -2322,7 +2323,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         norito::encode_canonical(&beacon_record)?,
         install_height,
     )?;
-    client.submit_blocking(lifecycle_certificate, fee())?;
+    client.submit(lifecycle_certificate, fee())?;
     assert_eq!(current_height(&client)?, install_height);
     let activation_height = install_height
         .checked_add(1)
@@ -2609,7 +2610,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         norito::encode_canonical(&beacon_record)?,
         install_height,
     )?;
-    client.submit_blocking(lifecycle_certificate, fee())?;
+    client.submit(lifecycle_certificate, fee())?;
     assert_eq!(current_height(&client)?, install_height);
     let activation_height = install_height
         .checked_add(1)

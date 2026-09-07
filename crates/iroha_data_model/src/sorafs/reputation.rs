@@ -93,7 +93,9 @@ pub const REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1: &[u8]
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionTargetV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionTargetV1"
+)]
 pub struct ReputationFinalizedArchiveRetentionTargetV1 {
     /// One-based finalized block height.
     pub height: u64,
@@ -142,7 +144,9 @@ impl ReputationFinalizedArchiveRetentionTargetV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1"
+)]
 pub struct ReputationFinalizedArchiveRetentionRequestV1 {
     /// Schema version.
     pub version: u16,
@@ -562,7 +566,9 @@ impl ReputationJournalAuthorityPolicyV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1"
+)]
 pub struct ReputationJournalAuthorityPolicyRecordV1 {
     /// Canonical governed policy.
     pub policy: ReputationJournalAuthorityPolicyV1,
@@ -1414,7 +1420,9 @@ impl StreamTokenRequestRouteV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationRequestContextV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::StreamTokenValidationRequestContextV1"
+)]
 pub struct StreamTokenValidationRequestContextV1 {
     version: u8,
     provider_id: ProviderId,
@@ -1999,7 +2007,9 @@ impl ReputationJournalSourceHeadV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalCommittedEventRecordV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::ReputationJournalCommittedEventRecordV1"
+)]
 pub struct ReputationJournalCommittedEventRecordV1 {
     /// One-based global journal sequence.
     pub sequence: u64,
@@ -2075,7 +2085,9 @@ impl ReputationJournalFinalizedCursorV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventCursorV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventCursorV1"
+)]
 pub struct ReputationJournalFinalizedEventCursorV1 {
     /// Monotonic journal sequence beginning at one.
     pub sequence: u64,
@@ -2172,7 +2184,9 @@ impl ReputationJournalFinalizedEventV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventPageV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventPageV1"
+)]
 pub struct ReputationJournalFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ReputationJournalFinalizedCursorV1,

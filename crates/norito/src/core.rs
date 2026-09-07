@@ -1503,18 +1503,12 @@ pub fn decode_packed_offsets_slice(
     Ok((offsets, bytes_needed, data_len, 0))
 }
 /// Decode a packed-struct offset table relative to an active payload context.
-///
-/// The zero-field behavior intentionally matches the historical derive output,
-/// which consumes no table in this internal path.
 #[doc(hidden)]
 #[inline(never)]
 pub fn decode_context_packed_offsets(
     ptr: *const u8,
     count: usize,
 ) -> Result<(Vec<usize>, usize, usize, usize), Error> {
-    if count == 0 {
-        return Ok((vec![0], 0, 0, 0));
-    }
     let payload = payload_slice_from_ptr(ptr)?;
     decode_packed_offsets_slice(payload, count)
 }
@@ -3000,7 +2994,7 @@ where
     }
     Ok(out)
 }
-fn decode_vec_from_slice_with<'a, T, F>(
+fn decode_element_sequence_from_slice_with<'a, T, F>(
     bytes: &'a [u8],
     decode_planned: F,
 ) -> Result<(Vec<T>, usize), Error>
@@ -3008,18 +3002,7 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
     F: FnOnce(&'a [u8], u8, &SequencePlan) -> Result<Option<Vec<T>>, Error>,
 {
-    let (len, offset) = read_seq_len_slice(bytes)?;
-    // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
-    if core::any::type_name::<T>() == "u8" {
-        let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
-        // SAFETY: we verified `T == u8` via `type_name`.
-        let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
-        let mut raw = try_decode_vec_with_capacity::<u8>(len)?;
-        raw.extend_from_slice(slice);
-        let out = unsafe { std::mem::transmute::<Vec<u8>, Vec<T>>(raw) };
-        record_slice_access(bytes, end);
-        return Ok((out, end));
-    }
+    let (len, _) = read_seq_len_slice(bytes)?;
     if crate::debug_trace_enabled() {
         eprintln!(
             "Vec::<{}>::decode len={} packed_seq={}",
@@ -3040,6 +3023,47 @@ where
     }
     let out = decode_sequence_plan_serial::<T>(bytes, &plan)?;
     Ok((out, plan.used))
+}
+
+/// Decode a generic element sequence from the front of `bytes`.
+///
+/// Unlike [`decode_vec_from_slice_serial`], this always uses the advertised
+/// packed or length-prefixed element layout, including when `T` is `u8`.
+/// Callers whose wire type does not use `Vec<u8>`'s raw-byte optimization use
+/// this helper and decide separately whether trailing bytes are permitted.
+#[doc(hidden)]
+pub fn decode_element_sequence_from_slice_serial<'a, T>(
+    bytes: &'a [u8],
+) -> Result<(Vec<T>, usize), Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+{
+    decode_element_sequence_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))
+}
+
+fn decode_vec_from_slice_with<'a, T, F>(
+    bytes: &'a [u8],
+    decode_planned: F,
+) -> Result<(Vec<T>, usize), Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    F: FnOnce(&'a [u8], u8, &SequencePlan) -> Result<Option<Vec<T>>, Error>,
+{
+    // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency. Generic
+    // sequence containers use `decode_element_sequence_from_slice_with`
+    // instead so this storage optimization never changes their wire layout.
+    if core::any::type_name::<T>() == "u8" {
+        let (len, offset) = read_seq_len_slice(bytes)?;
+        let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
+        // SAFETY: we verified `T == u8` via `type_name`.
+        let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+        let mut raw = try_decode_vec_with_capacity::<u8>(len)?;
+        raw.extend_from_slice(slice);
+        let out = unsafe { std::mem::transmute::<Vec<u8>, Vec<T>>(raw) };
+        record_slice_access(bytes, end);
+        return Ok((out, end));
+    }
+    decode_element_sequence_from_slice_with::<T, _>(bytes, decode_planned)
 }
 /// Decode a binary sequence from a slice using the scalar sequence planner.
 #[doc(hidden)]
@@ -6411,23 +6435,7 @@ where
 }
 #[inline]
 fn tuple_serialization_flags() -> u8 {
-    let defaults = default_encode_flags();
-    let dynamic_mask = header_flags::PACKED_SEQ;
-    let static_defaults = defaults & !dynamic_mask;
-    match current_decode_flags_effective() {
-        None => defaults,
-        Some(0) => 0,
-        Some(current) => {
-            let current_dynamic = current & dynamic_mask;
-            let current_static = current & !dynamic_mask;
-            let effective_static = if current_static == 0 {
-                static_defaults
-            } else {
-                current_static | static_defaults
-            };
-            current_dynamic | effective_static
-        }
-    }
+    effective_layout_flags()
 }
 macro_rules! impl_tuple {
     ($( $name:ident $var:ident $idx:tt ),+ $(,)?) => {

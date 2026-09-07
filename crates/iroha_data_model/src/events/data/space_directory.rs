@@ -20,6 +20,9 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[event_set(
+        schema_name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryEventSet"
+    )]
     pub enum SpaceDirectoryEvent {
         /// A manifest was activated for a UAID/dataspace pair.
         ManifestActivated(SpaceDirectoryManifestActivated),

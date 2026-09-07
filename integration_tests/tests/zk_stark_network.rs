@@ -2,7 +2,7 @@
 #![cfg(feature = "zk-stark")]
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha_crypto::{
     Signature,
     blake2::{Blake2b512, Digest as _},
@@ -490,7 +490,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     );
     let mismatched_nullifier =
         derive_ballot_nullifier(&nullifier_domain, &client.chain, &election_id, &bad_commit);
-    let bad_ballot = client.submit_blocking(
+    let bad_ballot = client.submit(
         iroha_data_model::isi::zk::SubmitBallot {
             election_id: election_id.clone(),
             ciphertext: bad_commit.to_vec(),
@@ -613,7 +613,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     )
     .sign(client.key_pair.private_key());
     client
-        .submit_transaction_blocking(&tx_valid)
+        .submit_transaction_and_wait(&tx_valid)
         .wrap_err("submit STARK IvmProved tx after AIR proving is re-enabled")?;
     let bad_attachment =
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
@@ -625,7 +625,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
                 .expect("one attachment is a valid bounded proof list"),
         )
         .sign(client.key_pair.private_key());
-    let bad = client.submit_transaction_blocking(&tx_bad);
+    let bad = client.submit_transaction_and_wait(&tx_bad);
     assert!(
         bad.is_err(),
         "mismatched backend/circuit attachment should be rejected"

@@ -19,6 +19,7 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[event_set(schema_name = "iroha_data_model::events::data::musubi::model::MusubiEventSet")]
     pub enum MusubiEvent {
         /// A canonical namespace was immutably bound.
         NamespaceBound(crate::musubi::MusubiNamespaceBindingV1),

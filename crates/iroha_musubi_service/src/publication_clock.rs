@@ -77,6 +77,7 @@ impl std::error::Error for DurableMusubiPublicationServiceClockOpenErrorV1 {}
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::publication_clock::DurableClockStateV1")]
 #[norito_schema(name = "iroha::musubi_runtime::publication_clock::DurableClockStateV1")]
 struct DurableClockStateV1 {
     domain: [u8; 32],
@@ -120,6 +121,7 @@ impl DurableClockStateV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::publication_clock::DurableClockEnvelopeV1")]
 #[norito_schema(name = "iroha::musubi_runtime::publication_clock::DurableClockEnvelopeV1")]
 struct DurableClockEnvelopeV1 {
     state: DurableClockStateV1,

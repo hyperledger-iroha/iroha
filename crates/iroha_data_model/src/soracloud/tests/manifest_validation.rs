@@ -3549,6 +3549,7 @@ fn service_mailbox_message_validation_separates_submission_and_persisted_schedul
     assert_soracloud_invalid_field(error, "enqueue_sequence");
 
     message.enqueue_sequence = 0;
+    message.enqueue_height = 0;
     message.available_after_height = 0;
     message.expires_at_height = 0;
     message
@@ -3736,7 +3737,13 @@ fn runtime_receipt_validate_rejects_invalid_host_attribution() {
     let error = receipt
         .validate()
         .expect_err("invalid host attribution must be rejected");
-    assert_soracloud_invalid_field(error, "peer_id");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::EmptyField {
+            manifest: "sora runtime deterministic validator host",
+            field: "peer_id",
+        }
+    ));
 }
 #[test]
 fn deterministic_validator_host_accepts_independently_canonical_account_and_peer() {
@@ -4266,7 +4273,23 @@ fn agent_apartment_audit_event_validation_requires_execution_fields() {
     let mut event = sample_agent_apartment_audit_event();
     event.action = SoraAgentApartmentActionV1::AutonomyRunExecuted;
     event.run_id = Some("ops_agent:autonomy:9".to_owned());
+    event.request_id = event.run_id.clone();
+    event.artifact_hash = Some(hex::encode([0x51; 32]));
+    event.run_label = Some("approved_run".to_owned());
+    event.budget_units = Some(1);
+    event.service_name = Some("ops_service".to_owned());
+    event.service_version = Some("1.0.0".to_owned());
+    event.handler_name = Some("execute".to_owned());
+    event.result_commitment = Some(sample_hash(52));
+    event.runtime_receipt_id = Some(sample_hash(53));
+    event.journal_artifact_hash = Some(sample_hash(54));
+    event.checkpoint_artifact_hash = Some(sample_hash(55));
     event.succeeded = Some(true);
+    event.reason = None;
+    event
+        .validate()
+        .expect("complete execution attribution must validate");
+    event.result_commitment = None;
     let error = event
         .validate()
         .expect_err("execution audit events must carry a result commitment");

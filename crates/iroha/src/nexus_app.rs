@@ -4,7 +4,10 @@
 //! pipeline APIs intact. SDK applications can use this module to build a
 //! canonical transfer payload, request a wallet signature, finalize the signed
 //! transaction, submit it, and optionally wait for exact global, state-resolved `Applied` status.
-use crate::client::{Client, TransactionWaitOptions, TransactionWaitOutcome};
+use crate::{
+    blocking::Client,
+    client::{FeeQuoteRequest, TransactionWaitOptions, TransactionWaitOutcome},
+};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity, Transfer},
@@ -329,7 +332,7 @@ impl NexusToriiSubmitter for Client {
         payload: &TransactionPayload,
     ) -> Result<FeePaymentIntent, NexusAppError> {
         let quote = self
-            .quote_fees(payload)
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload })
             .map_err(|err| NexusAppError::FeeQuote(err.to_string()))?;
         if !payload
             .fee_payment
@@ -375,7 +378,7 @@ pub struct NexusAppClient<C = UnsupportedConnectTransport, S = Client> {
     submitter: S,
 }
 impl NexusAppClient<UnsupportedConnectTransport, Client> {
-    /// Construct a facade over an existing Torii client.
+    /// Construct a facade over an existing blocking Torii client.
     ///
     /// Connect operations require constructing the generic client with a
     /// concrete [`NexusConnectTransport`].

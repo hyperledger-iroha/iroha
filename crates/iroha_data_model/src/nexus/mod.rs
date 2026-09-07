@@ -39,6 +39,8 @@ pub use endorsement::*;
 pub use fee_sponsor_program::*;
 pub use manifest::*;
 pub use privacy::*;
+#[cfg(all(test, feature = "json"))]
+pub(crate) use private_settlement::tests::measured_receipt as measured_private_settlement_receipt;
 pub use private_settlement::*;
 pub mod portfolio;
 pub use portfolio::*;

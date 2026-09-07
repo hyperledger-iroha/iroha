@@ -176,7 +176,7 @@ def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
     ("field", "value", "message"),
     [
         ("schema_version", 1, "schema_version must be 2"),
-        ("aggregate_rust", {"ceiling": 4_540_000}, "keys must be exactly"),
+        ("aggregate_rust", {"ceiling": 1}, "keys must be exactly"),
         ("limits", {"production": True, "test": 3_000}, "non-negative integer"),
         ("limits", {"production": 0, "test": 3_000}, "greater than zero"),
         ("limits", {"production": 5_000, "test": 3_000, "total": 1}, "only production and test"),

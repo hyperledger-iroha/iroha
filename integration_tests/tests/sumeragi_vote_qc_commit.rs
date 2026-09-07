@@ -43,7 +43,7 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         let client = network.client();
         let genesis_application_deadline = Instant::now() + network.sync_timeout();
         let baseline_non_empty = loop {
-            match client.get_status() {
+            match client.client().get_status() {
                 Ok(status) if status.blocks >= 1 && status.blocks_non_empty >= 1 => {
                     break status.blocks_non_empty;
                 }
@@ -65,7 +65,7 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         };
         let (new_account_id, _) = gen_account_in("wonderland");
         let register_new_account = Register::account(Account::new(new_account_id.clone()));
-        client.submit_blocking(
+        client.submit(
             register_new_account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -77,7 +77,7 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         })?;
         let account_visibility_deadline = Instant::now() + Duration::from_secs(30);
         let accounts = loop {
-            let accounts = client.query(FindAccounts).execute_all()?;
+            let accounts = client.client().query(FindAccounts).execute_all()?;
             if accounts
                 .iter()
                 .any(|account| account.id() == &new_account_id)
@@ -93,13 +93,13 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
                 .any(|account| account.id() == &new_account_id),
             "new account must exist in WSV after commit"
         );
-        let status = client.get_sumeragi_status()?;
+        let status = client.client().get_sumeragi_status()?;
         assert!(
             status.last_committed_height >= target_non_empty,
             "exact reducer status should observe the committed transaction"
         );
         assert!(status.height >= status.last_committed_height);
-        let qc_json = client.get_sumeragi_qc_json()?;
+        let qc_json = client.client().get_sumeragi_qc_json()?;
         assert!(
             qc_json.get("highest_qc").is_some() && qc_json.get("locked_qc").is_some(),
             "qc endpoint should include highest_qc and locked_qc"

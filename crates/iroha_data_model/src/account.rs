@@ -71,6 +71,8 @@ mod model {
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::account::model::Account")]
     pub struct Account {
         /// Identification of the [`Account`].
         pub id: AccountId,
@@ -367,6 +369,8 @@ pub type AccountEntry<'world> = Ref<'world, AccountId, AccountValue>;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::AccountDetails")]
 pub struct AccountDetails {
     /// Arbitrary metadata attached to the account.
     pub metadata: Metadata,

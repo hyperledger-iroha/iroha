@@ -1,0 +1,1580 @@
+//! Exhaustive instantiated type inventory for the generated `isi!` records.
+
+use super::check;
+use crate::{
+    account::Account,
+    asset::AssetDefinitionId,
+    asset::{Asset, AssetDefinition},
+    domain::{Domain, DomainId},
+    isi::{Burn, Grant, Mint, Register, RemoveKeyValue, Revoke, SetKeyValue, Transfer, Unregister},
+    nft::{Nft, NftId},
+    peer::Peer,
+    permission::Permission,
+    role::{Role, RoleId},
+    rwa::Rwa,
+    trigger::Trigger,
+};
+use iroha_primitives::numeric::Quantity;
+
+macro_rules! record {
+    ($test:ident, $ty:ty, $nominal:literal) => {
+        #[test]
+        fn $test() {
+            check::<$ty>($nominal);
+        }
+    };
+}
+record!(
+    account_recovery_approve_account_recovery,
+    crate::isi::account_recovery::ApproveAccountRecovery,
+    "iroha_data_model::isi::account_recovery::ApproveAccountRecovery"
+);
+record!(
+    account_recovery_cancel_account_recovery,
+    crate::isi::account_recovery::CancelAccountRecovery,
+    "iroha_data_model::isi::account_recovery::CancelAccountRecovery"
+);
+record!(
+    account_recovery_clear_account_recovery_policy,
+    crate::isi::account_recovery::ClearAccountRecoveryPolicy,
+    "iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy"
+);
+record!(
+    account_recovery_finalize_account_recovery,
+    crate::isi::account_recovery::FinalizeAccountRecovery,
+    "iroha_data_model::isi::account_recovery::FinalizeAccountRecovery"
+);
+record!(
+    account_recovery_propose_account_recovery,
+    crate::isi::account_recovery::ProposeAccountRecovery,
+    "iroha_data_model::isi::account_recovery::ProposeAccountRecovery"
+);
+record!(
+    account_recovery_replace_account_controller,
+    crate::isi::account_recovery::ReplaceAccountController,
+    "iroha_data_model::isi::account_recovery::ReplaceAccountController"
+);
+record!(
+    account_recovery_set_account_recovery_policy,
+    crate::isi::account_recovery::SetAccountRecoveryPolicy,
+    "iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy"
+);
+record!(
+    alias_setup_compare_and_set_primary_account_alias,
+    crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
+    "iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias"
+);
+record!(
+    alias_setup_configure_alias_auto_renew,
+    crate::isi::alias_setup::ConfigureAliasAutoRenew,
+    "iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew"
+);
+record!(
+    alias_setup_ensure_alias,
+    crate::isi::alias_setup::EnsureAlias,
+    "iroha_data_model::isi::alias_setup::EnsureAlias"
+);
+record!(
+    alias_setup_rebind_account_alias,
+    crate::isi::alias_setup::RebindAccountAlias,
+    "iroha_data_model::isi::alias_setup::RebindAccountAlias"
+);
+record!(
+    alias_setup_renew_alias_lease,
+    crate::isi::alias_setup::RenewAliasLease,
+    "iroha_data_model::isi::alias_setup::RenewAliasLease"
+);
+record!(
+    asset_alias_set_asset_definition_alias,
+    crate::isi::asset_alias::SetAssetDefinitionAlias,
+    "iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias"
+);
+record!(
+    asset_transfer_control_set_asset_holding_limit,
+    crate::isi::asset_transfer_control::SetAssetHoldingLimit,
+    "iroha_data_model::isi::asset_transfer_control::SetAssetHoldingLimit"
+);
+record!(
+    asset_transfer_control_set_asset_transfer_availability,
+    crate::isi::asset_transfer_control::SetAssetTransferAvailability,
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability"
+);
+record!(
+    asset_transfer_control_set_asset_transfer_blacklist,
+    crate::isi::asset_transfer_control::SetAssetTransferBlacklist,
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist"
+);
+record!(
+    asset_transfer_control_set_asset_transfer_control,
+    crate::isi::asset_transfer_control::SetAssetTransferControl,
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl"
+);
+record!(
+    bridge_apply_sccp_route_governance,
+    crate::isi::bridge::ApplySccpRouteGovernance,
+    "iroha_data_model::isi::bridge::ApplySccpRouteGovernance"
+);
+record!(
+    bridge_record_bridge_receipt,
+    crate::isi::bridge::RecordBridgeReceipt,
+    "iroha_data_model::isi::bridge::RecordBridgeReceipt"
+);
+record!(
+    bridge_record_sccp_message,
+    crate::isi::bridge::RecordSccpMessage,
+    "iroha_data_model::isi::bridge::RecordSccpMessage"
+);
+record!(
+    bridge_submit_bridge_proof,
+    crate::isi::bridge::SubmitBridgeProof,
+    "iroha_data_model::isi::bridge::SubmitBridgeProof"
+);
+record!(
+    bridge_submit_sccp_ton_breaker_observation_v1,
+    crate::isi::bridge::SubmitSccpTonBreakerObservationV1,
+    "iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1"
+);
+record!(
+    confidential_publish_pedersen_params,
+    crate::isi::confidential::PublishPedersenParams,
+    "iroha_data_model::isi::confidential::PublishPedersenParams"
+);
+record!(
+    confidential_publish_poseidon_params,
+    crate::isi::confidential::PublishPoseidonParams,
+    "iroha_data_model::isi::confidential::PublishPoseidonParams"
+);
+record!(
+    confidential_set_pedersen_params_lifecycle,
+    crate::isi::confidential::SetPedersenParamsLifecycle,
+    "iroha_data_model::isi::confidential::SetPedersenParamsLifecycle"
+);
+record!(
+    confidential_set_poseidon_params_lifecycle,
+    crate::isi::confidential::SetPoseidonParamsLifecycle,
+    "iroha_data_model::isi::confidential::SetPoseidonParamsLifecycle"
+);
+record!(
+    consensus_keys_apply_threshold_key_lifecycle_certificate_v1,
+    crate::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
+    "iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1"
+);
+record!(
+    content_publish_content_bundle,
+    crate::isi::content::PublishContentBundle,
+    "iroha_data_model::isi::content::PublishContentBundle"
+);
+record!(
+    content_retire_content_bundle,
+    crate::isi::content::RetireContentBundle,
+    "iroha_data_model::isi::content::RetireContentBundle"
+);
+record!(
+    contract_alias_set_contract_alias,
+    crate::isi::contract_alias::SetContractAlias,
+    "iroha_data_model::isi::contract_alias::SetContractAlias"
+);
+record!(
+    defi_configure_defi_amm_hook,
+    crate::isi::defi::ConfigureDefiAmmHook,
+    "iroha_data_model::isi::defi::ConfigureDefiAmmHook"
+);
+record!(
+    defi_record_defi_hook_execution,
+    crate::isi::defi::RecordDefiHookExecution,
+    "iroha_data_model::isi::defi::RecordDefiHookExecution"
+);
+record!(
+    defi_record_defi_operator_heartbeat,
+    crate::isi::defi::RecordDefiOperatorHeartbeat,
+    "iroha_data_model::isi::defi::RecordDefiOperatorHeartbeat"
+);
+record!(
+    defi_record_defi_vault_request,
+    crate::isi::defi::RecordDefiVaultRequest,
+    "iroha_data_model::isi::defi::RecordDefiVaultRequest"
+);
+record!(
+    defi_register_defi_margin_market,
+    crate::isi::defi::RegisterDefiMarginMarket,
+    "iroha_data_model::isi::defi::RegisterDefiMarginMarket"
+);
+record!(
+    defi_register_defi_operator,
+    crate::isi::defi::RegisterDefiOperator,
+    "iroha_data_model::isi::defi::RegisterDefiOperator"
+);
+record!(
+    defi_register_defi_rwa_market,
+    crate::isi::defi::RegisterDefiRwaMarket,
+    "iroha_data_model::isi::defi::RegisterDefiRwaMarket"
+);
+record!(
+    defi_register_defi_vault,
+    crate::isi::defi::RegisterDefiVault,
+    "iroha_data_model::isi::defi::RegisterDefiVault"
+);
+record!(
+    defi_report_defi_rwa_nav,
+    crate::isi::defi::ReportDefiRwaNav,
+    "iroha_data_model::isi::defi::ReportDefiRwaNav"
+);
+record!(
+    defi_settle_defi_intent,
+    crate::isi::defi::SettleDefiIntent,
+    "iroha_data_model::isi::defi::SettleDefiIntent"
+);
+record!(
+    defi_submit_defi_intent,
+    crate::isi::defi::SubmitDefiIntent,
+    "iroha_data_model::isi::defi::SubmitDefiIntent"
+);
+record!(
+    defi_update_defi_margin_account,
+    crate::isi::defi::UpdateDefiMarginAccount,
+    "iroha_data_model::isi::defi::UpdateDefiMarginAccount"
+);
+record!(
+    escrow_accept_asset_escrow,
+    crate::isi::escrow::AcceptAssetEscrow,
+    "iroha_data_model::isi::escrow::AcceptAssetEscrow"
+);
+record!(
+    escrow_attest_escrow_condition,
+    crate::isi::escrow::AttestEscrowCondition,
+    "iroha_data_model::isi::escrow::AttestEscrowCondition"
+);
+record!(
+    escrow_cancel_asset_escrow,
+    crate::isi::escrow::CancelAssetEscrow,
+    "iroha_data_model::isi::escrow::CancelAssetEscrow"
+);
+record!(
+    escrow_cancel_asset_lock,
+    crate::isi::escrow::CancelAssetLock,
+    "iroha_data_model::isi::escrow::CancelAssetLock"
+);
+record!(
+    escrow_drawdown_asset_lock,
+    crate::isi::escrow::DrawdownAssetLock,
+    "iroha_data_model::isi::escrow::DrawdownAssetLock"
+);
+record!(
+    escrow_expire_asset_lock,
+    crate::isi::escrow::ExpireAssetLock,
+    "iroha_data_model::isi::escrow::ExpireAssetLock"
+);
+record!(
+    escrow_expire_conditional_escrow,
+    crate::isi::escrow::ExpireConditionalEscrow,
+    "iroha_data_model::isi::escrow::ExpireConditionalEscrow"
+);
+record!(
+    escrow_mark_escrow_payment_sent,
+    crate::isi::escrow::MarkEscrowPaymentSent,
+    "iroha_data_model::isi::escrow::MarkEscrowPaymentSent"
+);
+record!(
+    escrow_open_asset_escrow,
+    crate::isi::escrow::OpenAssetEscrow,
+    "iroha_data_model::isi::escrow::OpenAssetEscrow"
+);
+record!(
+    escrow_open_asset_lock,
+    crate::isi::escrow::OpenAssetLock,
+    "iroha_data_model::isi::escrow::OpenAssetLock"
+);
+record!(
+    escrow_open_conditional_escrow,
+    crate::isi::escrow::OpenConditionalEscrow,
+    "iroha_data_model::isi::escrow::OpenConditionalEscrow"
+);
+record!(
+    escrow_open_escrow_dispute,
+    crate::isi::escrow::OpenEscrowDispute,
+    "iroha_data_model::isi::escrow::OpenEscrowDispute"
+);
+record!(
+    escrow_release_asset_escrow,
+    crate::isi::escrow::ReleaseAssetEscrow,
+    "iroha_data_model::isi::escrow::ReleaseAssetEscrow"
+);
+record!(
+    escrow_resolve_escrow_dispute,
+    crate::isi::escrow::ResolveEscrowDispute,
+    "iroha_data_model::isi::escrow::ResolveEscrowDispute"
+);
+record!(
+    identifier_activate_identifier_policy,
+    crate::isi::identifier::ActivateIdentifierPolicy,
+    "iroha_data_model::isi::identifier::ActivateIdentifierPolicy"
+);
+record!(
+    identifier_claim_identifier,
+    crate::isi::identifier::ClaimIdentifier,
+    "iroha_data_model::isi::identifier::ClaimIdentifier"
+);
+record!(
+    identifier_register_identifier_policy,
+    crate::isi::identifier::RegisterIdentifierPolicy,
+    "iroha_data_model::isi::identifier::RegisterIdentifierPolicy"
+);
+record!(
+    identifier_revoke_identifier,
+    crate::isi::identifier::RevokeIdentifier,
+    "iroha_data_model::isi::identifier::RevokeIdentifier"
+);
+record!(
+    kagemusha_v1_redeem_kagemusha_v1,
+    crate::isi::kagemusha_v1::RedeemKagemushaV1,
+    "iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1"
+);
+record!(
+    kagemusha_v1_top_up_kagemusha_v1,
+    crate::isi::kagemusha_v1::TopUpKagemushaV1,
+    "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
+);
+record!(
+    kaigi_create_kaigi,
+    crate::isi::kaigi::CreateKaigi,
+    "iroha_data_model::isi::kaigi::CreateKaigi"
+);
+record!(
+    kaigi_end_kaigi,
+    crate::isi::kaigi::EndKaigi,
+    "iroha_data_model::isi::kaigi::EndKaigi"
+);
+record!(
+    kaigi_join_kaigi,
+    crate::isi::kaigi::JoinKaigi,
+    "iroha_data_model::isi::kaigi::JoinKaigi"
+);
+record!(
+    kaigi_leave_kaigi,
+    crate::isi::kaigi::LeaveKaigi,
+    "iroha_data_model::isi::kaigi::LeaveKaigi"
+);
+record!(
+    kaigi_record_kaigi_usage,
+    crate::isi::kaigi::RecordKaigiUsage,
+    "iroha_data_model::isi::kaigi::RecordKaigiUsage"
+);
+record!(
+    kaigi_register_kaigi_relay,
+    crate::isi::kaigi::RegisterKaigiRelay,
+    "iroha_data_model::isi::kaigi::RegisterKaigiRelay"
+);
+record!(
+    kaigi_report_kaigi_relay_health,
+    crate::isi::kaigi::ReportKaigiRelayHealth,
+    "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth"
+);
+record!(
+    kaigi_set_kaigi_relay_manifest,
+    crate::isi::kaigi::SetKaigiRelayManifest,
+    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest"
+);
+record!(
+    kaigi_unregister_kaigi_relay,
+    crate::isi::kaigi::UnregisterKaigiRelay,
+    "iroha_data_model::isi::kaigi::UnregisterKaigiRelay"
+);
+record!(burn_quantity_asset, Burn<Quantity, Asset>, "iroha_data_model::isi::mint_burn::Burn<iroha_primitives::numeric::Quantity, iroha_data_model::asset::value::model::Asset>");
+record!(burn_u32_trigger, Burn<u32, Trigger>, "iroha_data_model::isi::mint_burn::Burn<u32, iroha_data_model::trigger::model::model::Trigger>");
+record!(mint_quantity_asset, Mint<Quantity, Asset>, "iroha_data_model::isi::mint_burn::Mint<iroha_primitives::numeric::Quantity, iroha_data_model::asset::value::model::Asset>");
+record!(mint_u32_trigger, Mint<u32, Trigger>, "iroha_data_model::isi::mint_burn::Mint<u32, iroha_data_model::trigger::model::model::Trigger>");
+record!(
+    musubi_accept_musubi_package_maintainer_v1,
+    crate::isi::musubi::AcceptMusubiPackageMaintainerV1,
+    "iroha_data_model::isi::musubi::AcceptMusubiPackageMaintainerV1"
+);
+record!(
+    musubi_add_musubi_archive_location_v1,
+    crate::isi::musubi::AddMusubiArchiveLocationV1,
+    "iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1"
+);
+record!(
+    musubi_assert_musubi_release_digest_v1,
+    crate::isi::musubi::AssertMusubiReleaseDigestV1,
+    "iroha_data_model::isi::musubi::AssertMusubiReleaseDigestV1"
+);
+record!(
+    musubi_invite_musubi_package_maintainer_v1,
+    crate::isi::musubi::InviteMusubiPackageMaintainerV1,
+    "iroha_data_model::isi::musubi::InviteMusubiPackageMaintainerV1"
+);
+record!(
+    musubi_publish_musubi_release_v1,
+    crate::isi::musubi::PublishMusubiReleaseV1,
+    "iroha_data_model::isi::musubi::PublishMusubiReleaseV1"
+);
+record!(
+    musubi_recover_musubi_package_v1,
+    crate::isi::musubi::RecoverMusubiPackageV1,
+    "iroha_data_model::isi::musubi::RecoverMusubiPackageV1"
+);
+record!(
+    musubi_register_musubi_alias_v1,
+    crate::isi::musubi::RegisterMusubiAliasV1,
+    "iroha_data_model::isi::musubi::RegisterMusubiAliasV1"
+);
+record!(
+    musubi_register_musubi_archive_v1,
+    crate::isi::musubi::RegisterMusubiArchiveV1,
+    "iroha_data_model::isi::musubi::RegisterMusubiArchiveV1"
+);
+record!(
+    musubi_register_musubi_namespace_binding_v1,
+    crate::isi::musubi::RegisterMusubiNamespaceBindingV1,
+    "iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1"
+);
+record!(
+    musubi_register_musubi_provider_bundle_attestation_v1,
+    crate::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
+    "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1"
+);
+record!(
+    musubi_remove_musubi_package_maintainer_v1,
+    crate::isi::musubi::RemoveMusubiPackageMaintainerV1,
+    "iroha_data_model::isi::musubi::RemoveMusubiPackageMaintainerV1"
+);
+record!(
+    musubi_retarget_musubi_alias_v1,
+    crate::isi::musubi::RetargetMusubiAliasV1,
+    "iroha_data_model::isi::musubi::RetargetMusubiAliasV1"
+);
+record!(
+    musubi_retire_musubi_archive_location_v1,
+    crate::isi::musubi::RetireMusubiArchiveLocationV1,
+    "iroha_data_model::isi::musubi::RetireMusubiArchiveLocationV1"
+);
+record!(
+    musubi_revoke_musubi_package_maintainer_invitation_v1,
+    crate::isi::musubi::RevokeMusubiPackageMaintainerInvitationV1,
+    "iroha_data_model::isi::musubi::RevokeMusubiPackageMaintainerInvitationV1"
+);
+record!(
+    musubi_set_musubi_artifact_takedown_v1,
+    crate::isi::musubi::SetMusubiArtifactTakedownV1,
+    "iroha_data_model::isi::musubi::SetMusubiArtifactTakedownV1"
+);
+record!(
+    musubi_set_musubi_package_maintainer_role_v1,
+    crate::isi::musubi::SetMusubiPackageMaintainerRoleV1,
+    "iroha_data_model::isi::musubi::SetMusubiPackageMaintainerRoleV1"
+);
+record!(
+    musubi_set_musubi_package_metadata_v1,
+    crate::isi::musubi::SetMusubiPackageMetadataV1,
+    "iroha_data_model::isi::musubi::SetMusubiPackageMetadataV1"
+);
+record!(
+    musubi_set_musubi_registry_policy_v1,
+    crate::isi::musubi::SetMusubiRegistryPolicyV1,
+    "iroha_data_model::isi::musubi::SetMusubiRegistryPolicyV1"
+);
+record!(
+    musubi_set_musubi_release_yank_v1,
+    crate::isi::musubi::SetMusubiReleaseYankV1,
+    "iroha_data_model::isi::musubi::SetMusubiReleaseYankV1"
+);
+record!(
+    nexus_set_lane_relay_emergency_validators,
+    crate::isi::nexus::SetLaneRelayEmergencyValidators,
+    "iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators"
+);
+record!(
+    oracle_aggregate_oracle_feed,
+    crate::isi::oracle::AggregateOracleFeed,
+    "iroha_data_model::isi::oracle::AggregateOracleFeed"
+);
+record!(
+    oracle_open_oracle_dispute,
+    crate::isi::oracle::OpenOracleDispute,
+    "iroha_data_model::isi::oracle::OpenOracleDispute"
+);
+record!(
+    oracle_propose_oracle_change,
+    crate::isi::oracle::ProposeOracleChange,
+    "iroha_data_model::isi::oracle::ProposeOracleChange"
+);
+record!(
+    oracle_record_twitter_binding,
+    crate::isi::oracle::RecordTwitterBinding,
+    "iroha_data_model::isi::oracle::RecordTwitterBinding"
+);
+record!(
+    oracle_register_oracle_feed,
+    crate::isi::oracle::RegisterOracleFeed,
+    "iroha_data_model::isi::oracle::RegisterOracleFeed"
+);
+record!(
+    oracle_resolve_oracle_dispute,
+    crate::isi::oracle::ResolveOracleDispute,
+    "iroha_data_model::isi::oracle::ResolveOracleDispute"
+);
+record!(
+    oracle_revoke_twitter_binding,
+    crate::isi::oracle::RevokeTwitterBinding,
+    "iroha_data_model::isi::oracle::RevokeTwitterBinding"
+);
+record!(
+    oracle_rollback_oracle_change,
+    crate::isi::oracle::RollbackOracleChange,
+    "iroha_data_model::isi::oracle::RollbackOracleChange"
+);
+record!(
+    oracle_submit_defi_oracle_attestation,
+    crate::isi::oracle::SubmitDefiOracleAttestation,
+    "iroha_data_model::isi::oracle::SubmitDefiOracleAttestation"
+);
+record!(
+    oracle_submit_oracle_observation,
+    crate::isi::oracle::SubmitOracleObservation,
+    "iroha_data_model::isi::oracle::SubmitOracleObservation"
+);
+record!(
+    oracle_vote_oracle_change_stage,
+    crate::isi::oracle::VoteOracleChangeStage,
+    "iroha_data_model::isi::oracle::VoteOracleChangeStage"
+);
+record!(
+    privacy_bootstrap_privacy_orchard_pool_v1,
+    crate::isi::privacy::BootstrapPrivacyOrchardPoolV1,
+    "iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1"
+);
+record!(
+    privacy_bootstrap_privacy_pgc_accounts_v1,
+    crate::isi::privacy::BootstrapPrivacyPgcAccountsV1,
+    "iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1"
+);
+record!(
+    privacy_bootstrap_privacy_proof_managed_pool_v1,
+    crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1,
+    "iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1"
+);
+record!(
+    privacy_bootstrap_privacy_zk_ams_registry_v1,
+    crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1,
+    "iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1"
+);
+record!(
+    privacy_publish_privacy_root_v1,
+    crate::isi::privacy::PublishPrivacyRootV1,
+    "iroha_data_model::isi::privacy::PublishPrivacyRootV1"
+);
+record!(
+    privacy_register_privacy_bootle_lantern_issuer_policy_v1,
+    crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1"
+);
+record!(
+    privacy_register_privacy_exact12_qualification_v1,
+    crate::isi::privacy::RegisterPrivacyExact12QualificationV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1"
+);
+record!(
+    privacy_register_privacy_protocol_activation_v1,
+    crate::isi::privacy::RegisterPrivacyProtocolActivationV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1"
+);
+record!(
+    privacy_register_privacy_vega_issuer_v1,
+    crate::isi::privacy::RegisterPrivacyVegaIssuerV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyVegaIssuerV1"
+);
+record!(
+    privacy_register_privacy_zk_ace_policy_v1,
+    crate::isi::privacy::RegisterPrivacyZkAcePolicyV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1"
+);
+record!(
+    privacy_register_privacy_zk_x509_certificate_policy_v1,
+    crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1"
+);
+record!(
+    privacy_register_privacy_zk_x509_crl_v1,
+    crate::isi::privacy::RegisterPrivacyZkX509CrlV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1"
+);
+record!(
+    privacy_register_privacy_zk_x509_trust_anchor_v1,
+    crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1,
+    "iroha_data_model::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1"
+);
+record!(
+    privacy_revoke_privacy_bootle_lantern_issuer_policy_v1,
+    crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1,
+    "iroha_data_model::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1"
+);
+record!(
+    privacy_revoke_privacy_vega_issuer_v1,
+    crate::isi::privacy::RevokePrivacyVegaIssuerV1,
+    "iroha_data_model::isi::privacy::RevokePrivacyVegaIssuerV1"
+);
+record!(
+    privacy_revoke_privacy_zk_ace_policy_v1,
+    crate::isi::privacy::RevokePrivacyZkAcePolicyV1,
+    "iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1"
+);
+record!(
+    privacy_revoke_privacy_zk_x509_certificate_policy_v1,
+    crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1,
+    "iroha_data_model::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1"
+);
+record!(
+    privacy_revoke_privacy_zk_x509_crl_v1,
+    crate::isi::privacy::RevokePrivacyZkX509CrlV1,
+    "iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1"
+);
+record!(
+    privacy_revoke_privacy_zk_x509_trust_anchor_v1,
+    crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1,
+    "iroha_data_model::isi::privacy::RevokePrivacyZkX509TrustAnchorV1"
+);
+record!(
+    privacy_rotate_privacy_bootle_lantern_issuer_policy_v1,
+    crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1,
+    "iroha_data_model::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1"
+);
+record!(
+    privacy_rotate_privacy_vega_issuer_v1,
+    crate::isi::privacy::RotatePrivacyVegaIssuerV1,
+    "iroha_data_model::isi::privacy::RotatePrivacyVegaIssuerV1"
+);
+record!(
+    privacy_rotate_privacy_zk_ace_policy_v1,
+    crate::isi::privacy::RotatePrivacyZkAcePolicyV1,
+    "iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1"
+);
+record!(
+    privacy_rotate_privacy_zk_x509_certificate_policy_v1,
+    crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1,
+    "iroha_data_model::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1"
+);
+record!(
+    privacy_rotate_privacy_zk_x509_crl_v1,
+    crate::isi::privacy::RotatePrivacyZkX509CrlV1,
+    "iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1"
+);
+record!(
+    privacy_rotate_privacy_zk_x509_trust_anchor_v1,
+    crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1,
+    "iroha_data_model::isi::privacy::RotatePrivacyZkX509TrustAnchorV1"
+);
+record!(
+    privacy_schedule_privacy_consensus_policy_tightening_v1,
+    crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1,
+    "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1"
+);
+record!(
+    privacy_schedule_privacy_protocol_limits_tightening_v1,
+    crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1,
+    "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1"
+);
+record!(
+    privacy_submit_privacy_proof_v1,
+    crate::isi::privacy::SubmitPrivacyProofV1,
+    "iroha_data_model::isi::privacy::SubmitPrivacyProofV1"
+);
+record!(
+    privacy_transition_privacy_protocol_lifecycle_v1,
+    crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
+    "iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1"
+);
+record!(
+    private_settlement_abort_atomic_private_settlement_v1,
+    crate::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+    "iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1"
+);
+record!(
+    private_settlement_activate_private_settlement_pool_v1,
+    crate::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+    "iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1"
+);
+record!(
+    private_settlement_finalize_atomic_private_settlement_v1,
+    crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+    "iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1"
+);
+record!(
+    private_settlement_register_atomic_private_settlement_prepare_v1,
+    crate::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
+    "iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1"
+);
+record!(
+    private_settlement_rotate_private_settlement_pool_policy_v1,
+    crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1,
+    "iroha_data_model::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1"
+);
+record!(
+    ram_lfe_activate_ram_lfe_program_policy,
+    crate::isi::ram_lfe::ActivateRamLfeProgramPolicy,
+    "iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy"
+);
+record!(
+    ram_lfe_deactivate_ram_lfe_program_policy,
+    crate::isi::ram_lfe::DeactivateRamLfeProgramPolicy,
+    "iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy"
+);
+record!(
+    ram_lfe_register_ram_lfe_program_policy,
+    crate::isi::ram_lfe::RegisterRamLfeProgramPolicy,
+    "iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy"
+);
+record!(
+    register_account,
+    Register<Account>,
+    "iroha_data_model::isi::register::Register<iroha_data_model::account::model::Account>"
+);
+record!(
+    register_asset_definition,
+    Register<AssetDefinition>,
+    "iroha_data_model::isi::register::Register<iroha_data_model::asset::definition::model::AssetDefinition>"
+);
+record!(
+    register_domain,
+    Register<Domain>,
+    "iroha_data_model::isi::register::Register<iroha_data_model::domain::model::Domain>"
+);
+record!(
+    register_nft,
+    Register<Nft>,
+    "iroha_data_model::isi::register::Register<iroha_data_model::nft::model::Nft>"
+);
+record!(
+    register_role,
+    Register<Role>,
+    "iroha_data_model::isi::register::Register<iroha_data_model::role::model::Role>"
+);
+record!(
+    register_trigger,
+    Register<Trigger>,
+    "iroha_data_model::isi::register::Register<iroha_data_model::trigger::model::model::Trigger>"
+);
+record!(
+    unregister_account,
+    Unregister<Account>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::account::model::Account>"
+);
+record!(
+    unregister_asset_definition,
+    Unregister<AssetDefinition>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::asset::definition::model::AssetDefinition>"
+);
+record!(
+    unregister_domain,
+    Unregister<Domain>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::domain::model::Domain>"
+);
+record!(
+    unregister_nft,
+    Unregister<Nft>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::nft::model::Nft>"
+);
+record!(
+    unregister_peer,
+    Unregister<Peer>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::peer::model::Peer>"
+);
+record!(
+    unregister_role,
+    Unregister<Role>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::role::model::Role>"
+);
+record!(
+    unregister_trigger,
+    Unregister<Trigger>,
+    "iroha_data_model::isi::register::Unregister<iroha_data_model::trigger::model::model::Trigger>"
+);
+record!(
+    repo_repo_isi,
+    crate::isi::repo::RepoIsi,
+    "iroha_data_model::isi::repo::RepoIsi"
+);
+record!(
+    repo_repo_margin_call_isi,
+    crate::isi::repo::RepoMarginCallIsi,
+    "iroha_data_model::isi::repo::RepoMarginCallIsi"
+);
+record!(
+    repo_reverse_repo_isi,
+    crate::isi::repo::ReverseRepoIsi,
+    "iroha_data_model::isi::repo::ReverseRepoIsi"
+);
+record!(
+    runtime_upgrade_activate_runtime_upgrade,
+    crate::isi::runtime_upgrade::ActivateRuntimeUpgrade,
+    "iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade"
+);
+record!(
+    runtime_upgrade_cancel_runtime_upgrade,
+    crate::isi::runtime_upgrade::CancelRuntimeUpgrade,
+    "iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade"
+);
+record!(
+    runtime_upgrade_propose_runtime_upgrade,
+    crate::isi::runtime_upgrade::ProposeRuntimeUpgrade,
+    "iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade"
+);
+record!(
+    rwa_force_transfer_rwa,
+    crate::isi::rwa::ForceTransferRwa,
+    "iroha_data_model::isi::rwa::ForceTransferRwa"
+);
+record!(
+    rwa_freeze_rwa,
+    crate::isi::rwa::FreezeRwa,
+    "iroha_data_model::isi::rwa::FreezeRwa"
+);
+record!(
+    rwa_hold_rwa,
+    crate::isi::rwa::HoldRwa,
+    "iroha_data_model::isi::rwa::HoldRwa"
+);
+record!(
+    rwa_merge_rwas,
+    crate::isi::rwa::MergeRwas,
+    "iroha_data_model::isi::rwa::MergeRwas"
+);
+record!(
+    rwa_redeem_rwa,
+    crate::isi::rwa::RedeemRwa,
+    "iroha_data_model::isi::rwa::RedeemRwa"
+);
+record!(
+    rwa_register_rwa,
+    crate::isi::rwa::RegisterRwa,
+    "iroha_data_model::isi::rwa::RegisterRwa"
+);
+record!(
+    rwa_release_rwa,
+    crate::isi::rwa::ReleaseRwa,
+    "iroha_data_model::isi::rwa::ReleaseRwa"
+);
+record!(
+    rwa_set_rwa_controls,
+    crate::isi::rwa::SetRwaControls,
+    "iroha_data_model::isi::rwa::SetRwaControls"
+);
+record!(
+    rwa_transfer_rwa,
+    crate::isi::rwa::TransferRwa,
+    "iroha_data_model::isi::rwa::TransferRwa"
+);
+record!(
+    rwa_unfreeze_rwa,
+    crate::isi::rwa::UnfreezeRwa,
+    "iroha_data_model::isi::rwa::UnfreezeRwa"
+);
+record!(
+    settlement_dvp_isi,
+    crate::isi::settlement::DvpIsi,
+    "iroha_data_model::isi::settlement::DvpIsi"
+);
+record!(
+    settlement_fund_fx_corridor_escrow,
+    crate::isi::settlement::FundFxCorridorEscrow,
+    "iroha_data_model::isi::settlement::FundFxCorridorEscrow"
+);
+record!(
+    settlement_pvp_isi,
+    crate::isi::settlement::PvpIsi,
+    "iroha_data_model::isi::settlement::PvpIsi"
+);
+record!(
+    settlement_refund_fx_corridor_escrow,
+    crate::isi::settlement::RefundFxCorridorEscrow,
+    "iroha_data_model::isi::settlement::RefundFxCorridorEscrow"
+);
+record!(
+    settlement_set_fx_corridor_policy,
+    crate::isi::settlement::SetFxCorridorPolicy,
+    "iroha_data_model::isi::settlement::SetFxCorridorPolicy"
+);
+record!(
+    settlement_settle_fx_corridor,
+    crate::isi::settlement::SettleFxCorridor,
+    "iroha_data_model::isi::settlement::SettleFxCorridor"
+);
+record!(
+    smart_contract_code_accept_contract_ownership,
+    crate::isi::smart_contract_code::AcceptContractOwnership,
+    "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership"
+);
+record!(
+    smart_contract_code_activate_contract_instance,
+    crate::isi::smart_contract_code::ActivateContractInstance,
+    "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
+);
+record!(
+    smart_contract_code_cancel_contract_ownership_offer,
+    crate::isi::smart_contract_code::CancelContractOwnershipOffer,
+    "iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer"
+);
+record!(
+    smart_contract_code_cancel_smart_contract_code_upload,
+    crate::isi::smart_contract_code::CancelSmartContractCodeUpload,
+    "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload"
+);
+record!(
+    smart_contract_code_commit_contract_deployment,
+    crate::isi::smart_contract_code::CommitContractDeployment,
+    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
+);
+record!(
+    smart_contract_code_deactivate_contract_instance,
+    crate::isi::smart_contract_code::DeactivateContractInstance,
+    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance"
+);
+record!(
+    smart_contract_code_finalize_smart_contract_code_upload,
+    crate::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
+    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload"
+);
+record!(
+    smart_contract_code_offer_contract_ownership,
+    crate::isi::smart_contract_code::OfferContractOwnership,
+    "iroha_data_model::isi::smart_contract_code::OfferContractOwnership"
+);
+record!(
+    smart_contract_code_register_smart_contract_bytes,
+    crate::isi::smart_contract_code::RegisterSmartContractBytes,
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes"
+);
+record!(
+    smart_contract_code_register_smart_contract_code,
+    crate::isi::smart_contract_code::RegisterSmartContractCode,
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode"
+);
+record!(
+    smart_contract_code_remove_smart_contract_bytes,
+    crate::isi::smart_contract_code::RemoveSmartContractBytes,
+    "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes"
+);
+record!(
+    smart_contract_code_set_contract_parliament_delegation,
+    crate::isi::smart_contract_code::SetContractParliamentDelegation,
+    "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation"
+);
+record!(
+    smart_contract_code_upload_smart_contract_code_chunk,
+    crate::isi::smart_contract_code::UploadSmartContractCodeChunk,
+    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk"
+);
+record!(
+    social_cancel_twitter_escrow,
+    crate::isi::social::CancelTwitterEscrow,
+    "iroha_data_model::isi::social::CancelTwitterEscrow"
+);
+record!(
+    social_claim_twitter_follow_reward,
+    crate::isi::social::ClaimTwitterFollowReward,
+    "iroha_data_model::isi::social::ClaimTwitterFollowReward"
+);
+record!(
+    social_send_to_twitter,
+    crate::isi::social::SendToTwitter,
+    "iroha_data_model::isi::social::SendToTwitter"
+);
+record!(
+    soradns_add_release_signer,
+    crate::isi::soradns::AddReleaseSigner,
+    "iroha_data_model::isi::soradns::AddReleaseSigner"
+);
+record!(
+    soradns_publish_directory,
+    crate::isi::soradns::PublishDirectory,
+    "iroha_data_model::isi::soradns::PublishDirectory"
+);
+record!(
+    soradns_remove_release_signer,
+    crate::isi::soradns::RemoveReleaseSigner,
+    "iroha_data_model::isi::soradns::RemoveReleaseSigner"
+);
+record!(
+    soradns_revoke_resolver,
+    crate::isi::soradns::RevokeResolver,
+    "iroha_data_model::isi::soradns::RevokeResolver"
+);
+record!(
+    soradns_set_directory_rotation_policy,
+    crate::isi::soradns::SetDirectoryRotationPolicy,
+    "iroha_data_model::isi::soradns::SetDirectoryRotationPolicy"
+);
+record!(
+    soradns_submit_directory_draft,
+    crate::isi::soradns::SubmitDirectoryDraft,
+    "iroha_data_model::isi::soradns::SubmitDirectoryDraft"
+);
+record!(
+    soradns_unrevoke_resolver,
+    crate::isi::soradns::UnrevokeResolver,
+    "iroha_data_model::isi::soradns::UnrevokeResolver"
+);
+record!(
+    sorafs_accept_sorafs_moderation_juror_assignment,
+    crate::isi::sorafs::AcceptSorafsModerationJurorAssignment,
+    "iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment"
+);
+record!(
+    sorafs_activate_sorafs_moderation_case,
+    crate::isi::sorafs::ActivateSorafsModerationCase,
+    "iroha_data_model::isi::sorafs::ActivateSorafsModerationCase"
+);
+record!(
+    sorafs_advance_sorafs_reserve_lifecycle,
+    crate::isi::sorafs::AdvanceSorafsReserveLifecycle,
+    "iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle"
+);
+record!(
+    sorafs_append_sorafs_por_reputation_journal_entry,
+    crate::isi::sorafs::AppendSorafsPorReputationJournalEntry,
+    "iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry"
+);
+record!(
+    sorafs_append_sorafs_stream_token_reputation_journal_entry,
+    crate::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry,
+    "iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry"
+);
+record!(
+    sorafs_apply_sorafs_repair_task_action,
+    crate::isi::sorafs::ApplySorafsRepairTaskAction,
+    "iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction"
+);
+record!(
+    sorafs_approve_pin_manifest,
+    crate::isi::sorafs::ApprovePinManifest,
+    "iroha_data_model::isi::sorafs::ApprovePinManifest"
+);
+record!(
+    sorafs_bind_manifest_alias,
+    crate::isi::sorafs::BindManifestAlias,
+    "iroha_data_model::isi::sorafs::BindManifestAlias"
+);
+record!(
+    sorafs_cancel_sorafs_orderbook_order,
+    crate::isi::sorafs::CancelSorafsOrderbookOrder,
+    "iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder"
+);
+record!(
+    sorafs_charge_sorafs_reserve_rent,
+    crate::isi::sorafs::ChargeSorafsReserveRent,
+    "iroha_data_model::isi::sorafs::ChargeSorafsReserveRent"
+);
+record!(
+    sorafs_commit_sorafs_pop_credential_batch,
+    crate::isi::sorafs::CommitSorafsPopCredentialBatch,
+    "iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch"
+);
+record!(
+    sorafs_complete_replication_order,
+    crate::isi::sorafs::CompleteReplicationOrder,
+    "iroha_data_model::isi::sorafs::CompleteReplicationOrder"
+);
+record!(
+    sorafs_decide_sorafs_reserve_appeal,
+    crate::isi::sorafs::DecideSorafsReserveAppeal,
+    "iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal"
+);
+record!(
+    sorafs_decide_sorafs_reserve_movement,
+    crate::isi::sorafs::DecideSorafsReserveMovement,
+    "iroha_data_model::isi::sorafs::DecideSorafsReserveMovement"
+);
+record!(
+    sorafs_draw_sorafs_reserve_credit,
+    crate::isi::sorafs::DrawSorafsReserveCredit,
+    "iroha_data_model::isi::sorafs::DrawSorafsReserveCredit"
+);
+record!(
+    sorafs_expire_replication_order,
+    crate::isi::sorafs::ExpireReplicationOrder,
+    "iroha_data_model::isi::sorafs::ExpireReplicationOrder"
+);
+record!(
+    sorafs_expire_sorafs_moderation_challenge,
+    crate::isi::sorafs::ExpireSorafsModerationChallenge,
+    "iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge"
+);
+record!(
+    sorafs_finalize_sorafs_moderation_case,
+    crate::isi::sorafs::FinalizeSorafsModerationCase,
+    "iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase"
+);
+record!(
+    sorafs_finalize_sorafs_moderation_sortition,
+    crate::isi::sorafs::FinalizeSorafsModerationSortition,
+    "iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition"
+);
+record!(
+    sorafs_issue_replication_order,
+    crate::isi::sorafs::IssueReplicationOrder,
+    "iroha_data_model::isi::sorafs::IssueReplicationOrder"
+);
+record!(
+    sorafs_maintain_sorafs_orderbook,
+    crate::isi::sorafs::MaintainSorafsOrderbook,
+    "iroha_data_model::isi::sorafs::MaintainSorafsOrderbook"
+);
+record!(
+    sorafs_match_sorafs_orderbook,
+    crate::isi::sorafs::MatchSorafsOrderbook,
+    "iroha_data_model::isi::sorafs::MatchSorafsOrderbook"
+);
+record!(
+    sorafs_publish_sorafs_pop_revocation_list,
+    crate::isi::sorafs::PublishSorafsPopRevocationList,
+    "iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList"
+);
+record!(
+    sorafs_raise_sorafs_moderation_challenge,
+    crate::isi::sorafs::RaiseSorafsModerationChallenge,
+    "iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge"
+);
+record!(
+    sorafs_record_capacity_telemetry,
+    crate::isi::sorafs::RecordCapacityTelemetry,
+    "iroha_data_model::isi::sorafs::RecordCapacityTelemetry"
+);
+record!(
+    sorafs_record_sorafs_orderbook_settlement_receipt,
+    crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt,
+    "iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt"
+);
+record!(
+    sorafs_register_capacity_declaration,
+    crate::isi::sorafs::RegisterCapacityDeclaration,
+    "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration"
+);
+record!(
+    sorafs_register_capacity_dispute,
+    crate::isi::sorafs::RegisterCapacityDispute,
+    "iroha_data_model::isi::sorafs::RegisterCapacityDispute"
+);
+record!(
+    sorafs_register_pin_manifest,
+    crate::isi::sorafs::RegisterPinManifest,
+    "iroha_data_model::isi::sorafs::RegisterPinManifest"
+);
+record!(
+    sorafs_register_provider_owner,
+    crate::isi::sorafs::RegisterProviderOwner,
+    "iroha_data_model::isi::sorafs::RegisterProviderOwner"
+);
+record!(
+    sorafs_register_sorafs_citizen_bond,
+    crate::isi::sorafs::RegisterSorafsCitizenBond,
+    "iroha_data_model::isi::sorafs::RegisterSorafsCitizenBond"
+);
+record!(
+    sorafs_register_sorafs_moderation_juror_eligibility,
+    crate::isi::sorafs::RegisterSorafsModerationJurorEligibility,
+    "iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility"
+);
+record!(
+    sorafs_register_sorafs_reserve_account,
+    crate::isi::sorafs::RegisterSorafsReserveAccount,
+    "iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount"
+);
+record!(
+    sorafs_repay_sorafs_reserve_credit,
+    crate::isi::sorafs::RepaySorafsReserveCredit,
+    "iroha_data_model::isi::sorafs::RepaySorafsReserveCredit"
+);
+record!(
+    sorafs_request_sorafs_citizen_bond_exit,
+    crate::isi::sorafs::RequestSorafsCitizenBondExit,
+    "iroha_data_model::isi::sorafs::RequestSorafsCitizenBondExit"
+);
+record!(
+    sorafs_request_sorafs_reserve_movement,
+    crate::isi::sorafs::RequestSorafsReserveMovement,
+    "iroha_data_model::isi::sorafs::RequestSorafsReserveMovement"
+);
+record!(
+    sorafs_resolve_sorafs_capacity_dispute,
+    crate::isi::sorafs::ResolveSorafsCapacityDispute,
+    "iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute"
+);
+record!(
+    sorafs_resolve_sorafs_moderation_challenge,
+    crate::isi::sorafs::ResolveSorafsModerationChallenge,
+    "iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge"
+);
+record!(
+    sorafs_retire_pin_manifest,
+    crate::isi::sorafs::RetirePinManifest,
+    "iroha_data_model::isi::sorafs::RetirePinManifest"
+);
+record!(
+    sorafs_revise_replication_order_assignments,
+    crate::isi::sorafs::ReviseReplicationOrderAssignments,
+    "iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments"
+);
+record!(
+    sorafs_revoke_provider_ingest_completion_authority,
+    crate::isi::sorafs::RevokeProviderIngestCompletionAuthority,
+    "iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority"
+);
+record!(
+    sorafs_rotate_sorafs_citizen_bond_authorization,
+    crate::isi::sorafs::RotateSorafsCitizenBondAuthorization,
+    "iroha_data_model::isi::sorafs::RotateSorafsCitizenBondAuthorization"
+);
+record!(
+    sorafs_set_pricing_schedule,
+    crate::isi::sorafs::SetPricingSchedule,
+    "iroha_data_model::isi::sorafs::SetPricingSchedule"
+);
+record!(
+    sorafs_set_provider_ingest_completion_authority,
+    crate::isi::sorafs::SetProviderIngestCompletionAuthority,
+    "iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority"
+);
+record!(
+    sorafs_set_sorafs_moderation_policy,
+    crate::isi::sorafs::SetSorafsModerationPolicy,
+    "iroha_data_model::isi::sorafs::SetSorafsModerationPolicy"
+);
+record!(
+    sorafs_set_sorafs_orderbook_policy,
+    crate::isi::sorafs::SetSorafsOrderbookPolicy,
+    "iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy"
+);
+record!(
+    sorafs_set_sorafs_pop_issuer_policy,
+    crate::isi::sorafs::SetSorafsPopIssuerPolicy,
+    "iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy"
+);
+record!(
+    sorafs_set_sorafs_proof_outcome_signer_policy,
+    crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy,
+    "iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy"
+);
+record!(
+    sorafs_set_sorafs_reputation_journal_authority_policy,
+    crate::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy,
+    "iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy"
+);
+record!(
+    sorafs_set_sorafs_reserve_policy,
+    crate::isi::sorafs::SetSorafsReservePolicy,
+    "iroha_data_model::isi::sorafs::SetSorafsReservePolicy"
+);
+record!(
+    sorafs_submit_sorafs_moderation_appeal,
+    crate::isi::sorafs::SubmitSorafsModerationAppeal,
+    "iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal"
+);
+record!(
+    sorafs_submit_sorafs_moderation_commit,
+    crate::isi::sorafs::SubmitSorafsModerationCommit,
+    "iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit"
+);
+record!(
+    sorafs_submit_sorafs_moderation_reveal,
+    crate::isi::sorafs::SubmitSorafsModerationReveal,
+    "iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal"
+);
+record!(
+    sorafs_submit_sorafs_orderbook_order,
+    crate::isi::sorafs::SubmitSorafsOrderbookOrder,
+    "iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder"
+);
+record!(
+    sorafs_submit_sorafs_proof_outcome,
+    crate::isi::sorafs::SubmitSorafsProofOutcome,
+    "iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome"
+);
+record!(
+    sorafs_submit_sorafs_repair_appeal,
+    crate::isi::sorafs::SubmitSorafsRepairAppeal,
+    "iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal"
+);
+record!(
+    sorafs_submit_sorafs_repair_task,
+    crate::isi::sorafs::SubmitSorafsRepairTask,
+    "iroha_data_model::isi::sorafs::SubmitSorafsRepairTask"
+);
+record!(
+    sorafs_submit_sorafs_reserve_appeal,
+    crate::isi::sorafs::SubmitSorafsReserveAppeal,
+    "iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal"
+);
+record!(
+    sorafs_unregister_provider_owner,
+    crate::isi::sorafs::UnregisterProviderOwner,
+    "iroha_data_model::isi::sorafs::UnregisterProviderOwner"
+);
+record!(
+    sorafs_upsert_provider_credit,
+    crate::isi::sorafs::UpsertProviderCredit,
+    "iroha_data_model::isi::sorafs::UpsertProviderCredit"
+);
+record!(
+    space_directory_expire_space_directory_manifest,
+    crate::isi::space_directory::ExpireSpaceDirectoryManifest,
+    "iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest"
+);
+record!(
+    space_directory_publish_space_directory_manifest,
+    crate::isi::space_directory::PublishSpaceDirectoryManifest,
+    "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"
+);
+record!(
+    space_directory_revoke_space_directory_manifest,
+    crate::isi::space_directory::RevokeSpaceDirectoryManifest,
+    "iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest"
+);
+record!(
+    staking_activate_public_lane_validator,
+    crate::isi::staking::ActivatePublicLaneValidator,
+    "iroha_data_model::isi::staking::ActivatePublicLaneValidator"
+);
+record!(
+    staking_bond_public_lane_stake,
+    crate::isi::staking::BondPublicLaneStake,
+    "iroha_data_model::isi::staking::BondPublicLaneStake"
+);
+record!(
+    staking_cancel_consensus_evidence_penalty,
+    crate::isi::staking::CancelConsensusEvidencePenalty,
+    "iroha_data_model::isi::staking::CancelConsensusEvidencePenalty"
+);
+record!(
+    staking_claim_public_lane_rewards,
+    crate::isi::staking::ClaimPublicLaneRewards,
+    "iroha_data_model::isi::staking::ClaimPublicLaneRewards"
+);
+record!(
+    staking_exit_public_lane_validator,
+    crate::isi::staking::ExitPublicLaneValidator,
+    "iroha_data_model::isi::staking::ExitPublicLaneValidator"
+);
+record!(
+    staking_finalize_public_lane_unbond,
+    crate::isi::staking::FinalizePublicLaneUnbond,
+    "iroha_data_model::isi::staking::FinalizePublicLaneUnbond"
+);
+record!(
+    staking_rebind_public_lane_validator_peer,
+    crate::isi::staking::RebindPublicLaneValidatorPeer,
+    "iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer"
+);
+record!(
+    staking_record_public_lane_rewards,
+    crate::isi::staking::RecordPublicLaneRewards,
+    "iroha_data_model::isi::staking::RecordPublicLaneRewards"
+);
+record!(
+    staking_register_public_lane_validator,
+    crate::isi::staking::RegisterPublicLaneValidator,
+    "iroha_data_model::isi::staking::RegisterPublicLaneValidator"
+);
+record!(
+    staking_schedule_public_lane_unbond,
+    crate::isi::staking::SchedulePublicLaneUnbond,
+    "iroha_data_model::isi::staking::SchedulePublicLaneUnbond"
+);
+record!(
+    staking_slash_public_lane_validator,
+    crate::isi::staking::SlashPublicLaneValidator,
+    "iroha_data_model::isi::staking::SlashPublicLaneValidator"
+);
+record!(transfer_account_asset_definition_id_account, Transfer<Account, AssetDefinitionId, Account>, "iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::asset::id::model::AssetDefinitionId, iroha_data_model::account::model::Account>");
+record!(transfer_account_domain_id_account, Transfer<Account, DomainId, Account>, "iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::domain::model::DomainId, iroha_data_model::account::model::Account>");
+record!(transfer_account_nft_id_account, Transfer<Account, NftId, Account>, "iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::nft::model::NftId, iroha_data_model::account::model::Account>");
+record!(transfer_asset_quantity_account, Transfer<Asset, Quantity, Account>, "iroha_data_model::isi::transfer::Transfer<iroha_data_model::asset::value::model::Asset, iroha_primitives::numeric::Quantity, iroha_data_model::account::model::Account>");
+record!(
+    transfer_transfer_asset_batch,
+    crate::isi::transfer::TransferAssetBatch,
+    "iroha_data_model::isi::transfer::TransferAssetBatch"
+);
+record!(
+    transfer_transfer_asset_batch_entry,
+    crate::isi::transfer::TransferAssetBatchEntry,
+    "iroha_data_model::isi::transfer::TransferAssetBatchEntry"
+);
+record!(
+    transparent_add_signatory,
+    crate::isi::transparent::AddSignatory,
+    "iroha_data_model::isi::transparent::AddSignatory"
+);
+record!(
+    transparent_custom_instruction,
+    crate::isi::transparent::CustomInstruction,
+    "iroha_data_model::isi::transparent::CustomInstruction"
+);
+record!(
+    transparent_execute_trigger,
+    crate::isi::transparent::ExecuteTrigger,
+    "iroha_data_model::isi::transparent::ExecuteTrigger"
+);
+record!(grant_permission_account, Grant<Permission, Account>, "iroha_data_model::isi::transparent::Grant<iroha_data_model::permission::model::Permission, iroha_data_model::account::model::Account>");
+record!(grant_permission_role, Grant<Permission, Role>, "iroha_data_model::isi::transparent::Grant<iroha_data_model::permission::model::Permission, iroha_data_model::role::model::Role>");
+record!(grant_role_id_account, Grant<RoleId, Account>, "iroha_data_model::isi::transparent::Grant<iroha_data_model::role::model::RoleId, iroha_data_model::account::model::Account>");
+record!(
+    transparent_invalid_instruction,
+    crate::isi::transparent::InvalidInstruction,
+    "iroha_data_model::isi::transparent::InvalidInstruction"
+);
+record!(
+    transparent_log,
+    crate::isi::transparent::Log,
+    "iroha_data_model::isi::transparent::Log"
+);
+record!(
+    transparent_remove_asset_key_value,
+    crate::isi::transparent::RemoveAssetKeyValue,
+    "iroha_data_model::isi::transparent::RemoveAssetKeyValue"
+);
+record!(
+    remove_key_value_account,
+    RemoveKeyValue<Account>,
+    "iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::account::model::Account>"
+);
+record!(
+    remove_key_value_asset_definition,
+    RemoveKeyValue<AssetDefinition>,
+    "iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::asset::definition::model::AssetDefinition>"
+);
+record!(
+    remove_key_value_domain,
+    RemoveKeyValue<Domain>,
+    "iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::domain::model::Domain>"
+);
+record!(
+    remove_key_value_nft,
+    RemoveKeyValue<Nft>,
+    "iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::nft::model::Nft>"
+);
+record!(
+    remove_key_value_rwa,
+    RemoveKeyValue<Rwa>,
+    "iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::rwa::Rwa>"
+);
+record!(
+    remove_key_value_trigger,
+    RemoveKeyValue<Trigger>,
+    "iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::trigger::model::model::Trigger>"
+);
+record!(
+    transparent_remove_signatory,
+    crate::isi::transparent::RemoveSignatory,
+    "iroha_data_model::isi::transparent::RemoveSignatory"
+);
+record!(revoke_permission_account, Revoke<Permission, Account>, "iroha_data_model::isi::transparent::Revoke<iroha_data_model::permission::model::Permission, iroha_data_model::account::model::Account>");
+record!(revoke_permission_role, Revoke<Permission, Role>, "iroha_data_model::isi::transparent::Revoke<iroha_data_model::permission::model::Permission, iroha_data_model::role::model::Role>");
+record!(revoke_role_id_account, Revoke<RoleId, Account>, "iroha_data_model::isi::transparent::Revoke<iroha_data_model::role::model::RoleId, iroha_data_model::account::model::Account>");
+record!(
+    transparent_set_account_quorum,
+    crate::isi::transparent::SetAccountQuorum,
+    "iroha_data_model::isi::transparent::SetAccountQuorum"
+);
+record!(
+    transparent_set_asset_key_value,
+    crate::isi::transparent::SetAssetKeyValue,
+    "iroha_data_model::isi::transparent::SetAssetKeyValue"
+);
+record!(
+    set_key_value_account,
+    SetKeyValue<Account>,
+    "iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::account::model::Account>"
+);
+record!(
+    set_key_value_asset_definition,
+    SetKeyValue<AssetDefinition>,
+    "iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::asset::definition::model::AssetDefinition>"
+);
+record!(
+    set_key_value_domain,
+    SetKeyValue<Domain>,
+    "iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::domain::model::Domain>"
+);
+record!(
+    set_key_value_nft,
+    SetKeyValue<Nft>,
+    "iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::nft::model::Nft>"
+);
+record!(
+    set_key_value_rwa,
+    SetKeyValue<Rwa>,
+    "iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::rwa::Rwa>"
+);
+record!(
+    set_key_value_trigger,
+    SetKeyValue<Trigger>,
+    "iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::trigger::model::model::Trigger>"
+);
+record!(
+    transparent_upgrade,
+    crate::isi::transparent::Upgrade,
+    "iroha_data_model::isi::transparent::Upgrade"
+);
+record!(
+    verifying_keys_register_verifying_key,
+    crate::isi::verifying_keys::RegisterVerifyingKey,
+    "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"
+);
+record!(
+    verifying_keys_update_verifying_key,
+    crate::isi::verifying_keys::UpdateVerifyingKey,
+    "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"
+);
+record!(
+    vpn_open_vpn_lease_escrow,
+    crate::isi::vpn::OpenVpnLeaseEscrow,
+    "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow"
+);
+record!(
+    vpn_refund_expired_vpn_lease,
+    crate::isi::vpn::RefundExpiredVpnLease,
+    "iroha_data_model::isi::vpn::RefundExpiredVpnLease"
+);
+record!(
+    vpn_settle_vpn_lease,
+    crate::isi::vpn::SettleVpnLease,
+    "iroha_data_model::isi::vpn::SettleVpnLease"
+);
+record!(
+    zk_cancel_confidential_policy_transition,
+    crate::isi::zk::CancelConfidentialPolicyTransition,
+    "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition"
+);
+record!(
+    zk_create_election,
+    crate::isi::zk::CreateElection,
+    "iroha_data_model::isi::zk::CreateElection"
+);
+record!(
+    zk_finalize_election,
+    crate::isi::zk::FinalizeElection,
+    "iroha_data_model::isi::zk::FinalizeElection"
+);
+record!(
+    zk_prune_proofs,
+    crate::isi::zk::PruneProofs,
+    "iroha_data_model::isi::zk::PruneProofs"
+);
+record!(
+    zk_register_zk_asset,
+    crate::isi::zk::RegisterZkAsset,
+    "iroha_data_model::isi::zk::RegisterZkAsset"
+);
+record!(
+    zk_schedule_confidential_policy_transition,
+    crate::isi::zk::ScheduleConfidentialPolicyTransition,
+    "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition"
+);
+record!(
+    zk_submit_ballot,
+    crate::isi::zk::SubmitBallot,
+    "iroha_data_model::isi::zk::SubmitBallot"
+);
+record!(
+    zk_verify_proof,
+    crate::isi::zk::VerifyProof,
+    "iroha_data_model::isi::zk::VerifyProof"
+);

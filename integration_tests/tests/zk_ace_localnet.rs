@@ -4,7 +4,7 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{
         asset::AssetBalanceScope,
         metadata::Metadata,

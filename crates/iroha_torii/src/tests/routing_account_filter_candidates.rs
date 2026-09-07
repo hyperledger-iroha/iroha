@@ -1,6 +1,6 @@
 #[cfg(all(test, feature = "app_api"))]
 #[test]
-fn exact_field_filter_candidates_extracts_safe_account_constraints() {
+fn asset_holder_filter_extracts_safe_account_constraints() {
     let first = AccountId::new(
         checked_routing_fixture_keypair(
             0xF0,
@@ -20,10 +20,10 @@ fn exact_field_filter_candidates_extracts_safe_account_constraints() {
         .clone(),
     );
     let exact = FilterExpr::Eq(
-        FieldPath("id".to_owned()),
+        FieldPath("account_id".to_owned()),
         norito::json::Value::from(first.to_string()),
     );
-    let candidates = exact_field_filter_candidates::<AccountId>(Some(&exact), "id")
+    let candidates = asset_holder_filter_account_candidates(Some(&exact))
         .expect("account id equality should produce direct lookup candidates");
     assert_eq!(candidates, BTreeSet::from([first.clone()]));
     let combined = FilterExpr::And(vec![
@@ -33,17 +33,17 @@ fn exact_field_filter_candidates_extracts_safe_account_constraints() {
             norito::json::Value::from(false),
         ),
     ]);
-    let candidates = exact_field_filter_candidates::<AccountId>(Some(&combined), "id")
+    let candidates = asset_holder_filter_account_candidates(Some(&combined))
         .expect("AND should preserve safe account id candidates");
     assert_eq!(candidates, BTreeSet::from([first]));
     let many = FilterExpr::In(
-        FieldPath("id".to_owned()),
+        FieldPath("account_id".to_owned()),
         vec![
             norito::json::Value::from("not-an-account-id"),
             norito::json::Value::from(second.to_string()),
         ],
     );
-    let candidates = exact_field_filter_candidates::<AccountId>(Some(&many), "id")
+    let candidates = asset_holder_filter_account_candidates(Some(&many))
         .expect("account id IN should produce candidates");
     assert_eq!(candidates, BTreeSet::from([second]));
     let unsafe_or = FilterExpr::Or(vec![
@@ -53,5 +53,5 @@ fn exact_field_filter_candidates_extracts_safe_account_constraints() {
             norito::json::Value::from(false),
         ),
     ]);
-    assert!(exact_field_filter_candidates::<AccountId>(Some(&unsafe_or), "id").is_none());
+    assert!(asset_holder_filter_account_candidates(Some(&unsafe_or)).is_none());
 }

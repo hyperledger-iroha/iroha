@@ -94,6 +94,23 @@ pub(crate) fn fixture_network_id() -> NetworkId {
     );
     network_id
 }
+/// Synthetic Musubi-purpose order, outside the reserved automatic-order namespace.
+pub(crate) fn fixture_replication_order() -> ReplicationOrderId {
+    let order = ReplicationOrderId::new([0x42; 32]);
+    assert!(
+        !order.is_auto(),
+        "Musubi fixtures require a purpose-issued order"
+    );
+    order
+}
+
+#[test]
+fn musubi_fixture_order_uses_the_purpose_issued_namespace() {
+    let order = fixture_replication_order();
+    assert_eq!(order.as_bytes(), &[0x42; 32]);
+    assert!(!order.is_auto());
+}
+
 pub(crate) fn keypair(seed: u8) -> KeyPair {
     assert_ne!(seed, 0, "fixture signing seeds must be non-zero");
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -248,9 +265,49 @@ where
         "standalone_instruction_box_frame_hex": (encode_hex(&standalone_instruction_box_frame)),
     })
 }
+/// Concrete Musubi instruction values missing from the generated-record capture.
+pub(crate) struct MusubiGeneratedIdentityValues {
+    /// Namespace-binding registration fixture.
+    pub(crate) register_namespace: RegisterMusubiNamespaceBindingV1,
+    /// Archive-registration fixture with a verified seed-ingress receipt.
+    pub(crate) register_archive: RegisterMusubiArchiveV1,
+    /// Archive-location retirement fixture.
+    pub(crate) retire_archive_location: RetireMusubiArchiveLocationV1,
+    /// Package-metadata replacement fixture.
+    pub(crate) set_package_metadata: SetMusubiPackageMetadataV1,
+    /// Package-maintainer invitation fixture.
+    pub(crate) invite_package_maintainer: InviteMusubiPackageMaintainerV1,
+    /// Package-maintainer invitation acceptance fixture.
+    pub(crate) accept_package_maintainer: AcceptMusubiPackageMaintainerV1,
+    /// Package-maintainer role replacement fixture.
+    pub(crate) set_package_maintainer_role: SetMusubiPackageMaintainerRoleV1,
+    /// Package-maintainer removal fixture.
+    pub(crate) remove_package_maintainer: RemoveMusubiPackageMaintainerV1,
+    /// Alias-registration fixture.
+    pub(crate) register_alias: RegisterMusubiAliasV1,
+    /// Parliament-authorized package recovery fixture.
+    pub(crate) recover_package: RecoverMusubiPackageV1,
+    /// Parliament-authorized alias-retarget fixture.
+    pub(crate) retarget_alias: RetargetMusubiAliasV1,
+    /// Parliament-authorized artifact-takedown fixture.
+    pub(crate) set_artifact_takedown: SetMusubiArtifactTakedownV1,
+    /// Parliament-authorized registry-policy replacement fixture.
+    pub(crate) set_registry_policy: SetMusubiRegistryPolicyV1,
+}
+
 /// Construct the complete instruction fixture from concrete Rust values.
 #[must_use]
 pub(crate) fn instruction_document() -> Value {
+    instruction_document_and_generated_identity_values().0
+}
+
+/// Construct the typed values needed by the generated-record identity capture.
+#[must_use]
+pub(crate) fn generated_identity_values() -> MusubiGeneratedIdentityValues {
+    instruction_document_and_generated_identity_values().1
+}
+
+fn instruction_document_and_generated_identity_values() -> (Value, MusubiGeneratedIdentityValues) {
     let accept = AcceptMusubiPackageMaintainerV1 {
         package: package(7, MusubiPackageScopeV1::DataspaceRoot, "math-utils"),
         invite_id: MusubiInviteIdV1::new([0x11; 32]),
@@ -601,7 +658,7 @@ pub(crate) fn instruction_document() -> Value {
         .expect("fixture staging receipt verifies");
     let register_archive =
         RegisterMusubiArchiveV1::new(commitment.clone(), staging_receipt, u64::MAX - 30);
-    let replication_order = ReplicationOrderId::new([0x42; 32]);
+    let replication_order = fixture_replication_order();
     let provider_attestations = [
         (0xD1, INSTRUCTION_PROVIDER_1_SEED, 0xE1, 0xF1, 0x71),
         (0xD2, INSTRUCTION_PROVIDER_2_SEED, 0xE2, 0xF2, 0x72),
@@ -1024,6 +1081,21 @@ pub(crate) fn instruction_document() -> Value {
         set_policy.decision.action_digest,
         policy_action.action_digest()
     );
+    let generated_identity_values = MusubiGeneratedIdentityValues {
+        register_namespace: register_namespace.clone(),
+        register_archive: register_archive.clone(),
+        retire_archive_location: retire.clone(),
+        set_package_metadata: set_metadata.clone(),
+        invite_package_maintainer: invite.clone(),
+        accept_package_maintainer: accept.clone(),
+        set_package_maintainer_role: promote.clone(),
+        remove_package_maintainer: remove.clone(),
+        register_alias: alias.clone(),
+        recover_package: recover.clone(),
+        retarget_alias: retarget.clone(),
+        set_artifact_takedown: takedown.clone(),
+        set_registry_policy: set_policy.clone(),
+    };
     let cases = vec![
         render_instruction_case("accept-root-max-revision", accept),
         render_instruction_case("revoke-domain-invitation", revoke),
@@ -1054,14 +1126,17 @@ pub(crate) fn instruction_document() -> Value {
         render_instruction_case("replace-domain-metadata-high-revision", set_metadata),
         render_instruction_case("set-allowlisted-policy-repriced-aliases", set_policy),
     ];
-    norito::json!({
-        "format": "iroha-musubi-instructions-v1",
-        "fixture_version": 1,
-        "rust_owner": "iroha_data_model::isi::musubi",
-        "instruction_box_schema_name": (type_name::<(String, Vec<u8>)>()),
-        "instruction_box_schema_hash": (encode_hex(
-            &norito::core::type_name_schema_hash::<(String, Vec<u8>)>(),
-        )),
-        "cases": cases,
-    })
+    (
+        norito::json!({
+            "format": "iroha-musubi-instructions-v1",
+            "fixture_version": 1,
+            "rust_owner": "iroha_data_model::isi::musubi",
+            "instruction_box_schema_name": (type_name::<(String, Vec<u8>)>()),
+            "instruction_box_schema_hash": (encode_hex(
+                &norito::core::type_name_schema_hash::<(String, Vec<u8>)>(),
+            )),
+            "cases": cases,
+        }),
+        generated_identity_values,
+    )
 }

@@ -13338,10 +13338,10 @@ impl SnapshotResourcePolicy {
     /// Relationships stay fail-closed so values cannot exceed the authenticated
     /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
-        if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
+        if self.max_decode_depth.get() > norito::core::MAX_VALUE_NESTING_DEPTH {
             return Err(format!(
                 "snapshot.resources.max_decode_depth must not exceed Norito's structural limit of {}",
-                norito::json::MAX_JSON_VALUE_NESTING_DEPTH
+                norito::core::MAX_VALUE_NESTING_DEPTH
             ));
         }
         if self.max_string_bytes > self.max_blob_bytes {
@@ -38212,7 +38212,7 @@ publish_delay_seconds = 17
         let invalid_resources = [
             (
                 "max_decode_depth",
-                i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1)
+                i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH + 1)
                     .expect("Norito depth limit fits i64"),
             ),
             ("max_string_bytes", 65),
@@ -38228,7 +38228,13 @@ publish_delay_seconds = 17
                 .expect("snapshot table");
             snapshot.insert("max_payload_bytes".into(), Value::Integer(128));
             let mut resources = Table::new();
-            resources.insert("max_decode_depth".into(), Value::Integer(64));
+            resources.insert(
+                "max_decode_depth".into(),
+                Value::Integer(
+                    i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH)
+                        .expect("Norito depth limit fits i64"),
+                ),
+            );
             resources.insert("max_decode_items".into(), Value::Integer(1_024));
             resources.insert("max_string_bytes".into(), Value::Integer(32));
             resources.insert("max_blob_bytes".into(), Value::Integer(64));

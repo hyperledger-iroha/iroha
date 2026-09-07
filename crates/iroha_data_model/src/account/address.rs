@@ -2511,9 +2511,24 @@ mod tests {
     }
     #[test]
     fn canonical_decode_rejects_forged_multisig_count_before_allocation() {
-        let canonical = [0_u8, CONTROLLER_MULTISIG_TAG, 1, 0, 1, 0xff, 0xff];
-        let err = AccountAddress::from_canonical_bytes(&canonical).unwrap_err();
-        assert!(matches!(err, AccountAddressError::InvalidLength));
+        let header = AddressHeader::new(
+            HEADER_VERSION_V1,
+            AddressClass::MultiSig,
+            HEADER_NORM_VERSION_V1,
+        )
+        .expect("canonical multisig header")
+        .encode();
+        for count in [u16::MAX, 1_u16] {
+            let [high, low] = count.to_be_bytes();
+            let canonical = [header, CONTROLLER_MULTISIG_TAG, 1, 0, 1, high, low];
+            let (result, usage) = norito::core::with_decode_limits_measured(
+                norito::core::DecodeLimits::new(64, 256, 64, 0, 8),
+                || AccountAddress::from_canonical_bytes(&canonical),
+            );
+            assert!(matches!(result, Err(AccountAddressError::InvalidLength)));
+            assert_eq!(usage.total_elements(), 0);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
     }
     #[test]
     fn parse_encoded_accepts_i105_format() {

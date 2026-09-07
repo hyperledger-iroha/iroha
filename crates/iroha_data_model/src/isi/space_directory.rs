@@ -2,6 +2,7 @@ use super::*;
 use crate::nexus::{AssetPermissionManifest, DataSpaceId, UniversalAccountId};
 isi! {
     /// Publish or replace a capability manifest in the Space Directory.
+    #[norito_schema(name = "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest")]
     pub struct PublishSpaceDirectoryManifest {
         /// Canonical manifest payload (UAID, dataspace, rules, lifecycle schedule).
         pub manifest: AssetPermissionManifest,
@@ -17,6 +18,7 @@ impl PublishSpaceDirectoryManifest {
 }
 isi! {
     /// Revoke an existing Space Directory manifest for a UAID/dataspace pair.
+    #[norito_schema(name = "iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest")]
     pub struct RevokeSpaceDirectoryManifest {
         /// UAID that owns the manifest.
         pub uaid: UniversalAccountId,
@@ -32,6 +34,7 @@ isi! {
 impl crate::seal::Instruction for RevokeSpaceDirectoryManifest {}
 isi! {
     /// Expire an existing Space Directory manifest for a UAID/dataspace pair.
+    #[norito_schema(name = "iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest")]
     pub struct ExpireSpaceDirectoryManifest {
         /// UAID that owns the manifest.
         pub uaid: UniversalAccountId,

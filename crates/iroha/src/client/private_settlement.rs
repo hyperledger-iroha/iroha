@@ -1897,11 +1897,16 @@ impl Client {
             ));
         }
         let expected_manifest = barrier.manifest.clone();
-        let transaction = self.try_build_transaction(
-            [InstructionBox::from(instruction)],
-            expected_manifest.public_fee_intent.clone(),
-            Metadata::default(),
-        )?;
+        let transaction = {
+            let account = self.account_client()?;
+            account
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(instruction)],
+                    expected_manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }?;
         let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
         if signed_manifest != &expected_manifest
             || transaction.network_id() != Some(&expected_manifest.network_id)
@@ -2013,11 +2018,16 @@ impl Client {
         }
 
         let expected_manifest = manifest.clone();
-        let transaction = self.try_build_transaction(
-            [boxed_instruction],
-            expected_manifest.public_fee_intent.clone(),
-            Metadata::default(),
-        )?;
+        let transaction = {
+            let account = self.account_client()?;
+            account
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [boxed_instruction],
+                    expected_manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }?;
         let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
         if signed_manifest != &expected_manifest
             || transaction.network_id() != Some(&expected_manifest.network_id)
@@ -2137,13 +2147,18 @@ impl Client {
         }
 
         let expected_manifest = barrier.manifest.clone();
-        let transaction = self.try_build_transaction(
-            [InstructionBox::from(
-                FinalizeAtomicPrivateSettlementV1::new(bundle),
-            )],
-            expected_manifest.public_fee_intent.clone(),
-            Metadata::default(),
-        )?;
+        let transaction = {
+            let account = self.account_client()?;
+            account
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(
+                        FinalizeAtomicPrivateSettlementV1::new(bundle),
+                    )],
+                    expected_manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }?;
         let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
         if signed_manifest != &expected_manifest
             || transaction.network_id() != Some(&expected_manifest.network_id)
@@ -4048,7 +4063,7 @@ mod tests {
                     "hash": hash,
                     "status": { "kind": "Applied", "block_height": 10 },
                     "scope": "global",
-                    "resolved_from": resolved_from,
+                    "resolved_from": resolved_from
                 });
                 Ok(Response::builder()
                     .status(StatusCode::OK)
@@ -4061,7 +4076,11 @@ mod tests {
             }
         };
 
-        let accepted = with_mock_http(responder, || {
+        let accepted = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.register_private_settlement_prepare_and_wait_v1(
                 &barrier,
                 u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
@@ -4338,36 +4357,48 @@ mod tests {
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .expect("valid builder result contains a finalization carrier")
             .clone();
-        let multiple = client
-            .try_build_transaction(
-                [
-                    InstructionBox::from(carrier.clone()),
-                    InstructionBox::from(carrier.clone()),
-                ],
-                barrier.manifest.public_fee_intent.clone(),
-                Metadata::default(),
-            )
-            .expect("fixture multi-carrier transaction signs");
+        let multiple = {
+            let account = client
+                .account_client()
+                .expect("bind private-settlement fixture account");
+            account
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [
+                        InstructionBox::from(carrier.clone()),
+                        InstructionBox::from(carrier.clone()),
+                    ],
+                    barrier.manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("fixture multi-carrier transaction signs");
         assert!(exact_private_settlement_carrier_v1(&multiple).is_err());
         assert!(
             client
                 .submit_private_settlement_bundle_v1(&PrivateSettlementBundleSubmitRequestV1 {
-                    transaction: multiple,
+                    transaction: multiple
                 })
                 .is_err()
         );
 
-        let wrong_fee = client
-            .try_build_transaction(
-                [InstructionBox::from(carrier)],
-                FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1)),
-                Metadata::default(),
-            )
-            .expect("fixture fee-substituted transaction signs");
+        let wrong_fee = {
+            let account = client
+                .account_client()
+                .expect("bind private-settlement fixture account");
+            account
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(carrier)],
+                    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1)),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("fixture fee-substituted transaction signs");
         assert!(
             client
                 .submit_private_settlement_bundle_v1(&PrivateSettlementBundleSubmitRequestV1 {
-                    transaction: wrong_fee,
+                    transaction: wrong_fee
                 })
                 .is_err()
         );
@@ -4520,7 +4551,12 @@ mod tests {
                     .body(Vec::new())
                     .expect("response build"),
             ),
-            || client.private_settlement_bundle_status_v1(bundle_id),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.private_settlement_bundle_status_v1(bundle_id)
+            },
         )
         .expect_err("mocked missing bundle fails");
         let snapshots = snapshots.lock().expect("lock snapshots");
@@ -4565,7 +4601,12 @@ mod tests {
                     .body(Vec::new())
                     .expect("response build"),
             ),
-            || client.private_settlement_committee_proof_v1(payload_digest, &validator),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.private_settlement_committee_proof_v1(payload_digest, &validator)
+            },
         )
         .expect_err("mocked unauthorized committee read fails");
         let snapshots = snapshots.lock().expect("lock snapshots");
@@ -4606,7 +4647,12 @@ mod tests {
                     .body(response_body)
                     .expect("response build"),
             ),
-            || client.private_settlement_phase_certificates_v1(payload_digest),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.private_settlement_phase_certificates_v1(payload_digest)
+            },
         )
         .expect("sponsor recovery response");
         assert_eq!(decoded, response);

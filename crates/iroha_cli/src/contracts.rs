@@ -8,6 +8,7 @@ use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
+    blocking::Client as BlockingClient,
     client::{Client, ContractCallDraftIntent},
     config::{Config, LoadPath},
     data_model::{
@@ -1036,15 +1037,15 @@ impl DevDoctorArgs {
             .map(|path| resolve_manifest_path(manifest_dir, path));
         let profile_config = load_dev_profile_config(manifest_dir, Some(profile))?;
         let effective_config = profile_config.as_ref().unwrap_or_else(|| context.config());
-        let client = dev_client_from_profile(context, profile_config.as_ref());
+        let client = dev_client_from_profile(context, profile_config.as_ref())?;
         let default_gas_limit = profile.default_gas_limit;
-        let server_version = client.get_server_version().wrap_err_with(|| {
+        let server_version = client.client().get_server_version().wrap_err_with(|| {
             format!(
                 "failed to contact Torii for profile `{}` at {}",
                 self.manifest.profile, effective_config.torii_api_url
             )
         })?;
-        let status = client.get_status().wrap_err_with(|| {
+        let status = client.client().get_status().wrap_err_with(|| {
             format!(
                 "failed to fetch Torii status for profile `{}` at {}",
                 self.manifest.profile, effective_config.torii_api_url
@@ -1113,7 +1114,7 @@ impl DevCallArgs {
         )?;
         let profile_config =
             load_dev_profile_config(manifest_dir, manifest.profiles.get(&self.manifest.profile))?;
-        let client = dev_client_from_profile(context, profile_config.as_ref());
+        let client = dev_client_from_profile(context, profile_config.as_ref())?;
         let authority = resolve_dev_contract_authority(
             context,
             profile_config.as_ref(),
@@ -1156,7 +1157,7 @@ impl DevCallArgs {
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
                 .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
-            let status = wait_for_transaction_applied(&client, tx_hash, &self.wait)?;
+            let status = wait_for_transaction_applied(client.client(), tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: value,
                 trace: None,
@@ -1192,7 +1193,7 @@ impl DevViewArgs {
         )?;
         let profile_config =
             load_dev_profile_config(manifest_dir, manifest.profiles.get(&self.manifest.profile))?;
-        let client = dev_client_from_profile(context, profile_config.as_ref());
+        let client = dev_client_from_profile(context, profile_config.as_ref())?;
         let authority = resolve_dev_contract_authority(
             context,
             profile_config.as_ref(),
@@ -1209,7 +1210,7 @@ impl DevViewArgs {
         let gas_limit = self.gas_limit.unwrap_or_else(|| {
             dev_profile_default_gas_limit(manifest.profiles.get(&self.manifest.profile))
         });
-        let value = client.post_contract_view_json(
+        let value = client.client().post_contract_view_json(
             &authority,
             None,
             Some(&contract_alias),
@@ -1236,7 +1237,7 @@ impl DevSmokeArgs {
             .unwrap_or_else(|| Path::new("."));
         let profile = manifest.profiles.get(&self.manifest.profile);
         let profile_config = load_dev_profile_config(manifest_dir, profile)?;
-        let client = dev_client_from_profile(context, profile_config.as_ref());
+        let client = dev_client_from_profile(context, profile_config.as_ref())?;
         let authority = resolve_dev_contract_authority(
             context,
             profile_config.as_ref(),
@@ -1255,7 +1256,7 @@ impl DevSmokeArgs {
         let mut smoke_results = Vec::with_capacity(cases.len());
         for case in cases {
             let response = match case.mode {
-                DevSmokeMode::View => client.post_contract_view_json(
+                DevSmokeMode::View => client.client().post_contract_view_json(
                     &authority,
                     None,
                     Some(&case.contract_alias),
@@ -1296,7 +1297,8 @@ impl DevSmokeArgs {
                     if self.wait.is_enabled() {
                         let tx_hash = extract_submitted_transaction_hash(&submit)
                             .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
-                        let status = wait_for_transaction_applied(&client, tx_hash, &self.wait)?;
+                        let status =
+                            wait_for_transaction_applied(client.client(), tx_hash, &self.wait)?;
                         norito::json!({
                             "submit": (submit),
                             "terminal_kind": (status.terminal_kind),
@@ -1441,11 +1443,15 @@ fn load_dev_profile_config(
             )
         })
 }
-fn dev_client_from_profile<C: RunContext>(context: &C, profile_config: Option<&Config>) -> Client {
-    profile_config
+fn dev_client_from_profile<C: RunContext>(
+    context: &C,
+    profile_config: Option<&Config>,
+) -> Result<BlockingClient> {
+    let client = profile_config
         .cloned()
         .map(Client::new)
-        .unwrap_or_else(|| context.client_from_config())
+        .unwrap_or_else(|| context.client_from_config());
+    BlockingClient::from_client(client)
 }
 fn resolve_dev_contract_authority<C: RunContext>(
     context: &mut C,
@@ -2043,9 +2049,9 @@ pub struct CodeBytesGetArgs {
 }
 impl Run for CodeBytesGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client = BlockingClient::from_client(context.client_from_config())?;
         let code_hash = self.code_hash.trim_start_matches("0x");
-        let bytes = client.get_contract_code_bytes(code_hash)?;
+        let bytes = client.client().get_contract_code_bytes(code_hash)?;
         std::fs::write(&self.out, &bytes)?;
         context.println(format_args!(
             "Wrote {} bytes to {}",
@@ -2325,7 +2331,7 @@ pub struct CallArgs {
 }
 impl Run for CallArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client = BlockingClient::from_client(context.client_from_config())?;
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let private_key = if self.simulate {
             None
@@ -2343,7 +2349,7 @@ impl Run for CallArgs {
             self.payload.payload_file.as_deref(),
         )?;
         if self.simulate {
-            let value = client.post_contract_call_simulate_json(
+            let value = client.client().post_contract_call_simulate_json(
                 &authority,
                 target.contract_address.as_ref(),
                 target.contract_alias.as_ref(),
@@ -2355,7 +2361,7 @@ impl Run for CallArgs {
             return Ok(());
         }
         let trace = if self.trace {
-            Some(client.post_contract_call_simulate_json(
+            Some(client.client().post_contract_call_simulate_json(
                 &authority,
                 target.contract_address.as_ref(),
                 target.contract_alias.as_ref(),
@@ -2391,7 +2397,7 @@ impl Run for CallArgs {
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
                 .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
-            let status = wait_for_transaction_applied(&client, tx_hash, &self.wait)?;
+            let status = wait_for_transaction_applied(client.client(), tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: value,
                 trace,
@@ -5639,8 +5645,6 @@ mod tests {
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-                connect_queue_root: iroha::config::default_connect_queue_root(),
-                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

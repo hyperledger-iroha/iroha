@@ -1853,8 +1853,7 @@ mod wire {
             Ok(Self(values))
         }
     }
-    #[derive(Clone, NoritoSerialize, NoritoDeserialize)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::tx_predicate::wire::Node")]
     pub(super) enum Node {
         And { child_count: u32 },

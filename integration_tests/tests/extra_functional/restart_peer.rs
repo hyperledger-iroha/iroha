@@ -3,7 +3,7 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
-use iroha::{client::Client, crypto::KeyPair};
+use iroha::{blocking::Client, crypto::KeyPair};
 use iroha_config_base::toml::WriteExt as _;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
@@ -49,7 +49,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let mint_quantity = quantity.clone();
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
-            .submit_all_blocking::<InstructionBox>(
+            .submit_all::<InstructionBox>(
                 [
                     Register::asset_definition({
                         let __asset_definition_id = asset_definition_clone.clone();
@@ -95,7 +95,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         let assets = sandbox::handle_result(
             spawn_blocking({
                 let client = client.clone();
-                move || client.query(FindAssets::new()).execute_all()
+                move || client.client().query(FindAssets::new()).execute_all()
             })
             .await?
             .map_err(eyre::Report::new),
@@ -186,7 +186,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         let assets = match sandbox::handle_result(
             spawn_blocking({
                 let client = client.clone();
-                move || client.query(FindAssets::new()).execute_all()
+                move || client.client().query(FindAssets::new()).execute_all()
             })
             .await?
             .map_err(eyre::Report::new),
@@ -248,7 +248,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let quantity = Quantity::from(321_u32);
     let client = network.client();
-    let setup_domain = domain_setup_instruction(&domain_id, &client.account)?;
+    let setup_domain = domain_setup_instruction(&domain_id, &client.client().account)?;
     let setup_alias = account_alias_setup_instruction(
         "merchant@universal",
         &account_id,
@@ -261,7 +261,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let submit_quantity = quantity.clone();
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         submit_client
-            .submit_all_blocking::<InstructionBox>(
+            .submit_all::<InstructionBox>(
                 [
                     setup_domain,
                     setup_alias,
@@ -379,12 +379,21 @@ async fn route_sensitive_state_digest(
     quantity: Quantity,
 ) -> Result<blake3::Hash> {
     spawn_blocking(move || {
-        let account = client.query_single(FindAccountById::new(account_id.clone()))?;
-        let alias_account = client.query_single(FindAccountByAlias::new(alias.clone()))?;
-        let domain = client.query_single(FindDomainById::new(domain_id.clone()))?;
-        let definition =
-            client.query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
-        let asset = client.query_single(FindAssetById::new(asset_id.clone()))?;
+        let account = client
+            .client()
+            .query_single(FindAccountById::new(account_id.clone()))?;
+        let alias_account = client
+            .client()
+            .query_single(FindAccountByAlias::new(alias.clone()))?;
+        let domain = client
+            .client()
+            .query_single(FindDomainById::new(domain_id.clone()))?;
+        let definition = client
+            .client()
+            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
+        let asset = client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))?;
         if asset.value() != &quantity {
             return Err(eyre!(
                 "asset `{}` has value `{}`, expected `{}`",
@@ -393,8 +402,11 @@ async fn route_sensitive_state_digest(
                 quantity
             ));
         }
-        let mut aliases =
-            client.query_single(FindAliasesByAccountId::new(account_id.clone(), None, None))?;
+        let mut aliases = client.client().query_single(FindAliasesByAccountId::new(
+            account_id.clone(),
+            None,
+            None,
+        ))?;
         aliases.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
         let mut surface = Vec::new();
         surface.push(format!("account={}", account.id()));

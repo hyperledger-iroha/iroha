@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{Level, isi::Log},
 };
 use iroha_core::sumeragi::network_topology::Topology;
@@ -35,9 +35,9 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let status = client.get_status()?;
+    let status = client.client().get_status()?;
     for idx in status.blocks..3 {
-        client.submit_blocking(
+        client.submit(
             Log::new(Level::INFO, format!("lock convergence seed {idx}")),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -190,9 +190,9 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let status = client.get_status()?;
+    let status = client.client().get_status()?;
     for idx in status.blocks..3 {
-        client.submit_blocking(
+        client.submit(
             Log::new(Level::INFO, format!("lock convergence restart seed {idx}")),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -336,7 +336,7 @@ impl AsRef<Table> for ConfigLayer {
 }
 async fn fetch_qc_snapshot(client: &Client) -> Result<QcSnapshot> {
     let client = client.clone();
-    let payload = task::spawn_blocking(move || client.get_sumeragi_qc_json())
+    let payload = task::spawn_blocking(move || client.client().get_sumeragi_qc_json())
         .await
         .wrap_err("fetch sumeragi QC snapshot")??;
     parse_qc_snapshot(&payload)
@@ -357,7 +357,7 @@ async fn wait_for_height(client: &Client, target_height: u64, timeout: Duration)
 }
 async fn fetch_status(client: &Client) -> Result<Status> {
     let client = client.clone();
-    task::spawn_blocking(move || client.get_status())
+    task::spawn_blocking(move || client.client().get_status())
         .await
         .wrap_err("join status fetch task")?
         .wrap_err("fetch status")

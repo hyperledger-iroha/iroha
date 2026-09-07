@@ -384,9 +384,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "5eac6c5cdf846c53a6372745194b23e342242a0c004debe5461fedb5160a0853";
+            "626ced8aa00ec4628608122a40dd19fe1c034a8b994e8031479cafd51e6a75c9";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "4cd2566dc4f63942e1e52b751a1b097747793e32dab67d24bde9420902177abd";
+            "c4c8cb84e6c00129faf6afdc7e407dc42d3c8aa5421fe1807ff8cd67cd0d148f";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1134,7 +1134,7 @@ mod tests {
         );
     }
     #[test]
-    fn instruction_registry_rejects_cross_family_payloads_through_type_name_aliases() {
+    fn instruction_registry_rejects_cross_family_payloads_under_removed_type_names() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
         let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
             "registry_repo_cross_type_name"
@@ -1149,21 +1149,30 @@ mod tests {
             settlement_leg(account(0xDA), account(0xD9), 111),
             settlement::SettlementPlan::default(),
         ));
-        assert_default_registry_rejects_framed_payload(
-            std::any::type_name::<MintBox>(),
-            &framed_instruction_payload(&register_box),
-            std::any::type_name::<RegisterBox>(),
-        );
-        assert_default_registry_rejects_framed_payload(
-            std::any::type_name::<settlement::SettlementInstructionBox>(),
-            &framed_instruction_payload(&repo_box),
-            std::any::type_name::<repo::RepoInstructionBox>(),
-        );
-        assert_default_registry_rejects_framed_payload(
-            std::any::type_name::<repo::RepoInstructionBox>(),
-            &framed_instruction_payload(&settlement_box),
-            std::any::type_name::<settlement::SettlementInstructionBox>(),
-        );
+        let registry = default();
+        for (type_name, framed) in [
+            (
+                std::any::type_name::<MintBox>(),
+                framed_instruction_payload(&register_box),
+            ),
+            (
+                std::any::type_name::<settlement::SettlementInstructionBox>(),
+                framed_instruction_payload(&repo_box),
+            ),
+            (
+                std::any::type_name::<repo::RepoInstructionBox>(),
+                framed_instruction_payload(&settlement_box),
+            ),
+        ] {
+            assert!(
+                registry.wire_id(type_name).is_some(),
+                "{type_name} remains registered for encoding"
+            );
+            assert!(
+                registry.decode(type_name, &framed).is_none(),
+                "{type_name} is not a decode alias"
+            );
+        }
     }
     #[test]
     fn instruction_registry_rejects_invalid_box_variant_tags() {

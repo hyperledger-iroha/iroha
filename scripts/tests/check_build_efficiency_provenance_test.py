@@ -234,13 +234,8 @@ def test_valid_mocked_object_graph_passes(
         ),
         lambda payload: payload["source_budget"].update({"production_limit": 5_001}),
         lambda payload: payload["source_budget"].update({"test_limit": 3_001}),
-        lambda payload: payload["source_budget"].update({"ceiling": 4_540_000}),
+        lambda payload: payload["source_budget"].update({"ceiling": 1}),
         lambda payload: payload["source_budget"]["excluded_prefixes"].reverse(),
-        lambda payload: payload["historical_source_budget"].update({"baseline": 5_067_262}),
-        lambda payload: payload["historical_source_budget"].update({"ceiling": 4_540_001}),
-        lambda payload: payload["historical_source_budget"].update({"ratchet_ceiling": 5_014_604}),
-        lambda payload: payload["historical_source_budget"].update({"working_target": 4_500_001}),
-        lambda payload: payload["historical_source_budget"]["excluded_prefixes"].reverse(),
     ],
 )
 def test_schema_mutations_fail_closed(mutation: Any) -> None:
@@ -466,7 +461,7 @@ def test_current_source_budget_rejects_reintroduced_aggregate_policy(
     manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
     budget_path = tmp_path / manifest["source_budget"]["path"]
     budget = json.loads(budget_path.read_text(encoding="utf-8"))
-    budget["aggregate_rust"] = {"ceiling": 4_540_000}
+    budget["aggregate_rust"] = {"ceiling": 1}
     budget_path.write_text(json.dumps(budget), encoding="utf-8")
 
     with pytest.raises(MODULE.ProvenanceError, match="current source budget has invalid keys"):

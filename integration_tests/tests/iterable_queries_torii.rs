@@ -58,7 +58,7 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
     // Submit two transactions so the first fetch-size=1 page has a real
     // continuation even if genesis is not included in the block-header query.
     for name in ["blkcheck_a", "blkcheck_b"] {
-        client.submit_blocking(
+        client.submit(
             Register::asset_definition({
                 let __asset_definition_id = AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal")?,
@@ -93,7 +93,7 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         ),
     )
     .expect("block-header query type has a canonical mapping");
-    let (first_batch, remaining, cursor) = client.start_query(qwp)?;
+    let (first_batch, remaining, cursor) = client.client().start_query(qwp)?;
     let v = match first_batch.into_iter().next().expect("slice") {
         QueryOutputBatchBox::BlockHeader(v) => v,
         other => panic!("unexpected batch variant: {other:?}"),
@@ -135,6 +135,7 @@ fn transactions_iterable_non_empty() -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let snapshot = client
+            .client()
             .query(FindTransactions)
             .execute_all()
             .expect("query transactions");
@@ -161,7 +162,7 @@ fn find_block_headers_descending() -> Result<()> {
     let client = network.client();
     // Submit a couple of extra transactions so we have more than one header
     // even if the block builder batches them together.
-    client.submit_blocking(
+    client.submit(
         Register::asset_definition({
             let __asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
@@ -176,7 +177,7 @@ fn find_block_headers_descending() -> Result<()> {
         }),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    client.submit_blocking(
+    client.submit(
         Register::asset_definition({
             let __asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
@@ -203,11 +204,11 @@ fn find_block_headers_descending() -> Result<()> {
     }));
     Ok(())
 }
-fn retry_block_headers(client: &iroha::client::Client) -> Result<Vec<BlockHeader>> {
+fn retry_block_headers(client: &iroha::blocking::Client) -> Result<Vec<BlockHeader>> {
     const RETRIES: usize = 5;
     const DELAY: Duration = Duration::from_millis(200);
     for attempt in 0..RETRIES {
-        match client.query(FindBlockHeaders).execute_all() {
+        match client.client().query(FindBlockHeaders).execute_all() {
             Ok(headers) => return Ok(headers),
             Err(_err) if attempt + 1 < RETRIES => sleep(DELAY),
             Err(err) => return Err(err.into()),
@@ -241,7 +242,7 @@ fn find_triggers_includes_registered() -> Result<()> {
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );
-    client.submit_blocking(
+    client.submit(
         Register::trigger(trig),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -250,6 +251,7 @@ fn find_triggers_includes_registered() -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let snapshot = loop {
         let snapshot = client
+            .client()
             .query(FindTriggers)
             .execute_all()
             .expect("query triggers");
@@ -285,7 +287,7 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
         authority: ALICE_ID.clone(),
     };
     let expected_permission: iroha::data_model::permission::Permission = permission.clone().into();
-    if let Err(err) = client.submit_blocking(
+    if let Err(err) = client.submit(
         Grant::account_permission(permission, ALICE_ID.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
@@ -305,7 +307,7 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );
-    client.submit_blocking(
+    client.submit(
         Register::trigger(trig),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -314,6 +316,7 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let snapshot = client
+            .client()
             .query(FindActiveTriggerIds)
             .execute_all()
             .expect("query active trigger ids");
@@ -351,16 +354,16 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );
-    client.submit_blocking(
+    client.submit(
         Register::trigger(trig),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
     // Sanity: trigger id is present among active trigger IDs
-    let ids = client.query(FindActiveTriggerIds).execute_all()?;
+    let ids = client.client().query(FindActiveTriggerIds).execute_all()?;
     assert!(ids.iter().any(|id| id == &trig_id));
     // Burn 1 repetition -> reaches zero, core prunes trigger immediately in the burn executor
-    client.submit_blocking(
+    client.submit(
         Burn::trigger_repetitions(1, trig_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -369,7 +372,7 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
     // the removal happens asynchronously.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let snapshot = client.query(FindActiveTriggerIds).execute_all()?;
+        let snapshot = client.client().query(FindActiveTriggerIds).execute_all()?;
         if snapshot.iter().all(|id| id != &trig_id) {
             break;
         }
@@ -392,7 +395,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let torii = client.torii_url.clone();
+    let torii = client.client().torii_url.clone();
     let env_dir = network.env_dir().to_path_buf();
     // Register a by-call trigger with Exactly(1) repeat
     let trig_id: TriggerId = "qtrig_burn_then_exec".parse()?;
@@ -407,7 +410,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         .expect("trigger action fixture satisfies validation invariants"),
     );
     client
-        .submit_blocking(
+        .submit(
             Register::trigger(trig),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -422,7 +425,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         ))?;
     // Burn to zero
     client
-        .submit_blocking(
+        .submit(
             Burn::trigger_repetitions(1, trig_id.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -445,6 +448,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let snapshot = client
+            .client()
             .query(FindActiveTriggerIds)
             .execute_all()
             .wrap_err(format!(
@@ -462,7 +466,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
     }
     // Attempt to execute; expect rejection referencing FindError::Trigger(trig_id)
     let err = client
-        .submit_blocking(
+        .submit(
             Instruction::into_instruction_box(Box::new(ExecuteTrigger::new(trig_id.clone()))),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -479,6 +483,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
     );
     // And confirm it's not among active IDs
     let snapshot = client
+        .client()
         .query(FindActiveTriggerIds)
         .execute_all()
         .wrap_err(format!(

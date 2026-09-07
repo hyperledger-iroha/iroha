@@ -43,7 +43,7 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
     let baseline = network
         .peers()
         .iter()
-        .map(|peer| peer.client().get_config())
+        .map(|peer| peer.client().client().get_config())
         .collect::<eyre::Result<Vec<_>>>()?;
     for config in &baseline {
         assert_shared_settings(config);
@@ -82,7 +82,7 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         Ok::<_, eyre::Report>(())
     })?;
 
-    let restarted = restarted_peer.client().get_config()?;
+    let restarted = restarted_peer.client().client().get_config()?;
     assert_shared_settings(&restarted);
     assert_eq!(restarted.logger.level, Level::DEBUG);
     assert_eq!(restarted.logger.filter.as_deref(), Some("iroha_p2p=trace"));
@@ -93,14 +93,14 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         "local proof-of-work policy must preserve the handshake identity and negotiated suite",
     );
 
-    let height = network.peers()[1].client().get_status()?.blocks;
-    network.peers()[1].client().submit_blocking(
+    let height = network.peers()[1].client().client().get_status()?.blocks;
+    network.peers()[1].client().submit(
         iroha_data_model::isi::Log::new(Level::INFO, "node-local configuration isolation".into()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     runtime.block_on(network.ensure_blocks(height + 1))?;
     for (index, peer) in network.peers().iter().enumerate().skip(1) {
-        let config = peer.client().get_config()?;
+        let config = peer.client().client().get_config()?;
         assert_shared_settings(&config);
         assert_eq!(config.logger.level, baseline[index].logger.level);
         assert_eq!(config.logger.filter, baseline[index].logger.filter);
@@ -110,7 +110,7 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
             handshake_identity(&baseline[index].network.soranet_handshake),
         );
     }
-    let restarted = restarted_peer.client().get_config()?;
+    let restarted = restarted_peer.client().client().get_config()?;
     assert_pow(&restarted, (7, 720, 180, 360, 12288, 3, 3));
     assert_eq!(restarted.logger.level, Level::DEBUG);
     runtime.block_on(network.shutdown());

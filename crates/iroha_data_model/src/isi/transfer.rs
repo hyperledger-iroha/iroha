@@ -5,6 +5,7 @@ use norito::json::{FastJsonWrite, JsonSerialize};
 use std::{fmt::Display, format, string::String};
 isi! {
     /// Generic instruction for a transfer of an object from the identifiable source to the identifiable destination.
+    #[norito_schema(name = "iroha_data_model::isi::transfer::Transfer")]
     pub struct Transfer<S: Identifiable, O, D: Identifiable> {
         /// Source object `Id`.
         pub source: S::Id,
@@ -83,6 +84,7 @@ isi_box! {
     ///
     /// Dev note: this is an enum that groups concrete `Transfer<_, _, _>`
     /// variants (not a heap box).
+    #[norito_schema(name = "iroha_data_model::isi::transfer::TransferBox")]
     pub enum TransferBox {
         /// Transfer [`Domain`] to another [`Account`].
         Domain(Transfer<Account, DomainId, Account>),
@@ -95,6 +97,7 @@ isi_box! {
     }
 }
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::transfer::TransferType")]
     pub(crate) enum TransferType {
         Domain,
         AssetDefinition,
@@ -205,6 +208,7 @@ impl TransferBox {
 }
 isi! {
     /// Single entry within a [`TransferAssetBatch`] instruction.
+    #[norito_schema(name = "iroha_data_model::isi::transfer::TransferAssetBatchEntry")]
     pub struct TransferAssetBatchEntry {
         /// Caller-selected identifier used to correlate this leg with its receipt.
         leg_id: String,
@@ -291,6 +295,7 @@ pub enum BatchMode {
 }
 isi! {
     /// Deterministic batch transfer instruction covering multiple `Transfer::asset_quantity` calls.
+    #[norito_schema(name = "iroha_data_model::isi::transfer::TransferAssetBatch")]
     pub struct TransferAssetBatch {
         /// Whether failures roll back the whole batch or only the affected leg.
         mode: BatchMode,

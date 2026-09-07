@@ -49,14 +49,8 @@ pub struct Root {
     /// Transaction defaults.
     pub transaction: Transaction,
     #[config(nested)]
-    /// Connect queue diagnostics and replay helpers.
-    pub connect: Connect,
-    #[config(nested)]
     /// SoraFS-specific configuration.
     pub sorafs: Sorafs,
-    #[config(nested)]
-    /// Soracloud-specific client behavior.
-    pub soracloud: Soracloud,
     #[config(nested)]
     /// Optional Musubi production-publication platform bindings.
     pub musubi: Musubi,
@@ -91,9 +85,6 @@ pub enum ParseError {
         /// The supplied label.
         value: String,
     },
-    /// Connect queue root path was empty after parsing.
-    #[error("`connect.queue_root` must not be empty")]
-    EmptyConnectQueueRoot,
     /// Invalid account domain literal.
     #[error("Account domain must use `dataspace` or `domain.dataspace` format: `{value}`")]
     InvalidAccountDomain {
@@ -424,9 +415,7 @@ impl Root {
                     status_timeout_ms: tx_timeout,
                     nonce: tx_add_nonce,
                 },
-            connect: Connect { queue_root },
             sorafs,
-            soracloud,
             musubi:
                 Musubi {
                     publication: musubi_publication,
@@ -537,23 +526,11 @@ impl Root {
                 .ok_or_emit(&mut emitter)
         });
         let account_id = AccountId::of(public_key);
-        let (queue_root_path, queue_root_origin) = queue_root.into_tuple();
-        if queue_root_path.as_os_str().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::EmptyConnectQueueRoot)
-                    .attach(ConfigValueAndOrigin::new(
-                        "[EMPTY]",
-                        queue_root_origin.clone(),
-                    ))
-                    .attach("connect.queue_root must point to the Connect queue root directory"),
-            );
-        }
         let Sorafs {
             alias_cache,
             rollout_phase,
             anonymity_policy,
         } = sorafs;
-        let Soracloud { http_witness_file } = soracloud;
         let alias_policy = alias_cache.into_policy();
         let rollout_phase_value =
             RolloutPhase::parse(rollout_phase.as_str()).unwrap_or_else(|| {
@@ -600,8 +577,6 @@ impl Root {
                 transaction_ttl: tx_ttl.into_value().get(),
                 transaction_status_timeout: tx_timeout.into_value().get(),
                 transaction_add_nonce: tx_add_nonce,
-                connect_queue_root: queue_root_path,
-                soracloud_http_witness_file: http_witness_file,
                 sorafs_alias_cache: alias_policy,
                 sorafs_anonymity_policy: default_anonymity_policy,
                 sorafs_rollout_phase: rollout_phase_value,
@@ -648,26 +623,6 @@ pub struct Transaction {
     /// Whether to add a random nonce to transactions.
     #[config(default = "super::DEFAULT_TRANSACTION_NONCE")]
     pub nonce: bool,
-}
-/// Connect queue persistence and diagnostics.
-#[derive(Debug, Clone, ReadConfig)]
-pub struct Connect {
-    /// Root directory containing Connect queue state.
-    #[config(default = "super::default_connect_queue_root()")]
-    pub queue_root: WithOrigin<PathBuf>,
-}
-impl Default for Connect {
-    fn default() -> Self {
-        Self {
-            queue_root: WithOrigin::inline(super::default_connect_queue_root()),
-        }
-    }
-}
-/// Soracloud-specific client settings.
-#[derive(Debug, Clone, Default, ReadConfig)]
-pub struct Soracloud {
-    /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
-    pub http_witness_file: Option<PathBuf>,
 }
 /// Musubi-specific platform client configuration.
 #[derive(Clone, Debug, Default, ReadConfig)]
@@ -871,7 +826,7 @@ impl AliasCache {
 mod tests {
     use super::*;
     use iroha_crypto::Algorithm;
-    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
+    use std::{fs, str::FromStr, time::Duration};
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
         let key_pair =
             KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)
@@ -910,9 +865,7 @@ mod tests {
                 status_timeout_ms: WithOrigin::inline(DurationMs::from(timeout)),
                 nonce: false,
             },
-            connect: Connect::default(),
             sorafs: Sorafs::default(),
-            soracloud: Soracloud::default(),
             musubi: Musubi::default(),
         }
     }
@@ -1097,14 +1050,6 @@ mod tests {
         assert_eq!(config.torii_request_timeout, timeout);
     }
     #[test]
-    fn parse_preserves_soracloud_http_witness_file() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        let witness_file = PathBuf::from("/tmp/soracloud-witness.json");
-        root.soracloud.http_witness_file = Some(witness_file.clone());
-        let config = root.parse().expect("configuration should be valid");
-        assert_eq!(config.soracloud_http_witness_file, Some(witness_file));
-    }
-    #[test]
     fn parse_rejects_timeout_exceeding_ttl() {
         let err = root_with_timeouts(Duration::from_secs(2), Duration::from_secs(3))
             .parse()
@@ -1120,24 +1065,6 @@ mod tests {
             "expected `ParseError::TxTimeoutVsTtl`, found {parse_errors:?}"
         );
         assert!(format!("{err:?}").contains("transaction status timeout must not exceed TTL"));
-    }
-    #[test]
-    fn parse_rejects_empty_connect_queue_root() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.connect.queue_root = WithOrigin::inline(PathBuf::new());
-        let err = root
-            .parse()
-            .expect_err("empty connect.queue_root should be rejected");
-        let parse_errors: Vec<_> = err
-            .frames()
-            .filter_map(|frame| frame.downcast_ref::<ParseError>())
-            .collect();
-        assert!(
-            parse_errors
-                .iter()
-                .any(|error| matches!(error, ParseError::EmptyConnectQueueRoot)),
-            "expected `ParseError::EmptyConnectQueueRoot`, found {parse_errors:?}"
-        );
     }
     #[test]
     fn parse_accepts_dataspace_account_domain_scope() {
