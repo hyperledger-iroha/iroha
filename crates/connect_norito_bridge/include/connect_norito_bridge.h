@@ -629,6 +629,25 @@ int32_t iroha_privacy_validate_compiled_profile_catalog_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
 
+// Authoritative canonical/semantic evidence validation, including all release,
+// audit and deployment signatures. Only zero accepts. The caller separately
+// authenticates Torii and matches all committed tuples to its local catalog.
+typedef enum iroha_privacy_exact12_capability_validation_status_v1 {
+    IROHA_PRIVACY_EXACT12_CAPABILITY_VALID_V1 = 0,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_NULL_POINTER_V1 = 1,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_EMPTY_V1 = 2,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_ARCHIVE_TOO_LARGE_V1 = 3,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_DECODE_RESOURCE_LIMIT_V1 = 4,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_SCHEMA_MISMATCH_V1 = 5,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_NON_CANONICAL_V1 = 6,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_MALFORMED_ARCHIVE_V1 = 7,
+    IROHA_PRIVACY_EXACT12_CAPABILITY_INVALID_MANIFEST_V1 = 8
+} iroha_privacy_exact12_capability_validation_status_v1;
+
+int32_t iroha_privacy_validate_exact12_capability_manifest_v1(
+    const uint8_t* archive_ptr,
+    unsigned long archive_len);
+
 // Complete Rust-derived canonical bytes through signed-transaction and hash
 // layers for all twelve first-release rows. The archive is accepted only when
 // it is byte-identical to the bundle compiled from the typed Rust fixtures.

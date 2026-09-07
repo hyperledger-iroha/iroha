@@ -1,23 +1,3 @@
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeCudaAvailable(
-    _env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jboolean {
-    use jni::sys::{JNI_FALSE, JNI_TRUE};
-    use std::panic::catch_unwind;
-    let available = catch_unwind(ivm::cuda_available).unwrap_or(false);
-    if available { JNI_TRUE } else { JNI_FALSE }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeCudaDisabled(
-    _env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jboolean {
-    use jni::sys::{JNI_FALSE, JNI_TRUE};
-    use std::panic::catch_unwind;
-    let disabled = catch_unwind(ivm::cuda_disabled).unwrap_or(false);
-    if disabled { JNI_TRUE } else { JNI_FALSE }
-}
 pub(super) fn throw_java_illegal_argument(env: &mut jni::JNIEnv<'_>, message: String) {
     let _ = env.throw_new("java/lang/IllegalArgumentException", message);
 }

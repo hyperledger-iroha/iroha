@@ -4,7 +4,9 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.util.LinkedHashMap
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicBoolean
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.TransportSecurity
@@ -14,19 +16,17 @@ import org.hyperledger.iroha.sdk.client.transport.TransportWebSocket
 /**
  * WebSocket client built on the transport abstractions shared between JVM and Android targets.
  *
- * Callers must inject the platform connector explicitly with [Builder.setWebSocketConnector].
- * Keeping runtime selection outside `core-jvm` avoids reflective platform discovery and lets
- * Android callers reuse an application-owned HTTP client.
+ * Inject a concrete WebSocket backend or an explicit application connector. The immutable request
+ * contains the complete handshake inputs. A session is attached before its onOpen callback;
+ * sends attempted before that callback fail immediately instead of retaining caller buffers.
  */
 class ToriiWebSocketClient private constructor(builder: Builder) {
 
-    /** Connector hook so platforms can supply their preferred WebSocket implementation. */
+    /** Opens the final immutable handshake request; implementations must emit onOpen once ready. */
     fun interface WebSocketConnector {
         fun connect(
             request: TransportRequest,
-            options: ToriiWebSocketOptions,
-            listener: TransportWebSocket.Listener,
-            defaultHeaders: Map<String, String>
+            listener: TransportWebSocket.Listener
         ): CompletableFuture<TransportWebSocket>
     }
 
@@ -43,18 +43,17 @@ class ToriiWebSocketClient private constructor(builder: Builder) {
         val request = buildRequest(path, resolved)
         notifyRequest(request)
         val session = ToriiWebSocketSessionImpl()
-        val adapter = Adapter(listener, session)
-        connector.connect(request, resolved, adapter, defaultHeaders)
-            .whenComplete { socket, throwable ->
-                if (throwable != null) {
-                    session.fail(throwable)
-                    notifyFailure(request, throwable)
-                    listener.onError(session, throwable)
-                    return@whenComplete
-                }
-                session.attach(socket)
-                notifyResponse(request)
-            }
+        val adapter = Adapter(listener, session, request)
+        val connection = try {
+            connector.connect(request, adapter)
+        } catch (failure: Exception) {
+            adapter.fail(failure)
+            return session
+        }
+        session.bind(connection)
+        connection.whenComplete { socket, error ->
+            if (error != null) adapter.fail(error) else session.attach(socket)
+        }
         return session
     }
 
@@ -104,34 +103,89 @@ class ToriiWebSocketClient private constructor(builder: Builder) {
         for (observer in observers) observer.onFailure(request, error)
     }
 
-    private class Adapter(
+    private inner class Adapter(
         private val delegate: ToriiWebSocketListener,
-        private val session: ToriiWebSocketSessionImpl
+        private val session: ToriiWebSocketSessionImpl,
+        private val request: TransportRequest,
     ) : TransportWebSocket.Listener {
-        override fun onOpen(socket: TransportWebSocket) { delegate.onOpen(session) }
-        override fun onText(socket: TransportWebSocket, data: CharSequence, last: Boolean) { delegate.onText(session, data, last) }
-        override fun onBinary(socket: TransportWebSocket, data: ByteBuffer, last: Boolean) { delegate.onBinary(session, data, last) }
-        override fun onPing(socket: TransportWebSocket, data: ByteBuffer) { delegate.onPing(session, data) }
-        override fun onPong(socket: TransportWebSocket, data: ByteBuffer) { delegate.onPong(session, data) }
-        override fun onError(socket: TransportWebSocket, error: Throwable) { delegate.onError(session, error); session.fail(error) }
-        override fun onClose(socket: TransportWebSocket, statusCode: Int, reason: String) { delegate.onClose(session, statusCode, reason); session.close(statusCode, reason) }
+        private val opened = AtomicBoolean(false)
+
+        override fun onOpen(socket: TransportWebSocket) {
+            if (session.attach(socket) && opened.compareAndSet(false, true)) {
+                notifyResponse(request)
+                delegate.onOpen(session)
+            }
+        }
+        override fun onText(socket: TransportWebSocket, data: String) { delegate.onText(session, data) }
+        override fun onBinary(socket: TransportWebSocket, data: ByteBuffer) { delegate.onBinary(session, data) }
+        override fun onError(socket: TransportWebSocket, error: Throwable) { fail(error) }
+        override fun onClose(socket: TransportWebSocket, statusCode: Int, reason: String) {
+            if (session.finish()) delegate.onClose(session, statusCode, reason)
+        }
+        fun fail(error: Throwable) {
+            if (session.finish(error)) {
+                notifyFailure(request, error)
+                delegate.onError(session, error)
+            }
+        }
     }
 
     private class ToriiWebSocketSessionImpl : ToriiWebSocketSession {
-        private val ready = CompletableFuture<TransportWebSocket>()
+        private val lock = Any()
+        private var socket: TransportWebSocket? = null
+        private var connection: CompletableFuture<TransportWebSocket>? = null
+        private var finished = false
+        private var failure: Throwable? = null
 
-        fun attach(socket: TransportWebSocket) { ready.complete(socket) }
-        fun fail(error: Throwable) { ready.completeExceptionally(error) }
-
-        override fun sendText(data: CharSequence, last: Boolean): CompletableFuture<Void> = ready.thenCompose { it.sendText(data, last) }
-        override fun sendBinary(data: ByteBuffer, last: Boolean): CompletableFuture<Void> = ready.thenCompose { it.sendBinary(data, last) }
-        override fun sendPing(message: ByteBuffer): CompletableFuture<Void> = ready.thenCompose { it.ping(message) }
-        override fun sendPong(message: ByteBuffer): CompletableFuture<Void> = ready.thenCompose { it.pong(message) }
-        override fun close(statusCode: Int, reason: String): CompletableFuture<Void> = ready.thenCompose { ws ->
-            if (!ws.isOpen()) CompletableFuture.completedFuture(null) else ws.close(statusCode, reason)
+        fun bind(value: CompletableFuture<TransportWebSocket>) {
+            val cancelled = synchronized(lock) { connection = value; finished }
+            if (cancelled) value.cancel(false)
         }
-        override val isOpen: Boolean get() = ready.getNow(null)?.isOpen() == true
-        override val subprotocol: String? get() = ready.getNow(null)?.subprotocol() ?: ""
+
+        fun attach(value: TransportWebSocket): Boolean {
+            val accepted = synchronized(lock) {
+                if (finished) false else { socket = value; true }
+            }
+            if (!accepted) value.close(1000, "session closed")
+            return accepted
+        }
+
+        fun finish(error: Throwable? = null): Boolean = synchronized(lock) {
+            if (finished) false else { finished = true; failure = error; true }
+        }
+
+        private fun send(action: (TransportWebSocket) -> CompletableFuture<Void>): CompletableFuture<Void> {
+            val target = synchronized(lock) {
+                if (finished || socket == null) {
+                    return CompletableFuture<Void>().also {
+                        it.completeExceptionally(failure ?: IllegalStateException("WebSocket session is not open"))
+                    }
+                }
+                requireNotNull(socket)
+            }
+            return action(target)
+        }
+
+        override fun sendText(data: String): CompletableFuture<Void> = send { it.sendText(data) }
+        override fun sendBinary(data: ByteBuffer): CompletableFuture<Void> = send { it.sendBinary(data) }
+        override fun close(statusCode: Int, reason: String): CompletableFuture<Void> {
+            val target: TransportWebSocket?
+            val pending: CompletableFuture<TransportWebSocket>?
+            synchronized(lock) {
+                if (finished) return CompletableFuture.completedFuture(null)
+                target = socket
+                pending = connection
+                if (target == null) {
+                    finished = true
+                    failure = CancellationException("WebSocket session closed before handshake")
+                }
+            }
+            if (target != null) return target.close(statusCode, reason)
+            pending?.cancel(false)
+            return CompletableFuture.completedFuture(null)
+        }
+        override val isOpen: Boolean get() = synchronized(lock) { !finished && socket?.isOpen() == true }
+        override val subprotocol: String get() = synchronized(lock) { if (finished) "" else socket?.subprotocol().orEmpty() }
     }
 
     class Builder {

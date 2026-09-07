@@ -9,7 +9,8 @@ use crate::{account::AccountId, asset::AssetId};
 use norito::codec::{Decode, Encode};
 use std::{string::String, vec::Vec};
 /// Operation that triggered a fraud screening request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::RiskOperation")]
 pub enum RiskOperation {
     /// Transfer of a fungible asset between accounts.
     TransferAsset {
@@ -22,7 +23,8 @@ pub enum RiskOperation {
     Custom(String),
 }
 /// Rich context supplied with a [`RiskQuery`].
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::RiskContext")]
 pub struct RiskContext {
     /// Identifier of the PSP tenant submitting the query.
     pub tenant_id: String,
@@ -32,7 +34,8 @@ pub struct RiskContext {
     pub reason: Option<String>,
 }
 /// Feature inputs provided to the risk engine.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::FeatureInput")]
 pub struct FeatureInput {
     /// Deterministic key describing the feature.
     pub key: String,
@@ -40,7 +43,8 @@ pub struct FeatureInput {
     pub value_hash: [u8; 32],
 }
 /// Ledger-facing query emitted before a transaction is executed.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::RiskQuery")]
 pub struct RiskQuery {
     /// Stable query identifier supplied by the API gateway.
     pub query_id: [u8; 32],
@@ -58,7 +62,8 @@ pub struct RiskQuery {
     pub context: RiskContext,
 }
 /// Recommended action for a [`FraudAssessment`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::AssessmentDecision")]
 pub enum AssessmentDecision {
     /// Continue processing without delay.
     Allow,
@@ -68,7 +73,8 @@ pub enum AssessmentDecision {
     Deny,
 }
 /// Individual rule outcome contributing to the overall score.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Ord, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Ord, PartialOrd, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::RuleOutcome")]
 pub struct RuleOutcome {
     /// Stable identifier of the rule evaluated by the engine.
     pub rule_id: String,
@@ -78,7 +84,8 @@ pub struct RuleOutcome {
     pub rationale: Option<String>,
 }
 /// Response returned by the risk engine.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::FraudAssessment")]
 pub struct FraudAssessment {
     /// Identifier of the query this assessment answers.
     pub query_id: [u8; 32],
@@ -133,7 +140,8 @@ pub struct FraudAssessmentParts {
 }
 /// Aggregated export for governance and auditor tooling.
 #[cfg(feature = "governance")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::GovernanceExport")]
 pub struct GovernanceExport {
     /// Timestamp when the export was produced.
     pub generated_at_ms: u64,
@@ -148,7 +156,8 @@ pub struct GovernanceExport {
 }
 /// Summary of decisions used for governance exports.
 #[cfg(feature = "governance")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fraud::types::DecisionAggregate")]
 pub struct DecisionAggregate {
     /// Decision captured in the export.
     pub decision: AssessmentDecision,
@@ -259,3 +268,6 @@ mod tests {
         assert!(!Encode::encode(&export).is_empty());
     }
 }
+
+#[cfg(test)]
+mod captured_types_schema_tests;

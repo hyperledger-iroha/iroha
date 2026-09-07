@@ -19,8 +19,178 @@ NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE = Path(
 NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE = Path(
     "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs"
 )
+NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE = "crates/iroha_core/src/native_amx.rs"
+NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE = (
+    "crates/iroha_core/src/native_amx/participant_application_role_tests.rs"
+)
+NATIVE_PARTICIPANT_APPLICATION_ROLE_BINDINGS = (
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE,
+        "fn",
+        "native_amx_participant_application_role",
+        (
+            "let prepare = &leg.prepare_qc.body;",
+            "let commit = &leg.commit_qc.body;",
+            "compute_settlement_hash(&leg.participant_settlement)",
+            "settlement_hash != leg.participant_settlement_hash",
+            "Native AMX participant leg identity is internally inconsistent",
+            "Native AMX same-route leg differs from the coordinator identity",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "NativeAmxParticipantApplicationRole::Coordinator",
+        ),
+    ),
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE,
+        "fn",
+        "native_amx_receipt_requires_separate_participant_application_for",
+        (
+            "let mut matches = false;",
+            "for leg in &receipt.legs",
+            "native_amx_participant_application_role(receipt, leg)?",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "matches |= descriptor.lane_id == lane_id",
+            "descriptor.dataspace_id == dataspace_id",
+            "descriptor.lane_incarnation == lane_incarnation",
+            "Ok(matches)",
+        ),
+    ),
+)
+NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS = tuple(
+    (NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE, "fn", symbol, tokens)
+    for symbol, tokens in (
+        (
+            "participant_application_role_classifies_exact_routes_and_incarnations",
+            (
+                "fixture_receipt()",
+                "NativeAmxParticipantApplicationRole::Coordinator",
+                "NativeAmxParticipantApplicationRole::SeparateParticipant",
+                "native_amx_participant_application_role(&receipt, leg)",
+                "Ok(role)",
+                "Ok(role == NativeAmxParticipantApplicationRole::SeparateParticipant)",
+                '"unknown lane"',
+                '"different dataspace"',
+                '"stale incarnation"',
+                "Ok(false)",
+            ),
+        ),
+        (
+            "participant_application_role_keeps_each_route_coordinate_distinct",
+            (
+                "(receipt.lane_id, receipt.legs[index].dataspace_id)",
+                "(receipt.legs[index].lane_id, receipt.dataspace_id)",
+                "rebind_participant_identity(leg)",
+                "Ok(NativeAmxParticipantApplicationRole::SeparateParticipant)",
+                "native_amx_receipt_requires_separate_participant_application_for(",
+                "Ok(true)",
+            ),
+        ),
+        (
+            "participant_application_role_rejects_independent_prepare_and_commit_identity_drift",
+            (
+                "for index in 0..receipt.legs.len()",
+                "for phase in [NativeAmxPhase::Prepare, NativeAmxPhase::Commit]",
+                "for &(label, mutate) in BODY_IDENTITY_MUTATIONS",
+                "NativeAmxPhase::Prepare => &mut leg.prepare_qc.body",
+                "NativeAmxPhase::Commit => &mut leg.commit_qc.body",
+                "mutate(body)",
+                "Err(INCONSISTENT_IDENTITY)",
+            ),
+        ),
+        (
+            "participant_application_role_rejects_coherent_same_route_coordinator_drift",
+            (
+                "NativeAmxParticipantApplicationRole::Coordinator",
+                "descriptor.lane_incarnation =",
+                "descriptor.lane_block_height += 1",
+                "descriptor.lane_block_view += 1",
+                "descriptor.subject_hash =",
+                "mutate(&mut leg.participant_proposal.descriptor)",
+                "rebind_participant_identity(leg)",
+                "Err(SAME_ROUTE_DRIFT)",
+            ),
+        ),
+        (
+            "participant_application_role_rejects_settlement_identity_and_content_tampering",
+            (
+                "leg.participant_settlement.lane_id =",
+                "leg.participant_settlement.dataspace_id =",
+                "leg.participant_settlement.lane_incarnation =",
+                "leg.participant_settlement.block_height += 1",
+                "leg.participant_settlement.receipts[0].source_id =",
+                "leg.participant_settlement.receipts[0].timestamp_ms += 1",
+                "leg.participant_settlement_hash =",
+                "for index in 0..receipt.legs.len()",
+                "mutate(&mut altered.legs[index])",
+                "Err(INCONSISTENT_IDENTITY)",
+            ),
+        ),
+        (
+            "participant_application_lookup_validates_later_legs_after_an_exact_match",
+            (
+                "receipt.legs.swap(0, matching_index)",
+                "let descriptor = &receipt.legs[0].participant_proposal.descriptor",
+                "&receipt, route.0, route.1, route.2,",
+                "Ok(true)",
+                "receipt.legs[1]",
+                ".participant_previous_block_height += 1",
+                "for lane_id in [route.0, LaneId::new(90)]",
+                "&receipt, lane_id, route.1, route.2,",
+                "Err(INCONSISTENT_IDENTITY)",
+            ),
+        ),
+    )
+)
+
+# Both phase bodies must independently bind the participant and coordinator.
+# Keep the whole rejecting disjunction, so a missing comparison or changed
+# boolean operator cannot be hidden by another mention of the same field.
+NATIVE_PARTICIPANT_APPLICATION_IDENTITY_COMPARISONS = (
+    "descriptor.lane_id != leg.lane_id",
+    "descriptor.dataspace_id != leg.dataspace_id",
+    "prepare.participant_lane_id != leg.lane_id",
+    "commit.participant_lane_id != leg.lane_id",
+    "prepare.participant_dataspace_id != leg.dataspace_id",
+    "commit.participant_dataspace_id != leg.dataspace_id",
+    "descriptor.lane_incarnation != prepare.participant_lane_incarnation",
+    "descriptor.lane_incarnation != commit.participant_lane_incarnation",
+    "descriptor.proposal_height != prepare.authority_context_height",
+    "descriptor.proposal_height != commit.authority_context_height",
+    "descriptor.previous_lane_block_height != prepare.participant_previous_block_height",
+    "descriptor.previous_lane_block_height != commit.participant_previous_block_height",
+    "descriptor.previous_lane_block_descriptor_hash != prepare.participant_previous_block_descriptor_hash",
+    "descriptor.previous_lane_block_descriptor_hash != commit.participant_previous_block_descriptor_hash",
+    "descriptor.lane_block_height != prepare.participant_lane_block_height",
+    "descriptor.lane_block_height != commit.participant_lane_block_height",
+    "descriptor.lane_block_view != prepare.participant_lane_block_view",
+    "descriptor.lane_block_view != commit.participant_lane_block_view",
+    "leg.participant_proposal.proposal_hash != prepare.participant_proposal_hash",
+    "leg.participant_proposal.proposal_hash != commit.participant_proposal_hash",
+    "settlement_hash != leg.participant_settlement_hash",
+    "leg.participant_settlement.lane_id != descriptor.lane_id",
+    "leg.participant_settlement.dataspace_id != descriptor.dataspace_id",
+    "leg.participant_settlement.lane_incarnation != descriptor.lane_incarnation",
+    "leg.participant_settlement.block_height != descriptor.lane_block_height",
+    "Hash::from(settlement_hash) != prepare.participant_settlement_commitment",
+    "Hash::from(settlement_hash) != commit.participant_settlement_commitment",
+    "prepare.coordinator_lane_id != receipt.lane_id",
+    "commit.coordinator_lane_id != receipt.lane_id",
+    "prepare.coordinator_dataspace_id != receipt.dataspace_id",
+    "commit.coordinator_dataspace_id != receipt.dataspace_id",
+    "prepare.coordinator_lane_incarnation != receipt.lane_incarnation",
+    "commit.coordinator_lane_incarnation != receipt.lane_incarnation",
+    "prepare.authority_context_height != receipt.authority_context_height",
+    "commit.authority_context_height != receipt.authority_context_height",
+    "prepare.planned_coordinator_block_height != receipt.lane_block_height",
+    "commit.planned_coordinator_block_height != receipt.lane_block_height",
+    "prepare.coordinator_lane_block_view != receipt.lane_block_view",
+    "commit.coordinator_lane_block_view != receipt.lane_block_view",
+    "prepare.coordinator_proposal_hash != receipt.coordinator_proposal_hash",
+    "commit.coordinator_proposal_hash != receipt.coordinator_proposal_hash",
+)
 
 NATIVE_MERGE_SOURCE_BINDINGS = (
+    *NATIVE_PARTICIPANT_APPLICATION_ROLE_BINDINGS,
+    *NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS,
     (
         "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
         "enum",
@@ -267,6 +437,81 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
 
 NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
     (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE,
+        "fn",
+        "native_amx_participant_application_role",
+        "let descriptor = &leg.participant_proposal.descriptor; "
+        "let prepare = &leg.prepare_qc.body; let commit = &leg.commit_qc.body; "
+        "let settlement_hash = iroha_data_model::nexus::"
+        "compute_settlement_hash(&leg.participant_settlement) "
+        '.map_err(|_| "Native AMX participant settlement cannot be hashed")?; '
+        "if " + " || ".join(NATIVE_PARTICIPANT_APPLICATION_IDENTITY_COMPARISONS)
+        + ' { return Err("Native AMX participant leg identity is internally inconsistent"); } '
+        "let same_route = descriptor.lane_id == receipt.lane_id "
+        "&& descriptor.dataspace_id == receipt.dataspace_id; "
+        "if !same_route { return Ok(NativeAmxParticipantApplicationRole::SeparateParticipant); } "
+        "if descriptor.lane_incarnation != receipt.lane_incarnation "
+        "|| descriptor.proposal_height != receipt.authority_context_height "
+        "|| descriptor.lane_block_height != receipt.lane_block_height "
+        "|| descriptor.lane_block_view != receipt.lane_block_view "
+        "|| leg.participant_proposal.proposal_hash != receipt.coordinator_proposal_hash "
+        '{ return Err("Native AMX same-route leg differs from the coordinator identity"); } '
+        "Ok(NativeAmxParticipantApplicationRole::Coordinator)",
+    ),
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE,
+        "fn",
+        "native_amx_receipt_requires_separate_participant_application_for",
+        "let mut matches = false; for leg in &receipt.legs { "
+        "match native_amx_participant_application_role(receipt, leg)? { "
+        "NativeAmxParticipantApplicationRole::Coordinator => {} "
+        "NativeAmxParticipantApplicationRole::SeparateParticipant => { "
+        "let descriptor = &leg.participant_proposal.descriptor; "
+        "matches |= descriptor.lane_id == lane_id "
+        "&& descriptor.dataspace_id == dataspace_id "
+        "&& descriptor.lane_incarnation == lane_incarnation; } } } Ok(matches)",
+    ),
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE,
+        "fn",
+        "participant_application_role_rejects_independent_prepare_and_commit_identity_drift",
+        "let body = match phase { "
+        "NativeAmxPhase::Prepare => &mut leg.prepare_qc.body, "
+        "NativeAmxPhase::Commit => &mut leg.commit_qc.body, }; mutate(body); "
+        "assert_eq!( native_amx_participant_application_role(&altered, &altered.legs[index]), "
+        'Err(INCONSISTENT_IDENTITY), "leg {index}, {phase:?}: {label} drift must fail closed", );',
+    ),
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE,
+        "fn",
+        "participant_application_role_rejects_coherent_same_route_coordinator_drift",
+        "mutate(&mut leg.participant_proposal.descriptor); rebind_participant_identity(leg); "
+        "assert_eq!( native_amx_participant_application_role(&altered, &altered.legs[index]), "
+        'Err(SAME_ROUTE_DRIFT), "coherent participant-side {label} drift must not become '
+        'a separate application", );',
+    ),
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE,
+        "fn",
+        "participant_application_role_rejects_settlement_identity_and_content_tampering",
+        "mutate(&mut altered.legs[index]); "
+        "assert_eq!( native_amx_participant_application_role(&altered, &altered.legs[index]), "
+        'Err(INCONSISTENT_IDENTITY), "leg {index}: settlement {label} tampering must fail closed", );',
+    ),
+    (
+        NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE,
+        "fn",
+        "participant_application_lookup_validates_later_legs_after_an_exact_match",
+        "assert_eq!( native_amx_receipt_requires_separate_participant_application_for( "
+        "&receipt, route.0, route.1, route.2, ), Ok(true), ); "
+        "receipt.legs[1].commit_qc.body.participant_previous_block_height += 1; "
+        "for lane_id in [route.0, LaneId::new(90)] { "
+        "assert_eq!( native_amx_receipt_requires_separate_participant_application_for( "
+        "&receipt, lane_id, route.1, route.2, ), Err(INCONSISTENT_IDENTITY), "
+        '"a malformed later leg must fail lookup even if the queried route matched '
+        'or is absent", ); }',
+    ),
+    (
         NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE.as_posix(),
         "method",
         "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle",
@@ -379,6 +624,21 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "crates/iroha_core/src/sumeragi/v2_lane_work/"
         "canonical_executed_block_application_repair.rs",
         "fn",
+        "build_canonical_executed_block_response",
+        "kura.read_block_body(height).map_err(CanonicalRecoveryReadError::storage)?",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/"
+        "canonical_executed_block_application_repair.rs",
+        "fn",
+        "plan_lane_application_evidence_repair",
+        "kura.read_block_body(height)"
+        ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/"
+        "canonical_executed_block_application_repair.rs",
+        "fn",
         "plan_lane_application_evidence_repair",
         "let planned_merge_entries = "
         "planned_merge_entries_by_carrier(&merge_carriers)?;",
@@ -394,6 +654,53 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
 )
 
 NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
+    *(
+        (relative, kind, symbol, tokens)
+        for relative, kind, symbol, tokens in NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS
+        if symbol in {
+            "participant_application_role_rejects_independent_prepare_and_commit_identity_drift",
+            "participant_application_role_rejects_settlement_identity_and_content_tampering",
+            "participant_application_lookup_validates_later_legs_after_an_exact_match",
+        }
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
+        (
+            ".begin_fail_stop_operation()",
+            ".prune_finalized_pending_certified_merge_entries(finalized_cleanup_height)",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;",
+            "construction.complete();",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::activate_after_lane_drain_queue_install",
+        (
+            "if !Arc::ptr_eq(installed_queue, queue)",
+            ".begin_fail_stop_operation()",
+            "self.hydrate_canonical_lane_artifacts()?;",
+            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;",
+            "self.startup_activation_complete = true;",
+            "self.drive_lane_sessions();",
+            "activation.complete();",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/"
+        "canonical_executed_block_application_repair.rs",
+        "method",
+        "CanonicalExecutedBlockRecovery::reconcile_cached_front",
+        (
+            "self.kura.read_block_body(height)",
+            "validate_canonical_executed_block_need(",
+            "!canonical_executed_block_matches_need(&block, &finality, need)",
+            ".preflight_cached_finalized_merge_carrier_reconstruction(&block)",
+            "self.needs.pop_front();",
+        ),
+    ),
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work/"
         "canonical_executed_block_application_repair.rs",
@@ -402,7 +709,9 @@ NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
         (
             "let planned_merge_entries = "
             "planned_merge_entries_by_carrier(&merge_carriers)?;",
-            "let Some(block) = kura.get_block_without_merge_sidecar(height) else",
+            "let Some(block) = kura",
+            ".read_block_body(height)",
+            ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?",
             "let planned_merge_entry = planned_merge_entries",
             ".get(&(application_block_height, application_block_hash))",
             "preflight_native_amx_participant_application_evidence_repair(",
@@ -482,6 +791,7 @@ NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (
     NATIVE_MERGE_MANIFEST_TEST_RELATIVE,
     NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
     NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE,
+    Path(NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE),
 )
 
 

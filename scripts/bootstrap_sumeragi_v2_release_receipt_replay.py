@@ -1396,7 +1396,7 @@ def _validate_terminal_release_evidence(
         "terminal SDK Gradle binding",
     )
     wrapper_digests = _require_exact_json_fields(
-        gradle_binding["wrapper_properties_sha256"], {"java", "kotlin"},
+        gradle_binding["wrapper_properties_sha256"], {"kotlin"},
         "terminal SDK Gradle wrapper digests",
     )
     gradle_url = (
@@ -1440,7 +1440,6 @@ def _validate_terminal_release_evidence(
         ),
         (swift_binding["package_resolved_sha256"], "terminal SDK Package.resolved"),
         (gradle_binding["distribution_sha256"], "terminal SDK Gradle distribution"),
-        (wrapper_digests["java"], "terminal SDK Java wrapper"),
         (wrapper_digests["kotlin"], "terminal SDK Kotlin wrapper"),
     ):
         _require_digest(digest, label)
@@ -1478,7 +1477,6 @@ def _validate_terminal_release_evidence(
         ],
         "swiftpm/Package.resolved": swift_binding["package_resolved_sha256"],
         "gradle/gradle-9.3.0-bin.zip": gradle_binding["distribution_sha256"],
-        "gradle/java-gradle-wrapper.properties": wrapper_digests["java"],
         "gradle/kotlin-gradle-wrapper.properties": wrapper_digests["kotlin"],
     }
     if any(
@@ -1560,7 +1558,6 @@ def _validate_terminal_release_evidence(
         "gradle_user_home_inventory": retained_source_inventory(
             "gradle/gradle-user-home"
         ),
-        "java_wrapper_properties_sha256": wrapper_digests["java"],
         "kotlin_wrapper_properties_sha256": wrapper_digests["kotlin"],
         "version": "9.3.0",
         "wrapper_cache_key": gradle_key,
@@ -1576,8 +1573,6 @@ def _validate_terminal_release_evidence(
         or source_gradle["distribution_sha256"]
         != gradle_binding["distribution_sha256"]
         or source_gradle["distribution_url"] != gradle_url
-        or source_gradle["java_wrapper_properties_sha256"]
-        != wrapper_digests["java"]
         or source_gradle["kotlin_wrapper_properties_sha256"]
         != wrapper_digests["kotlin"]
         or source_gradle["version"] != "9.3.0"
@@ -1754,7 +1749,6 @@ def _validate_terminal_release_evidence(
         "openapi/package-lock.json",
         "openapi/node_modules/.package-lock.json",
         "swiftpm/Package.resolved",
-        "gradle/java-gradle-wrapper.properties",
         "gradle/kotlin-gradle-wrapper.properties",
         *(
             f"swiftpm/cache/checkouts/{item['checkout']}/.git/HEAD"
@@ -1889,22 +1883,21 @@ def _validate_terminal_release_evidence(
             raise BootstrapError("terminal SDK Swift checkout HEAD is malformed") from error
         if observed_head != item["revision"]:
             raise BootstrapError("terminal SDK Swift checkout HEAD changed")
-    for kind in ("java", "kotlin"):
-        try:
-            lines = controls[
-                f"gradle/{kind}-gradle-wrapper.properties"
-            ].decode("utf-8").splitlines()
-        except (KeyError, UnicodeDecodeError) as error:
-            raise BootstrapError("terminal SDK Gradle wrapper is malformed") from error
-        values = dict(
-            line.split("=", 1) for line in lines
-            if line and not line.startswith("#") and "=" in line
-        )
-        if values.get("distributionUrl") != gradle_url.replace(":", r"\:", 1):
-            raise BootstrapError("terminal SDK Gradle wrapper URL changed")
-        checksum = values.get("distributionSha256Sum")
-        if checksum is not None and checksum != gradle_binding["distribution_sha256"]:
-            raise BootstrapError("terminal SDK Gradle wrapper digest changed")
+    try:
+        lines = controls[
+            "gradle/kotlin-gradle-wrapper.properties"
+        ].decode("utf-8").splitlines()
+    except (KeyError, UnicodeDecodeError) as error:
+        raise BootstrapError("terminal SDK Kotlin Gradle wrapper is malformed") from error
+    values = dict(
+        line.split("=", 1) for line in lines
+        if line and not line.startswith("#") and "=" in line
+    )
+    if values.get("distributionUrl") != gradle_url.replace(":", r"\:", 1):
+        raise BootstrapError("terminal SDK Kotlin Gradle wrapper URL changed")
+    checksum = values.get("distributionSha256Sum")
+    if checksum is not None and checksum != gradle_binding["distribution_sha256"]:
+        raise BootstrapError("terminal SDK Kotlin Gradle wrapper digest changed")
 
     runtime_probes = _require_exact_json_fields(
         receipt_evidence["runtime_tool_probes"],

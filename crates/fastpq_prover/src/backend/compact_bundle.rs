@@ -176,7 +176,7 @@ fn verify_transfer_bundle_with(
     verifier: SharedVerifier,
 ) -> Result<VerifiedBundle> {
     check_limit("max_bundle_wire_bytes", bytes.len(), limits.max_wire_bytes)?;
-    if prepared.semantics() != ProofSemantics::TransferStateTransition {
+    if prepared.semantics() != ProofSemantics::StateTransition {
         return Err(shape(
             "ordinary compact bundles require ordinary transfer semantics",
         ));
@@ -1047,7 +1047,7 @@ mod tests {
         ));
         let frame = encode_wire(&wire(1), 1, limits(1)).unwrap();
         assert!(verify_transfer_bundle(&axt, &expected, &frame, limits(1)).is_err());
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let mut wrong = fixture.expected(&ordinary);
         wrong.slot ^= 1;
         assert!(matches!(
@@ -1251,7 +1251,7 @@ mod tests {
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&axt);
         let raw = encode_axt_wire(&axt_wire(2), 2, limits(2)).unwrap();
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         assert!(matches!(
             verify_axt_transfer_bundle(
                 &ordinary,
@@ -1528,7 +1528,7 @@ mod tests {
     fn candidate_bundle_cumulative_query_and_raw_caps_precede_child_work() {
         let fixture = Fixture::multiple(2, false);
         for semantics in [
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             ProofSemantics::AxtTransferClaim,
         ] {
             let prepared = fixture.prepare(semantics);
@@ -1559,7 +1559,7 @@ mod tests {
                     "max_queries",
                 ),
             ] {
-                let result = if semantics == ProofSemantics::TransferStateTransition {
+                let result = if semantics == ProofSemantics::StateTransition {
                     verify_shake_transfer_bundle(&prepared, &expected, &[255], limits, usize::MAX)
                 } else {
                     verify_shake_axt_transfer_bundle(

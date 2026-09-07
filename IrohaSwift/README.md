@@ -1273,26 +1273,36 @@ contains no governance or readiness state. Call
 `ToriiClient.getPrivacyExact12CapabilityManifestV1(canonicalAuth:)` over HTTPS
 to fetch the exact canonical committed manifest; redirects, JSON, compressed
 representations, missing canonical request authentication, and a missing or
-stale native bridge fail closed. `PrivacyExact12CapabilityAdmissionV1` issues
+stale native bridge fail closed. The signed fetch bypasses local cached responses
+and sends `Cache-Control: no-cache, no-store` for current committed state.
+`PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
 byte-identical to the ABI23 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
-complete envelope profile tuple both at construction and final encoding.
+complete final V1 envelope profile tuple both at construction and final encoding.
+The client must supply `localSigningContext.networkId`: the authenticated origin
+and its token retain that exact network, the deployment's raw32 network and genesis
+fields must match it, and every retained statement's context must bind it.
+Final batch encoding also compares the token and statement against the batch's
+exact `networkId`; an admission from another network cannot be reused. Managed
+fixture projection and standalone native validation do not mint network authority.
 
-ABI23 intentionally remains exactly the five approved privacy C exports. It
-has no manifest validator export: Swift performs the strict bounded canonical
-and semantic manifest decode, anchored by the native catalog getter and native
-catalog validator on every authority-bearing path. A Rust-native semantic
-manifest-validation claim therefore requires separate evidence and is not
-implied by this Swift lane.
+ABI23 requires exactly six privacy C exports, including
+`iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
+Torii archive to the canonical Rust validator before projecting its fields.
+Rust checks the complete release and deployment records, artifact counts,
+digests, audit signatures, and validator signatures. Every authority-bearing
+path also compares the selected tuple against the native local catalog.
+The managed decoder alone cannot establish production qualification; a bridge
+without the manifest validator is unavailable.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 23
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
-the zeroizing-free symbol, and successful typed probes. Generic
+the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
 
@@ -1817,6 +1827,14 @@ symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
+`getSumeragiDiagnostics()` validates raw JSON number tokens before typed decoding:
+integer fields reject decimal and exponent notation, while the full `UInt64` range
+remains exact. Settlement quantities and TWAP values use canonical decimal
+strings. TWAP retains the signed `Numeric` schema; settlement quantities are
+nonnegative. Swap metadata and its tagged values reject unknown fields.
+The Sumeragi wire decoder bounds vector counts by the available encoded fields
+and checks byte-vector lengths before allocating their payloads.
+
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated
 descriptor-only mirror containing `transaction_payloads.json` and
@@ -2254,3 +2272,40 @@ pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 - Public Swift SDK and Connect tutorial: [docs.iroha.tech](https://docs.iroha.tech/guide/tutorials/swift.html)
 - Executable Connect examples: [`examples/ios/NoritoDemo`](../examples/ios/NoritoDemo/README.md) and [`examples/ios/NoritoDemoXcode`](../examples/ios/NoritoDemoXcode/README.md)
 - SwiftUI demo contributor guide (local Torii setup, acceleration toggles): [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md)
+
+
+## Kaigi V1
+
+`KaigiInstructionsV1.swift` owns all nine native Kaigi instruction builders.
+Private create requires the complete commitment, nullifier, roster root and
+proof bundle; private join, leave and end use the same bundle. Usage takes a
+separate scalar commitment and supplied proof. The node binds these artifacts
+to the current call, original account, action and participation sequence.
+
+`KaigiAuthorizationScalarV1` preserves all 32 little-endian Pasta Fp bytes below
+the modulus, including zero. Commitment and nullifier wrappers each contain
+one scalar field. They have no hash marker, alias tag or issuance timestamp.
+The roster root remains a separate marked Iroha hash.
+
+Account-controller policies retain the full u16 member count (1–65,535). The
+address decoder requires the single canonical count layout, V1 policy version,
+nonzero weights, reachable threshold and members ordered by algorithm name and
+full public-key bytes. `MultisigPolicyBuilder` sorts input members into that
+order and rejects duplicates. Tests use the same canonical account encoder as
+applications.
+
+`KaigiPrivacyStateV1.decodeCanonicalRecordJSON` reads the full retained record,
+including original host and retained original participant accounts. It checks
+strict scalar/integer JSON, duplicate and unknown fields, effective participant
+limits, lifecycle, roster ownership and reserved leave/end history capacity.
+Arbitrary metadata keeps its own JSON values. Account comparisons retain full
+controllers, including multisig policy, independent of network display prefixes.
+The redacted Torii application view cannot supply this record. This projection
+does not authenticate a response, recompute the roster root, check canonical
+account ordering, establish rekey authority or verify an authorization proof.
+
+`KaigiFinalWireFixturesV1.swift` pins all nine transparent instruction forms,
+all five private actions and a complex private create to Rust-owned model
+bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
+qualification and four-validator execution require separate evidence. The
+canonical Swift package always requires the real ABI23 NoritoBridge artifact.

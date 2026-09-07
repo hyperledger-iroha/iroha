@@ -255,11 +255,10 @@ public enum PrivacyNativeBridge {
     /// Validate Torii's canonical Exact12 manifest and bind every committed
     /// compiled-profile tuple to this exact ABI23 binary.
     ///
-    /// ABI23 intentionally exposes no local capability-manifest getter: local
-    /// build metadata cannot manufacture committed governance state. Swift
-    /// therefore performs the complete bounded canonical/semantic decode of
-    /// the exact Torii bytes, while the existing native getter and validator
-    /// authenticate the immutable local side of every tuple comparison.
+    /// Rust validates the complete canonical archive, including signed release,
+    /// audit and deployment evidence, before Swift projects its public fields.
+    /// The immutable local catalog then authenticates every tuple comparison.
+    /// This standalone projection cannot issue network admission; use the authenticated Torii fetch.
     public static func validateExact12CapabilityManifestV1(
         _ archive: Data
     ) throws -> PrivacyExact12CapabilityManifestV1 {
@@ -271,6 +270,15 @@ public enum PrivacyNativeBridge {
         }
         guard isNativeAvailable else {
             throw PrivacyExact12CapabilityManifestErrorV1.nativeUnavailable
+        }
+        guard let status = NoritoNativeBridge.shared
+            .privacyExact12CapabilityManifestValidationStatusV1(archive) else {
+            throw PrivacyExact12CapabilityManifestErrorV1.nativeUnavailable
+        }
+        guard status == 0 else {
+            throw PrivacyExact12CapabilityManifestErrorV1.invalidArchive(
+                "native evidence validation rejected status \(status)"
+            )
         }
         let localCatalog: Data
         do {

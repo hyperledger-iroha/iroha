@@ -17,9 +17,10 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::ExecWitness},
     fastpq::{
         FastpqOperationKind, FastpqPublicInputs, FastpqPublicTransferStatementV1,
-        FastpqPublicTransferTranscriptV1, FastpqStateTransition, FastpqTransitionBatch,
-        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript,
-        TransferTranscriptBundle, normalized_numeric_to_u64, transfer_asset_scales,
+        FastpqPublicTransferTranscriptV1, FastpqRolePermissionDelta, FastpqStateTransition,
+        FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
+        TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
+        transfer_asset_scales, transfer_balance_key as balance_key,
     },
     role::{Role, RoleId},
 };
@@ -33,7 +34,6 @@ use std::{
 };
 use thiserror::Error;
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
-const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
 const PERMISSION_TABLE_ROOT_DOMAIN: &[u8] = b"fastpq:v1:permission-table:blake2b-256";
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
@@ -114,8 +114,8 @@ pub enum TranscriptBatchError {
         /// Quantity that fell outside the FASTPQ prover's supported range.
         value: Quantity,
     },
-    /// Norito serialization of transcript metadata failed.
-    #[error("failed to encode transfer transcripts for gadget metadata")]
+    /// Norito serialization of a canonical balance key or transcript metadata failed.
+    #[error("failed to encode canonical transfer identity or transcript metadata")]
     MetadataEncoding {
         /// Underlying Norito error.
         #[from]
@@ -136,6 +136,9 @@ pub enum TranscriptBatchError {
     /// Execution witness does not carry precomputed FASTPQ batches.
     #[error("execution witness missing fastpq batches with public inputs")]
     MissingFastpqBatches,
+    /// Block execution did not supply a non-zero ordered canonical transaction-wire commitment.
+    #[error("execution witness missing authoritative ordered transaction-wire commitment")]
+    MissingTransactionSetCommitment,
     /// Precomputed batches do not align one-for-one with transcript bundles.
     #[error(
         "execution witness FASTPQ batch cardinality mismatch: {bundle_count} bundles, {batch_count} batches"
@@ -723,26 +726,6 @@ fn public_inputs_from_template(
 ) -> FastpqPublicInputs {
     template.with_tx_set_hash(tx_set_hash)
 }
-/// Compute a transaction set commitment from ordered FASTPQ execution-call identities.
-///
-/// These identities are the canonical outer entrypoint hashes except for sealed reveals, whose
-/// execution-scoped evidence is keyed by the revealed inner signed transaction hash.
-pub(crate) fn tx_set_hash_from_ordered_hashes<I, H>(hashes: I) -> [u8; 32]
-where
-    I: IntoIterator<Item = H>,
-    H: AsRef<[u8; 32]>,
-{
-    let iter = hashes.into_iter();
-    let (lower, _) = iter.size_hint();
-    let mut payload =
-        Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + lower.saturating_mul(Hash::LENGTH));
-    payload.extend_from_slice(TX_SET_HASH_DOMAIN);
-    for hash in iter {
-        let bytes = hash.as_ref();
-        payload.extend_from_slice(bytes);
-    }
-    Hash::new(payload).into()
-}
 /// Convert a collection of transfer transcripts into a canonical FASTPQ transition batch.
 ///
 /// The caller is responsible for supplying `public_inputs` and threading metadata
@@ -909,8 +892,8 @@ fn push_transfer_delta(
     delta: &TransferDeltaTranscript,
     target_scale: u32,
 ) -> Result<(), TranscriptBatchError> {
-    let from_key = balance_key(&delta.asset_definition, &delta.from_account);
-    let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+    let from_key = balance_key(&delta.asset_definition, &delta.from_account)?;
+    let to_key = balance_key(&delta.asset_definition, &delta.to_account)?;
     let from_pre = encode_numeric_le(&delta.from_balance_before, target_scale)?;
     let from_post = encode_numeric_le(&delta.from_balance_after, target_scale)?;
     let to_pre = encode_numeric_le(&delta.to_balance_before, target_scale)?;
@@ -928,9 +911,6 @@ fn push_transfer_delta(
         OperationKind::Transfer,
     ));
     Ok(())
-}
-fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-    format!("asset/{asset}/{account}").into_bytes()
 }
 fn encode_numeric_le(value: &Quantity, target_scale: u32) -> Result<Vec<u8>, TranscriptBatchError> {
     let integer = normalized_numeric_to_u64(value.as_numeric(), target_scale).ok_or_else(|| {
@@ -1124,12 +1104,44 @@ fn state_transition_to_dto(transition: &StateTransition) -> FastpqStateTransitio
 fn operation_to_dto(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
+        OperationKind::Mint => FastpqOperationKind::Mint,
+        OperationKind::Burn => FastpqOperationKind::Burn,
+        OperationKind::RoleGrant {
+            role_id,
+            permission_id,
+            epoch,
+        } => FastpqOperationKind::RoleGrant(FastpqRolePermissionDelta {
+            role_id: *role_id,
+            permission_id: *permission_id,
+            epoch: *epoch,
+        }),
+        OperationKind::RoleRevoke {
+            role_id,
+            permission_id,
+            epoch,
+        } => FastpqOperationKind::RoleRevoke(FastpqRolePermissionDelta {
+            role_id: *role_id,
+            permission_id: *permission_id,
+            epoch: *epoch,
+        }),
         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
     }
 }
 fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
+        FastpqOperationKind::Mint => OperationKind::Mint,
+        FastpqOperationKind::Burn => OperationKind::Burn,
+        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
+        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
@@ -1545,21 +1557,7 @@ mod tests {
         assert_eq!(inputs.perm_root, template.perm_root);
     }
     #[test]
-    fn tx_set_hash_from_ordered_hashes_matches_domain() {
-        let first = Hash::prehashed([0x11; 32]);
-        let second = Hash::prehashed([0x22; 32]);
-        let tx_set_hash = tx_set_hash_from_ordered_hashes([first, second]);
-        let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + 2 * Hash::LENGTH);
-        payload.extend_from_slice(TX_SET_HASH_DOMAIN);
-        payload.extend_from_slice(first.as_ref());
-        payload.extend_from_slice(second.as_ref());
-        let expected: [u8; 32] = Hash::new(payload).into();
-        assert_eq!(tx_set_hash, expected);
-        let reversed = tx_set_hash_from_ordered_hashes([second, first]);
-        assert_ne!(tx_set_hash, reversed);
-    }
-    #[test]
-    fn public_producer_matches_legacy_bytes_and_finalized_duplicate_occurrences() {
+    fn public_producer_preserves_finalized_duplicate_occurrences() {
         let captured = vec![sample_transcript(), sample_transcript()];
         let captured_before = norito::encode_canonical(&captured).unwrap();
         let inputs = FastpqPublicInputs {
@@ -1570,8 +1568,9 @@ mod tests {
             perm_root: [0x44; 32],
             tx_set_hash: [0x55; 32],
         };
-        let legacy = batch_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, inputs, &captured)
-            .expect("legacy batch");
+        let expected_batch =
+            batch_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, inputs, &captured)
+                .expect("batch");
         let (private, public) = batch_and_public_statement_from_transcripts(
             FASTPQ_CANONICAL_PARAMETER_SET,
             inputs,
@@ -1580,7 +1579,7 @@ mod tests {
         .expect("producer pair");
         assert_eq!(
             norito::encode_canonical(&private).unwrap(),
-            norito::encode_canonical(&legacy).unwrap()
+            norito::encode_canonical(&expected_batch).unwrap()
         );
         assert_eq!(
             norito::encode_canonical(&captured).unwrap(),
@@ -1607,7 +1606,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(account, before, after)| FastpqStateTransition {
-            key: format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+            key: balance_key(&delta.asset_definition, account).unwrap(),
             pre_value: before.to_le_bytes().to_vec(),
             post_value: after.to_le_bytes().to_vec(),
             operation: FastpqOperationKind::Transfer,
@@ -1637,7 +1636,7 @@ mod tests {
             Quantity::from(200_u32)
         );
         // Private decoding occurs only in this test as an independent check of
-        // the exact finalized occurrences actually embedded by the old producer.
+        // the exact finalized occurrences actually embedded by the batch producer.
         let finalized: Vec<TransferTranscript> = decode_from_bytes(
             private
                 .metadata
@@ -1740,7 +1739,7 @@ mod tests {
         delta.to_balance_after = delta.to_balance_before.clone();
         for captured in [vec![self_transfer], vec![zero], Vec::new()] {
             let inputs = sample_public_inputs();
-            let legacy =
+            let expected_batch =
                 batch_from_transcripts("producer-fixture-parameter", inputs, &captured).unwrap();
             let (private, public) = batch_and_public_statement_from_transcripts(
                 "producer-fixture-parameter",
@@ -1750,7 +1749,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 norito::encode_canonical(&private).unwrap(),
-                norito::encode_canonical(&legacy).unwrap()
+                norito::encode_canonical(&expected_batch).unwrap()
             );
             assert_eq!(private.parameter, "producer-fixture-parameter");
             assert_eq!(public.public_inputs.old_root, public.public_inputs.new_root);
@@ -1900,12 +1899,14 @@ mod tests {
         .unwrap();
         assert_eq!(batch.transitions.len(), 2);
         let delta = &transcript.deltas[0];
-        let sender_key = format!("asset/{}/{}", delta.asset_definition, delta.from_account);
-        let receiver_key = format!("asset/{}/{}", delta.asset_definition, delta.to_account);
+        let sender_key =
+            balance_key(&delta.asset_definition, &delta.from_account).expect("sender key");
+        let receiver_key =
+            balance_key(&delta.asset_definition, &delta.to_account).expect("receiver key");
         let sender_row = batch
             .transitions
             .iter()
-            .find(|row| row.key == sender_key.as_bytes())
+            .find(|row| row.key == sender_key.as_slice())
             .expect("sender row present");
         assert_eq!(sender_row.operation_rank(), OperationKind::Transfer.rank());
         assert_eq!(decode_le(&sender_row.pre_value), 200);
@@ -1913,10 +1914,31 @@ mod tests {
         let receiver_row = batch
             .transitions
             .iter()
-            .find(|row| row.key == receiver_key.as_bytes())
+            .find(|row| row.key == receiver_key.as_slice())
             .expect("receiver row present");
         assert_eq!(decode_le(&receiver_row.pre_value), 1);
         assert_eq!(decode_le(&receiver_row.post_value), 43);
+    }
+    #[test]
+    fn balance_key_batches_ignore_account_display_discriminant() {
+        use iroha_data_model::account::address::ChainDiscriminantGuard;
+        let transcript = sample_transcript();
+        let expected = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap();
+        for discriminant in [0, 369, 753, 65_535] {
+            let _display = ChainDiscriminantGuard::enter(discriminant);
+            let actual = batch_from_transcripts(
+                FASTPQ_CANONICAL_PARAMETER_SET,
+                sample_public_inputs(),
+                [&transcript],
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
     }
     #[test]
     fn batch_from_transcripts_rejects_empty_transcript_in_mixed_input() {
@@ -2102,7 +2124,8 @@ mod tests {
                 .expect("non-negative FASTPQ quantity")
         );
 
-        let sender_key = balance_key(&second_delta.asset_definition, &second_delta.from_account);
+        let sender_key = balance_key(&second_delta.asset_definition, &second_delta.from_account)
+            .expect("canonical balance key");
         let sender_rows = batch
             .transitions
             .iter()
@@ -2148,6 +2171,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].from_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("sender row");
         let receiver_row = batch
@@ -2159,6 +2183,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].to_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("receiver row");
         assert_eq!(decode_le(&sender_row.pre_value), 10);
@@ -2191,6 +2216,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].from_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("sender row");
         let receiver_row = batch
@@ -2202,6 +2228,7 @@ mod tests {
                         &transcript.deltas[0].asset_definition,
                         &transcript.deltas[0].to_account,
                     )
+                    .expect("canonical balance key")
             })
             .expect("receiver row");
         assert_eq!(decode_le(&sender_row.pre_value), 120_000_000);
@@ -2377,7 +2404,7 @@ mod tests {
         );
     }
     #[test]
-    fn transition_batch_dto_roundtrip_preserves_metadata() {
+    fn transition_batch_dto_roundtrip_preserves_all_operation_payloads_and_metadata() {
         let transcript = sample_transcript();
         let mut batch = batch_from_transcripts(
             FASTPQ_CANONICAL_PARAMETER_SET,
@@ -2393,6 +2420,35 @@ mod tests {
             perm_root: [0x44; 32],
             tx_set_hash: [0x55; 32],
         };
+        for (index, operation) in [
+            OperationKind::Mint,
+            OperationKind::Burn,
+            OperationKind::RoleGrant {
+                role_id: [0x11; 32],
+                permission_id: [0x22; 32],
+                epoch: 7,
+            },
+            OperationKind::RoleRevoke {
+                role_id: [0x33; 32],
+                permission_id: [0x44; 32],
+                epoch: 8,
+            },
+            OperationKind::MetaSet,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // This is deliberately a codec/conversion fixture. Semantic tests
+            // construct canonical tree keys and membership leaves in the
+            // prover crate before attempting to build a trace.
+            let value = u8::try_from(index).expect("operation fixture index fits u8");
+            batch.push(StateTransition::new(
+                format!("roundtrip/{index}").into_bytes(),
+                vec![value],
+                vec![value + 1],
+                operation,
+            ));
+        }
         batch.metadata.insert("test".into(), vec![0xAA, 0xBB, 0xCC]);
         let dto = transition_batch_to_dto(&batch);
         let restored = transition_batch_from_dto(&dto);

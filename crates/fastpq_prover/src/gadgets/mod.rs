@@ -8,8 +8,8 @@ pub mod compact_smt_air;
 #[cfg(test)]
 pub(crate) mod compact_smt_batch_schedule;
 pub mod compact_trace_columns;
-pub mod public_transfer_statement;
 pub mod iroha_hash_output_air;
+pub mod public_transfer_statement;
 pub mod smt_path_air;
 pub mod transfer;
 pub mod transfer_integer_air;

@@ -63,17 +63,18 @@ fn trigger_account_fixture_uses_checked_randomness() {
 }
 async fn submit_instruction_and_wait(
     network: &sandbox::SerializedNetwork,
-    client: iroha::client::Client,
+    client: iroha::blocking::Client,
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<()> {
-    let mut client = client;
-    client.transaction_status_timeout = network.sync_timeout();
+    let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = network.sync_timeout();
+    });
     let instruction = instruction.into();
     let context = context.to_string();
     spawn_blocking(move || {
         client
-            .submit_blocking(
+            .submit(
                 instruction,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -83,7 +84,7 @@ async fn submit_instruction_and_wait(
     Ok(())
 }
 async fn wait_for_asset_value(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     asset_id: &AssetId,
     expected: Quantity,
     timeout_after: Duration,
@@ -118,7 +119,7 @@ async fn wait_for_asset_value(
     }
 }
 async fn wait_for_trigger(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     trigger_id: &TriggerId,
     timeout_after: Duration,
     context: &str,
@@ -136,6 +137,7 @@ async fn wait_for_trigger(
             let trigger_id = trigger_id.clone();
             move || -> Result<Option<Trigger>> {
                 Ok(client
+                    .client()
                     .query(FindTriggers::new())
                     .execute_all()?
                     .into_iter()
@@ -318,7 +320,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
                 .under_authority(account_id);
             let mut events = timeout(
                 network.sync_timeout(),
-                test_client.listen_for_events_async([filter]),
+                test_client.client().listen_for_events([filter]),
             )
             .await
             .wrap_err("Timed out opening ExecuteTrigger event stream")??;
@@ -412,13 +414,15 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             })
             .await??;
             let err = spawn_blocking({
-                let mut client = test_client.clone();
-                client.transaction_status_timeout = network
-                    .sync_timeout()
-                    .min(std::time::Duration::from_secs(120));
+                let client =
+                    integration_tests::sync::rebind_blocking_client(&test_client, |client| {
+                        client.transaction_status_timeout = network
+                            .sync_timeout()
+                            .min(std::time::Duration::from_secs(120));
+                    });
                 let bad_trigger_id = bad_trigger_id.clone();
                 move || {
-                    client.submit_blocking(
+                    client.submit(
                         Instruction::into_instruction_box(Box::new(ExecuteTrigger::new(
                             bad_trigger_id,
                         ))),
@@ -454,14 +458,23 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                 .max()
                 .unwrap_or(0);
             let target_non_empty = baseline_non_empty.saturating_add(1);
-            let log_tx = test_client.build_transaction_from_items(
-                [InstructionBox::from(Log::new(
-                    Level::INFO,
-                    "trigger probe".to_string(),
-                ))],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
+            let log_tx = {
+                let account = test_client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [InstructionBox::from(Log::new(
+                            Level::INFO,
+                            "trigger probe".to_string(),
+                        ))],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             spawn_blocking({
                 let client = test_client.clone();
                 move || client.submit_transaction(&log_tx)
@@ -547,7 +560,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             let error = spawn_blocking({
                 let client = test_client.clone();
                 move || {
-                    client.submit_blocking(
+                    client.submit(
                         Instruction::into_instruction_box(Box::new(execute_trigger)),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -710,12 +723,11 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             let rabbit_keys = checked_random_trigger_account_keypair();
             let rabbit_account_id = AccountId::new(rabbit_keys.public_key().clone());
             let rabbit_account = Account::new(rabbit_account_id.clone());
-            let rabbit_client = {
-                let mut client = test_client.clone();
-                client.account = rabbit_account_id.clone();
-                client.key_pair = rabbit_keys;
-                client
-            };
+            let rabbit_client =
+                integration_tests::sync::rebind_blocking_client(&test_client, |client| {
+                    client.account = rabbit_account_id.clone();
+                    client.key_pair = rabbit_keys;
+                });
             // Permission for the trigger registration on behalf of alice
             let permission_on_registration = CanRegisterTrigger {
                 authority: ALICE_ID.clone(),
@@ -748,6 +760,7 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 let rabbit_account_id = rabbit_account_id.clone();
                 move || -> Result<()> {
                     client
+                        .client()
                         .query(FindAccounts::new())
                         .execute_all()
                         .expect("Account not found")
@@ -764,7 +777,7 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 let client = rabbit_client.clone();
                 let trigger = trigger.clone();
                 move || {
-                    client.submit_blocking(
+                    client.submit(
                         Register::trigger(trigger),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -858,6 +871,7 @@ async fn unregister_trigger() -> Result<()> {
                 let trigger_id = trigger_id.clone();
                 move || {
                     client
+                        .client()
                         .query(FindTriggers::new())
                         .execute_all()
                         .unwrap()
@@ -906,6 +920,7 @@ async fn unregister_trigger() -> Result<()> {
                 let trigger_id = trigger_id.clone();
                 move || {
                     client
+                        .client()
                         .query(FindTriggers::new())
                         .execute_all()
                         .unwrap()
@@ -1072,7 +1087,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             let err = spawn_blocking({
                 let client = test_client.clone();
                 move || {
-                    client.submit_all_blocking(
+                    client.submit_all(
                         [
                             Instruction::into_instruction_box(Box::new(execute_trigger_unregister)),
                             Instruction::into_instruction_box(Box::new(
@@ -1223,6 +1238,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
                     let trigger_id = trigger_id.clone();
                     move || -> Result<bool> {
                         let ids = client
+                            .client()
                             .query(FindActiveTriggerIds)
                             .execute_all()
                             .wrap_err("query active trigger ids")?;
@@ -1243,15 +1259,23 @@ async fn trigger_burn_repetitions() -> Result<()> {
         // by observing the pipeline event instead of waiting on the confirmation stream.
         let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
         let instruction = Instruction::into_instruction_box(Box::new(execute_trigger));
-        let transaction = test_client.build_transaction_from_items(
-            [instruction],
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let transaction = {
+            let account = test_client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [instruction],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         let hash = transaction.hash();
         let mut events = timeout(
             network.sync_timeout(),
-            test_client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+            test_client
+                .client()
+                .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
         )
         .await
         .wrap_err("timed out opening pipeline event stream")??;
@@ -1357,7 +1381,7 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
                 let second_trigger_id = second_trigger_id.clone();
                 move || {
                     client
-                        .query(FindTriggers::new())
+                        .client().query(FindTriggers::new())
                         .execute_all()
                         .unwrap()
                         .into_iter()

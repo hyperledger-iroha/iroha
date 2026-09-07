@@ -1,13 +1,11 @@
 package org.hyperledger.iroha.sdk.client
 
-import java.security.PrivateKey
-
-/** Canonical request signing material for authenticated Torii endpoints. */
+/** Account identity and application-owned signer for authenticated Torii endpoints. */
 class ToriiCanonicalRequestAuth(
     @JvmField val accountId: String,
-    @JvmField val privateKey: PrivateKey,
+    @JvmField val signer: RequestSigner,
     @JvmField val timestampMs: Long?,
     @JvmField val nonce: String?,
 ) {
-    constructor(accountId: String, privateKey: PrivateKey) : this(accountId, privateKey, null, null)
+    constructor(accountId: String, signer: RequestSigner) : this(accountId, signer, null, null)
 }

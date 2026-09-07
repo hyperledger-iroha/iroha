@@ -11,14 +11,47 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let (authority, signer) = gen_account_in("wonderland");
     let authority_domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(authority_domain.clone()).build(&authority);
+    let authority_uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+        b"native AMX settlement authority",
+    ));
     let (mut world, keypairs) = native_amx_test_world_with_keys();
     world.domains.insert(authority_domain, domain);
     world.accounts.insert(
         authority.clone(),
         iroha_data_model::account::AccountValue::new(
-            iroha_data_model::account::AccountDetails::default(),
+            iroha_data_model::account::AccountDetails {
+                uaid: Some(authority_uaid),
+                ..iroha_data_model::account::AccountDetails::default()
+            },
         ),
     );
+    let mut manifests = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+    let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+    let mut manifest_roots = BTreeMap::new();
+    for dataspace in [paynet, cbuae] {
+        let manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::default(),
+            uaid: authority_uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut manifest_root = [0_u8; Hash::LENGTH];
+        manifest_root.copy_from_slice(record.manifest_hash.as_ref());
+        manifest_roots.insert(dataspace, manifest_root);
+        manifests.upsert(record);
+        bindings.bind_account(dataspace, authority.clone());
+    }
+    world
+        .space_directory_manifests_mut_for_testing()
+        .insert(authority_uaid, manifests);
+    world
+        .uaid_dataspaces_mut_for_testing()
+        .insert(authority_uaid, bindings);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
@@ -55,6 +88,18 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
     }
     install_test_lane_manifests(&state);
+    for (dataspace, lane) in [(paynet, LaneId::new(1)), (cbuae, LaneId::new(2))] {
+        state.set_axt_policy(
+            dataspace,
+            AxtPolicyEntry {
+                manifest_root: manifest_roots[&dataspace],
+                target_lane: lane,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 0,
+            },
+        );
+    }
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
     let tx = TransactionBuilder::new_with_time_source(
         state.network_id,

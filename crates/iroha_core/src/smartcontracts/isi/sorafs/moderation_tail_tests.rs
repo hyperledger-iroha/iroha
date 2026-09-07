@@ -23,9 +23,7 @@ fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
         })
         .expect_err("sortition at the exact registration deadline must fail");
     assert!(
-        error
-            .to_string()
-            .contains("registration must close before sortition"),
+        parameter_error_message(&error).contains("registration must close before sortition"),
         "unexpected exact-deadline rejection: {error:?}"
     );
     assert!(fixture.appeal().sortition_anchor.is_none());
@@ -62,8 +60,7 @@ fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
         })
         .expect_err("sortition cannot execute in the block that pins its anchor");
     assert!(
-        error
-            .to_string()
+        parameter_error_message(&error)
             .contains("must execute after its pinned anchor block commits"),
         "unexpected same-anchor-block rejection: {error:?}"
     );
@@ -206,16 +203,93 @@ fn restored_sortition_anchor_is_bound_to_exact_committed_history() {
     );
 }
 
+// These storage/WSV fixtures execute instructions directly in the overlay and persist
+// signed, result-bearing empty blocks for ledger-time and DA-index replay queries.
+// They do not stand in for consensus certificates or payload-availability evidence.
+fn panel_fixture_with_kura() -> PanelFixture {
+    let fixture = PanelFixture::new();
+    let foundation = iroha_data_model::block::builder::BlockBuilder::new(header(1, 1_000_000))
+        .try_build_with_signature(0, fixture.manager.private_key())
+        .expect("sign moderation foundation block with execution results");
+    assert_eq!(
+        fixture.state.view().latest_block_hash(),
+        Some(foundation.hash()),
+        "persist the exact foundation header already executed by the panel fixture"
+    );
+    fixture
+        .state
+        .kura()
+        .store_block(foundation)
+        .expect("persist moderation foundation block");
+    fixture
+}
+
+fn run_panel_kura_block(
+    fixture: &mut PanelFixture,
+    now: u64,
+    operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
+) -> Result<(), InstructionExecutionError> {
+    let height = fixture.next_height;
+    let chained_header = BlockHeader::new(
+        NonZeroU64::new(height).expect("nonzero moderation fixture height"),
+        fixture.state.view().latest_block_hash(),
+        None,
+        None,
+        now,
+        0,
+    );
+    let signed_block = iroha_data_model::block::builder::BlockBuilder::new(chained_header)
+        .try_build_with_signature(0, fixture.manager.private_key())
+        .expect("sign chained moderation block with execution results");
+    let mut block = fixture.state.block(signed_block.header());
+    let mut transaction = block.transaction();
+    transaction.tx_call_hash = Some(iroha_crypto::Hash::new(
+        [height.to_le_bytes(), now.to_le_bytes()].concat(),
+    ));
+    operation(&mut transaction)?;
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit Kura-backed moderation overlay");
+    let block_hash = signed_block.hash();
+    fixture
+        .state
+        .kura()
+        .store_block(signed_block)
+        .expect("persist exact executed moderation header and body");
+    fixture.state.push_block_hash_for_testing(block_hash);
+    fixture.next_height += 1;
+    Ok(())
+}
+
 #[test]
 fn soft_fork_replacement_repins_the_reverted_anchor_block() -> Result<(), InstructionExecutionError>
 {
-    let mut fixture = PanelFixture::new();
-    fixture.submit(1, 0, 1);
+    let mut fixture = panel_fixture_with_kura();
+    let intake = panel_intake(&fixture.appellant, "panel-case", 1, 0, 1, 0x91);
+    let appellant = fixture.appellant_id();
+    run_panel_kura_block(&mut fixture, 1_001_000, |transaction| {
+        SubmitSorafsModerationAppeal::new(intake).execute(&appellant, transaction)
+    })
+    .expect("submit panel appeal in a persisted block");
+    run_panel_kura_block(&mut fixture, 1_003_000, |_| Ok(())).expect("commit exact-deadline block");
+    run_panel_kura_block(&mut fixture, 1_004_000, |_| Ok(()))
+        .expect("persist the first post-registration anchor block");
+    let original_anchor = fixture
+        .appeal()
+        .sortition_anchor
+        .expect("committed maintenance pinned the original anchor");
     fixture
-        .run(1_003_000, |_| Ok(()))
-        .expect("commit exact-deadline block");
-    let original_anchor = fixture.pin_sortition_anchor();
-    let replacement_header = header(original_anchor.block_height, 1_004_500);
+        .state
+        .ensure_da_indexes_hydrated()
+        .expect("hydrate the complete canonical block prefix before rewind");
+    let mut replacement_header = fixture
+        .state
+        .view()
+        .latest_block()
+        .expect("persisted original anchor block")
+        .header();
+    replacement_header.creation_time_ms = 1_004_500;
     let replacement_hash = *replacement_header.hash().as_ref();
     assert_ne!(replacement_hash, original_anchor.block_hash);
 
@@ -280,7 +354,7 @@ fn same_deadline_anchor_schedule_is_canonical_bounded_and_pins_together() {
         },
     )
     .expect_err("the hard schedule bound must reject one more appeal");
-    assert!(error.to_string().contains("reached the hard bound"));
+    assert!(parameter_error_message(&error).contains("reached the hard bound"));
     let mut noncanonical = bounded.clone();
     noncanonical.entries.swap(0, 1);
     let error = validate_sortition_anchor_schedule(&noncanonical)
@@ -367,7 +441,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     let appeal = fixture.appeal();
     let juror = fixture.juror_id();
     let outsider = fixture.outsider_id();
-    let mut wrong_root = proof_for_appeal(&appeal);
+    let mut wrong_root = proof_for_appeal(&appeal, &juror);
     wrong_root.commitment_root[0] ^= 1;
     assert!(
         fixture
@@ -383,7 +457,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     );
     assert_eq!(fixture.appeal().eligible_jurors.len(), 0);
     fixture.register_juror();
-    let proof = proof_for_appeal(&fixture.appeal());
+    let proof = proof_for_appeal(&fixture.appeal(), &juror);
     assert!(
         fixture
             .run(1_002_001, |transaction| {
@@ -770,7 +844,7 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
             proof_digest: [0xA1; 32],
             nullifier: [0xB1; 32],
             pop_snapshot_digest: appeal.pop_snapshot_digest,
-            credential_expires_at_epoch: 2_000,
+            credential_expires_at_epoch: shared_pop_material().credential.expires_at_epoch,
             registered_at_unix_ms: 1_002_000,
         },
         ModerationJurorEligibilityRecordV1 {
@@ -781,7 +855,7 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
             proof_digest: [0xA2; 32],
             nullifier: [0xB2; 32],
             pop_snapshot_digest: appeal.pop_snapshot_digest,
-            credential_expires_at_epoch: 2_000,
+            credential_expires_at_epoch: shared_pop_material().credential.expires_at_epoch,
             registered_at_unix_ms: 1_002_000,
         },
     ];
@@ -913,8 +987,8 @@ fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
                 .execute(&manager, transaction)
         })
         .unwrap();
-    let proof = proof_for_appeal(&fixture.appeal());
     let juror = fixture.juror_id();
+    let proof = proof_for_appeal(&fixture.appeal(), &juror);
     fixture
         .run(1_002_000, |transaction| {
             RegisterSorafsModerationJurorEligibility::new(
@@ -1051,21 +1125,19 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
 }
 #[test]
 fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
-    let mut fixture = PanelFixture::new();
+    let mut fixture = panel_fixture_with_kura();
     let appellant = fixture.appellant_id();
     let z_intake = panel_intake(&fixture.appellant, "z-case", 1, 0, 1, 0x91);
-    fixture
-        .run(1_001_000, |transaction| {
-            SubmitSorafsModerationAppeal::new(z_intake).execute(&appellant, transaction)
-        })
-        .expect("submit z appeal");
+    run_panel_kura_block(&mut fixture, 1_001_000, |transaction| {
+        SubmitSorafsModerationAppeal::new(z_intake).execute(&appellant, transaction)
+    })
+    .expect("submit z appeal");
     let mut a_intake = panel_intake(&fixture.appellant, "a-case", 1, 0, 1, 0x92);
     a_intake.proof_token_digest = [0x35; 32];
-    fixture
-        .run(1_001_001, |transaction| {
-            SubmitSorafsModerationAppeal::new(a_intake).execute(&appellant, transaction)
-        })
-        .expect("submit a appeal");
+    run_panel_kura_block(&mut fixture, 1_001_001, |transaction| {
+        SubmitSorafsModerationAppeal::new(a_intake).execute(&appellant, transaction)
+    })
+    .expect("submit a appeal");
     let view = fixture.state.view();
     let snapshot = FindSorafsModerationSnapshot::new(8, 16)
         .execute(&view)

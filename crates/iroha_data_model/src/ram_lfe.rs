@@ -36,6 +36,8 @@ pub enum RamLfeProgramIdParseError {
 /// Stable on-chain identifier for a hidden RAM-LFE program policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeProgramId")]
 pub struct RamLfeProgramId {
     /// Canonical program name.
     pub name: Name,
@@ -63,6 +65,8 @@ impl FromStr for RamLfeProgramId {
 /// Public metadata for a globally registered hidden RAM-LFE program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeProgramPolicy")]
 pub struct RamLfeProgramPolicy {
     /// Stable on-chain program identifier.
     pub program_id: RamLfeProgramId,
@@ -124,6 +128,8 @@ impl RamLfeProgramPolicy {
 /// Canonical stateless RAM-LFE execution receipt payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload")]
 pub struct RamLfeExecutionReceiptPayload {
     /// Program policy used for the execution.
     pub program_id: RamLfeProgramId,
@@ -171,6 +177,8 @@ impl RamLfeExecutionReceiptPayload {
 /// Canonical payload signed by an external RAM-LFE output-opening authority.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload")]
 pub struct RamLfeOutputOpeningPayload {
     /// Program policy whose output ciphertext was opened.
     pub program_id: RamLfeProgramId,
@@ -194,6 +202,8 @@ pub struct RamLfeOutputOpeningPayload {
 /// Externally attested opening of a RAM-LFE encrypted output.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeOutputOpening")]
 pub struct RamLfeOutputOpening {
     /// Canonical opening payload.
     pub payload: RamLfeOutputOpeningPayload,
@@ -215,6 +225,8 @@ impl RamLfeOutputOpening {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeReceiptAttestation")]
 pub enum RamLfeReceiptAttestation {
     /// Resolver signature over the canonical payload bytes.
     Signed(Signature),
@@ -242,6 +254,8 @@ impl RamLfeReceiptAttestation {
 /// Self-contained generic RAM-LFE execution receipt.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ram_lfe::RamLfeExecutionReceipt")]
 pub struct RamLfeExecutionReceipt {
     /// Canonical receipt payload.
     pub payload: RamLfeExecutionReceiptPayload,
@@ -690,3 +704,6 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod captured_ram_lfe_schema_tests;

@@ -27,7 +27,7 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_repository_inventory_is_exact(self) -> None:
         result = GUARD.audit_source(SOURCE)
-        self.assertEqual(94, result.pair_count)
+        self.assertEqual(38, result.pair_count)
         self.assertEqual(GUARD.EXPECTED_ABI_DIGEST, result.abi_digest)
         self.assertEqual(GUARD.EXPECTED_ATTRIBUTE_DIGEST, result.attribute_digest)
 
@@ -37,6 +37,7 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
             "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignDetachedV2();",
             1,
         )
+        self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
         with self.assertRaisesRegex(GUARD.AuditError, "suffix mismatch"):
             GUARD.audit_source(mutated)
 
@@ -46,6 +47,7 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
             "java_native_public_key_from_private(&mut env, private_key, algorithm_code)",
             1,
         )
+        self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
         with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
 
@@ -55,16 +57,38 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
             "Validate a Torii Exact12 capability manifest for Android.",
             1,
         )
+        self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
         with self.assertRaisesRegex(GUARD.AuditError, "documentation/attribute contract changed"):
             GUARD.audit_source(mutated)
 
     def test_rejects_macro_expansion_drift(self) -> None:
         mutated = SOURCE.replace(
-            ") -> $return_type $body\n            $(#[$android_attribute])*",
-            ") -> $return_type { $body }\n            $(#[$android_attribute])*",
+            ") $(-> $return_type)? $body\n            $(#[$android_attribute])*",
+            ") $(-> $return_type)? { $body }\n            $(#[$android_attribute])*",
             1,
         )
+        self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
         with self.assertRaisesRegex(GUARD.AuditError, "macro expansion contract changed"):
+            GUARD.audit_source(mutated)
+
+    def test_rejects_retired_privacy_methods_without_network_binding(self) -> None:
+        for method in (
+            "nativeValidateExact12CapabilityManifest",
+            "nativeRequireExact12CapabilityTuple",
+            "nativeValidateExact12SubmitProofConstruction",
+        ):
+            with self.subTest(method=method):
+                mutated = SOURCE.replace(method + "ForNetworkV1", method)
+                self.assertNotEqual(SOURCE, mutated)
+                with self.assertRaisesRegex(GUARD.AuditError, "inventory changed"):
+                    GUARD.audit_source(mutated)
+
+    def test_rejects_dropped_expected_network_parameter(self) -> None:
+        mutated = SOURCE.replace(
+            "    expected_network: jni::objects::JByteArray<'_>,\n", "", 1,
+        )
+        self.assertNotEqual(SOURCE, mutated)
+        with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
 
 

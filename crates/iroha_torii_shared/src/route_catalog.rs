@@ -2647,6 +2647,16 @@ pub mod sumeragi {
         "sccp.sora_outbound_material.read",
         "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
     );
+    /// Read one locally rebuilt, three-replica-authenticated SORA replay root.
+    pub const SCCP_REPLAY_ROOT: RouteDescriptor = public_sccp_get(
+        "sccp.replay.root.read",
+        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root",
+    );
+    /// Read one canonical SORA replay membership or non-membership witness.
+    pub const SCCP_REPLAY_WITNESS: RouteDescriptor = public_sccp_get(
+        "sccp.replay.witness.read",
+        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}",
+    );
 
     /// Read the authoritative Sumeragi status snapshot as an authenticated operator.
     pub const STATUS: RouteDescriptor =
@@ -2695,6 +2705,8 @@ pub mod sumeragi {
         SCCP_CAPABILITIES,
         SCCP_REGISTRY,
         SCCP_SORA_OUTBOUND_MATERIAL,
+        SCCP_REPLAY_ROOT,
+        SCCP_REPLAY_WITNESS,
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,
@@ -3937,6 +3949,7 @@ pub mod application_api {
         DOMAINS_GET => dataspace_get("application.domains_get", "/v1/domains");
         DOMAINS_QUERY_POST => dataspace_compute_post("application.domains_query_post", "/v1/domains/query");
         ACCOUNTS_GET => dataspace_get("application.accounts_get", "/v1/accounts");
+        ACCOUNTS_CAPABILITIES_GET => app_get("application.accounts_capabilities_get", "/v1/accounts/capabilities");
         ACCOUNTS_QUERY_POST => dataspace_compute_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");

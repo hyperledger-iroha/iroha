@@ -6,7 +6,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeMap;
 /// Snapshot of a validator registered for a public Nexus lane.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneValidatorRecord")]
 pub struct PublicLaneValidatorRecord {
     /// Lane that the validator services.
     pub lane_id: LaneId,
@@ -39,7 +40,8 @@ pub struct PublicLaneValidatorRecord {
     pub last_reward_epoch: Option<u64>,
 }
 /// Lifecycle state for a validator entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneValidatorStatus")]
 pub enum PublicLaneValidatorStatus {
     /// Validator is scheduled for election eligibility at the exact payload height.
     PendingActivation(u64),
@@ -57,7 +59,8 @@ pub enum PublicLaneValidatorStatus {
     Slashed(Hash),
 }
 /// Per-staker bonded stake record.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneStakeShare")]
 pub struct PublicLaneStakeShare {
     /// Lane serviced by the validator.
     pub lane_id: LaneId,
@@ -73,7 +76,8 @@ pub struct PublicLaneStakeShare {
     pub metadata: Metadata,
 }
 /// Pending unbond request tracked on-ledger.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneUnbonding")]
 pub struct PublicLaneUnbonding {
     /// Deterministic identifier supplied by the submitter.
     pub request_id: Hash,
@@ -91,7 +95,10 @@ pub struct PublicLaneUnbonding {
     pub liability_release_height: u64,
 }
 /// Aggregated reward share emitted for a validator or delegator.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardShare")]
 pub struct PublicLaneRewardShare {
     /// Account that receives the payout.
     pub account: AccountId,
@@ -101,7 +108,20 @@ pub struct PublicLaneRewardShare {
     pub amount: Quantity,
 }
 /// Role marker for a reward share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardRole")]
 pub enum PublicLaneRewardRole {
     /// Validator portion of the reward.
     Validator,
@@ -109,7 +129,8 @@ pub enum PublicLaneRewardRole {
     Nominator,
 }
 /// Ledger entry capturing the outcome of a reward distribution for auditing.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardRecord")]
 pub struct PublicLaneRewardRecord {
     /// Lane that produced the reward.
     pub lane_id: LaneId,
@@ -125,7 +146,8 @@ pub struct PublicLaneRewardRecord {
     pub metadata: Metadata,
 }
 /// Pending reward summary for an account and lane.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLanePendingReward")]
 pub struct PublicLanePendingReward {
     /// Lane identifier.
     pub lane_id: LaneId,
@@ -192,3 +214,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_staking_schema_tests;

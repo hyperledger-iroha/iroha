@@ -87,7 +87,7 @@ impl Default for PublicTransferLimits {
 /// Complete canonical key hash and its unique collision-resolved path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKeyAllocation {
-    /// Exact full UTF-8 `asset/{asset_definition}/{account}` bytes.
+    /// Complete canonical `FastpqBalanceKeyV1` Norito frame.
     pub key: Vec<u8>,
     /// Marked BLAKE2b-256 of the complete key-domain message, including long keys.
     pub key_hash: [u8; 32],
@@ -409,7 +409,7 @@ pub fn prepare_public_transfers<'a>(
             .into_iter()
             .enumerate()
             {
-                let key = balance_key(&delta.asset_definition, account);
+                let key = balance_key(&delta.asset_definition, account)?;
                 if last_values
                     .get(&key)
                     .is_some_and(|previous| *previous != before)
@@ -758,8 +758,10 @@ fn allocate_path(
     Ok(candidate)
 }
 
-fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-    format!("asset/{asset}/{account}").into_bytes()
+fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Result<Vec<u8>> {
+    Ok(iroha_data_model::fastpq::transfer_balance_key(
+        asset, account,
+    )?)
 }
 fn decode_balance(bytes: &[u8]) -> Result<u64> {
     Ok(u64::from_le_bytes(bytes.try_into().map_err(|_| {
@@ -966,7 +968,7 @@ mod tests {
                     ),
                 ] {
                     rows.push(StateTransition::new(
-                        balance_key(&delta.asset_definition, account),
+                        balance_key(&delta.asset_definition, account).unwrap(),
                         before.to_le_bytes().to_vec(),
                         after.to_le_bytes().to_vec(),
                         OperationKind::Transfer,
@@ -989,7 +991,7 @@ mod tests {
             rows,
             claims,
             inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits::default(),
         )
         .unwrap()
@@ -1011,10 +1013,7 @@ mod tests {
         assert_eq!(prepared.public_inputs(), &inputs);
         assert_eq!(prepared.claims(), claims);
         assert_eq!(prepared.transitions(), rows);
-        assert_eq!(
-            prepared.semantics(),
-            ProofSemantics::TransferStateTransition
-        );
+        assert_eq!(prepared.semantics(), ProofSemantics::StateTransition);
         let scales = iroha_data_model::fastpq::transfer_asset_scales(transcripts);
         assert_eq!(asset_scales(&claims), scales);
         let mut native_batch = TransitionBatch::new("fastpq-state-transition-stark-v1", inputs);
@@ -1196,7 +1195,7 @@ mod tests {
             &[],
             &[],
             PublicInputs::default(),
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             limits,
         )
         .unwrap();
@@ -1217,14 +1216,8 @@ mod tests {
             ..PublicInputs::default()
         };
         assert!(
-            prepare_public_transfers(
-                &[],
-                &[],
-                changed,
-                ProofSemantics::TransferStateTransition,
-                limits
-            )
-            .is_err()
+            prepare_public_transfers(&[], &[], changed, ProofSemantics::StateTransition, limits)
+                .is_err()
         );
         let (transcripts, mut rows, inputs) = fixture(vec![vec![draft_delta(1, 20, 2, false)]]);
         let claims = public_claims_from_transcripts(&transcripts, limits).unwrap();
@@ -1254,7 +1247,7 @@ mod tests {
                 &rows,
                 &claims,
                 inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 limits
             )
             .is_err()
@@ -1266,7 +1259,7 @@ mod tests {
                 &rows,
                 &claims,
                 inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 limits
             )
             .is_err()
@@ -1284,7 +1277,7 @@ mod tests {
                     &rows,
                     &claims,
                     malformed,
-                    ProofSemantics::TransferStateTransition,
+                    ProofSemantics::StateTransition,
                     limits
                 )
                 .is_err()
@@ -1318,7 +1311,7 @@ mod tests {
                     &changed_rows,
                     &changed,
                     inputs,
-                    ProofSemantics::TransferStateTransition,
+                    ProofSemantics::StateTransition,
                     limits
                 )
                 .is_err(),
@@ -1339,7 +1332,7 @@ mod tests {
         changed[0].deltas[1].from_balance_before = Quantity::from(100_u64);
         changed[0].deltas[1].from_balance_after = Quantity::from(98_u64);
         assert!(
-            matches!(prepare_public_transfers(&rows, &changed, inputs, ProofSemantics::TransferStateTransition, limits),
+            matches!(prepare_public_transfers(&rows, &changed, inputs, ProofSemantics::StateTransition, limits),
             Err(Error::TransferInvariant { details }) if details.contains("repeated-key"))
         );
     }
@@ -1394,7 +1387,7 @@ mod tests {
                     &rows,
                     &claims,
                     inputs,
-                    ProofSemantics::TransferStateTransition,
+                    ProofSemantics::StateTransition,
                     restricted
                 ),
                 Err(Error::VerifierLimitExceeded { .. })
@@ -1409,7 +1402,7 @@ mod tests {
                 &rows,
                 &claims,
                 inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 exact
             )
             .is_ok()
@@ -1419,7 +1412,7 @@ mod tests {
                 &rows,
                 &claims,
                 inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 PublicTransferLimits {
                     max_public_bytes: exact.max_public_bytes - 1,
                     ..exact
@@ -1458,7 +1451,7 @@ mod tests {
                 &oversized,
                 &claims,
                 inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 limits
             ),
             Err(Error::VerifierLimitExceeded {

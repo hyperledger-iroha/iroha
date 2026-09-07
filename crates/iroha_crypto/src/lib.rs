@@ -1,6 +1,8 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
 #![allow(unexpected_cfgs)]
 mod algorithm;
+#[cfg(test)]
+mod captured_schema_tests;
 mod confidential;
 #[cfg(feature = "pqc")]
 pub mod confidential_memo;
@@ -869,7 +871,8 @@ impl TryFrom<&PublicKeyCompact> for PublicKeyFull {
 /// In case signature verification is needed, it will be decoded.
 ///
 /// Invariant: `payload` is valid, that is conversion to full form must not give error.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::PublicKeyCompact")]
 #[repr(transparent)]
 pub struct PublicKeyCompact {
     // First byte corresponds to algorithm
@@ -2019,6 +2022,8 @@ ffi::ffi_item! {
     /// );
     /// ```
     #[derive(Clone, PartialEq, Eq, TypeId)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_crypto::PublicKey")]
     #[repr(transparent)]
     #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     pub struct PublicKey(PublicKeyCompact);
@@ -2447,8 +2452,27 @@ impl norito::json::JsonDeserialize for PublicKey {
         };
         Self::from_canonical_str_for_decode(value).map_err(public_key_json_decode_error)
     }
+}
+impl norito::json::JsonObjectKey for PublicKey {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self.normalize_lossy();
+        visitor(&canonical)
+    }
 
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), norito::json::BoundedJsonError>,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        self.structural_components()
+            .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
+        norito::json::visit_json_display_text(self, visitor)
+    }
+}
+impl norito::json::JsonObjectKeyOwned for PublicKey {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         Self::from_canonical_str_for_decode(key).map_err(public_key_json_decode_error)
     }
 }
@@ -3023,7 +3047,8 @@ impl norito::json::JsonSerialize for PrivateKey {
 /// [`Debug`] is always redacted so that embedding this type in another debug-formatted
 /// value cannot disclose key material. [`Display`], JSON/Norito serialization, and the
 /// named export methods expose the private key deliberately and must not be used in logs.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ExposedPrivateKey")]
 pub struct ExposedPrivateKey(pub PrivateKey);
 impl FromStr for ExposedPrivateKey {
     type Err = ParseError;

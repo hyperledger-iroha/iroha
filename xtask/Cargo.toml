@@ -41,6 +41,7 @@ dev-tools = []
 vote-tally = ["dep:halo2_proofs"]
 
 [dependencies]
+iroha_service_model = { workspace = true }
 hex = { workspace = true }
 norito = { workspace = true, features = ["node-codec", "bench-internal", "simd-accel", "parallel-stage1"], default-features = false }
 tempfile = { workspace = true }
@@ -57,9 +58,11 @@ iroha_torii = { workspace = true, features = [
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api"], default-features = false }
 iroha_telemetry = { workspace = true }
+iroha_torii_shared = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha = { workspace = true, features = ["test-fixtures"] }
+iroha_storage_client = { workspace = true }
 ivm = { workspace = true }
 norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }

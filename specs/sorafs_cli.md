@@ -12,8 +12,6 @@ _Looking for an end-to-end walkthrough?_ The quickstart at
 `specs/sorafs/developer/overview.md` chains the key commands together for
 local testing and CI.
 
-- `norito build` — compile Kotodama `.ko` sources into deterministic IVM
-  bytecode artefacts.
 - `car pack` — produce a CAR archive, chunk-fetch plan, and JSON summary for CI.
 - `manifest build` — translate the CAR summary into a Norito manifest.
 - `manifest submit` — build and locally sign one exact-network transaction whose
@@ -129,15 +127,18 @@ replace this release-authenticity check.
 ## Compile Kotodama bytecode
 
 ```bash
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  norito build \
+cargo run -p iroha_cli --bin iroha -- \
+  app sorafs toolkit compile \
   --source contracts/register_domain.ko \
   --bytecode-out artifacts/register_domain.to \
-  --summary-out artifacts/register_domain.bytecode.json
+  --json-out artifacts/register_domain.bytecode.json
 ```
 
 The summary captures the ABI version, output path, byte length, and BLAKE3
 digest so downstream tooling can pin compiler outputs in CI.
+The main CLI owns compilation and uses the shared Kotodama build driver to
+publish authenticated artifacts, manifests, and sidecars. Use `--source -` to
+read a source from stdin. This local operation needs no node or signing config.
 
 ## Submit manifests to Torii
 

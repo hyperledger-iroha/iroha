@@ -98,7 +98,7 @@ impl PublicTransferBatch {
     ) -> Result<Self> {
         let count = prepared.pairs().len();
         let root_bytes = preflight_prepared(prepared, intermediate_roots.len(), limits)?;
-        if prepared.semantics() != ProofSemantics::TransferStateTransition {
+        if prepared.semantics() != ProofSemantics::StateTransition {
             return Err(Error::InvalidProofSemantics {
                 profile: prepared.semantics().name(),
                 details: "ordinary compact bundle requires transfer-state-transition semantics"
@@ -428,7 +428,7 @@ mod tests {
                     (&delta.to_account, to_before, to_after),
                 ] {
                     rows.push(StateTransition::new(
-                        format!("asset/{asset}/{account}").into_bytes(),
+                        iroha_data_model::fastpq::transfer_balance_key(&asset, account).unwrap(),
                         before.to_le_bytes().to_vec(),
                         after.to_le_bytes().to_vec(),
                         OperationKind::Transfer,
@@ -477,7 +477,7 @@ mod tests {
                 &self.rows,
                 &self.claims,
                 self.inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 PublicTransferLimits::default(),
             )
             .unwrap()
@@ -846,7 +846,7 @@ mod tests {
             &fixture.rows,
             &fixture.claims,
             fixture.inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits {
                 max_transcripts: count,
                 max_deltas: count,
@@ -888,7 +888,7 @@ mod tests {
             &fixture.rows,
             &fixture.claims,
             fixture.inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits {
                 max_deltas: 3000,
                 max_rows: 6000,
@@ -957,7 +957,11 @@ mod tests {
                 (&delta.to_account, values[2], values[3]),
             ] {
                 fixture.rows.push(StateTransition::new(
-                    format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        account,
+                    )
+                    .unwrap(),
                     before.to_le_bytes().to_vec(),
                     after.to_le_bytes().to_vec(),
                     OperationKind::Transfer,
@@ -1003,7 +1007,7 @@ mod tests {
             &first_rows,
             &fixture.claims[..1],
             fixture.inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits::default(),
         )
         .unwrap();

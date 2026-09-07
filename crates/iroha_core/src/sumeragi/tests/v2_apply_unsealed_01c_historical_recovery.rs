@@ -1,3 +1,4 @@
+include!("v2_apply_unsealed_01c_second_autonomous_cycle.rs");
 v2_apply_test!(
     historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application,
     {
@@ -524,6 +525,14 @@ v2_apply_test!(
             prepare_qc,
             commit_qc,
         };
+        let retained_terminal_adapters = crate::sumeragi::v2_lane_work::tests::retain_public_lane_evidence_before_application_for_test(
+            Arc::clone(&fixture.state),
+            Arc::clone(&fixture.kura),
+            active_context.context().clone(),
+            limits,
+            &certificate,
+            &commit_votes[0],
+        );
         assert_eq!(
             lane_work.accept_lane_message(
                 crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
@@ -1463,5 +1472,32 @@ v2_apply_test!(
             SumeragiAutonomousLaneExecutionStage::QueueFinalized,
         );
         assert_eq!(terminal_row, finalized_row);
+        crate::sumeragi::v2_lane_work::tests::inspect_applied_public_lane_qc_replay_for_test(
+            Arc::clone(&fixture.state),
+            Arc::clone(&fixture.kura),
+            startup_context,
+            limits,
+            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+                proposal: execution.proposal.clone(),
+                prepare_qc: execution.prepare_qc.clone(),
+                commit_qc: execution.commit_qc.clone(),
+            },
+            [prepare_votes.as_slice(), commit_votes.as_slice()],
+            &validator_keys,
+            &local_key,
+            retained_terminal_adapters,
+        );
+        second_autonomous_cycle_preserves_terminal_replay(
+            &fixture,
+            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+                proposal: execution.proposal.clone(),
+                prepare_qc: execution.prepare_qc.clone(),
+                commit_qc: execution.commit_qc.clone(),
+            },
+            [prepare_votes.as_slice(), commit_votes.as_slice()],
+            &validator_keys,
+            &local_key,
+            limits,
+        );
     }
 );

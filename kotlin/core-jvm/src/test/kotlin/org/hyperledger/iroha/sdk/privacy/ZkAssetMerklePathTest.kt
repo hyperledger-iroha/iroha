@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.privacy
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.security.KeyPairGenerator
@@ -98,7 +100,7 @@ class ZkAssetMerklePathTest {
                 client,
                 ToriiCanonicalRequestAuth(
                     "alice@universal",
-                    keyPair.private,
+                    RequestSigner.ed25519(keyPair.private),
                     1_700_000_000_000L,
                     "reused-provider-nonce",
                 ),
@@ -244,7 +246,7 @@ class ZkAssetMerklePathTest {
     }
 
     private fun canonicalAuth(): ToriiCanonicalRequestAuth =
-        ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private))
 
     private data class MerklePathResponseEntry(
         val commitment: ByteArray,

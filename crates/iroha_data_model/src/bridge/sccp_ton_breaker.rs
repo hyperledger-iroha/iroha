@@ -27,6 +27,8 @@ const OBSERVATION_RECORD_DOMAIN_V1: &[u8] = b"iroha:sccp:ton-breaker-observation
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonBlockIdExtV1")]
 pub struct SccpTonBlockIdExtV1 {
     /// Signed workchain identifier.
     pub workchain: i32,
@@ -63,6 +65,10 @@ impl SccpTonBlockIdExtV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonFinalizedMasterchainBlockV1"
+)]
 pub struct SccpTonFinalizedMasterchainBlockV1 {
     /// Exact finalized masterchain block.
     pub block_id: SccpTonBlockIdExtV1,
@@ -90,6 +96,8 @@ impl SccpTonFinalizedMasterchainBlockV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonAccountStateReadbackV1")]
 pub struct SccpTonAccountStateReadbackV1 {
     /// Exact basechain account opened by the proof.
     pub address: SccpTonAddressV1,
@@ -105,6 +113,14 @@ pub struct SccpTonAccountStateReadbackV1 {
     pub code_hash: [u8; 32],
     /// Representation hash of the complete persistent data cell.
     pub data_hash: [u8; 32],
+    /// Last transaction hash authenticated by the shard-account leaf.
+    pub last_transaction_hash: [u8; 32],
+    /// Last transaction logical time authenticated by the shard-account leaf.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub last_transaction_lt: u64,
+    /// Account storage logical time, strictly after its latest transaction.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub storage_last_transaction_lt: u64,
 }
 
 impl SccpTonAccountStateReadbackV1 {
@@ -120,6 +136,11 @@ impl SccpTonAccountStateReadbackV1 {
             && nonzero(&self.account_state_hash)
             && nonzero(&self.code_hash)
             && nonzero(&self.data_hash)
+            && if self.last_transaction_lt == 0 {
+                self.storage_last_transaction_lt == 0
+            } else {
+                self.storage_last_transaction_lt > self.last_transaction_lt
+            }
     }
 }
 
@@ -129,6 +150,8 @@ impl SccpTonAccountStateReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonReplayForestReadbackV1")]
 pub struct SccpTonReplayForestReadbackV1 {
     /// Absent only for the canonical empty forest.
     pub root_hash: Option<[u8; 32]>,
@@ -158,6 +181,10 @@ impl SccpTonReplayForestReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonBridgePendingReadbackV1"
+)]
 pub struct SccpTonBridgePendingReadbackV1 {
     /// Pending mint dictionary root, absent exactly when its count is zero.
     pub mint_root_hash: Option<[u8; 32]>,
@@ -184,6 +211,8 @@ impl SccpTonBridgePendingReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonDeploymentReadbackV1")]
 pub struct SccpTonDeploymentReadbackV1 {
     /// Exact governed Jetton-master account.
     pub jetton_master_address: SccpTonAddressV1,
@@ -321,6 +350,8 @@ impl SccpTonDeploymentReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonRouteStorageReadbackV1")]
 pub struct SccpTonRouteStorageReadbackV1 {
     /// Exact storage schema version.
     pub storage_version: u8,
@@ -344,6 +375,10 @@ pub struct SccpTonRouteStorageReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonMasterStorageReadbackV1"
+)]
 pub struct SccpTonMasterStorageReadbackV1 {
     /// Exact storage schema version.
     pub storage_version: u8,
@@ -376,6 +411,10 @@ pub struct SccpTonMasterStorageReadbackV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_ton_breaker::SccpTonBreakerObservationRecordV1"
+)]
 pub struct SccpTonBreakerObservationRecordV1 {
     /// Exact governed route revision observed.
     pub route_key: SccpRouteKeyV1,
@@ -530,6 +569,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn account_readback_preserves_authenticated_transaction_coordinates() {
+        let account = SccpTonAccountStateReadbackV1 {
+            address: SccpTonAddressV1 {
+                workchain: 0,
+                account: [1; 32],
+            },
+            shard_block: SccpTonBlockIdExtV1 {
+                workchain: 0,
+                shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
+                seqno: 7,
+                root_hash: [2; 32],
+                file_hash: [3; 32],
+            },
+            registered_masterchain_seqno: 8,
+            shard_state_hash: [4; 32],
+            account_state_hash: [5; 32],
+            code_hash: [6; 32],
+            data_hash: [7; 32],
+            last_transaction_hash: [8; 32],
+            last_transaction_lt: u64::MAX - 1,
+            storage_last_transaction_lt: u64::MAX,
+        };
+        assert!(account.is_well_formed(8));
+        let encoded = norito::to_bytes(&account).expect("encode account readback");
+        assert_eq!(
+            norito::decode_from_bytes::<SccpTonAccountStateReadbackV1>(&encoded).unwrap(),
+            account
+        );
+        #[cfg(feature = "json")]
+        {
+            let encoded = norito::json::to_json(&account).unwrap();
+            assert_eq!(
+                norito::json::from_str::<SccpTonAccountStateReadbackV1>(&encoded).unwrap(),
+                account
+            );
+            let value = norito::json::to_value(&account).unwrap();
+            assert_eq!(
+                value
+                    .get("storage_last_transaction_lt")
+                    .and_then(norito::json::Value::as_str),
+                Some("18446744073709551615"),
+            );
+            for field in [
+                "last_transaction_hash",
+                "last_transaction_lt",
+                "storage_last_transaction_lt",
+            ] {
+                let mut missing = value.clone();
+                missing.as_object_mut().unwrap().remove(field).unwrap();
+                assert!(
+                    norito::json::from_value::<SccpTonAccountStateReadbackV1>(missing).is_err()
+                );
+            }
+        }
+        let mut invalid = account;
+        invalid.storage_last_transaction_lt = invalid.last_transaction_lt;
+        assert!(!invalid.is_well_formed(8));
+        invalid.last_transaction_lt = 0;
+        assert!(!invalid.is_well_formed(8));
+        invalid.storage_last_transaction_lt = 0;
+        assert!(invalid.is_well_formed(8));
+        invalid.registered_masterchain_seqno = 0;
+        assert!(!invalid.is_well_formed(8));
+    }
+
+    #[test]
     fn freshness_uses_checked_fixed_time_window() {
         let ton = 1_000_000;
         assert!(observation_is_fresh_at(ton, ton));
@@ -564,3 +669,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_ton_breaker_schema_tests;

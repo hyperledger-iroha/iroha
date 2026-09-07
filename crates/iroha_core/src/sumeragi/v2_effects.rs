@@ -12233,12 +12233,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
             if proposal_replay.is_some() || certificate.is_none() {
                 return Err(EffectExecutorError::Contract(
-                    "certified genesis Fetch rediscovery changed its authenticated origin".to_owned(),
+                    "certified genesis Fetch rediscovery changed its authenticated origin"
+                        .to_owned(),
                 ));
             }
             if matches!(stage, AuthenticatedGenesisReplayStageV1::StoreAdmission(_)) {
                 return Err(EffectExecutorError::Contract(
-                    "certified genesis Fetch rediscovery observed transient Store admission".to_owned(),
+                    "certified genesis Fetch rediscovery observed transient Store admission"
+                        .to_owned(),
                 ));
             }
             if stage.exactly_authenticates_fetch_rediscovery(&incoming_effect) {
@@ -12268,7 +12270,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .rebind_as_inherited_adapter_effect(&store_effect)
                 .map_err(EffectExecutorError::Contract)?;
             if !matches!(
-                self.prepare_authenticated_genesis_store_replay(key, &store_effect, &store_ownership)?,
+                self.prepare_authenticated_genesis_store_replay(
+                    key,
+                    &store_effect,
+                    &store_ownership
+                )?,
                 AuthenticatedGenesisStoreReplayDispositionV1::Retry(_)
             ) {
                 return Err(EffectExecutorError::Contract(

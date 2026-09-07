@@ -8,6 +8,7 @@ in disposable owner-only temporary directories; none are release evidence.
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 import copy
 import hashlib
 import importlib.util
@@ -24,6 +25,57 @@ assert SPEC is not None and SPEC.loader is not None
 M = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(M)
 COMMIT = "a" * 40
+
+
+@contextmanager
+def canonical_source_fixture(*, gitlink: bool = False):
+    """Use real canonical byte checks with synthetic read-only Git metadata."""
+    with tempfile.TemporaryDirectory(prefix="synthetic-canonical-source-") as temporary:
+        base = Path(temporary).resolve()
+        root = base / "repo"
+        root.mkdir()
+        cargo_home = base / "cargo-home"
+        cargo_home.mkdir()
+        entries = []
+        for relative, contents in (("Cargo.lock", b"# synthetic locked input\n"),
+                                   ("source.rs", b"// synthetic signed blob fixture\n")):
+            path = root / relative
+            path.write_bytes(contents)
+            path.chmod(0o644)
+            blob = hashlib.sha1(f"blob {len(contents)}\0".encode() + contents).hexdigest()
+            entries.append((relative.encode(), "100644", blob))
+        if gitlink:
+            (root / "docs").mkdir()
+            entries.append((b"docs", "160000", "d" * 40))
+        entries.sort()
+        paths = [os.fsdecode(path) for path, _, _ in entries]
+        listing = b"".join(
+            f"{mode} {'commit' if mode == '160000' else 'blob'} {oid}\t".encode() + path + b"\0"
+            for path, mode, oid in entries
+        )
+        responses = {
+            ("rev-parse", "--show-toplevel"): str(root).encode() + b"\n",
+            ("rev-parse", "HEAD"): COMMIT.encode() + b"\n",
+            ("verify-commit", COMMIT): b"",
+            ("ls-tree", "-rz", COMMIT): listing,
+        }
+        canonical_responses = {
+            ("rev-parse", "--verify", "HEAD^{commit}"): COMMIT,
+            ("rev-parse", "--verify", f"{COMMIT}^{{tree}}"): "b" * 40,
+            ("rev-parse", "--show-object-format"): "sha1",
+        }
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {"CARGO_HOME": str(cargo_home)}))
+            git = stack.enter_context(mock.patch.object(
+                M, "git_bytes", side_effect=lambda _root, args: responses[tuple(args)]))
+            stack.enter_context(mock.patch.object(M._SOURCE_TOOLS, "_reject_active_git_operations"))
+            stack.enter_context(mock.patch.object(M._SOURCE_TOOLS, "_git_unmerged_paths", return_value=[]))
+            stack.enter_context(mock.patch.object(M._SOURCE_TOOLS, "_git_paths", return_value=[]))
+            stack.enter_context(mock.patch.object(M._SOURCE_TOOLS, "_git_index_entries", return_value=entries))
+            stack.enter_context(mock.patch.object(M._SOURCE_TOOLS, "_git_source_paths", return_value=paths))
+            stack.enter_context(mock.patch.object(M._SOURCE_TOOLS, "_git_stdout",
+                side_effect=lambda _root, *args: canonical_responses[args]))
+            yield root, git
 
 
 def hash_literal(number: int, *, mark: bool = True) -> str:
@@ -438,28 +490,92 @@ class DriverBoundaryTests(unittest.TestCase):
         self.assertEqual(environment["PATH"], "/test/toolchain")
         self.assertTrue((set(injected) - {"PATH", "HOME"}).isdisjoint(environment))
 
+    def test_source_checker_loads_from_checkout_not_ambient_module(self) -> None:
+        with mock.patch.dict(M.sys.modules, {"compute_workspace_source_manifest": mock.Mock()}):
+            loaded = M._load_source_manifest_tools()
+        self.assertEqual(Path(loaded.__file__).resolve(), SCRIPT.parent / "compute_workspace_source_manifest.py")
+        self.assertTrue(callable(loaded.release_source_identity))
+
     def test_signed_blob_seal_detects_edits_hidden_by_git_status(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="synthetic-source-seal-") as temporary:
-            root = Path(temporary).resolve()
-            source = root / "source.rs"
-            original = b"// synthetic signed blob fixture\n"
-            source.write_bytes(original)
-            source.chmod(0o644)
-            blob = hashlib.sha1(f"blob {len(original)}\0".encode()+original).hexdigest()
-            responses = {
-                ("rev-parse", "--show-toplevel"): str(root).encode()+b"\n",
-                ("rev-parse", "HEAD"): COMMIT.encode()+b"\n",
-                ("status", "--porcelain=v1", "--untracked-files=all"): b"",
-                ("verify-commit", COMMIT): b"",
-                ("ls-tree", "-rz", COMMIT): f"100644 blob {blob}\tsource.rs\0".encode(),
-                ("rev-parse", f"{COMMIT}^{{tree}}"): b"b"*40+b"\n"}
-            with mock.patch.object(M, "git_bytes", side_effect=lambda _repo, args: responses[tuple(args)]) as git, \
-                 mock.patch.object(M, "reject_unsigned_cargo_configuration"):
-                self.assertEqual(M.source_seal(root, COMMIT)["tracked_files"], 1)
-                self.assertIn(mock.call(root, ["verify-commit", COMMIT]), git.call_args_list)
-                source.write_bytes(b"// substituted despite clean status\n")
-                with self.assertRaisesRegex(M.CampaignError, "signed source bytes"):
+        with canonical_source_fixture() as (root, git):
+            seal = M.source_seal(root, COMMIT)
+            identity = M._SOURCE_TOOLS.release_source_identity(root)
+            self.assertEqual(seal["tracked_files"], 2)
+            self.assertEqual(seal["source_sha256"], identity["workspace_source_manifest_sha256"])
+            self.assertIn(mock.call(root, ["verify-commit", COMMIT]), git.call_args_list)
+            (root / "source.rs").write_bytes(b"// substituted despite clean Git metadata\n")
+            with self.assertRaisesRegex(M.CampaignError, "canonical release source refused.*tracked changes"):
+                M.source_seal(root, COMMIT)
+
+    def test_canonical_source_accepts_empty_gitlink_and_rejects_materialization(self) -> None:
+        for mutation in ("populated", "missing", "symlink"):
+            with self.subTest(mutation=mutation), canonical_source_fixture(gitlink=True) as (root, _):
+                seal = M.source_seal(root, COMMIT)
+                self.assertEqual(seal["tracked_files"], 3)
+                self.assertEqual(seal["tree"], "b" * 40)
+                docs = root / "docs"
+                if mutation == "populated":
+                    (docs / "unsealed.md").write_text("not in parent source closure\n")
+                else:
+                    docs.rmdir()
+                    if mutation == "symlink":
+                        docs.symlink_to(root.parent / "missing-docs", target_is_directory=True)
+                with self.assertRaisesRegex(M.CampaignError, "canonical release source refused.*docs"):
                     M.source_seal(root, COMMIT)
+
+    def test_canonical_source_refusals_are_never_accepted(self) -> None:
+        failures = [error("synthetic refusal") for error in (
+            M._SOURCE_TOOLS.ActiveGitOperationError, M._SOURCE_TOOLS.UnmergedSourceError,
+            M._SOURCE_TOOLS.DirtyReleaseSourceError, M._SOURCE_TOOLS.SourceSealError)]
+        failures.append(M.subprocess.CalledProcessError(1, ["git", "synthetic-read-only-check"]))
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), canonical_source_fixture() as (root, _):
+                with mock.patch.object(M._SOURCE_TOOLS, "release_source_identity", side_effect=failure):
+                    with self.assertRaisesRegex(M.CampaignError, "canonical release source refused") as raised:
+                        M.source_seal(root, COMMIT)
+                    self.assertIs(raised.exception.__cause__, failure)
+
+    def test_canonical_source_rejects_wrong_commit_index_and_capture_substitution(self) -> None:
+        with canonical_source_fixture() as (root, _):
+            identity = M._SOURCE_TOOLS.release_source_identity(root)
+            for field in ("head_commit", "index_tree"):
+                altered = {**identity, field: "c" * 40}
+                with self.subTest(field=field), mock.patch.object(
+                        M._SOURCE_TOOLS, "release_source_identity", return_value=altered):
+                    with self.assertRaisesRegex(M.CampaignError, "canonical source commit/tree differs"):
+                        M.source_seal(root, COMMIT)
+            for field in ("workspace_source_manifest_sha256", "cargo_lock_sha256"):
+                altered = {**identity, field: "c" * 64}
+                with self.subTest(field=field), mock.patch.object(
+                        M._SOURCE_TOOLS, "release_source_identity", side_effect=[identity, altered]):
+                    with self.assertRaisesRegex(M.CampaignError, "source changed during sealing"):
+                        M.source_seal(root, COMMIT)
+
+    def test_canonical_source_still_requires_signature_root_and_requested_commit(self) -> None:
+        cases = [("root", ["rev-parse", "--show-toplevel"]),
+                 ("commit", ["rev-parse", "HEAD"]),
+                 ("signature", ["verify-commit", COMMIT])]
+        for name, rejected in cases:
+            with self.subTest(check=name), canonical_source_fixture() as (root, git):
+                original = git.side_effect
+                def altered(candidate, arguments):
+                    if arguments == rejected:
+                        if name == "signature":
+                            raise M.CampaignError("signature refused")
+                        return b"not-the-requested-root-or-commit\n"
+                    return original(candidate, arguments)
+                git.side_effect = altered
+                with mock.patch.object(M._SOURCE_TOOLS, "release_source_identity") as identity:
+                    with self.assertRaises(M.CampaignError):
+                        M.source_seal(root, COMMIT)
+                    identity.assert_not_called()
+
+    def test_canonical_source_still_rejects_unsigned_cargo_configuration(self) -> None:
+        with canonical_source_fixture() as (root, _):
+            M.source_seal(root, COMMIT)
+            (root.parent / "cargo-home" / "config.toml").write_text("# unsigned build override\n")
+            with self.assertRaisesRegex(M.CampaignError, "unsigned Cargo"):
+                M.source_seal(root, COMMIT)
 
     def test_unsigned_cargo_configuration_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="synthetic-cargo-configuration-") as temporary:

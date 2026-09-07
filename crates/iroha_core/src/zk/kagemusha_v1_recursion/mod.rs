@@ -188,9 +188,8 @@ pub use state_relation::{
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use terminal_authorization::{
-    KagemushaCommitWrapperDeferredAuditsV1, KagemushaCommitWrapperEpCircuitV1,
-    KagemushaCommitWrapperEqCircuitV1, KagemushaCommitWrapperWitnessV1,
-    KagemushaTerminalAuthorizationDeferredAuditsV1, KagemushaTerminalAuthorizationEpCircuitV1,
+    KagemushaCommitWrapperEpCircuitV1, KagemushaCommitWrapperEqCircuitV1,
+    KagemushaCommitWrapperWitnessV1, KagemushaTerminalAuthorizationEpCircuitV1,
     KagemushaTerminalAuthorizationEpWitnessV1, KagemushaTerminalAuthorizationEqCircuitV1,
     KagemushaTerminalAuthorizationEqWitnessV1, KagemushaTerminalAuthorizationWitnessV1,
     TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, build_kagemusha_commit_wrapper_ep_v1,

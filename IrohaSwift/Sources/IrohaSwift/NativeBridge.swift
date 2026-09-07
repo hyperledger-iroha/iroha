@@ -111,6 +111,7 @@ enum NoritoBridgeLoader {
         "connect_norito_alias_instruction_round_trip_v1",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
+        "iroha_privacy_validate_exact12_capability_manifest_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
         "iroha_privacy_free_buffer",
@@ -2018,6 +2019,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCompiledProfileCatalogFn: PrivacyCompiledProfileCatalogFn? = nil
     private var privacyValidateCompiledProfileCatalogFn: PrivacyValidateCompiledProfileCatalogFn? = nil
+    private var privacyValidateExact12CapabilityManifestFn: PrivacyValidateCompiledProfileCatalogFn? = nil
     private var privacyExact12FixtureBundleFn: PrivacyExact12FixtureBundleFn? = nil
     private var privacyValidateExact12FixtureBundleFn: PrivacyValidateExact12FixtureBundleFn? = nil
     // Privacy outputs point past a private allocation header. Only the dedicated
@@ -2142,6 +2144,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCompiledProfileCatalogFn: Any? = nil
     private let privacyValidateCompiledProfileCatalogFn: Any? = nil
+    private let privacyValidateExact12CapabilityManifestFn: Any? = nil
     private let privacyExact12FixtureBundleFn: Any? = nil
     private let privacyValidateExact12FixtureBundleFn: Any? = nil
     private let privacyFreeFn: Any? = nil
@@ -2156,6 +2159,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard let handle else {
             self.privacyCompiledProfileCatalogFn = nil
             self.privacyValidateCompiledProfileCatalogFn = nil
+            self.privacyValidateExact12CapabilityManifestFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
@@ -2179,6 +2183,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.privacyValidateCompiledProfileCatalogFn = nil
+        }
+        if let validateCapabilitySymbol = dlsym(
+            handle,
+            "iroha_privacy_validate_exact12_capability_manifest_v1"
+        ) {
+            self.privacyValidateExact12CapabilityManifestFn = unsafeBitCast(
+                validateCapabilitySymbol,
+                to: PrivacyValidateCompiledProfileCatalogFn.self
+            )
+        } else {
+            self.privacyValidateExact12CapabilityManifestFn = nil
         }
         if let fixtureSymbol = dlsym(handle, "iroha_privacy_exact12_fixture_bundle_v1") {
             self.privacyExact12FixtureBundleFn = unsafeBitCast(
@@ -3172,6 +3187,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.parliamentTimedOvnBallotFromProofFn = nil
             self.privacyCompiledProfileCatalogFn = nil
             self.privacyValidateCompiledProfileCatalogFn = nil
+            self.privacyValidateExact12CapabilityManifestFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
@@ -3746,6 +3762,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion
             && privacyCompiledProfileCatalogFn != nil
             && privacyValidateCompiledProfileCatalogFn != nil
+            && privacyValidateExact12CapabilityManifestFn != nil
             && privacyExact12FixtureBundleFn != nil
             && privacyValidateExact12FixtureBundleFn != nil
             && privacyFreeFn != nil
@@ -6053,6 +6070,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         return archive.withUnsafeBytes { bytes in
             privacyValidateCompiledProfileCatalogFn(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(archive.count)
+            )
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    func privacyExact12CapabilityManifestValidationStatusV1(_ archive: Data) -> Int32? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let privacyValidateExact12CapabilityManifestFn,
+              archive.count <= PrivacyNativeBridge.exact12CapabilityManifestArchiveMaximumBytes else {
+            return nil
+        }
+        return archive.withUnsafeBytes { bytes in
+            privacyValidateExact12CapabilityManifestFn(
                 bytes.bindMemory(to: UInt8.self).baseAddress,
                 CUnsignedLong(archive.count)
             )

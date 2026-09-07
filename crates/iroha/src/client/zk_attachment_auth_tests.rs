@@ -26,7 +26,11 @@ fn zk_attachment_calls_sign_the_exact_method_path_and_body_once() {
                 .push(snapshot);
             Ok(response)
         },
-        || {
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_zk_attachment(br#"{"proof":1}"#, APPLICATION_JSON)
                 .expect("signed attachment upload");
@@ -91,7 +95,11 @@ fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
                 .push(snapshot);
             Ok(response)
         },
-        || {
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client
                 .post_zk_verify_batch_norito(&[0x01, 0x02])
                 .expect("signed Norito verify batch");
@@ -104,7 +112,7 @@ fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
                     "authority": { "placeholder": true },
                     "fee_payment": { "placeholder": true },
                     "metadata": {},
-                    "bytecode": { "placeholder": true },
+                    "bytecode": { "placeholder": true }
                 }))
                 .expect("signed IVM derive");
         },

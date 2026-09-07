@@ -753,6 +753,8 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, GovernedPricingError> {
+    let _canonical_layout =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let exact = norito::core::encoded_frame_len(value)
         .map_err(|error| GovernedPricingError::Encoding(error.to_string()))?;
     if exact > max_bytes {
@@ -762,7 +764,7 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
             max: max_bytes,
         });
     }
-    let bytes = norito::to_bytes(value)
+    let bytes = norito::encode_canonical(value)
         .map_err(|error| GovernedPricingError::Encoding(error.to_string()))?;
     if bytes.len() > max_bytes {
         return Err(GovernedPricingError::EncodedPayloadTooLarge {
@@ -789,17 +791,16 @@ where
             max: max_bytes,
         });
     }
-    let decoded = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
-        GovernedPricingError::Decoding {
-            payload,
-            reason: error.to_string(),
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            GovernedPricingError::NonCanonicalEncoding { payload }
+        } else {
+            GovernedPricingError::Decoding {
+                payload,
+                reason: error.to_string(),
+            }
         }
-    })?;
-    let canonical = encode_canonical_bounded(payload, &decoded, max_bytes)?;
-    if canonical != bytes {
-        return Err(GovernedPricingError::NonCanonicalEncoding { payload });
-    }
-    Ok(decoded)
+    })
 }
 /// Governed pricing validation failures.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -1082,6 +1083,42 @@ mod tests {
         governed
     }
     #[test]
+    fn signed_canonical_boundaries_ignore_enclosing_norito_layout() {
+        let policy = policy();
+        let envelope = signed_manifest(&policy, ADMITTED_AT, None, &[0, 1]);
+        let policy_bytes = policy.canonical_bytes().expect("policy bytes");
+        let envelope_bytes = envelope.canonical_bytes().expect("signed envelope bytes");
+        let policy_digest = policy.canonical_digest().expect("policy digest");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                policy.canonical_bytes().expect("policy bytes"),
+                policy_bytes
+            );
+            assert_eq!(
+                policy.canonical_digest().expect("policy digest"),
+                policy_digest
+            );
+            assert_eq!(
+                envelope.canonical_bytes().expect("envelope bytes"),
+                envelope_bytes
+            );
+            assert_eq!(
+                decode_pricing_trust_policy(&policy_bytes).expect("canonical policy"),
+                policy
+            );
+            assert_eq!(
+                decode_governed_pricing_manifest(&envelope_bytes).expect("canonical envelope"),
+                envelope
+            );
+            envelope
+                .verify(&policy, ADMITTED_AT)
+                .expect("unchanged signed authorization");
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+    }
+
+    #[test]
     fn threshold_governed_pricing_manifest_verifies() {
         let policy = policy();
         let governed = signed_manifest(&policy, ADMITTED_AT + 100, None, &[0, 1]);
@@ -1339,7 +1376,7 @@ mod tests {
         ));
     }
     #[test]
-    fn canonical_decoders_reject_trailing_compressed_and_oversized_inputs() {
+    fn canonical_decoders_reject_trailing_compression_tag_and_oversized_inputs() {
         let policy = policy();
         let governed = signed_manifest(&policy, ADMITTED_AT, None, &[0, 1]);
         let policy_bytes = policy.canonical_bytes().expect("policy bytes");
@@ -1358,9 +1395,7 @@ mod tests {
             decode_pricing_trust_policy(&trailing),
             Err(GovernedPricingError::Decoding { .. })
         ));
-        let compressed =
-            norito::to_compressed_bytes(&policy, Some(norito::CompressionConfig::default()))
-                .expect("compress policy");
+        let compressed = crate::canonical_test_support::with_compression_tag(&policy);
         assert!(matches!(
             decode_pricing_trust_policy(&compressed),
             Err(GovernedPricingError::NonCanonicalEncoding { .. })

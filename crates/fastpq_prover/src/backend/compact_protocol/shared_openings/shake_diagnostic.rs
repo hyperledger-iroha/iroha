@@ -65,7 +65,7 @@ fn complete_candidate_transfer_verifies_after_private_witnesses_are_dropped() {
             .into_iter()
             .map(|(account, before, after)| {
                 StateTransition::new(
-                    format!("asset/{asset}/{account}").into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(&asset, account).unwrap(),
                     before.to_le_bytes().to_vec(),
                     after.to_le_bytes().to_vec(),
                     OperationKind::Transfer,
@@ -114,7 +114,7 @@ fn complete_candidate_transfer_verifies_after_private_witnesses_are_dropped() {
             &rows,
             &claims,
             inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits::default(),
         )
         .unwrap();
@@ -182,7 +182,7 @@ fn complete_candidate_transfer_verifies_after_private_witnesses_are_dropped() {
         &rows,
         &claims,
         inputs,
-        ProofSemantics::TransferStateTransition,
+        ProofSemantics::StateTransition,
         PublicTransferLimits::default(),
     )
     .unwrap();
@@ -288,7 +288,7 @@ fn complete_candidate_transfer_verifies_after_private_witnesses_are_dropped() {
         &rows,
         &claims,
         changed_inputs,
-        ProofSemantics::TransferStateTransition,
+        ProofSemantics::StateTransition,
         PublicTransferLimits::default(),
     )
     .unwrap();

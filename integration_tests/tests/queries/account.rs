@@ -30,12 +30,13 @@ fn find_accounts_with_asset() -> Result<()> {
                 None,
             )
         };
-        test_client.submit_blocking(
+        test_client.submit(
             Register::asset_definition(asset_definition.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         // Checking results before all
         let received_asset_definition = test_client
+            .client()
             .query(FindAssetsDefinitions::new())
             .execute_all()?
             .into_iter()
@@ -56,7 +57,7 @@ fn find_accounts_with_asset() -> Result<()> {
             .cloned()
             .map(|account_id| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
-        test_client.submit_all_blocking(
+        test_client.submit_all(
             register_accounts,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -66,13 +67,14 @@ fn find_accounts_with_asset() -> Result<()> {
             .map(|account_id| AssetId::new(definition_id.clone(), account_id))
             .map(|asset_id| Mint::asset_quantity(1u32, asset_id))
             .collect::<Vec<_>>();
-        test_client.submit_all_blocking(
+        test_client.submit_all(
             mint_asset,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let accounts = HashSet::from(accounts);
         // Checking results
         let received_asset_definition = test_client
+            .client()
             .query(FindAssetsDefinitions::new())
             .execute_all()?
             .into_iter()
@@ -81,6 +83,7 @@ fn find_accounts_with_asset() -> Result<()> {
         assert_eq!(received_asset_definition.id(), asset_definition.id());
         assert_eq!(received_asset_definition.spec(), NumericSpec::default());
         let found_accounts = test_client
+            .client()
             .query(FindAccountsWithAsset::new(definition_id))
             .execute_all()?;
         let found_ids = found_accounts

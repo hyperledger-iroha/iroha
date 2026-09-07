@@ -26,6 +26,8 @@ pub type MeasurementId = Digest32;
 /// Canonical payload signed by a blinded measurement client for relay bandwidth proofs.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayBandwidthProofPayloadV1")]
 pub struct RelayBandwidthProofPayloadV1 {
     /// Relay fingerprint for which the bandwidth was measured.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1022,3 +1024,6 @@ mod tests {
         assert_eq!(dispute.resolution_metadata, resolution);
     }
 }
+
+#[cfg(test)]
+mod captured_incentives_schema_tests;

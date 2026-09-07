@@ -1,12 +1,13 @@
 ## Kaigi Relay Telemetry API (TORII-APP-6)
 
-Status: Implemented 2026-04-05  
+Status: Current first-release implementation; deployment qualification is separate.
+
 Owners: Kaigi Team, Torii Platform, Observability  
 Roadmap reference: TORII-APP-6 — Kaigi relay telemetry API
 
-This document describes the live Kaigi relay telemetry surface exposed by Torii.
-The implementation shipped in `crates/iroha_torii` v2.0.0-rc.2.0 behind the
-`app_api` + `telemetry` feature gates. Responses are Norito-backed and mirror
+This document describes the Kaigi relay telemetry implementation in
+`crates/iroha_torii`, with the per-route `app_api` and `telemetry` requirements
+listed below. Responses are Norito-backed and mirror
 the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 
 ### Endpoints

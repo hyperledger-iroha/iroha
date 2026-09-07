@@ -26,7 +26,7 @@ fn find_accounts_with_asset() {
         // Ensure Alice has the expected default metadata key used by assertions below.
         // Some environments may not preload this value via genesis.
         test_client
-            .submit_blocking(
+            .submit(
                 SetKeyValue::account(
                     ALICE_ID.clone(),
                     key.clone(),
@@ -37,13 +37,14 @@ fn find_accounts_with_asset() {
             .unwrap();
         // Ensure Bob account exists (defaults genesis may omit it).
         let existing_accounts = test_client
+            .client()
             .query(FindAccounts)
             .execute_all()
             .expect("fetch accounts");
         let bob_missing = existing_accounts.iter().all(|acc| acc.id() != &*BOB_ID);
         if bob_missing {
             test_client
-                .submit_blocking(
+                .submit(
                     Grant::account_permission(
                         CanRegisterAccount {
                             domain: wonderland_domain.clone(),
@@ -54,7 +55,7 @@ fn find_accounts_with_asset() {
                 )
                 .expect("Failed to grant account registration permission to Alice");
             test_client
-                .submit_blocking(
+                .submit(
                     Register::account(Account::new(BOB_ID.clone())),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -66,7 +67,7 @@ fn find_accounts_with_asset() {
             .expect("network has at least one peer")
             .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
         bob_client
-            .submit_blocking(
+            .submit(
                 SetKeyValue::account(
                     BOB_ID.clone(),
                     key.clone(),
@@ -82,7 +83,7 @@ fn find_accounts_with_asset() {
             )
             .unwrap();
         bob_client
-            .submit_blocking(
+            .submit(
                 SetKeyValue::account(BOB_ID.clone(), another_key.clone(), "value"),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -93,6 +94,7 @@ fn find_accounts_with_asset() {
         // BOB      {"funny": "value"}  "value"
         // check that bulk retrieval works as expected
         let key_values = test_client
+            .client()
             .query(FindAccounts)
             .execute_all()
             .unwrap()
@@ -122,6 +124,7 @@ fn find_accounts_with_asset() {
         assert_eq!(key_values.get(&*BOB_ID), Some(&expected_bob));
         // check that missing metadata key produces an error
         let alice_no_key_err = test_client
+            .client()
             .query(FindAccounts)
             .execute_all()
             .unwrap()
@@ -143,6 +146,7 @@ fn find_accounts_with_asset() {
         assert_eq!(returned_key, another_key);
         // check single key retrieval
         let another_key_value = test_client
+            .client()
             .query(FindAccounts)
             .execute_all()
             .unwrap()
@@ -153,6 +157,7 @@ fn find_accounts_with_asset() {
         assert_eq!(another_key_value, "value".into());
         // check predicates on non-existing metadata (they should just evaluate to false)
         let accounts = test_client
+            .client()
             .query(FindAccounts)
             .execute_all()
             .unwrap()

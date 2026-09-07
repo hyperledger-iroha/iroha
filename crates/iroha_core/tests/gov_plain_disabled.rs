@@ -8,14 +8,17 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{
-    events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
+    Registrable, account::Account, events::data::governance::GovernanceEvent, isi::Grant,
+    isi::governance::CastPlainBallot, permission::Permission,
 };
+use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 #[test]
 fn plain_ballot_rejected_when_disabled() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     // Disable plain voting
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = false;
@@ -31,13 +34,19 @@ fn plain_ballot_rejected_when_disabled() {
     );
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let permission: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "rid-disabled".into(),
+    }
+    .into();
+    Grant::account_permission(permission, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant exact ballot permission");
     let instr = CastPlainBallot {
         referendum_id: "rid-disabled".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 1000_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 1000_u64.into(),
+        duration_blocks: 10,
     };
     let err = instr.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s = format!("{err}");

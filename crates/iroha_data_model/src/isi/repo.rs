@@ -7,6 +7,7 @@ use iroha_crypto::Hash;
 use norito::codec::Encode;
 isi! {
     /// Initiate or roll a repo agreement between two counterparties.
+    #[norito_schema(name = "iroha_data_model::isi::repo::RepoIsi")]
     pub struct RepoIsi {
         /// Stable agreement identifier shared across the lifecycle.
         pub agreement_id: RepoAgreementId,
@@ -52,6 +53,7 @@ isi! {
     /// Early unwind and collateral substitution are intentionally not
     /// representable by this instruction. Any recorded participant may submit
     /// it after maturity, so no single participant can veto settlement.
+    #[norito_schema(name = "iroha_data_model::isi::repo::ReverseRepoIsi")]
     pub struct ReverseRepoIsi {
         /// Identifier of the repo agreement being unwound.
         pub agreement_id: RepoAgreementId,
@@ -129,6 +131,7 @@ impl ReverseRepoIsi {
 }
 isi! {
     /// Record a margin check for an active repo agreement.
+    #[norito_schema(name = "iroha_data_model::isi::repo::RepoMarginCallIsi")]
     pub struct RepoMarginCallIsi {
         /// Identifier of the repo agreement undergoing a margin check.
         pub agreement_id: RepoAgreementId,

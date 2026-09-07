@@ -155,11 +155,12 @@ def write_source_budget(root: Path, manifest: dict[str, Any]) -> None:
         json.dumps(
             {
                 "schema_version": contract["schema_version"],
-                "aggregate_rust": {
-                    "baseline": contract["baseline"],
-                    "ceiling": contract["ceiling"],
+                "limits": {
+                    "production": contract["production_limit"],
+                    "test": contract["test_limit"],
                 },
                 "excluded_prefixes": contract["excluded_prefixes"],
+                "exceptions": {},
             }
         ),
         encoding="utf-8",
@@ -210,7 +211,10 @@ def test_valid_mocked_object_graph_passes(
         "roles": 5,
         "selected_paths": 14,
         "historical_rust_paths": 19_456,
-        "cargo_lock_bytes": len(store.lock_bytes),
+        "historical_cargo_lock_bytes": len(store.lock_bytes),
+        "head_cargo_lock_blob": manifest["signed_lock_anchor"]["cargo_lock"]["blob"],
+        "head_cargo_lock_bytes": len(store.lock_bytes),
+        "head_cargo_lock_sha256": hashlib.sha256(store.lock_bytes).hexdigest(),
     }
 
 
@@ -228,8 +232,9 @@ def test_valid_mocked_object_graph_passes(
         lambda payload: payload["signed_lock_anchor"]["signature"].update(
             {"cryptographic_signer_authentication": True}
         ),
-        lambda payload: payload["source_budget"].update({"baseline": 5_067_262}),
-        lambda payload: payload["source_budget"].update({"ceiling": 4_540_001}),
+        lambda payload: payload["source_budget"].update({"production_limit": 5_001}),
+        lambda payload: payload["source_budget"].update({"test_limit": 3_001}),
+        lambda payload: payload["source_budget"].update({"ceiling": 1}),
         lambda payload: payload["source_budget"]["excluded_prefixes"].reverse(),
     ],
 )
@@ -434,7 +439,7 @@ def test_cargo_lock_content_mutations_are_rejected(
         MODULE.validate_provenance(tmp_path, manifest, store)
 
 
-@pytest.mark.parametrize("field", ["baseline", "ceiling"])
+@pytest.mark.parametrize("field", ["production", "test"])
 def test_current_source_budget_mutations_are_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -443,8 +448,75 @@ def test_current_source_budget_mutations_are_rejected(
     manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
     budget_path = tmp_path / manifest["source_budget"]["path"]
     budget = json.loads(budget_path.read_text(encoding="utf-8"))
-    budget["aggregate_rust"][field] += 1
+    budget["limits"][field] += 1
     budget_path.write_text(json.dumps(budget), encoding="utf-8")
 
     with pytest.raises(MODULE.ProvenanceError, match=f"current source budget {field}"):
+        MODULE.validate_provenance(tmp_path, manifest, store)
+
+
+def test_current_source_budget_rejects_reintroduced_aggregate_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    budget_path = tmp_path / manifest["source_budget"]["path"]
+    budget = json.loads(budget_path.read_text(encoding="utf-8"))
+    budget["aggregate_rust"] = {"ceiling": 1}
+    budget_path.write_text(json.dumps(budget), encoding="utf-8")
+
+    with pytest.raises(MODULE.ProvenanceError, match="current source budget has invalid keys"):
+        MODULE.validate_provenance(tmp_path, manifest, store)
+
+
+@pytest.mark.parametrize("valid_blob", [True, False])
+def test_head_lock_can_change_only_with_verified_blob_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, valid_blob: bool,
+) -> None:
+    verify_object_id = MODULE.verify_object_id
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    store.head_oid = "f" * 40
+    updated_bytes = b"fixture blob\n"
+    updated_oid = MODULE.git_object_id("blob", updated_bytes)
+    if not valid_blob:
+        updated_oid = "e" * 40
+    store.entries[(store.head_oid, "Cargo.lock")] = MODULE.TreeEntry(
+        mode="100644", object_type="blob", oid=updated_oid, path="Cargo.lock",
+    )
+    verified: list[str] = []
+
+    def verify_candidate(oid: str, kind: str, data: bytes) -> None:
+        if oid == updated_oid:
+            verified.append(oid)
+            verify_object_id(oid, kind, data)
+
+    monkeypatch.setattr(MODULE, "verify_object_id", verify_candidate)
+    if not valid_blob:
+        with pytest.raises(MODULE.ProvenanceError, match="unexpected id"):
+            MODULE.validate_provenance(tmp_path, manifest, store)
+        return
+
+    report = MODULE.validate_provenance(tmp_path, manifest, store)
+    assert verified == [updated_oid]
+    assert report["historical_cargo_lock_bytes"] == len(store.lock_bytes)
+    assert report["head_cargo_lock_bytes"] == len(updated_bytes)
+    assert report["head_cargo_lock_blob"] == updated_oid
+    assert report["head_cargo_lock_sha256"] == hashlib.sha256(updated_bytes).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("mode", "object_type"),
+    [(None, None), ("120000", "blob"), ("100755", "blob"), ("040000", "tree")],
+)
+def test_head_lock_must_be_a_regular_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    mode: str | None, object_type: str | None,
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    store.head_oid = "f" * 40
+    if mode is not None:
+        store.entries[(store.head_oid, "Cargo.lock")] = MODULE.TreeEntry(
+            mode=mode, object_type=object_type, oid="e" * 40, path="Cargo.lock",
+        )
+
+    with pytest.raises(MODULE.ProvenanceError, match="HEAD Cargo.lock must be a regular"):
         MODULE.validate_provenance(tmp_path, manifest, store)

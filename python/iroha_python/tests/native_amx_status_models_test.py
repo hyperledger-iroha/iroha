@@ -16,6 +16,7 @@ from iroha_torii_client.native_amx import (
 from iroha_python import (
     SumeragiLaneRelayEnvelope,
     SumeragiLaneSettlementCommitment,
+    SumeragiNativeAmxParticipantSettlement,
     SumeragiNativeAmxPhase,
 )
 
@@ -683,6 +684,9 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         receipt = deepcopy(leg["participant_settlement"]["source_ids"][0])
         leg["participant_settlement"]["source_ids"] = [receipt] * 4097
 
+    def empty_recursive_settlement(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = []
+
     def recursive_settlement(leg: dict[str, Any]) -> None:
         leg["participant_settlement"]["native_amx_receipts"] = [{}]
 
@@ -716,6 +720,7 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         wrong_settlement_tx_count,
         empty_settlement,
         oversized_settlement,
+        empty_recursive_settlement,
         recursive_settlement,
     )
     for mutate in mutations:

@@ -163,6 +163,7 @@ def test_evidence_phase_builds_and_uses_production_validator() -> None:
         "--bin sccp_release_evidence"
     ) in trace
     assert "pytests/scripts/sccp_release_tooling_test.py" in trace
+    assert "pytests/scripts/sccp_wire_inventory_test.py" in trace
     assert "scripts/sccp_release_fixture.py" in trace
     assert "sccp_release_fixture.py reject" in trace
     assert " build --output-dir" not in trace
@@ -332,6 +333,7 @@ def test_retired_operator_surface_is_physically_absent() -> None:
     assert actual == allowed
     assert {path.name for path in (ROOT / "pytests" / "scripts").glob("sccp*_test.py")} == {
         "sccp_release_tooling_test.py",
+        "sccp_wire_inventory_test.py",
     }
 
 

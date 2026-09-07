@@ -135,6 +135,8 @@ mod model {
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::name::model::Name")]
     pub struct Name(pub(super) ConstString);
 }
 impl Name {
@@ -395,6 +397,21 @@ impl norito::json::JsonDeserialize for Name {
             .as_str()
             .ok_or_else(|| name_json_error("Name must be a JSON string"))?;
         Self::parse_for_json_decode(candidate)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for Name {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.as_ref())
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for Name {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        Self::parse_for_json_decode(key)
     }
 }
 // Norito deserialization is derived via `Decode` above.

@@ -82,8 +82,21 @@ fn normalize_value_expr(expr: Expr) -> syn::Result<Expr> {
         Ok(expr)
     }
 }
+
 #[allow(clippy::too_many_lines)]
 pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> TokenStream {
+    let schema_name = match crate::utils::required_child_schema_name(
+        input,
+        "registrable_builder",
+        "RegistrableBuilder",
+        "registration builder",
+    ) {
+        Ok(name) => name,
+        Err(error) => {
+            emit!(emitter, error.span(), "{}", error);
+            return quote!();
+        }
+    };
     let name = &input.ident;
     let builder_name = format_ident!("New{}", name);
     let mut item_attrs: Vec<Attribute> = input
@@ -207,6 +220,8 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         .collect::<Vec<_>>();
     quote! {
         #[derive(Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = #schema_name)]
         #[cfg_attr(
             feature = "json",
             derive(crate::DeriveJsonSerialize, crate::DeriveFastJson)
@@ -293,3 +308,6 @@ fn add_doc_if_missing(attrs: &mut Vec<syn::Attribute>, default: impl AsRef<str>)
     let doc = default.as_ref();
     attrs.push(syn::parse_quote!(#[doc = #doc]));
 }
+
+#[cfg(test)]
+mod tests;

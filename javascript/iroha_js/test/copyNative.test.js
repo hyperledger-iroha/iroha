@@ -1598,6 +1598,8 @@ test("required-export probe rejects missing strict boundary symbols", (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
   for (const missing of [
+    "buildKaigiAuthorizationProofV1",
+    "buildKaigiUsageProofV1",
     "privacyCompiledProfileCatalogV1",
     "privacyExact12CapabilityManifestJsonV1",
     "privacyRequireExact12CapabilityTupleV1",

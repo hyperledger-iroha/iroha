@@ -125,6 +125,7 @@ fn materialized_aggregates(
 
 #[test]
 fn exact_small_constraint_aggregates_match_canonical_materialization() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
     for (bound, coefficient_count) in [
         (ExactBound::One, 1),
         (ExactBound::One, 3),
@@ -150,6 +151,7 @@ fn exact_small_constraint_aggregates_match_canonical_materialization() {
 
 #[test]
 fn exact_small_constraint_source_closes_shape_and_release_row_counts() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
     assert_eq!(
         ExactSmallCoefficientConstraintSourceV1::new(0, ExactBound::One),
         Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
@@ -280,6 +282,7 @@ fn exact_small_prover_source_is_sealed_and_validates_before_randomness() {
 
 #[test]
 fn exact_capacity_helper_is_fail_closed_and_routes_existing_reservations() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
     struct ZeroSized;
     assert!(matches!(
         try_exact_capacity_vec_v1::<ZeroSized>(1),

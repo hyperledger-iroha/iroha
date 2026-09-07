@@ -9,6 +9,7 @@ use crate::{
     asset::id::AssetDefinitionId,
     block::BlockHeader,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_primitives::numeric::{NumericOperationError, Quantity};
@@ -42,6 +43,169 @@ pub const AXT_ANCHORED_SPEND_HANDLE_DIGEST_DOMAIN_V1: &[u8] =
 pub const AXT_ANCHORED_SPEND_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:axt:anchored-spend:issuer-signature:v1\0";
 
+/// Domain separator for the exact ordered transaction wires in a finalized AXT anchor.
+pub const AXT_ORDERED_TRANSACTION_SET_DOMAIN_V1: &[u8] =
+    b"iroha:axt:ordered-transaction-wire-set:v1\0";
+/// Maximum transaction count in one finalized AXT anchor witness.
+///
+/// This bounded AXT verification surface admits up to the per-block AXT handle
+/// ceiling. This witness-admission limit does not restrict canonical block hashing.
+pub const MAX_AXT_FINALIZED_TRANSACTIONS_V1: usize = 65_536;
+/// Maximum cumulative canonical transaction-wire bytes in one finalized AXT witness.
+///
+/// The consensus executed-block hard ceiling also bounds its transaction wires.
+pub const MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1: u64 =
+    crate::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES;
+
+/// Failure to commit a bounded ordered transaction-wire set.
+#[derive(Debug, Error)]
+pub enum AxtOrderedTransactionSetErrorV1 {
+    /// The supplied transaction count exceeds the anchored-spend verification ceiling.
+    #[error("AXT ordered transaction count exceeds {maximum}")]
+    Count {
+        /// Maximum admitted transaction count.
+        maximum: usize,
+    },
+    /// The cumulative exact wire length exceeds the consensus block ceiling.
+    #[error("AXT ordered transaction wires exceed {maximum} bytes")]
+    WireBytes {
+        /// Maximum admitted cumulative wire bytes.
+        maximum: u64,
+    },
+    /// A canonical transaction wire could not be encoded.
+    #[error("AXT ordered transaction wire encoding failed: {0}")]
+    Encoding(String),
+}
+
+/// Commit exact transaction-entrypoint wires in their supplied finalized order.
+///
+/// The BLAKE2b-256 `Hash` preimage is the domain above, a little-endian `u64`
+/// count, then for each transaction its little-endian `u64` wire length and its
+/// complete [`TransactionEntrypoint::encode_wire_v1`] bytes. Signatures and all
+/// authorization proofs are retained. Entries are never sorted or deduplicated.
+/// This is a ledger commitment, distinct from six-lane native-STARK hashes.
+///
+/// A bounded counting pass checks the cumulative consensus wire budget before a
+/// second pass streams the exact bytes into the hasher. The cloneable iterator
+/// retains borrowed entries; only bounded per-entry lengths are stored. The
+/// smaller AXT witness-count admission limit is enforced by the proof verifier,
+/// so this canonical commitment does not impose that limit on ordinary blocks.
+///
+/// # Errors
+/// Rejects excessive count or cumulative wire bytes and serialization errors.
+pub fn axt_ordered_transaction_set_digest_v1<I>(
+    transactions: I,
+) -> Result<Hash, AxtOrderedTransactionSetErrorV1>
+where
+    I: IntoIterator,
+    I::Item: std::borrow::Borrow<TransactionEntrypoint>,
+    I::IntoIter: Clone,
+{
+    axt_ordered_transaction_set_digest_with_limits(
+        transactions,
+        // Every complete versioned wire contains at least its one-byte version.
+        // This count bound is therefore implied by the consensus wire ceiling.
+        MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1 as usize,
+        MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1,
+    )
+}
+
+fn axt_ordered_transaction_set_digest_with_limits<I>(
+    transactions: I,
+    max_count: usize,
+    max_wire_bytes: u64,
+) -> Result<Hash, AxtOrderedTransactionSetErrorV1>
+where
+    I: IntoIterator,
+    I::Item: std::borrow::Borrow<TransactionEntrypoint>,
+    I::IntoIter: Clone,
+{
+    use std::io::Write as _;
+
+    let iter = transactions.into_iter();
+    if iter.size_hint().0 > max_count {
+        return Err(AxtOrderedTransactionSetErrorV1::Count { maximum: max_count });
+    }
+    let mut counter = AxtWireBudgetWriter {
+        written: 0,
+        maximum: max_wire_bytes,
+        rejected: false,
+    };
+    let mut lengths = Vec::new();
+    for transaction in iter.clone() {
+        if lengths.len() == max_count {
+            return Err(AxtOrderedTransactionSetErrorV1::Count { maximum: max_count });
+        }
+        let transaction: &TransactionEntrypoint = std::borrow::Borrow::borrow(&transaction);
+        let start = counter.written;
+        let counted = counter
+            .write_all(&[1])
+            .map_err(norito::core::Error::from)
+            .and_then(|()| {
+                norito::codec::encode_adaptive_into(transaction, &mut counter).map(|_| ())
+            });
+        if counter.rejected {
+            return Err(AxtOrderedTransactionSetErrorV1::WireBytes {
+                maximum: max_wire_bytes,
+            });
+        }
+        counted.map_err(|error| AxtOrderedTransactionSetErrorV1::Encoding(error.to_string()))?;
+        lengths.push(counter.written - start);
+    }
+    Hash::new_from_writer(|mut writer| {
+        writer.write_all(AXT_ORDERED_TRANSACTION_SET_DOMAIN_V1)?;
+        writer.write_all(&(lengths.len() as u64).to_le_bytes())?;
+        let mut remaining = iter;
+        for length in lengths {
+            let transaction = remaining.next().ok_or_else(|| {
+                std::io::Error::other("canonical AXT entry count shortened between passes")
+            })?;
+            let transaction: &TransactionEntrypoint = std::borrow::Borrow::borrow(&transaction);
+            writer.write_all(&length.to_le_bytes())?;
+            writer.write_all(&[1])?;
+            let written = norito::codec::encode_adaptive_into(transaction, &mut writer)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            if written as u64 != length - 1 {
+                return Err(std::io::Error::other(
+                    "canonical AXT wire length changed between passes",
+                ));
+            }
+        }
+        if remaining.next().is_some() {
+            return Err(std::io::Error::other(
+                "canonical AXT entry count grew between passes",
+            ));
+        }
+        Ok(())
+    })
+    .map_err(|error| AxtOrderedTransactionSetErrorV1::Encoding(error.to_string()))
+}
+
+struct AxtWireBudgetWriter {
+    written: u64,
+    maximum: u64,
+    rejected: bool,
+}
+
+impl std::io::Write for AxtWireBudgetWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let Some(total) = self
+            .written
+            .checked_add(bytes.len() as u64)
+            .filter(|total| *total <= self.maximum)
+        else {
+            self.rejected = true;
+            return Err(std::io::Error::other("AXT canonical wire budget exceeded"));
+        };
+        self.written = total;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn axt_logical_hash_is_zero(bytes: &[u8; Hash::LENGTH]) -> bool {
     bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0) && bytes[Hash::LENGTH - 1] & !1 == 0
 }
@@ -67,6 +231,8 @@ fn axt_framed_digest_v1<T: Encode>(domain: &[u8], value: &T) -> [u8; Hash::LENGT
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtBinding")]
 pub struct AxtBinding([u8; 32]);
 impl AxtBinding {
     /// Construct a binding from raw bytes.
@@ -89,6 +255,8 @@ impl AxtBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtDescriptor")]
 pub struct AxtDescriptor {
     /// List of dataspace identifiers touched by the transaction.
     pub dsids: Vec<DataSpaceId>,
@@ -99,6 +267,8 @@ pub struct AxtDescriptor {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtTouchSpec")]
 pub struct AxtTouchSpec {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -111,6 +281,8 @@ pub struct AxtTouchSpec {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::TouchManifest")]
 pub struct TouchManifest {
     /// Keys read within the dataspace during execution.
     pub read: Vec<String>,
@@ -234,6 +406,8 @@ impl AxtDescriptorBuilder {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtTouchFragment")]
 pub struct AxtTouchFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -244,6 +418,8 @@ pub struct AxtTouchFragment {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::ProofBlob")]
 pub struct ProofBlob {
     /// Norito-encoded AXT proof envelope bytes, bounded by
     /// [`MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES`] at every proof-aware ingress.
@@ -329,6 +505,8 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtProofEnvelope")]
 pub struct AxtProofEnvelope {
     /// Dataspace the proof is intended for.
     pub dsid: DataSpaceId,
@@ -358,6 +536,8 @@ pub struct AxtProofEnvelope {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtFastpqBinding")]
 pub struct AxtFastpqBinding {
     /// Canonical FASTPQ parameter set.
     pub parameter: String,
@@ -405,6 +585,8 @@ pub struct AxtFastpqBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtEffectBinding")]
 pub struct AxtEffectBinding {
     /// Destination dataspace/domain label when applicable.
     #[norito(required)]
@@ -441,6 +623,8 @@ pub struct AxtEffectBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtProofFragment")]
 pub struct AxtProofFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -451,6 +635,8 @@ pub struct AxtProofFragment {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::GroupBinding")]
 pub struct GroupBinding {
     /// Domain or composability group identifier.
     pub composability_group_id: Vec<u8>,
@@ -461,6 +647,8 @@ pub struct GroupBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::HandleBudget")]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
     pub remaining: Quantity,
@@ -472,6 +660,8 @@ pub struct HandleBudget {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::HandleSubject")]
 pub struct HandleSubject {
     /// Canonical I105 account identifier of the spender.
     pub account: String,
@@ -495,6 +685,8 @@ pub const AXT_ASSET_INCARNATION_DOMAIN_V1: &[u8] = b"iroha:axt:asset-incarnation
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
 #[schema(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAssetIncarnationV1")]
 pub struct AxtAssetIncarnationV1(Hash);
 /// Failure returned while validating raw V1 asset-incarnation bytes.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -584,6 +776,8 @@ impl AxtAssetIncarnationV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtFinalizedSpendAnchorV1")]
 pub struct AxtFinalizedSpendAnchorV1 {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
@@ -608,7 +802,8 @@ pub struct AxtFinalizedSpendAnchorV1 {
     pub pre_state_root: Hash,
     /// State root after the anchored transaction set executed.
     pub post_state_root: Hash,
-    /// Digest of the exact ordered canonical transaction-wire set.
+    /// Digest of the exact ordered canonical transaction-wire set, computed by
+    /// [`axt_ordered_transaction_set_digest_v1`].
     pub transaction_set_digest: Hash,
     /// Digest of the exact signed RS16 data-availability manifest.
     pub da_manifest_digest: Hash,
@@ -722,6 +917,8 @@ pub enum AxtFinalizedSpendAnchorValidationErrorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleIssuerContextV1")]
 pub struct AxtHandleIssuerContextV1 {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
@@ -789,6 +986,8 @@ impl Default for AxtHandleIssuerContextV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AssetHandleIssuerPayloadV1")]
 pub struct AssetHandleIssuerPayloadV1 {
     /// Immutable admission context reconstructed by the validating host.
     pub context: AxtHandleIssuerContextV1,
@@ -825,6 +1024,8 @@ pub struct AssetHandleIssuerPayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AssetHandleDraft")]
 pub struct AssetHandleDraft {
     /// Exact asset definition authorized by the capability.
     pub asset_definition_id: AssetDefinitionId,
@@ -912,6 +1113,8 @@ impl AssetHandleDraft {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AssetHandle")]
 pub struct AssetHandle {
     /// Exact asset definition authorized by the issuer signature.
     pub asset_definition_id: AssetDefinitionId,
@@ -1019,6 +1222,8 @@ impl AssetHandle {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleBudgetKey")]
 pub struct AxtHandleBudgetKey {
     issuer_context: AxtHandleIssuerContextV1,
     asset_definition_id: AssetDefinitionId,
@@ -1129,6 +1334,8 @@ impl AxtHandleBudgetKey {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleBudgetRecord")]
 pub struct AxtHandleBudgetRecord {
     consumed: Quantity,
     retain_until_slot: u64,
@@ -1249,6 +1456,8 @@ impl AxtHandleBudgetRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleCounterRecord")]
 pub struct AxtHandleCounterRecord {
     next: u64,
     authorization_generation: u64,
@@ -1478,6 +1687,8 @@ pub fn next_axt_handle_sub_nonce(
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::SpendOp")]
 pub struct SpendOp {
     /// Exact asset definition authorized by the handle and proven by FASTPQ.
     pub asset_definition_id: AssetDefinitionId,
@@ -1495,6 +1706,8 @@ pub struct SpendOp {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::RemoteSpendIntent")]
 pub struct RemoteSpendIntent {
     /// Target asset dataspace identifier.
     pub asset_dsid: DataSpaceId,
@@ -1505,6 +1718,8 @@ pub struct RemoteSpendIntent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtSpendNonceV1")]
 pub struct AxtSpendNonceV1([u8; 32]);
 
 impl AxtSpendNonceV1 {
@@ -1548,6 +1763,8 @@ pub enum AxtSpendNonceValidationErrorV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendDraftV1")]
 pub struct AxtAnchoredSpendDraftV1 {
     /// Reusable issuer-authenticated capability consumed by this spend.
     pub handle: AssetHandle,
@@ -1568,6 +1785,8 @@ pub struct AxtAnchoredSpendDraftV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendIssuerPayloadV1")]
 pub struct AxtAnchoredSpendIssuerPayloadV1 {
     /// Exact replay identity of the reusable handle.
     pub handle_replay_key: AxtHandleReplayKey,
@@ -1595,6 +1814,8 @@ pub struct AxtAnchoredSpendIssuerPayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendIssuerAuthorizationV1")]
 pub struct AxtAnchoredSpendIssuerAuthorizationV1 {
     /// Exact authoritative finalized source-state anchor.
     pub anchor: AxtFinalizedSpendAnchorV1,
@@ -1613,6 +1834,8 @@ pub struct AxtAnchoredSpendIssuerAuthorizationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendV1")]
 pub struct AxtAnchoredSpendV1 {
     /// Exact spend facts authenticated by the issuer.
     pub draft: AxtAnchoredSpendDraftV1,
@@ -1624,6 +1847,8 @@ pub struct AxtAnchoredSpendV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendReplayKeyV1")]
 pub struct AxtAnchoredSpendReplayKeyV1 {
     /// Complete committed issuer context, including network and asset incarnation.
     pub issuer_context: AxtHandleIssuerContextV1,
@@ -1680,14 +1905,10 @@ impl AxtAnchoredSpendDraftV1 {
         if envelope.da_commitment != Some(anchor.da_manifest_digest.into()) {
             return Err(AxtAnchoredSpendValidationErrorV1::DaManifest);
         }
-        let expected_transaction_set = hex::encode(anchor.transaction_set_digest.as_ref());
-        if envelope
-            .fastpq_binding
-            .as_ref()
-            .is_none_or(|binding| binding.source_tx_commitment != expected_transaction_set)
-        {
-            return Err(AxtAnchoredSpendValidationErrorV1::TransactionSet);
-        }
+        // source_tx_commitment identifies one execution, not the whole ordered set.
+        // The FASTPQ owner must verify its exact membership in the anchored canonical
+        // transaction wires and compare the proof's PublicIO roots/set digest. This
+        // model-only signature/shape check cannot authenticate opaque proof bytes.
         Ok(AxtAnchoredSpendIssuerPayloadV1 {
             handle_replay_key: AxtHandleReplayKey::from_handle(anchor.dataspace_id, &self.handle),
             handle_digest: axt_framed_digest_v1(
@@ -1830,9 +2051,6 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
     /// Proof and finalized anchor bind different DA manifests.
     #[error("AXT anchored spend DA-manifest binding is invalid")]
     DaManifest,
-    /// Proof and finalized anchor bind different exact transaction sets.
-    #[error("AXT anchored spend transaction-set binding is invalid")]
-    TransactionSet,
     /// Reusable handle signature is invalid for authoritative WSV context.
     #[error("AXT anchored spend handle signature is invalid")]
     HandleSignature,
@@ -1847,6 +2065,8 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtRemoteSpendClaimV1")]
 pub struct AxtRemoteSpendClaimV1 {
     /// Exact authenticated handle use that is allowed to consume this claim.
     ///
@@ -1927,6 +2147,8 @@ pub fn compute_remote_spend_claim_commitment_v1(statement: &AxtRemoteSpendClaimV
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleFragment")]
 pub struct AxtHandleFragment {
     /// Handle presented by the caller.
     pub handle: AssetHandle,
@@ -1946,6 +2168,8 @@ pub struct AxtHandleFragment {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleReplayKey")]
 pub struct AxtHandleReplayKey {
     /// Dataspace whose committed policy issued the handle.
     pub asset_dsid: DataSpaceId,
@@ -2034,6 +2258,8 @@ pub enum AxtHandleReplayKeyValidationError {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtReplayRecord")]
 pub struct AxtReplayRecord {
     /// Redundant observational dataspace recorded with the handle use.
     ///
@@ -2143,6 +2369,8 @@ impl AxtReplayRecord {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtEnvelopeRecord")]
 pub struct AxtEnvelopeRecord {
     /// Binding derived from the descriptor.
     pub binding: AxtBinding,
@@ -2163,6 +2391,8 @@ pub struct AxtEnvelopeRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtPolicyEntry")]
 pub struct AxtPolicyEntry {
     /// Manifest root the handle must reference.
     pub manifest_root: [u8; 32],
@@ -2179,6 +2409,8 @@ pub struct AxtPolicyEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtPolicyBinding")]
 pub struct AxtPolicyBinding {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -2189,6 +2421,8 @@ pub struct AxtPolicyBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtPolicySnapshot")]
 pub struct AxtPolicySnapshot {
     /// Hash-derived snapshot version (truncated to u64 for gauges/telemetry).
     pub version: u64,
@@ -2319,6 +2553,8 @@ impl AxtPolicySnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtRejectContext")]
 pub struct AxtRejectContext {
     /// Classified reason for the rejection.
     pub reason: AxtRejectReason,
@@ -2364,6 +2600,8 @@ impl core::fmt::Display for AxtRejectContext {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "reason", content = "detail"))]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtRejectReason")]
 pub enum AxtRejectReason {
     /// Dataspace or lane binding did not match the policy.
     Lane,
@@ -2675,6 +2913,140 @@ mod tests {
     #[cfg(feature = "json")]
     use mv::json::JsonKeyCodec;
     use norito::{decode_from_bytes, to_bytes};
+    fn ordered_set_entry(seed: u8) -> TransactionEntrypoint {
+        let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let mut builder = crate::transaction::TransactionBuilder::new(
+            test_network_id(b"ordered-axt-set"),
+            crate::account::AccountId::new(signer.public_key().clone()),
+            crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(std::time::Duration::from_millis(1_000));
+        TransactionEntrypoint::External(builder.try_sign(signer.private_key()).expect("sign entry"))
+    }
+
+    #[test]
+    fn axt_ordered_transaction_set_matches_exact_wires_and_order() {
+        let entries = [ordered_set_entry(61), ordered_set_entry(62)];
+        let mut expected = AXT_ORDERED_TRANSACTION_SET_DOMAIN_V1.to_vec();
+        expected.extend_from_slice(&2_u64.to_le_bytes());
+        for entry in &entries {
+            let wire = entry.encode_wire_v1().expect("canonical entry wire");
+            expected.extend_from_slice(&(wire.len() as u64).to_le_bytes());
+            expected.extend_from_slice(&wire);
+        }
+        let digest = axt_ordered_transaction_set_digest_v1(&entries).expect("ordered set");
+        assert_eq!(digest, Hash::new(&expected));
+        assert_ne!(
+            digest,
+            axt_ordered_transaction_set_digest_v1(entries.iter().rev()).unwrap()
+        );
+        assert_ne!(
+            digest,
+            axt_ordered_transaction_set_digest_v1(&entries[..1]).unwrap()
+        );
+        let _alternate = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            digest,
+            axt_ordered_transaction_set_digest_v1(&entries).unwrap()
+        );
+    }
+
+    #[test]
+    fn axt_ordered_transaction_set_retains_authorization_proofs() {
+        let original = ordered_set_entry(63);
+        let mut changed = original.clone();
+        let TransactionEntrypoint::External(transaction) = &mut changed else {
+            unreachable!()
+        };
+        let signer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
+        let signatures = crate::transaction::signed::MultisigSignatures::from_signers(
+            transaction.payload(),
+            [signer.private_key()],
+        )
+        .expect("additional authorization proof");
+        transaction.set_multisig_signatures(signatures);
+        assert_eq!(
+            original.execution_call_hash(),
+            changed.execution_call_hash()
+        );
+        assert_ne!(
+            axt_ordered_transaction_set_digest_v1([&original]).unwrap(),
+            axt_ordered_transaction_set_digest_v1([&changed]).unwrap(),
+        );
+    }
+
+    #[test]
+    fn axt_ordered_transaction_set_enforces_count_and_cumulative_wire_caps() {
+        let entries = [ordered_set_entry(65), ordered_set_entry(66)];
+        let bytes = entries
+            .iter()
+            .map(|entry| entry.encode_wire_v1().unwrap().len() as u64)
+            .sum();
+        assert!(matches!(
+            axt_ordered_transaction_set_digest_with_limits(&entries, 1, bytes),
+            Err(AxtOrderedTransactionSetErrorV1::Count { maximum: 1 }),
+        ));
+        assert!(matches!(
+            axt_ordered_transaction_set_digest_with_limits(&entries, 2, bytes - 1),
+            Err(AxtOrderedTransactionSetErrorV1::WireBytes { maximum }) if maximum == bytes - 1,
+        ));
+        assert_eq!(
+            axt_ordered_transaction_set_digest_with_limits(&entries, 2, bytes).unwrap(),
+            axt_ordered_transaction_set_digest_v1(&entries).unwrap(),
+        );
+        let mut writer = AxtWireBudgetWriter {
+            written: u64::MAX,
+            maximum: u64::MAX,
+            rejected: false,
+        };
+        assert!(std::io::Write::write(&mut writer, &[1]).is_err());
+        assert!(writer.rejected);
+    }
+
+    #[test]
+    fn axt_ordered_transaction_set_hashing_does_not_impose_proof_witness_count_cap() {
+        let entry = ordered_set_entry(67);
+        let entries = std::iter::repeat_n(&entry, MAX_AXT_FINALIZED_TRANSACTIONS_V1 + 1);
+        assert!(axt_ordered_transaction_set_digest_v1(entries).is_ok());
+    }
+
+    #[test]
+    fn axt_ordered_transaction_set_rejects_changed_iterator_count_between_passes() {
+        struct ChangingCount<'a> {
+            entry: &'a TransactionEntrypoint,
+            remaining: usize,
+            cloned_remaining: usize,
+        }
+        impl Clone for ChangingCount<'_> {
+            fn clone(&self) -> Self {
+                Self {
+                    entry: self.entry,
+                    remaining: self.cloned_remaining,
+                    cloned_remaining: self.cloned_remaining,
+                }
+            }
+        }
+        impl<'a> Iterator for ChangingCount<'a> {
+            type Item = &'a TransactionEntrypoint;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.remaining == 0 {
+                    return None;
+                }
+                self.remaining -= 1;
+                Some(self.entry)
+            }
+        }
+        let entry = ordered_set_entry(68);
+        for (remaining, cloned_remaining) in [(1, 2), (2, 1)] {
+            assert!(matches!(
+                axt_ordered_transaction_set_digest_v1(ChangingCount { entry: &entry, remaining, cloned_remaining }),
+                Err(AxtOrderedTransactionSetErrorV1::Encoding(message)) if message.contains("entry count"),
+            ));
+        }
+    }
+
     fn sample_descriptor(dsid: DataSpaceId) -> AxtDescriptor {
         AxtDescriptor {
             dsids: vec![dsid],
@@ -2793,8 +3165,7 @@ mod tests {
         handle: AssetHandle,
         anchor: AxtFinalizedSpendAnchorV1,
     ) -> AxtAnchoredSpendDraftV1 {
-        let mut binding = sample_fastpq_binding(anchor.dataspace_id);
-        binding.source_tx_commitment = hex::encode(anchor.transaction_set_digest.as_ref());
+        let binding = sample_fastpq_binding(anchor.dataspace_id);
         let envelope = AxtProofEnvelope {
             dsid: anchor.dataspace_id,
             manifest_root: handle.manifest_view_root,
@@ -2933,7 +3304,20 @@ mod tests {
             handle.target_lane,
         );
         let nonce = AxtSpendNonceV1::try_new([0x77; 32]).expect("non-zero nonce");
-        let signed = sample_anchored_spend_draft(handle, anchor)
+        let draft = sample_anchored_spend_draft(handle, anchor);
+        let envelope: AxtProofEnvelope =
+            norito::decode_canonical(&draft.proof.as_ref().expect("proof").payload)
+                .expect("envelope");
+        assert_ne!(
+            envelope
+                .fastpq_binding
+                .as_ref()
+                .expect("binding")
+                .source_tx_commitment,
+            hex::encode(anchor.transaction_set_digest.as_ref()),
+            "per-execution identity is distinct from the ordered transaction-set digest",
+        );
+        let signed = draft
             .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key())
             .expect("sign exact anchored spend");
         assert_eq!(
@@ -5250,3 +5634,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_axt_schema_tests;

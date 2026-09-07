@@ -24,7 +24,10 @@ build is accepted:
   commits, security options, isolation flags, and empty server-error state;
 - the SHA-256 identity of a network-inert OpenPGP commit verifier (for example,
   an audited `gpgv` build); Git is forced to use it with system/global config,
-  replacement objects, hooks, and filesystem monitors disabled;
+  replacement objects, hooks, and filesystem monitors disabled. Both signature
+  verification and fingerprint readback bind every format-specific helper slot
+  to that authenticated verifier; another signature format cannot select a
+  repository-configured executable;
 - the expected vendored dependency inventory, Cargo metadata graph, SBOM,
   toolchain inventory, sysroot inventory, linker, build recipe, and build
   environment; and
@@ -57,7 +60,15 @@ clean tracked/nonignored tree, streams a deterministic `git archive`,
 adds a canonical inventory binding every archived path, Git mode, blob object
 ID, and unexpanded gitlink to the signed tree. Git, Docker, and the commit
 verifier are copied from their authenticated inodes into an owner-only run
-directory before first use. The image runs with `--pull=never`,
+directory before first use. Source checks and archival use fresh private Git
+metadata referencing only the original object store. Read-only status checks
+inspect the original index and worktree with optional index locks disabled.
+Repository configuration, replacement refs, and unsigned local/global/system
+attributes cannot select filters or change the archive. Tracked attributes
+retain their signed meaning; archive signature substitutions use the same
+policy-pinned verifier as the explicit signature checks.
+
+The image runs with `--pull=never`,
 `--platform=linux/amd64`, `--network=none`, a read-only root, no capabilities,
 `no-new-privileges`, fixed PID/CPU/memory/swap/file-descriptor/file-size limits,
 and private bounded tmpfs. Docker uses an empty per-run configuration and the

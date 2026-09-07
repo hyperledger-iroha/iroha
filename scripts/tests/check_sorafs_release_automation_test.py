@@ -47,6 +47,133 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
 
 
 @pytest.mark.parametrize(
+    "marker",
+    (
+        'test ! -e "$native_root"',
+        "cargo build --locked --offline --release -p connect_norito_bridge",
+        "cargo build --locked --offline --release -p kotlin-fixture-gen",
+        "--features dev-tools --bin kotlin-fixture-gen",
+        '--target "$target" --target-dir "$native_root/cargo-target"',
+        '--sdk c-jni --target "$target"',
+        'echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"',
+        'echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$native_dir/kotlin-fixture-gen" >> "$GITHUB_ENV"',
+        "./gradlew --no-daemon --no-build-cache --rerun-tasks",
+        ":core-jvm:test :tools:test",
+        ":client-android:testDebugUnitTest",
+        ":client-android:testDebugHostNative",
+        ":kagemusha-wallet-android:testDebugUnitTest --console=plain",
+        "python3 -I scripts/check_sorafs_mobile_parity_reports.py",
+        '--report-root "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk"',
+        '> "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/test-execution.json"',
+        "sorafs-mobile-parity/test-execution.json",
+        '--manifest "$SORAFS_MOBILE_NATIVE_MANIFEST"',
+        "sorafs-mobile-parity/gradle-build/iroha_kotlin_sdk/*/test-results/**/TEST-*.xml",
+    ),
+)
+def test_mobile_native_qualification_rejects_removed_security_controls(
+    tmp_path: Path, marker: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    expected_count = 2 if marker.startswith('--target "$target"') else 1
+    assert source.count(marker) == expected_count
+    workflow.write_text(source.replace(marker, "removed", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="mobile-parity.*missing contract marker|must both use the isolated build target",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("mutation", ("conditional", "reordered", "duplicate"))
+def test_mobile_native_qualification_cannot_skip_or_reorder_execution(
+    tmp_path: Path, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    before = (
+        "      - name: Require fresh ABI-23 JNI bridge "
+        "in complete Kotlin and Java suites\n"
+    )
+    after = "      - name: Reauthenticate the consumed Kotlin bridge\n"
+    if mutation == "conditional":
+        source = source.replace(before, before + "        if: false\n", 1)
+        message = "qualification must not be conditional"
+    elif mutation == "reordered":
+        start = source.index(before)
+        middle = source.index(after, start)
+        end = source.index(
+            "      - name: Upload Kotlin and Java native parity evidence\n", middle
+        )
+        source = (
+            source[:start] + source[middle:end] + source[start:middle] + source[end:]
+        )
+        message = "stages must execute exactly once"
+    else:
+        source = source.replace(before, before + before, 1)
+        message = "stages must execute exactly once"
+    workflow.write_text(source, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        ".github/workflows/sorafs-cli-release.yml",
+        ".github/workflows/sorafs-orchestrator-sdk.yml",
+    ),
+)
+@pytest.mark.parametrize(
+    "dependency",
+    (
+        "scripts/check_sorafs_mobile_parity_reports.py",
+        "scripts/tests/check_sorafs_mobile_parity_reports_test.py",
+    ),
+)
+def test_mobile_report_security_changes_must_trigger_both_release_workflows(
+    tmp_path: Path, relative: str, dependency: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / relative
+    source = workflow.read_text(encoding="utf-8")
+    marker = f'      - "{dependency}"\n'
+    assert source.count(marker) == 1
+    workflow.write_text(source.replace(marker, "", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "dependency",
+    (
+        "scripts/sorafs_evidence_json.py",
+        "scripts/sorafs_evidence_paths.py",
+        "scripts/sorafs_evidence_sensitivity.py",
+        "scripts/sorafs_path_identity.py",
+        "tools/kotlin-fixture-gen/**",
+    ),
+)
+def test_mobile_native_transitive_dependencies_must_trigger_parity(
+    tmp_path: Path, dependency: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = f'      - "{dependency}"\n'
+    assert source.count(marker) == 1
+    workflow.write_text(source.replace(marker, "", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
     "relative",
     sorted(automation.SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS),
 )
@@ -1048,6 +1175,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "bash ci/check_sorafs_python_native_sdk.sh",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
@@ -2038,6 +2166,10 @@ def test_validate_release_automation_rejects_release_document_drift(
             "sorafs_reference_sdk_release_evidence.args.example",
             "--provenance-verification-public-key-hex",
         ),
+        ("scripts/examples/sorafs_reference_sdk_release_collection.args.example", "--signed-manifest-source-context-sha256"),
+        ("scripts/examples/sorafs_reference_sdk_release_evidence.args.example", "--signed-manifest-source-context-sha256"),
+        ("scripts/examples/sorafs_reference_sdk_release_signed_manifest_canary.args.example", "--signed-manifest-source-context-sha256"),
+        ("scripts/examples/sorafs_reference_sdk_signed_manifest_canary.args.example", "--signed-manifest-source-context-sha256"),
     ],
 )
 def test_validate_release_automation_rejects_stale_source_examples(
@@ -2082,7 +2214,17 @@ def test_validate_release_automation_rejects_retired_supply_chain_example_flags(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="retired manual supply-chain marker"):
+    with pytest.raises(ValueError, match="retired manual release marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("retired", ("--manifest-digest-hex", "--policy-digest-hex", "--public-key-fingerprint-hex", "--signature-algorithm", "--signing-provider", "--signing-backend"))
+@pytest.mark.parametrize("name", ("sorafs_reference_sdk_release_signed_manifest_canary.args.example", "sorafs_reference_sdk_signed_manifest_canary.args.example"))
+def test_validate_release_automation_rejects_signing_claims_in_source_examples(tmp_path, retired, name):
+    _copy_workflows(tmp_path)
+    path = tmp_path / "scripts/examples" / name
+    path.write_text(path.read_text() + f"{retired}\nclaim\n")
+    with pytest.raises(ValueError, match="retired manual release marker"):
         automation.validate_release_automation(tmp_path)
 
 
@@ -2335,8 +2477,10 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         encoding="utf-8"
     )
     for relative in (
+        "scripts/tests/check_sorafs_mobile_parity_reports_test.py",
         "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py",
         "scripts/tests/sorafs_reference_sdk_supply_chain_test.py",
+        "scripts/tests/sorafs_reference_sdk_signed_manifest_test.py",
         "scripts/tests/check_sorafs_release_version_map_test.py",
         "cargo test --locked -p iroha --lib client::repair::tests -- --nocapture",
         "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture",

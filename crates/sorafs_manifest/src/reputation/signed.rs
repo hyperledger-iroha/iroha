@@ -550,17 +550,16 @@ where
             max: max_bytes,
         });
     }
-    let decoded = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
-        SignedReputationSnapshotError::Decoding {
-            payload,
-            reason: error.to_string(),
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            SignedReputationSnapshotError::NonCanonicalEncoding { payload }
+        } else {
+            SignedReputationSnapshotError::Decoding {
+                payload,
+                reason: error.to_string(),
+            }
         }
-    })?;
-    let canonical = encode_canonical_bounded(payload, &decoded, max_bytes)?;
-    if canonical != bytes {
-        return Err(SignedReputationSnapshotError::NonCanonicalEncoding { payload });
-    }
-    Ok(decoded)
+    })
 }
 /// Compute the domain-separated snapshot digest bound to an external policy.
 pub fn snapshot_signing_digest(
@@ -662,8 +661,10 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, SignedReputationSnapshotError> {
+    let _canonical_layout =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     preflight_canonical_encoded_len(payload, value, max_bytes)?;
-    let bytes = norito::to_bytes(value)
+    let bytes = norito::encode_canonical(value)
         .map_err(|error| SignedReputationSnapshotError::Encoding(error.to_string()))?;
     if bytes.len() > max_bytes {
         return Err(SignedReputationSnapshotError::EncodedPayloadTooLarge {
@@ -679,6 +680,8 @@ fn preflight_canonical_encoded_len<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<usize, SignedReputationSnapshotError> {
+    let _canonical_layout =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     if let Some(len) = value.encoded_len_exact()
         && len > max_bytes
     {
@@ -1092,6 +1095,41 @@ mod tests {
         (policy, envelope)
     }
     #[test]
+    fn signed_canonical_boundaries_ignore_enclosing_norito_layout() {
+        let (policy, envelope) = signed_snapshot();
+        let policy_bytes = policy.canonical_bytes().expect("policy bytes");
+        let envelope_bytes = envelope.canonical_bytes().expect("signed envelope bytes");
+        let policy_digest = policy.canonical_digest().expect("policy digest");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                policy.canonical_bytes().expect("policy bytes"),
+                policy_bytes
+            );
+            assert_eq!(
+                policy.canonical_digest().expect("policy digest"),
+                policy_digest
+            );
+            assert_eq!(
+                envelope.canonical_bytes().expect("envelope bytes"),
+                envelope_bytes
+            );
+            assert_eq!(
+                decode_reputation_trust_policy(&policy_bytes).expect("canonical policy"),
+                policy
+            );
+            assert_eq!(
+                decode_signed_reputation_snapshot(&envelope_bytes).expect("canonical envelope"),
+                envelope
+            );
+            envelope
+                .verify(&policy, GENERATED_AT + 10)
+                .expect("unchanged signed authorization");
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+    }
+
+    #[test]
     fn threshold_snapshot_verifies_against_external_policy() {
         let (policy, envelope) = signed_snapshot();
         envelope
@@ -1176,7 +1214,7 @@ mod tests {
         );
     }
     #[test]
-    fn bounded_canonical_decoders_reject_oversize_trailing_and_compressed_inputs() {
+    fn bounded_canonical_decoders_reject_oversize_trailing_and_compression_tag() {
         let policy = policy();
         let mut trailing = policy.canonical_bytes().expect("encode policy");
         trailing.push(0);
@@ -1184,9 +1222,7 @@ mod tests {
             decode_reputation_trust_policy(&trailing),
             Err(SignedReputationSnapshotError::Decoding { .. })
         ));
-        let compressed =
-            norito::to_compressed_bytes(&policy, Some(norito::CompressionConfig::default()))
-                .expect("compress policy");
+        let compressed = crate::canonical_test_support::with_compression_tag(&policy);
         assert!(matches!(
             decode_reputation_trust_policy(&compressed),
             Err(SignedReputationSnapshotError::NonCanonicalEncoding { .. })

@@ -344,7 +344,7 @@ mod tests {
                     (&delta.to_account, to_before, to_after),
                 ] {
                     rows.push(StateTransition::new(
-                        format!("asset/{asset}/{account}").into_bytes(),
+                        iroha_data_model::fastpq::transfer_balance_key(&asset, account).unwrap(),
                         before.to_le_bytes().to_vec(),
                         after.to_le_bytes().to_vec(),
                         OperationKind::Transfer,
@@ -393,7 +393,7 @@ mod tests {
                 &self.rows,
                 &self.claims,
                 self.inputs,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 PublicTransferLimits::default(),
             )
             .unwrap()
@@ -614,7 +614,11 @@ mod tests {
                 (&delta.to_account, values[2], values[3]),
             ] {
                 fixture.rows.push(StateTransition::new(
-                    format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        account,
+                    )
+                    .unwrap(),
                     before.to_le_bytes().to_vec(),
                     after.to_le_bytes().to_vec(),
                     OperationKind::Transfer,
@@ -663,7 +667,7 @@ mod tests {
             &first_rows,
             &fixture.claims[..1],
             fixture.inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits::default(),
         )
         .unwrap();

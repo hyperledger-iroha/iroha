@@ -12228,6 +12228,24 @@ pub(crate) struct PreparedSccpReplayMutationV1 {
     forest: SccpReplayForestV1,
     delta: iroha_data_model::bridge::SccpReplayDeltaV1,
 }
+
+fn sccp_replay_binding_matches_governed_route(
+    accumulator_id: &SccpReplayAccumulatorIdV1,
+    domain: &iroha_data_model::bridge::SccpReplayDomainV1,
+    record_operation: iroha_data_model::bridge::SccpReplayBoundaryV1,
+    governed_route_configuration_hash: Option<[u8; 32]>,
+) -> bool {
+    use iroha_data_model::bridge::SccpReplayBoundaryV1::{SoraInboundRelease, SoraOutboundLock};
+
+    accumulator_id.validate_domain(domain).is_ok()
+        && record_operation == accumulator_id.boundary
+        && governed_route_configuration_hash == Some(domain.route_configuration_hash)
+        && matches!(
+            accumulator_id.boundary,
+            SoraOutboundLock | SoraInboundRelease
+        )
+}
+
 impl SccpVerifierWorkV1 {
     fn checked_add(self, other: Self) -> Option<Self> {
         Some(Self {
@@ -28609,8 +28627,8 @@ impl State {
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
                     iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-                kaigi_roster_join_vk: None,
-                kaigi_roster_leave_vk: None,
+                kaigi_authorization_vk: None,
+
                 kaigi_usage_vk: None,
                 max_proof_size_bytes:
                     iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
@@ -48793,8 +48811,8 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
+        kaigi_authorization_vk: None,
+
         kaigi_usage_vk: None,
         max_proof_size_bytes:
             iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
@@ -50396,13 +50414,8 @@ pub fn compute_zk_consensus_policy_hash(
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
         &mut h,
-        "kaigi_roster_join_vk",
-        &zk_config.kaigi_roster_join_vk,
-    );
-    zk_policy_put_option_vk_ref(
-        &mut h,
-        "kaigi_roster_leave_vk",
-        &zk_config.kaigi_roster_leave_vk,
+        "kaigi_authorization_vk",
+        &zk_config.kaigi_authorization_vk,
     );
     zk_policy_put_option_vk_ref(&mut h, "kaigi_usage_vk", &zk_config.kaigi_usage_vk);
     zk_policy_put_u32(
@@ -51302,24 +51315,13 @@ impl<'state> StateBlock<'state> {
                 .collect();
             let has_fastpq =
                 !witness.fastpq_transcripts.is_empty() || !witness.fastpq_batches.is_empty();
-            let tx_set_hash = if witness.fastpq_transcripts.is_empty()
-                && witness.fastpq_batches.is_empty()
-            {
-                None
+            // Only block execution owns the complete ordered canonical wires.
+            // Transcript identities cannot reconstruct that commitment; leave
+            // missing authority absent so the prover job rejects it.
+            let tx_set_hash = if has_fastpq {
+                self.fastpq_tx_set_hash
             } else {
-                Some(self.fastpq_tx_set_hash.unwrap_or_else(|| {
-                    if witness.fastpq_transcripts.is_empty() {
-                        [0u8; 32]
-                    } else {
-                        let mut entry_hashes: Vec<Hash> = witness
-                            .fastpq_transcripts
-                            .iter()
-                            .map(|bundle| bundle.entry_hash)
-                            .collect();
-                        entry_hashes.sort_unstable();
-                        crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied())
-                    }
-                }))
+                None
             };
             let perm_root =
                 if witness.fastpq_transcripts.is_empty() && witness.fastpq_batches.is_empty() {
@@ -59932,9 +59934,14 @@ mod fastpq_tx_set_hash_tests {
         let _ = new_block
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
-        let mut entry_hashes = [tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint()];
-        entry_hashes.sort_unstable();
-        let expected = crate::fastpq::tx_set_hash_from_ordered_hashes(entry_hashes.iter().copied());
+        let entrypoints = [
+            TransactionEntrypoint::External(tx1),
+            TransactionEntrypoint::External(tx2),
+        ];
+        let expected: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(entrypoints.iter())
+                .expect("canonical ordered transaction set")
+                .into();
         assert_eq!(state_block.fastpq_tx_set_hash, Some(expected));
     }
     #[test]
@@ -60002,6 +60009,16 @@ mod fastpq_tx_set_hash_tests {
             .expect("FASTPQ context");
         assert!(witness.fastpq_batches.is_empty());
         assert_eq!(context.tx_set_hash, Some(tx_set_hash));
+        // A second capture with no block-owned commitment must not synthesize
+        // one from the transcript's execution identity.
+        state_block.fastpq_tx_set_hash = None;
+        crate::sumeragi::witness::start_block();
+        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        state_block.capture_exec_witness();
+        let missing = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert_eq!(missing.tx_set_hash, None);
     }
     #[test]
     fn capture_exec_witness_skips_replay_blocks_and_clears_active_capture() {
@@ -62297,10 +62314,6 @@ impl StateTransaction<'_, '_> {
         record: &iroha_data_model::bridge::SccpReplayRecordV1,
         witness: &iroha_data_model::bridge::SccpSparseMerkleWitnessV1,
     ) -> Result<PreparedSccpReplayMutationV1, Error> {
-        use iroha_data_model::bridge::SccpReplayBoundaryV1::{
-            SoraInboundRelease, SoraOutboundLock,
-        };
-
         if self.sccp_replay_root_mutated_in_tx {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -62308,12 +62321,16 @@ impl StateTransaction<'_, '_> {
                 ),
             ));
         }
-        let domain_matches_key = accumulator_id.validate_domain(domain).is_ok()
-            && record.operation == accumulator_id.boundary
-            && matches!(
-                accumulator_id.boundary,
-                SoraOutboundLock | SoraInboundRelease
-            );
+        let governed_route_configuration_hash = self
+            .sccp_registry
+            .route(&accumulator_id.route_key)
+            .and_then(|route| route.route_configuration_hash().ok());
+        let domain_matches_key = sccp_replay_binding_matches_governed_route(
+            &accumulator_id,
+            domain,
+            record.operation,
+            governed_route_configuration_hash,
+        );
         if !domain_matches_key {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(

@@ -81,6 +81,7 @@ export {
 
 export {
   encodeAccountIdNoritoValue,
+  decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,
   encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,

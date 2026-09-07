@@ -55,7 +55,7 @@ fn ordinary(
     fixture: &Fixture,
     bundle_frame: Vec<u8>,
 ) -> (FastpqOrdinaryCompactArtifactV1, PublicIO) {
-    let prepared = fixture.prepare(ProofSemantics::TransferStateTransition);
+    let prepared = fixture.prepare(ProofSemantics::StateTransition);
     let expected = fixture.expected(&prepared);
     (
         FastpqOrdinaryCompactArtifactV1 {

@@ -117,7 +117,7 @@ class ClientConfig private constructor(builder: Builder) {
         return b.build()
     }
 
-    fun toNoritoRpcClient(): NoritoRpcClient = toNoritoRpcClient(PlatformHttpTransportExecutor.createDefault())
+    fun toNoritoRpcClient(): NoritoRpcClient = toNoritoRpcClient(null)
 
     private fun toNoritoRpcClientBuilder(): NoritoRpcClient.Builder =
         NoritoRpcClient.builder().setBaseUri(baseUri).setTimeout(requestTimeout).defaultHeaders(defaultHeaders)
@@ -133,7 +133,8 @@ class ClientConfig private constructor(builder: Builder) {
     fun toSubscriptionToriiClient(executor: HttpTransportExecutor): SubscriptionToriiClient =
         SubscriptionToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
 
-    fun toSubscriptionToriiClient(): SubscriptionToriiClient = toSubscriptionToriiClient(PlatformHttpTransportExecutor.createDefault())
+    fun toSubscriptionToriiClient(): SubscriptionToriiClient = SubscriptionToriiClient.builder()
+        .baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
 
     private fun maybeInstallCrashTelemetryHandler(builder: Builder, sink: TelemetrySink?): CrashTelemetryHandler? {
         if (!builder.crashTelemetryEnabled) return null

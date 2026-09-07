@@ -135,7 +135,7 @@ class TransportSecurityClientTest {
     fun websocketRejectsInsecureAuthorizationHeader() {
         val client = ToriiWebSocketClient.builder()
             .setBaseUri(URI.create("http://example.com"))
-            .setWebSocketConnector { _, _, _, _ ->
+            .setWebSocketConnector { _, _ ->
                 CompletableFuture<TransportWebSocket>().also { it.completeExceptionally(IllegalStateException("should not connect")) }
             }
             .build()

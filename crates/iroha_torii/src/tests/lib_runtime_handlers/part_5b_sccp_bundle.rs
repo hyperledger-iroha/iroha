@@ -154,16 +154,12 @@ fn app_with_indexed_sccp_message_for_test(
         kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
+        da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
         leader_seed: [0x42; 32],
     };
+    context
+        .validate()
+        .expect("valid SCCP finality height context");
     let subject = BlockSubject {
         parent_block_hash: block.header().prev_block_hash(),
         block_hash,

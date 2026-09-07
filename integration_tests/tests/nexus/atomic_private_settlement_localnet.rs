@@ -13,11 +13,12 @@ use super::localnet_npos::npos_override_instruction;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
+    blocking::Client,
     client::{
-        BorrowedKeyPairIdentityRequestSignerV1, Client, PrivateSettlementAuditApprovalRequestV1,
-        PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementBundleReceiptResponseV1,
-        PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,
-        PrivateSettlementLifecycleDtoV1,
+        BorrowedKeyPairIdentityRequestSignerV1, Client as SdkClient,
+        PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditorCapsuleRequestV1,
+        PrivateSettlementBundleReceiptResponseV1, PrivateSettlementBundleSubmitRequestV1,
+        PrivateSettlementLegUploadRequestV1, PrivateSettlementLifecycleDtoV1,
     },
     data_model::{
         Level,
@@ -85,6 +86,7 @@ use iroha_core::{
     privacy_engines::{
         atomic_private_settlement::{
             AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
+            atomic_private_settlement_audit_input_commitment_v1,
             complete_atomic_private_settlement_prepared_leg_v1,
             consume_atomic_private_settlement_wallet_bundle_v1,
             derive_atomic_private_settlement_input_nullifiers_v1,
@@ -323,10 +325,12 @@ fn bounded_nexus_fee() -> FeePaymentIntent {
 }
 
 fn sponsor_nexus_fee_balance(client: &Client) -> Result<Quantity> {
-    let asset = client.query_single(FindAssetById::new(AssetId::new(
-        nexus_fee_asset_definition_id(),
-        ALICE_ID.clone(),
-    )))?;
+    let asset = client
+        .client()
+        .query_single(FindAssetById::new(AssetId::new(
+            nexus_fee_asset_definition_id(),
+            ALICE_ID.clone(),
+        )))?;
     Ok(asset.value().clone())
 }
 
@@ -907,7 +911,7 @@ fn routes_from_network(
     network: &Network,
     shape: TopologyShape,
 ) -> Result<Vec<PrivateSettlementRouteV1>> {
-    let status = network.client().get_lane_lifecycle_status()?;
+    let status = network.client().client().get_lane_lifecycle_status()?;
     status
         .validate()
         .wrap_err("validate lane lifecycle status")?;
@@ -1008,7 +1012,7 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
         .checked_add(16)
         .expect("privacy activation tick limit fits u64");
     loop {
-        let capability = client.get_privacy_capabilities()?;
+        let capability = client.client().get_privacy_capabilities()?;
         let row = capability
             .protocols
             .iter()
@@ -1057,18 +1061,24 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
             ticks < tick_limit,
             "governed IVM private-note activation did not promote within {tick_limit} blocks"
         );
-        let tick = client.build_transaction(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                format!(
-                    "atomic-private-settlement activation tick {}",
-                    capability.committed_height
-                ),
-            ))],
-            bounded_nexus_fee(),
-            Metadata::default(),
-        );
-        client.submit_transaction_blocking(&tick)?;
+        let tick = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!(
+                            "atomic-private-settlement activation tick {}",
+                            capability.committed_height
+                        ),
+                    ))],
+                    bounded_nexus_fee(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .wrap_err("build integration-test transaction")?;
+        client.submit_transaction_and_wait(&tick)?;
         ticks += 1;
     }
 }
@@ -1518,6 +1528,7 @@ fn prepare_leg_with_private_data_and_rngs(
             .collect(),
         encrypted_outputs: placeholders.to_vec(),
         audit_plaintext_commitment: hash(0x40 + ordinal as u8),
+        audit_input_commitment: [0x48 + ordinal as u8; 32],
         audit_capsule_digest: hash(0x50 + ordinal as u8),
         audit_policy_digest: governed.policy.policy_digest,
         audit_key_epoch: governed.policy.body.key_epoch,
@@ -1766,6 +1777,8 @@ fn prepare_leg_with_private_data_and_rngs(
             );
     }
     statement.audit_plaintext_commitment = plaintext.commitment()?;
+    statement.audit_input_commitment =
+        atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)?;
     statement.encrypted_outputs = prepare_atomic_private_settlement_outputs_v1(
         output_rng,
         manifest,
@@ -1882,6 +1895,7 @@ fn assert_no_partial_visibility(network: &Network, bundle_id: Hash, phase: &str)
     for peer in network.all_peers() {
         match peer
             .client()
+            .client()
             .private_settlement_bundle_receipt_v1(bundle_id)
         {
             Ok(PrivateSettlementBundleReceiptResponseV1::Pending { .. }) => {}
@@ -1919,6 +1933,7 @@ fn wait_for_identical_receipt(
         let mut receipts = Vec::new();
         for peer in network.all_peers() {
             match peer
+                .client()
                 .client()
                 .private_settlement_bundle_receipt_v1(bundle_id)
             {
@@ -2020,13 +2035,26 @@ fn run_n3_real_process_smoke() -> Result<()> {
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction =
-        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
+    let activation_transaction = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                activations,
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
     sponsor
-        .submit_transaction_blocking(&activation_transaction)
+        .submit_transaction_and_wait(&activation_transaction)
         .wrap_err("activate all three governed confidential pools at the bound context height")?;
     ensure!(
-        sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
+        sponsor
+            .client()
+            .get_privacy_capabilities()?
+            .committed_height
+            == authority_context_height,
         "pool activation did not land at the manifest authority context"
     );
     let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
@@ -2060,7 +2088,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
         .iter()
         .zip(&committees)
         .map(|(material, committee)| {
-            sponsor.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+            sponsor
+                .client()
+                .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
         })
         .collect::<Result<Vec<_>>>()?;
     let mut final_manifest = materials[0].manifest.clone();
@@ -2081,7 +2111,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
             payload: material.payload_with_certificate(certificate.clone()),
         };
         for endpoint in &committee.endpoints {
-            let response = sponsor.upload_private_settlement_leg_to_v1(endpoint, &request)?;
+            let response = sponsor
+                .client()
+                .upload_private_settlement_leg_to_v1(endpoint, &request)?;
             ensure!(
                 usize::from(response.leg_ordinal) == ordinal,
                 "upload ordinal substitution"
@@ -2103,13 +2135,15 @@ fn run_n3_real_process_smoke() -> Result<()> {
         let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
             audit_policy: leg.governed.policy.clone(),
         };
-        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
-            &committee.endpoints,
-            &materials[ordinal].committee_authority,
-            final_manifest.legs[ordinal].payload_digest,
-            &capsule_request,
-            &auditor_transport_signer,
-        )?;
+        let fetched = sponsor
+            .client()
+            .private_settlement_auditor_capsule_quorum_for_authority_v1(
+                &committee.endpoints,
+                &materials[ordinal].committee_authority,
+                final_manifest.legs[ordinal].payload_digest,
+                &capsule_request,
+                &auditor_transport_signer,
+            )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected audit lifecycle"
@@ -2135,16 +2169,18 @@ fn run_n3_real_process_smoke() -> Result<()> {
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
-            &committee.endpoints,
-            &materials[ordinal].committee_authority,
-            final_manifest.legs[ordinal].payload_digest,
-            &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 {
-                audit_policy: capsule_request.audit_policy,
-                approval,
-            },
-        )?;
+        let response = sponsor
+            .client()
+            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
+                &committee.endpoints,
+                &materials[ordinal].committee_authority,
+                final_manifest.legs[ordinal].payload_digest,
+                &auditor_transport_signer,
+                &PrivateSettlementAuditApprovalRequestV1 {
+                    audit_policy: capsule_request.audit_policy,
+                    approval,
+                },
+            )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
             "approval quorum was not durable"
@@ -2171,7 +2207,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         .iter()
         .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
-    let barrier = sponsor.prepare_private_settlement_bundle_v1(
+    let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
         &endpoint_matrix,
         &final_manifest,
         &authorities,
@@ -2186,15 +2222,17 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &state,
     )?);
     let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
-    sponsor.register_private_settlement_prepare_and_wait_v1(
-        &barrier,
-        u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-            .expect("V1 carrier ceiling fits u64"),
-        iroha::client::TransactionWaitOptions {
-            timeout: FINALITY_TIMEOUT,
-            poll_interval: POLL_INTERVAL,
-        },
-    )?;
+    sponsor
+        .client()
+        .register_private_settlement_prepare_and_wait_v1(
+            &barrier,
+            u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                .expect("V1 carrier ceiling fits u64"),
+            iroha::client::TransactionWaitOptions {
+                timeout: FINALITY_TIMEOUT,
+                poll_interval: POLL_INTERVAL,
+            },
+        )?;
     let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
     ensure_exact_private_settlement_carrier_fee(
         &fee_before_registration,
@@ -2213,8 +2251,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "prepare-barrier.json",
         &barrier,
     )?);
-    let commits =
-        sponsor.recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    let commits = sponsor
+        .client()
+        .recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
         "commit-certificates.json",
@@ -2229,16 +2268,20 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &state,
     )?);
 
-    let request = sponsor.build_private_settlement_finalization_request_v1(
-        &barrier,
-        &commits,
-        u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-            .expect("V1 carrier ceiling fits u64"),
-    )?;
+    let request = sponsor
+        .client()
+        .build_private_settlement_finalization_request_v1(
+            &barrier,
+            &commits,
+            u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                .expect("V1 carrier ceiling fits u64"),
+        )?;
     let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     observer.begin_phase("finalization", &[], true)?;
     observer.checkpoint_active_phase(&[])?;
-    sponsor.submit_private_settlement_bundle_v1(&request)?;
+    sponsor
+        .client()
+        .submit_private_settlement_bundle_v1(&request)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
     let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     ensure_exact_private_settlement_carrier_fee(
@@ -2290,6 +2333,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     );
     ensure!(
         sponsor
+            .client()
             .submit_private_settlement_bundle_v1(&request)
             .is_err(),
         "replaying the exact finalized carrier was accepted"
@@ -2356,7 +2400,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
             .block_on(peer.process_id())
             .ok_or_else(|| eyre!("smoke restart target #{peer_index} did not recover"))?;
         ensure!(
-            before_pid != after_pid && peer.client().get_status().is_ok(),
+            before_pid != after_pid && peer.client().client().get_status().is_ok(),
             "smoke restart target #{peer_index} lacks a healthy replacement process"
         );
         ensure!(

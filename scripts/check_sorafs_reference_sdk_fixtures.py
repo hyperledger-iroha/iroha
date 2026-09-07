@@ -317,6 +317,18 @@ _pair(
 )
 
 
+# Membership fixtures qualify the mandatory wire field and structural metadata only.
+EXPECTED_PAYLOADS["reference_sdk/pop_membership_current_v1.to"] = _payload(
+    "pop", "pop_membership_proof", "valid_structural_only"
+)
+EXPECTED_PAYLOADS["reference_sdk/pop_membership_missing_binding_v1.to"] = _payload(
+    "pop", "pop_membership_proof", "invalid_missing_presentation_binding"
+)
+EXPECTED_PAYLOADS["reference_sdk/pop_membership_zero_binding_v1.to"] = _payload(
+    "pop", "pop_membership_proof", "invalid_zero_presentation_binding"
+)
+
+
 # path -> (domain, scenario, status, code, generated_at)
 EXPECTED_OUTCOMES: dict[str, tuple[str, str, str, str, int]] = {
     "governance/dag_block_bad_signature_validation_outcome_v1.json": (
@@ -543,6 +555,15 @@ EXPECTED_OUTCOMES: dict[str, tuple[str, str, str, str, int]] = {
         "SFS-OK-000",
         1_700_001_234,
     ),
+    "reference_sdk/pop_membership_current_v1_validation_outcome.json": (
+        "pop", "membership_current_structural_only", "Ok", "SFS-OK-000", 123,
+    ),
+    "reference_sdk/pop_membership_missing_binding_v1_validation_outcome.json": (
+        "pop", "membership_missing_presentation_binding", "Error", "SFS-NORITO-001", 123,
+    ),
+    "reference_sdk/pop_membership_zero_binding_v1_validation_outcome.json": (
+        "pop", "membership_zero_presentation_binding", "Error", "SFS-VAL-001", 123,
+    ),
 }
 _HETEROGENEOUS_INPUTS = [
     ("replication_order", "replication_order/order_v1.to"),
@@ -663,12 +684,26 @@ EXPECTED_BUNDLE_PAYLOAD_CODES = {
         "SFS-PDP-003"
     ),
 }
+EXPECTED_POP_MEMBERSHIP_BINDINGS: dict[str, str | None] = {
+    "reference_sdk/pop_membership_current_v1_validation_outcome.json": "46" * 32,
+    "reference_sdk/pop_membership_missing_binding_v1_validation_outcome.json": None,
+    "reference_sdk/pop_membership_zero_binding_v1_validation_outcome.json": "00" * 32,
+}
+for _outcome_path in EXPECTED_POP_MEMBERSHIP_BINDINGS:
+    EXPECTED_OUTCOME_INPUTS[_outcome_path] = [
+        (
+            "pop_membership_proof",
+            PurePosixPath(_outcome_path).name.removesuffix("_validation_outcome.json") + ".to",
+        )
+    ]
+
 REQUIRED_DOMAINS = {
     "appeal_finance",
     "governance_dag",
     "moderation",
     "orderbook",
     "pdp",
+    "pop",
     "por",
     "potr",
     "reference_sdk",
@@ -714,6 +749,7 @@ REQUIRED_OUTCOME_DOMAINS = {
     "moderation",
     "orderbook",
     "pdp",
+    "pop",
     "reference_sdk",
 }
 
@@ -1153,7 +1189,7 @@ def _validate_payloads(
     if domains != REQUIRED_DOMAINS - {"reference_sdk"}:
         errors.append(
             "inventory.payloads must cover the exact appeal-finance/routing/"
-            "orderbook/PDP/PoR/PoTR/repair/Governance DAG/moderation domain set"
+            "orderbook/PDP/PoP/PoR/PoTR/repair/Governance DAG/moderation domain set"
         )
 
 
@@ -1243,6 +1279,23 @@ def _validate_outcomes(
                 errors.append(
                     f"{label} payload_code must be `{expected_payload_code}`"
                 )
+        if path in EXPECTED_POP_MEMBERSHIP_BINDINGS:
+            context = outcome["context"]
+            if type(context) is not list:
+                errors.append(f"{label} PoP structural context must be an array")
+                context = []
+            expected_binding = EXPECTED_POP_MEMBERSHIP_BINDINGS[path]
+            binding_rows = [
+                row for row in context
+                if type(row) is dict and row.get("key") == "presentation_binding_digest_hex"
+            ]
+            expected_rows = [] if expected_binding is None else [{
+                "key": "presentation_binding_digest_hex", "value": expected_binding,
+            }]
+            if binding_rows != expected_rows:
+                errors.append(
+                    f"{label} PoP presentation binding context differs from its structural fixture"
+                )
         canonical = _canonical_outcome_bytes(outcome)
         if canonical is None or data != canonical:
             errors.append(
@@ -1282,7 +1335,7 @@ def _validate_owned_directories(root_fd: int, errors: list[str]) -> None:
         ),
         "reference_sdk": sorted(
             PurePosixPath(path).name
-            for path in EXPECTED_OUTCOMES
+            for path in set(EXPECTED_PAYLOADS) | set(EXPECTED_OUTCOMES)
             if path.startswith("reference_sdk/")
         ),
     }

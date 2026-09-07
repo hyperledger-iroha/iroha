@@ -45,6 +45,8 @@ pub fn queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "detail", rename_all = "snake_case")]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::execution_context::ExternalExecutionRouteRole")]
 pub enum ExternalExecutionRouteRole {
     /// The route coordinates final admission and commit ordering for the plan.
     Coordinator,
@@ -55,6 +57,8 @@ pub enum ExternalExecutionRouteRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::execution_context::ExternalExecutionRouteLeg")]
 pub struct ExternalExecutionRouteLeg {
     /// Lane selected for this leg.
     pub lane_id: LaneId,
@@ -82,6 +86,8 @@ impl ExternalExecutionRouteLeg {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::execution_context::ExternalExecutionContext")]
 pub struct ExternalExecutionContext {
     /// Hash of the external entrypoint this context belongs to.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -161,6 +167,8 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::execution_context::CertifiedMergeLedgerReference")]
 pub struct CertifiedMergeLedgerReference {
     /// Reference schema version. Version one is the only valid value.
     pub version: u8,
@@ -244,6 +252,10 @@ impl CertifiedMergeLedgerReference {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::block::execution_context::AutonomousLanePayloadEnvelopeV1"
+)]
 pub struct AutonomousLanePayloadEnvelopeV1 {
     /// Envelope schema version.
     pub version: u8,
@@ -278,6 +290,8 @@ pub struct AutonomousLanePayloadEnvelopeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::execution_context::BlockExecutionContextBundle")]
 pub struct BlockExecutionContextBundle {
     /// Exact first-release bundle layout. Only version one is supported.
     pub version: u8,
@@ -855,3 +869,6 @@ mod tests {
         assert!(!tampered.matches_entry(&entry));
     }
 }
+
+#[cfg(test)]
+mod captured_execution_context_schema_tests;

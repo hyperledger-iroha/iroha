@@ -97,7 +97,7 @@ pub const PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1: u8 = 6;
 /// they cannot be interpreted as covering only the final carrier.
 pub const PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1: u8 = 2;
 /// Exact audited settlement-local proof profile descriptor.
-pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:selectors=canonical-active-or-domain-dummy:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:reimbursement-success-fee-carriers=2:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
+pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:activity=positive-value-membership-or-zero-virtual-domain-dummy:input-openings=air-sha256-raw256-exact-ordered-values-authorities-rhos-blindings-memos:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:reimbursement-success-fee-carriers=2:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
 
 /// Return a deterministic safe upper bound for one canonical V1 audit capsule.
 ///
@@ -727,6 +727,13 @@ pub struct PrivateSettlementProofStatementV1 {
     pub encrypted_outputs: Vec<PrivacyEncryptedOutputV1>,
     /// SHA-256 commitment to the exact auditor-only business plaintext.
     pub audit_plaintext_commitment: Hash,
+    /// Exact raw SHA-256 commitment to the two private input openings proved by the AIR.
+    ///
+    /// Includes each value, authority, nonce, blinding and memo. Activity is
+    /// canonical: a positive value is live and zero is a virtual dummy. All
+    /// 256 digest bits are retained; Iroha entity-hash marker semantics do not apply.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub audit_input_commitment: [u8; 32],
     /// Digest of the encrypted audit capsule.
     pub audit_capsule_digest: Hash,
     /// Digest of the governed auditor policy.
@@ -772,6 +779,7 @@ impl PrivateSettlementProofStatementV1 {
             || self.old_root.is_zero()
             || self.new_root.is_zero()
             || hash_is_zero(&self.audit_plaintext_commitment)
+            || self.audit_input_commitment == [0; 32]
             || hash_is_zero(&self.audit_capsule_digest)
             || hash_is_zero(&self.audit_policy_digest)
             || hash_is_zero(&self.fee_intent_digest)
@@ -5113,7 +5121,7 @@ pub enum PrivateSettlementValidationError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -5362,7 +5370,7 @@ mod tests {
         }
     }
 
-    fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
+    pub(crate) fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
         let mut manifest = manifest(count);
         let deltas = (0..count)
             .map(|index| measured_delta(&manifest, index))
@@ -7196,6 +7204,7 @@ mod tests {
             output_commitments,
             encrypted_outputs: encrypted_outputs.clone(),
             audit_plaintext_commitment: hash(16),
+            audit_input_commitment: [17; 32],
             audit_capsule_digest: hash(12),
             audit_policy_digest: hash(13),
             audit_key_epoch: 1,
@@ -7212,6 +7221,57 @@ mod tests {
         assert_eq!(decoded_statement, statement);
         assert_eq!(decoded_statement.new_root, PrivacyRootV1::new([6; 32]));
         assert_eq!(decoded_statement.new_epoch, 2);
+        assert_eq!(decoded_statement.audit_input_commitment, [17; 32]);
+        let json_statement = norito::json::to_value(&statement).expect("statement JSON encodes");
+        assert_eq!(
+            norito::json::from_value::<PrivateSettlementProofStatementV1>(json_statement.clone())
+                .expect("statement JSON decodes"),
+            statement
+        );
+        for digest in [[0x22; 32], [0x23; 32]] {
+            let mut raw_digest_statement = statement.clone();
+            raw_digest_statement.audit_input_commitment = digest;
+            raw_digest_statement
+                .validate()
+                .expect("either SHA-256 low-bit parity is canonical");
+            let bytes = norito::encode_canonical(&raw_digest_statement)
+                .expect("raw digest statement encodes");
+            let decoded = norito::decode_canonical::<PrivateSettlementProofStatementV1>(&bytes)
+                .expect("raw digest statement decodes");
+            assert_eq!(decoded.audit_input_commitment, digest);
+            assert_eq!(decoded, raw_digest_statement);
+            let json = norito::json::to_value(&raw_digest_statement)
+                .expect("raw digest statement JSON encodes");
+            let decoded = norito::json::from_value::<PrivateSettlementProofStatementV1>(json)
+                .expect("raw digest statement JSON decodes");
+            assert_eq!(decoded.audit_input_commitment, digest);
+            assert_eq!(decoded, raw_digest_statement);
+        }
+        let mut omitted_input_commitment = json_statement;
+        omitted_input_commitment
+            .as_object_mut()
+            .expect("statement JSON is an object")
+            .remove("audit_input_commitment");
+        assert!(
+            norito::json::from_value::<PrivateSettlementProofStatementV1>(omitted_input_commitment)
+                .is_err(),
+            "the first-release statement cannot omit its AIR input-opening binding"
+        );
+        let mut zero_input_commitment = statement.clone();
+        zero_input_commitment.audit_input_commitment = [0; 32];
+        assert_eq!(
+            zero_input_commitment.validate(),
+            Err(PrivateSettlementValidationError::ZeroCommitment)
+        );
+        let mut substituted_input_commitment = statement.clone();
+        substituted_input_commitment.audit_input_commitment = [18; 32];
+        assert_ne!(
+            statement.digest().expect("statement digest"),
+            substituted_input_commitment
+                .digest()
+                .expect("substituted statement digest"),
+            "the statement digest binds the exact input-opening commitment"
+        );
         let mut zero_successor = statement.clone();
         zero_successor.new_root = PrivacyRootV1::new([0; 32]);
         assert_eq!(
@@ -7251,6 +7311,10 @@ mod tests {
             audit_key_epoch: statement.audit_key_epoch,
         };
         delta.validate_against(&statement).expect("delta aligns");
+        assert_eq!(
+            delta.validate_against(&substituted_input_commitment),
+            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+        );
         let mut reused_statement_recipient = statement.clone();
         reused_statement_recipient.encrypted_outputs[1].recipient =
             reused_statement_recipient.encrypted_outputs[0].recipient;

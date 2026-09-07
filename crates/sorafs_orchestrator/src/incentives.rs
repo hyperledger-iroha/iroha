@@ -1,14 +1,10 @@
 //! Relay incentive engine wiring treasury payouts to the XOR ledger.
 //!
 //! This module bridges the SoraNet relay metrics emitted by the runtime with the core reward
-//! calculator implemented in `iroha_core::soranet_incentives`. The orchestrator feeds epoch metrics,
+//! calculator implemented in `soranet_incentives`. The orchestrator feeds epoch metrics,
 //! bond state, and optional metadata into the calculator and converts the resulting reward decision
 //! into deterministic `RelayRewardInstructionV1` payloads that the treasury daemon can execute.
 use hex::encode as hex_encode;
-use iroha_core::soranet_incentives::{
-    RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
-    RewardSkipReason, RewardWeights,
-};
 use iroha_data_model::{
     account::AccountId,
     metadata::Metadata,
@@ -19,8 +15,11 @@ use iroha_data_model::{
         prelude::{Digest32, RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayEpochMetricsV1},
     },
 };
-use iroha_logger::warn;
 use iroha_primitives::{json::Json, numeric::Quantity};
+use soranet_incentives::{
+    RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
+    RewardSkipReason, RewardWeights,
+};
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
@@ -29,6 +28,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use thiserror::Error;
+use tracing::warn;
 /// Declarative configuration for the relay reward engine.
 #[derive(Debug, Clone)]
 pub struct RewardConfig {
@@ -534,7 +534,7 @@ pub fn read_metrics_log(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, PublicKey};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
         soranet::incentives::RelayComplianceStatusV1,
@@ -571,8 +571,9 @@ mod tests {
         }
     }
     fn sample_account() -> AccountId {
-        let key_hex = "11".repeat(32);
-        let public_key = PublicKey::from_hex(Algorithm::Ed25519, &key_hex).expect("public key");
+        let (public_key, _) = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("derive relay reward account fixture key")
+            .into_parts();
         AccountId::new(public_key)
     }
     fn metrics(uptime_ratio_per_mille: u16, bandwidth_bytes: u128) -> RelayEpochMetricsV1 {

@@ -1,5 +1,6 @@
-// Included by `da::ingest::tests`; keeping this test here preserves its
-// original module path while separating error-envelope negotiation coverage.
+//! DA ingest error-envelope negotiation tests.
+
+use super::*;
 #[tokio::test]
 async fn da_ingest_error_response_negotiates_error_envelopes() {
     let (parts, body) = build_error_response(

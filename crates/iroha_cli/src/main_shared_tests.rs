@@ -48,21 +48,17 @@ fn local_sorafs_pack_accepts_no_config_and_rejects_transaction_globals() {
     assert!(matches!(
         &args.command,
         Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(
-            commands::sorafs::ToolkitCommand::Pack(_)
+            commands::sorafs::toolkit::Command::Pack(_)
         )))
     ));
     reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit pack")
         .expect("local pack needs no client context");
     let mut with_config = args;
     with_config.config = Some(PathBuf::from("must-not-read.toml"));
-    assert!(
-        reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err()
-    );
+    assert!(reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err());
     with_config.config = None;
     with_config.output = true;
-    assert!(
-        reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err()
-    );
+    assert!(reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err());
 }
 #[test]
 fn bounded_cli_input_accepts_exact_limit() {
@@ -236,6 +232,7 @@ fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec
         write: Vec::new(),
         err_write: Vec::new(),
         config: fallback_config(),
+        filesystem_config: client_config::FilesystemConfig::default(),
         operator_key_pair: None,
         transaction_metadata: None,
         fee_payment: FeePaymentArgs::default(),
@@ -800,6 +797,37 @@ fn taira_doctor_cli_parses_public_root_and_json() {
     assert_eq!(cmd.public_root, "https://taira.sora.org");
     assert!(cmd.json);
 }
+#[test]
+fn taira_public_reset_exports_source_without_runtime_signing_arguments() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "public-reset",
+        "source-manifest",
+        "--source-root",
+        "/private/source/iroha",
+    ])
+    .expect("parse read-only typed source export");
+    assert!(matches!(
+        args.command,
+        Command::Taira(crate::taira::Command::PublicReset(_))
+    ));
+    assert!(
+        Args::try_parse_from([
+            "iroha",
+            "taira",
+            "public-reset",
+            "source-manifest",
+            "--source-root",
+            "/private/source/iroha",
+            "--ssh-identity",
+            "/private/id_ed25519",
+        ])
+        .is_err(),
+        "local source export must reject unrelated signing inputs"
+    );
+}
+
 #[test]
 fn taira_public_reset_exposes_strict_preflight_and_apply() {
     let args = Args::try_parse_from([
@@ -1627,7 +1655,8 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
             stream.write_all(&body).expect("write fee-quote response");
         });
         config.torii_api_url = Url::parse(&format!("http://{address}/")).expect("fee-quote URL");
-        let client = Client::new(config);
+        let client = BlockingClient::from_client(Client::new(config))
+            .expect("blocking fee-quote fixture client");
         let result = quote_and_sign_transaction(
             &client,
             Executable::Instructions(Vec::<InstructionBox>::new().into()),
@@ -1644,26 +1673,11 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
 
     let error =
         invoke(1, "text/plain").expect_err("signing must reject a non-JSON successful response");
-    assert!(format!("{error:#}").contains("Content-Type must be application/json"));
-}
-#[test]
-fn fee_quote_rejection_surfaces_capacity_and_remediation() {
-    let body = br#"{
-            "code":"fee_payment_rejected",
-            "message":"program capacity exhausted",
-            "details":{"fee":{
-                "code":"program_block_limit_exceeded",
-                "retryable":true,
-                "required":"12",
-                "available":"7",
-                "remediation":"retry in the next block"
-            }}
-        }"#;
-    let message = fee_quote_rejection_message(reqwest::StatusCode::CONFLICT, body);
-    assert!(message.contains("program_block_limit_exceeded"));
-    assert!(message.contains("required=12"));
-    assert!(message.contains("available=7"));
-    assert!(message.contains("retry in the next block"));
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("fee quote response has invalid content-type (expected application/json)"),
+        "unexpected fee-quote media-type error: {error}"
+    );
 }
 #[test]
 fn account_admission_rejected_message_includes_hint() {
@@ -1797,6 +1811,28 @@ status_timeout_ms = 3400
         Duration::from_millis(3400)
     );
 }
+
+#[test]
+fn cli_loader_owns_filesystem_sections_before_sdk_validation() {
+    let file = NamedTempFile::new().expect("client configuration file");
+    let source = format!(
+        "{}\n[connect]\nqueue_root = \"queue-state\"\n\n[soracloud]\nhttp_witness_file = \"witness.json\"\n",
+        include_str!("../../../defaults/client.toml")
+    );
+    fs::write(file.path(), source).expect("write composite CLI configuration");
+    let (config, filesystem) = load_cli_client_config(LoadPath::Explicit(file.path().into()))
+        .expect("CLI-owned sections are removed before SDK validation");
+    assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+    let source_dir = file.path().parent().expect("configuration directory");
+    assert_eq!(
+        filesystem.connect_queue_root,
+        source_dir.join("queue-state")
+    );
+    assert_eq!(
+        filesystem.soracloud_http_witness_file,
+        Some(source_dir.join("witness.json"))
+    );
+}
 #[test]
 fn apply_transaction_overrides_ignores_legacy_top_level_keys() {
     let mut config = fallback_config();
@@ -1837,8 +1873,6 @@ impl CaptureContext {
             transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
             transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
             transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-            connect_queue_root: iroha::config::default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
             sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
             sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

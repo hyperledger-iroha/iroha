@@ -1,0 +1,5 @@
+error: duplicate event set identity declaration
+ --> tests/ui_fail/event_set_identity_duplicate.rs:6:1
+  |
+6 | #[event_set(schema_name = "fixture::Second")]
+  | ^

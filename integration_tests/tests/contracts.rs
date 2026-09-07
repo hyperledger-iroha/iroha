@@ -7,7 +7,7 @@ use iroha::data_model::prelude::*;
 use iroha::data_model::{
     block::{
         consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
-        consensus_v2::recommended_data_availability_layout,
+        consensus_v2::{SumeragiV2GenesisContextParameters, recommended_data_availability_layout},
     },
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
@@ -226,7 +226,7 @@ async fn post_typed_core_query_page(
     Ok((status, body))
 }
 async fn invoke_typed_core_query_page(
-    client: iroha::client::Client,
+    client: iroha::blocking::Client,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     offset: i64,
@@ -236,7 +236,7 @@ async fn invoke_typed_core_query_page(
     let entrypoint = entrypoint.to_owned();
     let payload = typed_core_query_page_payload(offset, limit);
     let response = tokio::task::spawn_blocking(move || {
-        client.post_contract_view_json(
+        client.client().post_contract_view_json(
             &iroha_test_samples::ALICE_ID,
             Some(&contract_address),
             None,
@@ -480,7 +480,7 @@ async fn wait_for_cross_peer_rbc_diagnostics(
             .iter()
             .map(|peer| {
                 let client = peer.client();
-                tokio::task::spawn_blocking(move || client.get_sumeragi_diagnostics())
+                tokio::task::spawn_blocking(move || client.client().get_sumeragi_diagnostics())
             })
             .collect::<Vec<_>>();
         let mut observations = Vec::with_capacity(tasks.len());
@@ -654,7 +654,7 @@ fn dynamic_counter_call_intent(
     }
 }
 async fn wait_for_approved_txs(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     baseline: u64,
     timeout: Duration,
     stage: &str,
@@ -665,7 +665,7 @@ async fn wait_for_approved_txs(
     while Instant::now() < deadline {
         match tokio::task::spawn_blocking({
             let client = client.clone();
-            move || client.get_status()
+            move || client.client().get_status()
         })
         .await
         .expect("poll status")
@@ -790,7 +790,7 @@ async fn wait_for_tx_applied(
     }
 }
 pub(super) fn deploy_contract_locally_signed(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     artifact: &[u8],
     contract_alias: iroha_data_model::smart_contract::ContractAlias,
 ) -> Result<(
@@ -807,9 +807,11 @@ pub(super) fn deploy_contract_locally_signed(
         .map_err(|error| eyre!("verify contract artifact: {error}"))?;
     let manifest = verified
         .manifest
-        .try_signed(&client.key_pair)
+        .try_signed(&client.client().key_pair)
         .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
-    let authority: Account = client.query_single(FindAccountById::new(client.account.clone()))?;
+    let authority: Account = client
+        .client()
+        .query_single(FindAccountById::new(client.client().account.clone()))?;
     let nonce_key =
         Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)?;
     let deploy_nonce = authority
@@ -823,8 +825,8 @@ pub(super) fn deploy_contract_locally_signed(
         .transpose()?
         .unwrap_or(0);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &client.network_id,
-        &client.account,
+        &client.client().network_id,
+        &client.client().account,
         deploy_nonce,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     )
@@ -857,18 +859,18 @@ pub(super) fn deploy_contract_locally_signed(
                 chunk_count,
             }));
         }
-        client.submit_all_blocking_with_metadata(
+        client.submit_all_with_metadata(
             instructions,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             metadata.clone(),
         )?;
     }
-    client.submit_blocking_with_metadata(
+    client.submit_with_metadata(
         RegisterSmartContractCode { manifest },
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     )?;
-    let deployment_tx_hash = client.submit_blocking_with_metadata(
+    let deployment_tx_hash = client.submit_with_metadata(
         CommitContractDeployment {
             expected_deploy_nonce: deploy_nonce,
             contract_address: contract_address.clone(),
@@ -888,7 +890,7 @@ pub(super) fn deploy_contract_locally_signed(
     ))
 }
 async fn deploy_contract_artifact(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     http: &reqwest::Client,
     artifact: &[u8],
     alias_name: &str,
@@ -909,7 +911,7 @@ async fn deploy_contract_artifact(
     .expect("deploy contract task")?;
     let deployment_block_height = wait_for_tx_applied(
         http,
-        &client.torii_url,
+        &client.client().torii_url,
         &hex::encode(deployment_tx_hash.as_ref()),
         Duration::from_secs(60),
         stage,
@@ -958,14 +960,14 @@ async fn contract_state_json_value(
 }
 
 async fn contract_view_json_value(
-    client: iroha::client::Client,
+    client: iroha::blocking::Client,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
 ) -> Result<norito::json::Value> {
     let contract_address = contract_address.clone();
     let entrypoint = entrypoint.to_owned();
     let response = tokio::task::spawn_blocking(move || {
-        client.post_contract_view_json(
+        client.client().post_contract_view_json(
             &iroha_test_samples::ALICE_ID,
             Some(&contract_address),
             None,
@@ -1100,6 +1102,7 @@ async fn wait_for_contract_lifecycle_on_all_peers(
             let contract_address = contract_address.clone();
             let observed = tokio::task::spawn_blocking(move || {
                 client
+                    .client()
                     .get_gov_contract_json(&contract_address)
                     .and_then(|response| contract_lifecycle_snapshot(&response))
             })
@@ -1209,7 +1212,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     .await?;
 
     let unauthorized = bob
-        .submit_blocking(
+        .submit(
             DeactivateContractInstance {
                 contract_address: contract_address.clone(),
                 expected_revision: 1,
@@ -1231,7 +1234,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     )
     .await?;
 
-    alice.submit_blocking(
+    alice.submit(
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
             expected_revision: 1,
@@ -1254,7 +1257,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     .await?;
 
     let stale_activation = alice
-        .submit_blocking(
+        .submit(
             ActivateContractInstance {
                 contract_address: contract_address.clone(),
                 expected_revision: 1,
@@ -1269,7 +1272,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         "stale owner activation",
     );
 
-    alice.submit_blocking(
+    alice.submit(
         SetContractParliamentDelegation {
             contract_address: contract_address.clone(),
             expected_revision: 2,
@@ -1290,7 +1293,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     )
     .await?;
 
-    alice.submit_blocking(
+    alice.submit(
         SetContractParliamentDelegation {
             contract_address: contract_address.clone(),
             expected_revision: 3,
@@ -1311,7 +1314,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     )
     .await?;
 
-    alice.submit_blocking(
+    alice.submit(
         OfferContractOwnership {
             contract_address: contract_address.clone(),
             expected_revision: 4,
@@ -1333,7 +1336,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     .await?;
 
     let wrong_acceptor = alice
-        .submit_blocking(
+        .submit(
             AcceptContractOwnership {
                 contract_address: contract_address.clone(),
                 expected_revision: 5,
@@ -1354,7 +1357,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     )
     .await?;
 
-    bob.submit_blocking(
+    bob.submit(
         AcceptContractOwnership {
             contract_address: contract_address.clone(),
             expected_revision: 5,
@@ -1377,7 +1380,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     .await?;
 
     let former_owner = alice
-        .submit_blocking(
+        .submit(
             ActivateContractInstance {
                 contract_address: contract_address.clone(),
                 expected_revision: 6,
@@ -1392,7 +1395,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         "former-owner activation",
     );
 
-    bob.submit_blocking(
+    bob.submit(
         ActivateContractInstance {
             contract_address: contract_address.clone(),
             expected_revision: 6,
@@ -1415,7 +1418,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     .await?;
 
     let stale_deactivation = bob
-        .submit_blocking(
+        .submit(
             DeactivateContractInstance {
                 contract_address: contract_address.clone(),
                 expected_revision: 6,
@@ -1490,7 +1493,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     while Instant::now() < deadline {
         match tokio::task::spawn_blocking({
             let client = client.clone();
-            move || client.get_status()
+            move || client.client().get_status()
         })
         .await
         .expect("poll status")
@@ -1531,6 +1534,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     }
     // GET by code hash
     let get_url = client
+        .client()
         .torii_url
         .join(&format!("/v1/contracts/code/{code_hash_hex}"))
         .unwrap();
@@ -1625,7 +1629,10 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
     network.ensure_blocks(1).await?;
     let alice_client = network.peers()[0].client();
-    let bob_client = network.peers()[1].client();
+    let bob_client = network.peers()[1].client_for(
+        &iroha_test_samples::BOB_ID,
+        iroha_test_samples::BOB_KEYPAIR.private_key().clone(),
+    );
     let http = integration_tests::http::client();
     let artifact = dynamic_access_counter_artifact();
     let (contract_address, _, deploy_height) = deploy_contract_artifact(
@@ -1643,7 +1650,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     )
     .expect("dynamic counter alias");
     network.ensure_blocks(deploy_height).await?;
-    let alice_submission = tokio::task::spawn_blocking({
+    let alice_submission = {
         let client = alice_client.clone();
         let contract_address = contract_address.clone();
         let payload = dynamic_counter_args(7, 3);
@@ -1654,23 +1661,26 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
             "bump_direct",
             &payload,
         );
-        move || {
-            client.post_contract_call_json(
-                &iroha_test_samples::ALICE_ID.clone(),
-                Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-                Some(&contract_address),
-                None,
-                "bump_direct",
-                Some(&payload),
-                None,
-                None,
-                None,
-                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
-                &intent,
-            )
+        async move {
+            client
+                .account_client()
+                .post_contract_call_json(
+                    &iroha_test_samples::ALICE_ID.clone(),
+                    Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+                    Some(&contract_address),
+                    None,
+                    "bump_direct",
+                    Some(&payload),
+                    None,
+                    None,
+                    None,
+                    &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
+                    &intent,
+                )
+                .await
         }
-    });
-    let bob_submission = tokio::task::spawn_blocking({
+    };
+    let bob_submission = {
         let client = bob_client.clone();
         let contract_address = contract_address.clone();
         let payload = dynamic_counter_args(7, 5);
@@ -1681,25 +1691,28 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
             "bump_via_helper",
             &payload,
         );
-        move || {
-            client.post_contract_call_json(
-                &iroha_test_samples::BOB_ID.clone(),
-                Some(iroha_test_samples::BOB_KEYPAIR.private_key()),
-                Some(&contract_address),
-                None,
-                "bump_via_helper",
-                Some(&payload),
-                None,
-                None,
-                None,
-                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
-                &intent,
-            )
+        async move {
+            client
+                .account_client()
+                .post_contract_call_json(
+                    &iroha_test_samples::BOB_ID.clone(),
+                    Some(iroha_test_samples::BOB_KEYPAIR.private_key()),
+                    Some(&contract_address),
+                    None,
+                    "bump_via_helper",
+                    Some(&payload),
+                    None,
+                    None,
+                    None,
+                    &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
+                    &intent,
+                )
+                .await
         }
-    });
+    };
     let (alice_response, bob_response) = tokio::join!(alice_submission, bob_submission);
-    let alice_response = alice_response.expect("submit direct bump task")?;
-    let bob_response = bob_response.expect("submit helper bump task")?;
+    let alice_response = alice_response?;
+    let bob_response = bob_response?;
     let alice_tx_hash = alice_response
         .get("tx_hash_hex")
         .and_then(norito::json::Value::as_str)
@@ -1713,14 +1726,14 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     let (alice_block_height, bob_block_height) = tokio::try_join!(
         wait_for_tx_applied(
             &http,
-            &alice_client.torii_url,
+            &alice_client.client().torii_url,
             &alice_tx_hash,
             Duration::from_secs(60),
             "direct dynamic bump",
         ),
         wait_for_tx_applied(
             &http,
-            &bob_client.torii_url,
+            &bob_client.client().torii_url,
             &bob_tx_hash,
             Duration::from_secs(60),
             "helper-hidden dynamic bump",
@@ -1737,7 +1750,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         peer_values.push(
             contract_state_json_value(
                 &http,
-                &peer_client.torii_url,
+                &peer_client.client().torii_url,
                 &contract_address,
                 "Counters/7",
             )
@@ -1870,30 +1883,35 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             let client = deploy_client.clone();
             move || -> Result<_> {
                 let account_ids = client
+                    .client()
                     .query(FindAccounts)
                     .execute_all()?
                     .into_iter()
                     .map(|account| account.id().clone())
                     .collect::<Vec<_>>();
                 let asset_ids = client
+                    .client()
                     .query(FindAssets::new())
                     .execute_all()?
                     .into_iter()
                     .map(|asset| asset.id().clone())
                     .collect::<Vec<_>>();
                 let asset_definition_ids = client
+                    .client()
                     .query(FindAssetsDefinitions::new())
                     .execute_all()?
                     .into_iter()
                     .map(|definition| definition.id().clone())
                     .collect::<Vec<_>>();
                 let domain_ids = client
+                    .client()
                     .query(FindDomains::new())
                     .execute_all()?
                     .into_iter()
                     .map(|domain| domain.id().clone())
                     .collect::<Vec<_>>();
                 let nft_ids = client
+                    .client()
                     .query(FindNfts::new())
                     .execute_all()?
                     .into_iter()
@@ -2131,7 +2149,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             let mut peer_rejections = Vec::with_capacity(network.peers().len());
             for peer in network.peers() {
                 let peer_client = peer.client();
-                let torii_url = peer_client.torii_url.clone();
+                let torii_url = peer_client.client().torii_url.clone();
                 let (status, body) = post_typed_core_query_page(
                     &http,
                     &torii_url,
@@ -2304,7 +2322,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     .expect("locally signed contract deployment task")?;
     let deployment_height = wait_for_tx_applied(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &hex::encode(deployment_tx_hash.as_ref()),
         Duration::from_secs(60),
         "contract V1 deployment",
@@ -2346,9 +2364,14 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         ),
     ])
     .expect("serialize activate body");
-    let activate_baseline = client.get_status()?.txs_approved;
+    let activate_baseline = client.client().get_status()?.txs_approved;
     let activate_resp = http
-        .post(client.torii_url.join("/v1/contracts/instance/activate")?)
+        .post(
+            client
+                .client()
+                .torii_url
+                .join("/v1/contracts/instance/activate")?,
+        )
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .body(norito::json::to_json(&activate_body)?)
@@ -2376,7 +2399,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     {
         wait_for_tx_applied(
             &http,
-            &client.torii_url,
+            &client.client().torii_url,
             activate_tx_hash,
             Duration::from_secs(30),
             "activate",
@@ -2422,9 +2445,9 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         ),
     ])
     .expect("serialize hajimari body");
-    let hajimari_baseline = client.get_status()?.txs_approved;
+    let hajimari_baseline = client.client().get_status()?.txs_approved;
     let hajimari_resp = http
-        .post(client.torii_url.join("/v1/contracts/call")?)
+        .post(client.client().torii_url.join("/v1/contracts/call")?)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .body(norito::json::to_json(&hajimari_body)?)
@@ -2452,7 +2475,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     {
         wait_for_tx_applied(
             &http,
-            &client.torii_url,
+            &client.client().torii_url,
             hajimari_tx_hash,
             Duration::from_secs(30),
             "hajimari",
@@ -2498,9 +2521,9 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         ),
     ])
     .expect("serialize verify body");
-    let verify_baseline = client.get_status()?.txs_approved;
+    let verify_baseline = client.client().get_status()?.txs_approved;
     let verify_resp = http
-        .post(client.torii_url.join("/v1/contracts/call")?)
+        .post(client.client().torii_url.join("/v1/contracts/call")?)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .body(norito::json::to_json(&verify_body)?)
@@ -2527,7 +2550,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     {
         wait_for_tx_applied(
             &http,
-            &client.torii_url,
+            &client.client().torii_url,
             verify_tx_hash,
             Duration::from_secs(30),
             "verify",
@@ -2546,7 +2569,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         );
         let stored = contract_state_json_value(
             &http,
-            &peer.client().torii_url,
+            &peer.client().client().torii_url,
             &contract_address,
             "probe_readback",
         )
@@ -2571,7 +2594,12 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         .peers()
         .iter()
         .take(restart_index)
-        .map(|peer| peer.client().get_status().map(|status| status.blocks))
+        .map(|peer| {
+            peer.client()
+                .client()
+                .get_status()
+                .map(|status| status.blocks)
+        })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .max()
@@ -2605,7 +2633,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     );
     let restarted_state = contract_state_json_value(
         &http,
-        &restart_peer.client().torii_url,
+        &restart_peer.client().client().torii_url,
         &contract_address,
         "probe_readback",
     )

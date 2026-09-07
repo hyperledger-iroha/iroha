@@ -18,9 +18,9 @@ enum class SccpReplayBoundaryV1(val tag: Int) {
     TON_MASTER_MINT(0x32),
     TON_MASTER_BURN(0x33),
     TON_WALLET_MINT_CREDIT(0x34),
-    TON_WALLET_BURN_DEBIT(0x35),
-    TON_WALLET_REFUND_DEBIT(0x36),
-    TON_WALLET_REFUND_CREDIT(0x37),
+    TON_WALLET_BURN_AUTHORIZATION(0x35),
+    TON_WALLET_BURN_LOCK(0x36),
+    TON_WALLET_BURN_REFUND(0x37),
 }
 
 /** Canonical contract identity committed by one replay domain. */
@@ -74,7 +74,12 @@ class SccpSparseMerkleWitnessV1(
     siblingBitmap: ByteArray,
     siblings: List<ByteArray>,
 ) {
-    internal val expectedShardRoot = requireExact(expectedShardRoot, 32, "expected shard root")
+    internal val expectedShardRoot = requireExact(
+        expectedShardRoot,
+        32,
+        "expected shard root",
+        nonzero = false,
+    )
     internal val priorRecordDigest = requireExact(
         priorRecordDigest,
         32,
@@ -88,7 +93,7 @@ class SccpSparseMerkleWitnessV1(
         nonzero = false,
     )
     internal val siblings = siblings.mapIndexed { index, sibling ->
-        requireExact(sibling, 32, "sibling[$index]")
+        requireExact(sibling, 32, "sibling[$index]", nonzero = false)
     }
 }
 
@@ -159,6 +164,9 @@ object SccpReplayV1 {
         require(amountScale9.signum() > 0 && amountScale9 <= maxU128) {
             "replay amount must be a positive u128"
         }
+        require(principal.kind == principalKind(operation)) {
+            "replay operation and principal kind are inconsistent"
+        }
         val principalDigest = hash(
             magic,
             byteArrayOf(3, principal.kind.toByte()),
@@ -170,7 +178,7 @@ object SccpReplayV1 {
             byteArrayOf(4, operation.tag.toByte()),
             requireExact(auxiliaryIdentitySha256, 32, "auxiliary identity SHA-256"),
         )
-        return hash(
+        val digest = hash(
             magic,
             byteArrayOf(2, operation.tag.toByte()),
             requireExact(replayId, 32, "replay id"),
@@ -179,6 +187,8 @@ object SccpReplayV1 {
             principalDigest,
             auxiliary,
         )
+        require(digest.any { it.toInt() != 0 }) { "occupied replay record digest must be nonzero" }
+        return digest
     }
 
     /** Return all canonical empty hashes in leaf-up order. */
@@ -192,10 +202,10 @@ object SccpReplayV1 {
     /** Reconstruct and strictly validate a canonical compressed witness. */
     @JvmStatic fun rootFromWitness(
         keyValue: ByteArray,
-        recordDigest: ByteArray?,
+        recordDigest: ByteArray,
         witness: SccpSparseMerkleWitnessV1,
     ): SccpReplayWitnessRootV1 {
-        val key = requireExact(keyValue, 32, "replay key")
+        val key = requireExact(keyValue, 32, "replay key", nonzero = false)
         require(witness.siblingBitmap[0].toInt() == 0) { "witness bitmap has reserved high bits" }
         val setBits = witness.siblingBitmap.fold(0) { count, byte ->
             count + Integer.bitCount(byte.toInt() and 0xff)
@@ -204,18 +214,12 @@ object SccpReplayV1 {
             "witness sibling count does not match bitmap"
         }
         val empty = emptyHashes()
-        var current = if (recordDigest == null) {
-            require(witness.priorRecordDigest.all { it.toInt() == 0 }) {
-                "non-membership witness has an occupied digest"
-            }
-            empty[0]
-        } else {
-            val digest = requireExact(recordDigest, 32, "record digest")
-            require(digest.contentEquals(witness.priorRecordDigest)) {
-                "membership witness record digest mismatch"
-            }
-            hash(magic, byteArrayOf(0x11), key, digest)
+        val digest = requireExact(recordDigest, 32, "record digest", nonzero = false)
+        require(digest.contentEquals(witness.priorRecordDigest)) {
+            "witness record digest mismatch"
         }
+        var current = if (digest.all { it.toInt() == 0 }) empty[0]
+        else hash(magic, byteArrayOf(0x11), key, digest)
         var supplied = 0
         for (level in 0 until DEPTH) {
             val sibling = if (bit(witness.siblingBitmap, level)) {
@@ -231,6 +235,44 @@ object SccpReplayV1 {
             else parent(level, current, sibling)
         }
         return SccpReplayWitnessRootV1(current, witness.expectedShardRoot, key[0].toInt() and 0xff)
+    }
+
+    /** Verify a replay witness against the caller's exact current shard root. */
+    @JvmStatic fun verifyAgainstCurrentRoot(
+        keyValue: ByteArray,
+        recordDigest: ByteArray,
+        witness: SccpSparseMerkleWitnessV1,
+        currentRootValue: ByteArray,
+    ): SccpReplayWitnessRootV1 {
+        val currentRoot = requireExact(
+            currentRootValue,
+            32,
+            "current shard root",
+            nonzero = false,
+        )
+        val reconstructed = rootFromWitness(keyValue, recordDigest, witness)
+        require(
+            reconstructed.expectedRoot().contentEquals(currentRoot) &&
+                reconstructed.root().contentEquals(currentRoot),
+        ) { "replay witness does not match the current shard root" }
+        return reconstructed
+    }
+
+    private fun principalKind(boundary: SccpReplayBoundaryV1): Int = when (boundary) {
+        SccpReplayBoundaryV1.SORA_OUTBOUND_LOCK,
+        SccpReplayBoundaryV1.SORA_INBOUND_RELEASE -> 0
+        SccpReplayBoundaryV1.EVM_SOURCE_BURN,
+        SccpReplayBoundaryV1.EVM_DESTINATION_MINT -> 1
+        SccpReplayBoundaryV1.TRON_SOURCE_BURN,
+        SccpReplayBoundaryV1.TRON_DESTINATION_MINT -> 2
+        SccpReplayBoundaryV1.TON_BRIDGE_INBOUND_MINT,
+        SccpReplayBoundaryV1.TON_BRIDGE_OUTBOUND_BURN,
+        SccpReplayBoundaryV1.TON_MASTER_MINT,
+        SccpReplayBoundaryV1.TON_MASTER_BURN,
+        SccpReplayBoundaryV1.TON_WALLET_MINT_CREDIT,
+        SccpReplayBoundaryV1.TON_WALLET_BURN_AUTHORIZATION,
+        SccpReplayBoundaryV1.TON_WALLET_BURN_LOCK,
+        SccpReplayBoundaryV1.TON_WALLET_BURN_REFUND -> 3
     }
 
     private fun parent(level: Int, left: ByteArray, right: ByteArray): ByteArray = hash(
@@ -267,13 +309,13 @@ object SccpReplayV1 {
             source == SccpNetworkV1.SORA_TAIRA && target == SccpNetworkV1.TRON_MAINNET && actorKind == 2
         SccpReplayBoundaryV1.TON_BRIDGE_INBOUND_MINT,
         SccpReplayBoundaryV1.TON_MASTER_MINT,
-        SccpReplayBoundaryV1.TON_WALLET_MINT_CREDIT,
-        SccpReplayBoundaryV1.TON_WALLET_REFUND_DEBIT,
-        SccpReplayBoundaryV1.TON_WALLET_REFUND_CREDIT ->
+        SccpReplayBoundaryV1.TON_WALLET_MINT_CREDIT ->
             source == SccpNetworkV1.SORA_TAIRA && target == SccpNetworkV1.TON_MAINNET && actorKind == 3
         SccpReplayBoundaryV1.TON_BRIDGE_OUTBOUND_BURN,
         SccpReplayBoundaryV1.TON_MASTER_BURN,
-        SccpReplayBoundaryV1.TON_WALLET_BURN_DEBIT ->
+        SccpReplayBoundaryV1.TON_WALLET_BURN_AUTHORIZATION,
+        SccpReplayBoundaryV1.TON_WALLET_BURN_LOCK,
+        SccpReplayBoundaryV1.TON_WALLET_BURN_REFUND ->
             source == SccpNetworkV1.TON_MAINNET && target == SccpNetworkV1.SORA_TAIRA && actorKind == 3
     }
 

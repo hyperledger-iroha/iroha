@@ -8,6 +8,7 @@ use crate::{
 };
 isi! {
     /// Submit a resolver directory draft signed by an approved release engineer.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::SubmitDirectoryDraft")]
     pub struct SubmitDirectoryDraft {
         /// Resolver directory record that will be anchored on-chain upon publish.
         pub record: ResolverDirectoryRecordV1,
@@ -24,6 +25,7 @@ isi! {
 impl crate::seal::Instruction for SubmitDirectoryDraft {}
 isi! {
     /// Publish a resolver directory draft after council approval.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::PublishDirectory")]
     pub struct PublishDirectory {
         /// Directory identifier (Merkle root) that identifies the draft.
         pub directory_id: DirectoryId,
@@ -34,6 +36,7 @@ isi! {
 impl crate::seal::Instruction for PublishDirectory {}
 isi! {
     /// Revoke a resolver immediately without publishing a new directory record.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::RevokeResolver")]
     pub struct RevokeResolver {
         /// Resolver identifier targeted by the revocation.
         pub resolver_id: ResolverId,
@@ -44,6 +47,7 @@ isi! {
 impl crate::seal::Instruction for RevokeResolver {}
 isi! {
     /// Remove an entry from the resolver revocation set.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::UnrevokeResolver")]
     pub struct UnrevokeResolver {
         /// Resolver identifier that will be restored.
         pub resolver_id: ResolverId,
@@ -52,6 +56,7 @@ isi! {
 impl crate::seal::Instruction for UnrevokeResolver {}
 isi! {
     /// Add a release engineer key authorized to submit directory drafts.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::AddReleaseSigner")]
     pub struct AddReleaseSigner {
         /// Public key that will be permitted to submit drafts.
         pub public_key: iroha_crypto::PublicKey,
@@ -60,6 +65,7 @@ isi! {
 impl crate::seal::Instruction for AddReleaseSigner {}
 isi! {
     /// Remove a release engineer key from the draft submission allowlist.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::RemoveReleaseSigner")]
     pub struct RemoveReleaseSigner {
         /// Public key that will be removed from the allowlist.
         pub public_key: iroha_crypto::PublicKey,
@@ -68,6 +74,7 @@ isi! {
 impl crate::seal::Instruction for RemoveReleaseSigner {}
 isi! {
     /// Update the resolver directory rotation policy enforced during publish.
+    #[norito_schema(name = "iroha_data_model::isi::soradns::SetDirectoryRotationPolicy")]
     pub struct SetDirectoryRotationPolicy {
         /// Updated rotation policy.
         pub policy: DirectoryRotationPolicyV1,

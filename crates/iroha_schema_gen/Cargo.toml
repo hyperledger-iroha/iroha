@@ -18,4 +18,4 @@ iroha_primitives = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_schema = { workspace = true }
-iroha_telemetry = { workspace = true }
+iroha_torii_shared = { workspace = true }

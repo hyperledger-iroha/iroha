@@ -18,6 +18,8 @@ use std::collections::BTreeSet;
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::LaneCompliancePolicyId")]
 pub struct LaneCompliancePolicyId(Hash);
 impl LaneCompliancePolicyId {
     /// Construct a new identifier from a hash.
@@ -44,6 +46,8 @@ impl Default for LaneCompliancePolicyId {
 /// Declarative policy describing per-lane allow/deny rules and audit controls.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::LaneCompliancePolicy")]
 pub struct LaneCompliancePolicy {
     /// Unique identifier for the policy payload.
     pub id: LaneCompliancePolicyId,
@@ -82,6 +86,8 @@ impl LaneCompliancePolicy {
 /// Rule evaluated against incoming transactions.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::LaneComplianceRule")]
 pub struct LaneComplianceRule {
     /// Selector describing which participants are affected.
     pub selector: ParticipantSelector,
@@ -101,6 +107,8 @@ impl LaneComplianceRule {
 /// Participant selector matching incoming transactions.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::ParticipantSelector")]
 pub struct ParticipantSelector {
     /// Specific account identifier required by the rule.
     #[norito(default)]
@@ -127,6 +135,8 @@ pub struct ParticipantSelector {
 /// Transfer limits expressed per asset or policy bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::TransferLimit")]
 pub struct TransferLimit {
     /// Asset identifier (when scoped to a specific asset). `None` implies XOR notional tracking.
     #[norito(default)]
@@ -144,6 +154,8 @@ pub struct TransferLimit {
 /// Audit knobs controlling how long decision records are persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::AuditControls")]
 pub struct AuditControls {
     /// Whether to persist every denial decision.
     pub record_denials: bool,
@@ -164,6 +176,8 @@ impl Default for AuditControls {
 /// Jurisdiction labels applied to a policy or rule override.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::JurisdictionSet")]
 pub struct JurisdictionSet {
     /// Backing set of jurisdiction flags.
     #[norito(default)]
@@ -191,6 +205,8 @@ impl JurisdictionSet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "flag", content = "state"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::compliance::JurisdictionFlag")]
 pub enum JurisdictionFlag {
     /// European Economic Area / EU oversight.
     EuEea,
@@ -228,3 +244,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_compliance_schema_tests;

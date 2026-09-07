@@ -109,7 +109,7 @@ fn resource_fixtures_are_deterministic_fully_witnessed_transfers() {
     for rows in [2, 4, 8, 16] {
         let batch = transfer_fixture(rows);
         assert_eq!(batch.transitions.len(), rows);
-        validate_batch_semantics(&batch, ProofSemantics::TransferStateTransition)
+        validate_batch_semantics(&batch, ProofSemantics::StateTransition)
             .expect("public transfer profile");
         let transcripts = decode_transcripts(&batch.metadata)
             .expect("decode transcripts")
@@ -159,7 +159,7 @@ fn measure_public_cpu(rows: usize) {
         .collect::<String>();
     let record = norito::json!({
         "measurement_version": 2_u64,
-        "profile": "transfer_state_transition",
+        "profile": "state_transition",
         "parameter": FASTPQ_FINAL_V1_ID,
         "execution_mode": "cpu",
         "debug_assertions": (cfg!(debug_assertions)),

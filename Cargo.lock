@@ -3205,6 +3205,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -4734,10 +4735,12 @@ dependencies = [
  "iroha_logger",
  "iroha_p2p",
  "iroha_primitives",
+ "iroha_service_model",
  "iroha_telemetry",
  "iroha_test_network",
  "iroha_test_samples",
  "iroha_torii",
+ "iroha_torii_shared",
  "ivm",
  "mint_rose_trigger_data_model",
  "nonzero_ext",
@@ -4781,15 +4784,13 @@ dependencies = [
  "hex",
  "hmac",
  "http",
- "iroha_config",
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
- "iroha_logger",
  "iroha_primitives",
  "iroha_sccp",
- "iroha_telemetry",
+ "iroha_service_model",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
@@ -4798,16 +4799,15 @@ dependencies = [
  "rand_core 0.6.4",
  "reqwest",
  "sha2",
- "sorafs_car",
  "sorafs_chunker",
  "sorafs_manifest",
- "sorafs_orchestrator",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.28.0",
  "toml 0.9.12+spec-1.1.0",
+ "tracing",
  "tungstenite 0.28.0",
  "url",
 ]
@@ -4844,12 +4844,15 @@ dependencies = [
  "image",
  "iroha",
  "iroha_config",
+ "iroha_config_base",
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_i18n",
  "iroha_primitives",
  "iroha_sccp",
+ "iroha_service_model",
+ "iroha_storage_client",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
@@ -4867,6 +4870,7 @@ dependencies = [
  "sorafs_chunker",
  "sorafs_manifest",
  "sorafs_orchestrator",
+ "soranet_incentives",
  "soranet_pq",
  "supports-color 3.0.2",
  "tempfile",
@@ -4892,6 +4896,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_primitives",
+ "iroha_service_model",
  "iroha_torii_shared",
  "log",
  "nonzero_ext",
@@ -5318,6 +5323,8 @@ dependencies = [
  "iroha_data_model",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_service_model",
+ "iroha_storage_client",
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
@@ -5416,6 +5423,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_musubi_service"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "hex",
+ "iroha",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_primitives",
+ "iroha_service_model",
+ "iroha_telemetry",
+ "norito",
+ "reqwest",
+ "sorafs_car",
+ "sorafs_manifest",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "iroha_p2p"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5461,6 +5489,7 @@ dependencies = [
  "iroha_macro",
  "iroha_primitives_derive",
  "iroha_schema",
+ "libc",
  "norito",
  "num-bigint 0.4.6",
  "num-traits",
@@ -5468,6 +5497,7 @@ dependencies = [
  "rust_decimal",
  "smallstr",
  "smallvec",
+ "tempfile",
  "thiserror 2.0.18",
  "trybuild",
 ]
@@ -5495,12 +5525,12 @@ dependencies = [
  "futures",
  "hex",
  "http",
- "iroha_config",
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_service_model",
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
@@ -5572,8 +5602,12 @@ dependencies = [
  "iroha_genesis",
  "iroha_primitives",
  "iroha_schema",
- "iroha_telemetry",
+ "iroha_torii_shared",
 ]
+
+[[package]]
+name = "iroha_service_model"
+version = "2.0.0-rc.2.0"
 
 [[package]]
 name = "iroha_smart_contract"
@@ -5621,6 +5655,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_storage_client"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "eyre",
+ "hex",
+ "iroha",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_primitives",
+ "iroha_service_model",
+ "norito",
+ "rand 0.9.4",
+ "reqwest",
+ "sorafs_car",
+ "sorafs_manifest",
+ "sorafs_orchestrator",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "url",
+]
+
+[[package]]
 name = "iroha_swarm"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5655,12 +5715,9 @@ dependencies = [
  "iroha_data_model",
  "iroha_futures",
  "iroha_logger",
- "iroha_schema",
  "iroha_telemetry_derive",
+ "iroha_torii_shared",
  "norito",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "prometheus",
  "reqwest",
  "streaming-stats",
@@ -5700,8 +5757,8 @@ dependencies = [
  "iroha_futures",
  "iroha_genesis",
  "iroha_primitives",
- "iroha_telemetry",
  "iroha_test_samples",
+ "iroha_torii_shared",
  "iroha_version",
  "nix 0.30.1",
  "nonzero_ext",
@@ -5765,6 +5822,7 @@ dependencies = [
  "iroha_sccp",
  "iroha_schema",
  "iroha_schema_gen",
+ "iroha_service_model",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -5824,6 +5882,7 @@ dependencies = [
  "hkdf",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_schema",
  "norito",
  "rand 0.9.4",
  "reqwest",
@@ -5926,6 +5985,7 @@ dependencies = [
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",
+ "iroha_torii_shared",
  "iroha_version",
  "ivm",
  "mv",
@@ -6292,6 +6352,7 @@ dependencies = [
  "iroha_crypto",
  "poseidon-primitives",
  "rand_core 0.6.4",
+ "zeroize",
 ]
 
 [[package]]
@@ -6777,7 +6838,6 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_genesis",
  "iroha_primitives",
- "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
@@ -6808,7 +6868,6 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_genesis",
- "iroha_telemetry",
  "iroha_torii_shared",
  "mochi-core",
  "norito",
@@ -6827,8 +6886,8 @@ dependencies = [
  "hex",
  "iroha_data_model",
  "iroha_executor_data_model",
- "iroha_telemetry",
  "iroha_test_samples",
+ "iroha_torii_shared",
  "mochi-core",
  "norito",
  "tempfile",
@@ -6863,6 +6922,9 @@ dependencies = [
  "hex",
  "iroha",
  "iroha_data_model",
+ "iroha_musubi_service",
+ "iroha_primitives",
+ "iroha_storage_client",
  "ivm",
  "norito",
  "sorafs_car",
@@ -7121,7 +7183,9 @@ dependencies = [
  "iroha_primitives",
  "iroha_schema",
  "norito",
+ "proc-macro2",
  "sha2",
+ "syn 2.0.117",
  "tempfile",
  "time",
 ]
@@ -7721,59 +7785,6 @@ dependencies = [
  "openssl-src",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "opentelemetry"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
-dependencies = [
- "js-sys",
-]
-
-[[package]]
-name = "opentelemetry-otlp"
-version = "0.31.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
-dependencies = [
- "http",
- "opentelemetry",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "prost 0.14.3",
- "thiserror 2.0.18",
- "tokio",
- "tonic",
-]
-
-[[package]]
-name = "opentelemetry-proto"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
-dependencies = [
- "opentelemetry",
- "opentelemetry_sdk",
- "prost 0.14.3",
- "tonic",
- "tonic-prost",
-]
-
-[[package]]
-name = "opentelemetry_sdk"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e14ae4f5991976fd48df6d843de219ca6d31b01daaab2dad5af2badeded372bd"
-dependencies = [
- "futures-channel",
- "futures-executor",
- "futures-util",
- "opentelemetry",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -10359,11 +10370,10 @@ dependencies = [
  "futures",
  "hex",
  "httpmock",
- "iroha_config",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_primitives",
- "ivm",
+ "iroha_service_model",
  "norito",
  "rand 0.9.4",
  "reqwest",
@@ -10461,14 +10471,13 @@ dependencies = [
  "hex",
  "httpmock",
  "iroha_config",
- "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_logger",
  "iroha_primitives",
+ "iroha_service_model",
  "iroha_telemetry",
  "iroha_version",
- "ivm",
  "norito",
  "prost 0.14.3",
  "quinn",
@@ -10481,6 +10490,7 @@ dependencies = [
  "sorafs_car",
  "sorafs_chunker",
  "sorafs_manifest",
+ "soranet_incentives",
  "soranet_pq",
  "tempfile",
  "thiserror 2.0.18",
@@ -10488,6 +10498,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tonic",
  "tonic-prost",
+ "tracing",
  "url",
 ]
 
@@ -10561,6 +10572,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zeroize",
+]
+
+[[package]]
+name = "soranet_incentives"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_primitives",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13208,8 +13229,11 @@ dependencies = [
  "iroha_data_model",
  "iroha_genesis",
  "iroha_primitives",
+ "iroha_service_model",
+ "iroha_storage_client",
  "iroha_telemetry",
  "iroha_torii",
+ "iroha_torii_shared",
  "ivm",
  "mv",
  "norito",

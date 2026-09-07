@@ -6,9 +6,10 @@ const FIXTURE: &str = include_str!("../../../fixtures/musubi/sdk_v1.json");
 fn shared_musubi_sdk_fixture_matches_its_typed_owner() {
     let actual: Value = json::from_str(FIXTURE).expect("parse Musubi SDK fixture");
     let expected = musubi_sdk_fixture_values::sdk_document();
-    assert_eq!(
-        actual, expected,
-        "regenerate sdk_v1.json with the registered typed owner"
+    super::fixture_json::assert_json_matches(
+        &actual,
+        &expected,
+        "sdk_v1.json must match its typed owner",
     );
     let canonical = format!(
         "{}\n",

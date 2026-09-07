@@ -1,7 +1,9 @@
 //! FASTPQ-specific data structures shared between the host and prover.
 
+mod balance_key;
 mod public_artifact;
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
+pub use balance_key::{FastpqBalanceKeyV1, transfer_balance_key};
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,
@@ -14,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";
 /// Canonical first-release Norito schema identity for [`FastpqTransitionBatch`].
 pub const FASTPQ_TRANSITION_BATCH_SCHEMA_NAME: &str =
-    "iroha_data_model::fastpq::FastpqTransitionBatchV1";
+    "iroha_data_model::fastpq::FastpqStateTransitionBatchV1";
 /// Transcript describing one or more deterministic asset transfers within a transaction.
 #[derive(
     Debug,
@@ -28,7 +30,9 @@ pub const FASTPQ_TRANSITION_BATCH_SCHEMA_NAME: &str =
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferTranscript")]
 pub struct TransferTranscript {
     /// Hash of the transaction entrypoint (`hash_as_entrypoint`) that emitted this transcript.
     pub batch_hash: Hash,
@@ -54,7 +58,9 @@ pub struct TransferTranscript {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferDeltaTranscript")]
 pub struct TransferDeltaTranscript {
     /// Source account.
     pub from_account: AccountId,
@@ -161,7 +167,9 @@ pub fn transfer_asset_scales(
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferSmtWitness")]
 pub struct TransferSmtWitness {
     /// Root before applying this participant update.
     pub root_before: [u8; 32],
@@ -219,7 +227,12 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
     norito::derive::JsonDeserialize,
     IntoSchema,
 )]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqTransitionBatchV1")]
+#[norito(schema_name = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::FastpqTransitionBatch",
+    frame = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1"
+)]
 pub struct FastpqTransitionBatch {
     /// Parameter set name (`fastpq-state-transition-stark-v1`).
     pub parameter: String,
@@ -241,7 +254,9 @@ pub struct FastpqTransitionBatch {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqStateTransition")]
 pub struct FastpqStateTransition {
     /// Schema-qualified logical key (asset/account path).
     pub key: Vec<u8>,
@@ -266,13 +281,52 @@ pub struct FastpqStateTransition {
     IntoSchema,
 )]
 #[norito(tag = "kind", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqOperationKind")]
 pub enum FastpqOperationKind {
+    // The final V1 block starts at 32 so both the experimental 0..=5 wire and
+    // the superseded two-operation 16/17 wire fail decoding.
     /// Asset transfer between two existing accounts.
-    #[codec(index = 16)]
+    #[codec(index = 32)]
     Transfer,
+    /// Asset mint increasing the committed circulating supply.
+    #[codec(index = 33)]
+    Mint,
+    /// Asset burn decreasing the committed circulating supply.
+    #[codec(index = 34)]
+    Burn,
+    /// Grant one exact permission to a role at the bound epoch.
+    #[codec(index = 35)]
+    RoleGrant(FastpqRolePermissionDelta),
+    /// Revoke one exact permission from a role at the bound epoch.
+    #[codec(index = 36)]
+    RoleRevoke(FastpqRolePermissionDelta),
     /// Opaque metadata effect whose meaning is authenticated by its outer statement.
-    #[codec(index = 17)]
+    #[codec(index = 37)]
     MetaSet,
+}
+/// Exact role/permission tuple committed by a FASTPQ permission transition.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqRolePermissionDelta")]
+pub struct FastpqRolePermissionDelta {
+    /// Canonical 32-byte role identifier.
+    pub role_id: [u8; 32],
+    /// Canonical 32-byte permission identifier.
+    pub permission_id: [u8; 32],
+    /// Epoch at which the membership change takes effect.
+    pub epoch: u64,
 }
 /// Public inputs committed by the FASTPQ prover.
 #[derive(
@@ -286,7 +340,9 @@ pub enum FastpqOperationKind {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqPublicInputs")]
 pub struct FastpqPublicInputs {
     /// Data-space identifier (little-endian UUID bytes).
     pub dsid: [u8; 16],
@@ -314,7 +370,9 @@ pub struct FastpqPublicInputs {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferTranscriptBundle")]
 pub struct TransferTranscriptBundle {
     /// Entry identity associated with the transcripts on the enclosing evidence surface.
     ///
@@ -351,9 +409,28 @@ mod tests {
 
     #[test]
     fn operation_wire_indices_reject_the_pre_release_enum() {
-        assert_eq!(FastpqOperationKind::Transfer.encode(), 16_u32.to_le_bytes());
-        assert_eq!(FastpqOperationKind::MetaSet.encode(), 17_u32.to_le_bytes());
-        for retired in 0_u32..=5 {
+        assert_eq!(FastpqOperationKind::Transfer.encode(), 32_u32.to_le_bytes());
+        assert_eq!(FastpqOperationKind::Mint.encode(), 33_u32.to_le_bytes());
+        assert_eq!(FastpqOperationKind::Burn.encode(), 34_u32.to_le_bytes());
+        let delta = FastpqRolePermissionDelta {
+            role_id: [0x11; 32],
+            permission_id: [0x22; 32],
+            epoch: 9,
+        };
+        let grant = FastpqOperationKind::RoleGrant(delta.clone()).encode();
+        let revoke = FastpqOperationKind::RoleRevoke(delta.clone()).encode();
+        assert_eq!(&grant[..4], 35_u32.to_le_bytes().as_slice());
+        assert_eq!(&revoke[..4], 36_u32.to_le_bytes().as_slice());
+        assert_eq!(FastpqOperationKind::MetaSet.encode(), 37_u32.to_le_bytes());
+        assert_eq!(
+            FastpqOperationKind::decode(&mut grant.as_slice()).expect("decode role grant"),
+            FastpqOperationKind::RoleGrant(delta.clone())
+        );
+        assert_eq!(
+            FastpqOperationKind::decode(&mut revoke.as_slice()).expect("decode role revoke"),
+            FastpqOperationKind::RoleRevoke(delta)
+        );
+        for retired in 0_u32..32 {
             assert!(
                 FastpqOperationKind::decode(&mut retired.to_le_bytes().as_slice()).is_err(),
                 "retired pre-release operation index {retired} must not decode"
@@ -362,8 +439,51 @@ mod tests {
     }
 
     #[test]
+    fn role_permission_delta_json_is_exactly_fixed_width() {
+        let delta = FastpqRolePermissionDelta {
+            role_id: [0x11; 32],
+            permission_id: [0x22; 32],
+            epoch: 9,
+        };
+        let encoded = norito::json::to_json(&delta).expect("encode role permission delta");
+        assert_eq!(
+            norito::json::from_str::<FastpqRolePermissionDelta>(&encoded)
+                .expect("decode role permission delta"),
+            delta
+        );
+        for length in [31_usize, 33] {
+            let malformed_role = format!(
+                r#"{{"role_id":"{}","permission_id":"{}","epoch":9}}"#,
+                "11".repeat(length),
+                "22".repeat(32)
+            );
+            assert!(
+                norito::json::from_str::<FastpqRolePermissionDelta>(&malformed_role).is_err(),
+                "{length}-byte role ID must fail closed"
+            );
+            let malformed_permission = format!(
+                r#"{{"role_id":"{}","permission_id":"{}","epoch":9}}"#,
+                "11".repeat(32),
+                "22".repeat(length)
+            );
+            assert!(
+                norito::json::from_str::<FastpqRolePermissionDelta>(&malformed_permission).is_err(),
+                "{length}-byte permission ID must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn transition_batch_schema_rejects_the_pre_release_header() {
         let expected = norito::core::schema_hash_for_name(FASTPQ_TRANSITION_BATCH_SCHEMA_NAME);
+        assert_eq!(
+            <FastpqTransitionBatch as norito::NoritoSchema>::frame_name(),
+            FASTPQ_TRANSITION_BATCH_SCHEMA_NAME
+        );
+        assert_eq!(
+            norito::schema::identity::frame_hash::<FastpqTransitionBatch>(),
+            expected
+        );
         assert_eq!(
             <FastpqTransitionBatch as norito::NoritoSerialize>::schema_hash(),
             expected
@@ -385,15 +505,20 @@ mod tests {
             transitions: Vec::new(),
             metadata: BTreeMap::new(),
         };
-        let mut encoded = norito::to_bytes(&batch).expect("encode release batch DTO");
+        let encoded = norito::to_bytes(&batch).expect("encode release batch DTO");
         assert_eq!(&encoded[6..22], expected.as_slice());
-        let pre_release =
-            norito::core::schema_hash_for_name("iroha_data_model::fastpq::FastpqTransitionBatch");
-        encoded[6..22].copy_from_slice(&pre_release);
-        assert!(
-            norito::decode_from_bytes::<FastpqTransitionBatch>(&encoded).is_err(),
-            "the pre-release batch DTO schema must not decode as release V1"
-        );
+        for retired_name in [
+            "iroha_data_model::fastpq::FastpqTransitionBatch",
+            "iroha_data_model::fastpq::FastpqTransitionBatchV1",
+        ] {
+            let mut retired = encoded.clone();
+            let retired_schema = norito::core::schema_hash_for_name(retired_name);
+            retired[6..22].copy_from_slice(&retired_schema);
+            assert!(
+                norito::decode_from_bytes::<FastpqTransitionBatch>(&retired).is_err(),
+                "retired batch DTO schema {retired_name} must not decode as final V1"
+            );
+        }
     }
 
     #[derive(Encode)]
@@ -541,3 +666,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_fastpq_schema_tests;

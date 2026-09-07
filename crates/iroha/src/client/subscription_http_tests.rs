@@ -1,12 +1,4 @@
 // Subscription app-API HTTP client contract tests.
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
-use http::StatusCode;
-use iroha_primitives::numeric::Quantity;
-use iroha_test_samples::gen_account_in;
-use norito::json::{JsonSerialize, Value as JsonValue};
 use super::evidence_http_tests::{
     SnapshotStore, base_url, client_with_base_url, json_response, with_mock_http,
 };
@@ -34,6 +26,14 @@ use crate::{
         SubscriptionActionDraftDetails, SubscriptionInstructionDraft, SubscriptionListItem,
         SubscriptionPlanCreateResponse, SubscriptionPlanListItem,
     },
+};
+use http::StatusCode;
+use iroha_primitives::numeric::Quantity;
+use iroha_test_samples::gen_account_in;
+use norito::json::{JsonSerialize, Value as JsonValue};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
 };
 fn encode_json<T: JsonSerialize>(value: &T) -> String {
     norito::json::to_json(value).expect("encode json")
@@ -258,7 +258,11 @@ fn subscription_endpoints_build_requests() {
             Ok(response)
         }
     };
-    with_mock_http(responder, || {
+    with_mock_http(responder, |mock_transport| {
+        let client = client
+            .clone()
+            .with_test_http_transport(mock_transport.clone());
+
         client
             .create_subscription_plan(&plan_request)
             .expect("create subscription plan");
@@ -379,7 +383,11 @@ fn subscription_authority_mismatch_fails_before_transport() {
             .body(Vec::new())
             .expect("response"))
     };
-    let error = with_mock_http(responder, || {
+    let error = with_mock_http(responder, |mock_transport| {
+        let client = client
+            .clone()
+            .with_test_http_transport(mock_transport.clone());
+
         client
             .record_subscription_usage(&subscription_id, &request)
             .expect_err("a mismatched request authority must fail")

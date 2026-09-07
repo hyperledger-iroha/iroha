@@ -72,7 +72,7 @@ async fn install_threshold_sessions(
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "failure-corridor threshold-key installation",
     )?;
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(lifecycle_certificate(
                 network,
@@ -1144,7 +1144,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         attempt_sequence: 0,
     };
     let competing_deploy_attempt_id = competing_deploy_create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1185,7 +1185,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         attempt_sequence: 0,
     };
     let deploy_attempt_id = deploy_create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1308,7 +1308,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         attempt_sequence: 0,
     };
     let runtime_attempt_id = runtime_create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeRuntimeUpgradeProposal {
                 manifest: runtime_manifest,
@@ -1488,7 +1488,7 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1719,7 +1719,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1807,7 +1807,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
             assert_eq!(observed.attempt().status, GovernanceAttemptStatusV1::Active,);
             if sequence == 0 || sequence + 1 == MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
                 let error = citizen_client
-                    .submit_blocking(
+                    .submit(
                         UnregisterCitizen {
                             owner: citizen.clone(),
                         },
@@ -1846,7 +1846,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
         );
     }
 
-    citizen_client.submit_blocking(
+    citizen_client.submit(
         UnregisterCitizen {
             owner: citizen.clone(),
         },

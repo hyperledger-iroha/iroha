@@ -81,6 +81,8 @@ pub use sccp_ton_breaker::{
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::WrappedAssetDef")]
 pub struct WrappedAssetDef {
     /// Origin chain identifier (canonical bytes, e.g., "btc", "evm-eth").
     pub origin_chain: Vec<u8>,
@@ -94,6 +96,8 @@ pub struct WrappedAssetDef {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeReceipt")]
 pub struct BridgeReceipt {
     /// Lane identifier (e.g., "btc→iroha", "iroha↔evm").
     pub lane: LaneId,
@@ -118,6 +122,8 @@ pub struct BridgeReceipt {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "hash_function", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeHashFunction")]
 pub enum BridgeHashFunction {
     /// SHA-256 (ICS-style hash-only light clients).
     Sha256,
@@ -129,6 +135,8 @@ pub enum BridgeHashFunction {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProofRange")]
 pub struct BridgeProofRange {
     /// Inclusive start height of the batch.
     pub start_height: u64,
@@ -159,6 +167,8 @@ impl BridgeProofRange {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeIcsProof")]
 pub struct BridgeIcsProof {
     /// Exact verifier manifest commitment selected for this proof.
     pub verifier_manifest_hash: [u8; 32],
@@ -176,6 +186,8 @@ pub struct BridgeIcsProof {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeTransparentProof")]
 pub struct BridgeTransparentProof {
     /// Exact verifier manifest commitment selected for this proof.
     pub verifier_manifest_hash: [u8; 32],
@@ -195,6 +207,8 @@ pub struct BridgeTransparentProof {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "protocol")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeNativeProofBackendV1")]
 pub enum BridgeNativeProofBackendV1 {
     /// Ethereum proof using the beacon light client and execution MPTs.
     #[codec(index = 0)]
@@ -248,6 +262,8 @@ impl BridgeNativeProofBackendV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::SccpNativeTrustAnchorV1")]
 pub struct SccpNativeTrustAnchorV1 {
     /// Concrete native verifier that defines the anchor preimage and hash.
     pub backend: BridgeNativeProofBackendV1,
@@ -292,6 +308,8 @@ impl SccpNativeTrustAnchorV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeNativeProtocolProofV1")]
 pub struct BridgeNativeProtocolProofV1 {
     /// Concrete native verifier selected for the encoded envelope.
     pub backend: BridgeNativeProofBackendV1,
@@ -319,6 +337,8 @@ impl BridgeNativeProtocolProofV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "family")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1")]
 pub enum BridgeSccpDestinationProofBackendV1 {
     /// EVM Groth16 verifier over BN254 for Ethereum and BSC destinations.
     #[codec(index = 0)]
@@ -366,6 +386,8 @@ impl BridgeSccpDestinationProofBackendV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeSccpDestinationProofV1")]
 pub struct BridgeSccpDestinationProofV1 {
     /// Closed production verifier selected for the encoded artifact.
     pub backend: BridgeSccpDestinationProofBackendV1,
@@ -401,6 +423,8 @@ impl BridgeSccpDestinationProofV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "kind", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProofPayload")]
 pub enum BridgeProofPayload {
     /// ICS-23-style inclusion proof against a state root.
     #[codec(index = 0)]
@@ -464,6 +488,8 @@ impl BridgeProofPayload {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProof")]
 pub struct BridgeProof {
     /// Height range covered by this proof.
     pub range: BridgeProofRange,
@@ -494,6 +520,8 @@ impl BridgeProof {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProofRecord")]
 pub struct BridgeProofRecord {
     /// Recorded proof artifact.
     pub proof: BridgeProof,
@@ -518,6 +546,8 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityProof")]
 pub struct BridgeFinalityProof {
     /// Proof schema version. The first release requires [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
     pub version: u8,
@@ -535,6 +565,8 @@ pub struct BridgeFinalityProof {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityAttestationBodyV1")]
 pub struct BridgeFinalityAttestationBodyV1 {
     /// Attestation schema version.
     pub version: u8,
@@ -644,6 +676,8 @@ impl BridgeFinalityAttestationBodyV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityAttestationV1")]
 pub struct BridgeFinalityAttestationV1 {
     /// Complete signed statement.
     pub body: BridgeFinalityAttestationBodyV1,
@@ -730,6 +764,8 @@ pub enum BridgeFinalityAttestationValidationError {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeCommitment")]
 pub struct BridgeCommitment {
     /// Exact genesis-derived network identity to prevent cross-network replay.
     pub network_id: NetworkId,
@@ -745,6 +781,8 @@ pub struct BridgeCommitment {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityBundle")]
 pub struct BridgeFinalityBundle {
     /// Commitment binding the block hash and immutable height context.
     pub commitment: BridgeCommitment,
@@ -1717,9 +1755,19 @@ mod tests {
             (&destination.payload, 3),
         ] {
             let encoded = payload.encode();
-            let decoded_index =
-                u32::decode(&mut encoded.as_slice()).expect("bridge payload variant index decodes");
+            // Decode consumes a complete payload; the enum tag is only its fixed-width prefix.
+            let tag_bytes = encoded
+                .get(..4)
+                .expect("bridge payload contains its variant tag")
+                .try_into()
+                .expect("four-byte variant tag");
+            let decoded_index = u32::from_le_bytes(tag_bytes);
             assert_eq!(decoded_index, expected_index);
+            assert_eq!(
+                BridgeProofPayload::decode(&mut encoded.as_slice())
+                    .expect("complete bridge payload decodes"),
+                *payload
+            );
         }
     }
     #[test]
@@ -3068,3 +3116,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_bridge_schema_tests;

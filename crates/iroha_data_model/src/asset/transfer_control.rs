@@ -55,6 +55,8 @@ pub fn validate_asset_transfer_availability_reason(
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value")]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferAvailability")]
 pub enum AssetTransferAvailability {
     /// Asset movement in this direction is permitted.
     #[default]
@@ -74,6 +76,8 @@ impl AssetTransferAvailability {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "window", content = "value")]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlWindow")]
 pub enum AssetTransferControlWindow {
     /// UTC calendar day.
     Day,
@@ -115,6 +119,8 @@ impl core::fmt::Display for AssetTransferControlWindow {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferLimit")]
 pub struct AssetTransferLimit {
     /// Controlled window.
     pub window: AssetTransferControlWindow,
@@ -126,6 +132,8 @@ pub struct AssetTransferLimit {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferUsageBucket")]
 pub struct AssetTransferUsageBucket {
     /// Controlled window.
     pub window: AssetTransferControlWindow,
@@ -138,6 +146,8 @@ pub struct AssetTransferUsageBucket {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlRecord")]
 pub struct AssetTransferControlRecord {
     /// Controlled asset definition.
     pub asset_definition_id: AssetDefinitionId,
@@ -306,6 +316,8 @@ mod availability_tests {
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlStoreV1")]
 pub struct AssetTransferControlStoreV1 {
     /// Controlled asset records for the account.
     #[norito(default)]
@@ -559,3 +571,6 @@ mod tests {
         assert!(store.validate_canonical().is_ok());
     }
 }
+
+#[cfg(test)]
+mod captured_transfer_control_schema_tests;

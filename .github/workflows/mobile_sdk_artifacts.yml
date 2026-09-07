@@ -32,6 +32,15 @@ on:
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/run_mobile_hermetic_command.py"
       - "scripts/check_kotlin_no_reflection.sh"
+      - "scripts/tests/check_kotlin_no_reflection_test.py"
+      - "scripts/check_kotlin_jni.py"
+      - "scripts/jvm_classfile.py"
+      - "scripts/tests/check_kotlin_jni_test.py"
+      - "scripts/android_keystore_attestation.sh"
+      - "scripts/tests/android_keystore_attestation_launcher_test.py"
+      - "scripts/android_strongbox_attestation_ci.sh"
+      - "scripts/android_strongbox_attestation_report.py"
+      - "scripts/tests/android_strongbox_attestation_report_test.py"
       - "ci/check_android_transport_guard.sh"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
@@ -142,7 +151,7 @@ jobs:
       - name: Install pinned checker dependencies
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Shell syntax
-        run: bash -n ci/check_swift_pod_bridge.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/tests/mobile_sdk_python312_contract.sh
+        run: bash -n scripts/android_keystore_attestation.sh ci/check_swift_pod_bridge.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
         run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/norito_bridge_apple_slice_handoff.py scripts/tests/norito_bridge_apple_slice_handoff_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi23_artifact.py scripts/tests/check_native_sdk_abi23_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
       - name: Deterministic NoritoBridge archive owner fixtures
@@ -165,6 +174,13 @@ jobs:
         run: python3 -B -m pytest -q scripts/tests/check_native_sdk_abi23_artifact_test.py
       - name: Android app native archive authenticator fixtures
         run: python3 -I -B scripts/tests/check_android_app_native_archive_test.py
+      - name: Kotlin reflection and attestation launcher contracts
+        run: >-
+          python3 -B -m pytest -q
+          scripts/tests/check_kotlin_no_reflection_test.py
+          scripts/tests/check_kotlin_jni_test.py
+          scripts/tests/android_keystore_attestation_launcher_test.py
+          scripts/tests/android_strongbox_attestation_report_test.py
       - name: Kotlin production reflection guard
         run: scripts/check_kotlin_no_reflection.sh
       - name: Artifact checker fixture tests
@@ -500,7 +516,9 @@ jobs:
             -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
             -PirohaSdkRepoDir="$MOBILE_SDK_ANDROID_MAVEN_REPO_DIR" \
+            :tools:test \
             :client-android:testDebugUnitTest \
+            :client-android:testDebugHostNative \
             :client-android:lintRelease \
             :kagemusha-wallet-android:testDebugUnitTest \
             :kagemusha-wallet-android:lintRelease \

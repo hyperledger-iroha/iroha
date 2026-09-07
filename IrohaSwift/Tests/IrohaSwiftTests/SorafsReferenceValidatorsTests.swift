@@ -656,6 +656,45 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
+    func testPopMembershipStructuralFixturesRequirePresentationBinding() throws {
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isNativeAvailable,
+            "SoraFS reference bridge unavailable"
+        ) else {
+            return
+        }
+        // These shared fixtures validate wire metadata, not cryptographic recipient authorization.
+        let profiles = [
+            ("pop_membership_current_v1", "Ok", "SFS-OK-000"),
+            ("pop_membership_missing_binding_v1", "Error", "SFS-NORITO-001"),
+            ("pop_membership_zero_binding_v1", "Error", "SFS-VAL-001")
+        ]
+        for (name, status, code) in profiles {
+            let outcome = try SorafsReferenceValidators.validatePopPayloadJSON(
+                kind: .membershipProof,
+                payload: try fixture("sorafs_manifest/reference_sdk/\(name).to"),
+                label: "\(name).to",
+                generatedAtUnix: 123
+            )
+            let data = try XCTUnwrap(outcome.data(using: .utf8))
+            let fields = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            XCTAssertEqual(fields["status"] as? String, status, name)
+            XCTAssertEqual(fields["code"] as? String, code, name)
+            XCTAssertEqual(
+                outcome,
+                String(
+                    decoding: try fixture(
+                        "sorafs_manifest/reference_sdk/\(name)_validation_outcome.json"
+                    ),
+                    as: UTF8.self
+                ),
+                name
+            )
+        }
+    }
+
     func testValidatesOrderbookFixtureWhenNativeBridgeIsAvailable() throws {
         guard try requireNativeCapability(
             SorafsReferenceValidators.isNativeAvailable,

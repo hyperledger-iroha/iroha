@@ -968,28 +968,14 @@ struct PortableVmBackendPreflight {
     namespace_tools: inrou_namespace::InrouNamespaceTools,
 }
 #[cfg(any(target_os = "linux", test))]
-fn inrou_startup_probe_resources(
-    _config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
-) -> iroha_data_model::soracloud::SoraResourceLimitsV1 {
-    iroha_data_model::soracloud::SoraResourceLimitsV1 {
-        cpu_millis: std::num::NonZeroU32::new(
-            iroha_data_model::soracloud::SORA_INROU_MAX_CPU_MILLIS_V1,
-        )
-        .expect("fixed nonzero startup-probe CPU budget"),
-        memory_bytes: std::num::NonZeroU64::new(
-            iroha_data_model::soracloud::SORA_INROU_MIN_MEMORY_BYTES_V1,
-        )
-        .expect("fixed nonzero startup-probe memory budget"),
-        ephemeral_storage_bytes: std::num::NonZeroU64::new(
-            iroha_data_model::soracloud::SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
-        )
-        .expect("fixed nonzero startup-probe storage budget"),
-        max_open_files_per_process: std::num::NonZeroU32::new(
-            iroha_data_model::soracloud::SORA_INROU_MIN_OPEN_FILES_PER_PROCESS_V1,
-        )
-        .expect("fixed nonzero per-process probe fd budget"),
-        max_tasks: std::num::NonZeroU16::new(1).expect("fixed nonzero probe task budget"),
-    }
+fn inrou_startup_probe_shape(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1> {
+    iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1::from_host_envelope(
+        u64::from(config.max_cpu_millis.get()),
+        config.max_memory_bytes.get(),
+    )
+    .map_err(|message| eyre::eyre!(message))
 }
 #[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1121,6 +1107,7 @@ fn run_inrou_portable_vm_startup_probe(
     slot_lock: InrouOwnerSlotLock,
 ) -> eyre::Result<()> {
     const PROBE_GUEST_PORT: u16 = 9;
+    let probe = inrou_startup_probe_shape(config)?;
     let PortableVmBackendPreflight {
         child_identity,
         qemu_img: _,
@@ -1153,7 +1140,7 @@ fn run_inrou_portable_vm_startup_probe(
             process_generation: 0,
             bundle_hash: "inrou-startup-probe-v1",
         },
-        &inrou_startup_probe_resources(config),
+        &probe.resources(),
         &io_backing_path_refs,
     )
     .wrap_err("prepare exact cgroup-v2 limits for the Inrou startup probe")?;
@@ -1181,7 +1168,7 @@ fn run_inrou_portable_vm_startup_probe(
         &launch_barrier,
         worker_cgroup.attestation().expected_proc_path(),
     )?;
-    append_inrou_startup_probe_qemu_args(&mut command, guest_isa, &netdev);
+    append_inrou_startup_probe_qemu_args(&mut command, guest_isa, &netdev, probe);
     command.stderr(Stdio::null());
     let qmp_stream = configure_inrou_qmp_stdio(&mut command)
         .wrap_err("create the Inrou startup-probe QMP socketpair")?;
@@ -17154,15 +17141,16 @@ fn append_inrou_startup_probe_qemu_args(
     command: &mut Command,
     guest_isa: SoraInrouGuestIsaV1,
     netdev: &str,
+    probe: iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1,
 ) {
-    const PROBE_MEMORY_MIB: u64 = 128;
     let profile = portable_vm_guest_machine_profile(guest_isa);
     command
         // The production machine, host CPU, vCPU, and memory-backend shape is
         // exercised without booting a kernel or attaching service artifacts.
         .arg("-object")
         .arg(format!(
-            "memory-backend-ram,id=vmmem,size={PROBE_MEMORY_MIB}M,share=on"
+            "memory-backend-ram,id=vmmem,size={}M,share=on",
+            probe.memory_mib()
         ))
         .arg("-machine")
         .arg(format!(
@@ -17172,7 +17160,7 @@ fn append_inrou_startup_probe_qemu_args(
         .arg("-cpu")
         .arg("host")
         .arg("-smp")
-        .arg(SORA_INROU_MAX_VCPUS_V1.to_string())
+        .arg(probe.vcpus().to_string())
         .arg("-S")
         .arg("-nodefaults")
         .arg("-display")
@@ -28120,7 +28108,8 @@ mod tests {
             (SoraInrouGuestIsaV1::Aarch64, "virt"),
         ] {
             let mut command = Command::new("qemu-system-test");
-            append_inrou_startup_probe_qemu_args(&mut command, guest_isa, netdev);
+            let probe = iroha_config::parameters::inrou_startup_probe::InrouStartupProbeShapeV1::from_host_envelope(1_000, 768 * 1024 * 1024).unwrap();
+            append_inrou_startup_probe_qemu_args(&mut command, guest_isa, netdev, probe);
             let arguments = command
                 .get_args()
                 .map(|argument| argument.to_string_lossy().into_owned())
@@ -28129,13 +28118,13 @@ mod tests {
                 arguments,
                 vec![
                     "-object".to_owned(),
-                    "memory-backend-ram,id=vmmem,size=128M,share=on".to_owned(),
+                    "memory-backend-ram,id=vmmem,size=512M,share=on".to_owned(),
                     "-machine".to_owned(),
                     format!("{machine},accel=kvm,memory-backend=vmmem"),
                     "-cpu".to_owned(),
                     "host".to_owned(),
                     "-smp".to_owned(),
-                    SORA_INROU_MAX_VCPUS_V1.to_string(),
+                    "1".to_owned(),
                     "-S".to_owned(),
                     "-nodefaults".to_owned(),
                     "-display".to_owned(),
@@ -28256,35 +28245,28 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_startup_probe_uses_fixed_qualified_resources_independent_of_host_capacity() {
+    fn inrou_startup_probe_uses_the_configured_ceiling_including_vmm_overhead() {
         let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
-        config.max_cpu_millis = std::num::NonZeroU32::new(7_321).expect("CPU ceiling");
-        config.max_memory_bytes = std::num::NonZeroU64::new(9_876_543_210).expect("memory ceiling");
-        config.max_storage_bytes =
-            std::num::NonZeroU64::new(8_765_432_109).expect("storage ceiling");
-        let resources = inrou_startup_probe_resources(&config);
+        config.max_cpu_millis = std::num::NonZeroU32::new(1_000).unwrap();
+        config.max_memory_bytes = std::num::NonZeroU64::new(768 * 1024 * 1024).unwrap();
+        let probe = inrou_startup_probe_shape(&config).unwrap();
         assert_eq!(
-            resources.cpu_millis.get(),
-            iroha_data_model::soracloud::SORA_INROU_MAX_CPU_MILLIS_V1
+            probe.resources().checked_inrou_host_cpu_millis(),
+            Some(1_000)
         );
         assert_eq!(
-            resources.memory_bytes.get(),
-            iroha_data_model::soracloud::SORA_INROU_MIN_MEMORY_BYTES_V1
+            probe.resources().checked_inrou_host_memory_bytes(),
+            Some(768 * 1024 * 1024)
         );
-        assert_eq!(
-            resources.ephemeral_storage_bytes.get(),
-            iroha_data_model::soracloud::SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1
-        );
-        assert_eq!(
-            resources.max_open_files_per_process.get(),
-            iroha_data_model::soracloud::SORA_INROU_MIN_OPEN_FILES_PER_PROCESS_V1
-        );
-        assert_eq!(resources.max_tasks.get(), 1);
+        assert_eq!(probe.vcpus(), 1);
+        assert_eq!(probe.memory_mib(), 512);
+        config.max_cpu_millis = std::num::NonZeroU32::new(250).unwrap();
+        assert!(inrou_startup_probe_shape(&config).is_err());
     }
     #[test]
     fn inrou_vcpu_mapping_rejects_instead_of_clamping_above_v1() -> Result<()> {
         let config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
-        let baseline = inrou_startup_probe_resources(&config);
+        let baseline = inrou_startup_probe_shape(&config)?.resources();
         for (cpu_millis, expected_vcpus) in [(10, 1), (1_000, 1), (1_010, 2), (4_000, 4)] {
             let resources = SoraResourceLimitsV1 {
                 cpu_millis: std::num::NonZeroU32::new(cpu_millis).expect("nonzero CPU"),

@@ -988,40 +988,63 @@ def test_receipt_rejects_rehashed_noncanonical_g_unit_inventory(
 def test_receipt_rejects_rehashed_g_unit_log_missing_named_test(
     tmp_path: Path,
 ) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    logs = evidence["corridor_logs"]
-    summary = evidence["corridor_summary"]
-    completion = evidence["corridor_completion"]
-    assert isinstance(logs, list)
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    log = logs[0]
-    first_result = next(
-        line
-        for line in log.read_text(encoding="utf-8").splitlines()
-        if line.startswith("test ") and line.endswith(" ... ok")
+    missing_names = (
+        None,
+        "lane_consensus::tests::recovered_proposal_batch_is_idempotent_and_replaces_uncertified_slot_at_capacity",
+        "lane_consensus::tests::recovered_proposal_batch_preserves_required_history_and_commit_evidence",
+        "lane_consensus::tests::recovered_proposal_batch_preflights_later_quorum_before_any_eviction",
+        "lane_consensus::tests::recovered_proposal_batch_rejects_required_union_over_capacity",
+        "lane_consensus::tests::applied_proposal_retirement_preserves_unselected_evidence_and_capacity",
+        "lane_consensus::tests::applied_proposal_retirement_preflights_all_selected_quorums",
+        "lane_consensus::tests::applied_proposal_retirement_revalidates_orphan_commit_lock_quorums",
+        "lane_consensus::tests::applied_proposal_retirement_rejects_invalid_or_conflicting_target_sets",
+        "lane_consensus::tests::retained_vote_body_inventory_covers_partial_owners_without_mutation",
     )
-    log.write_text(
-        log.read_text(encoding="utf-8").replace(first_result + "\n", "", 1),
-        encoding="utf-8",
-    )
-    summary_lines = summary.read_text(encoding="utf-8").splitlines()
-    row = summary_lines[1].split("\t")
-    row[7] = sha256(log)
-    summary_lines[1] = "\t".join(row)
-    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
+    for case_index, missing_name in enumerate(missing_names):
+        case_root = tmp_path / str(case_index)
+        case_root.mkdir()
+        evidence = make_evidence(case_root)
+        writer = fixture_writer(case_root)
+        logs = evidence["corridor_logs"]
+        summary = evidence["corridor_summary"]
+        completion = evidence["corridor_completion"]
+        assert isinstance(logs, list)
+        assert isinstance(summary, Path)
+        assert isinstance(completion, Path)
+        log = logs[0]
+        log_source = log.read_text(encoding="utf-8")
+        missing_result = (
+            next(
+                line
+                for line in log_source.splitlines()
+                if line.startswith("test ") and line.endswith(" ... ok")
+            )
+            if missing_name is None
+            else f"test {missing_name} ... ok"
+        )
+        assert log_source.splitlines().count(missing_result) == 1
+        log.write_text(
+            log_source.replace(missing_result + "\n", "", 1), encoding="utf-8"
+        )
+        summary_lines = summary.read_text(encoding="utf-8").splitlines()
+        row = summary_lines[1].split("\t")
+        row[7] = sha256(log)
+        summary_lines[1] = "\t".join(row)
+        summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+        fields = dict(
+            line.split("\t", 1)
+            for line in completion.read_text(encoding="utf-8").splitlines()
+        )
+        fields["summary_sha256"] = sha256(summary)
+        write_tsv(completion, fields)
 
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+        result = run_writer(evidence, case_root / "receipt.json", writer)
 
-    assert result.returncode == 1
-    assert "G-UNIT leg g-unit-iroha-core lacks one required passing test" in result.stderr
+        assert result.returncode == 1
+        assert (
+            "G-UNIT leg g-unit-iroha-core lacks one required passing test"
+            in result.stderr
+        ), (missing_name, result.stderr)
 
 
 def test_receipt_rejects_missing_or_altered_source_sealed_full_suite_leg(

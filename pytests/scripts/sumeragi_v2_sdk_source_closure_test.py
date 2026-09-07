@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 1_474
+    assert len(grouped_record_lines) == 895
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 1_476
+    assert len(diagnostics_records.stdout.splitlines()) == 899
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -322,7 +322,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     ) == 1
     harness = NATIVE_HARNESS.read_text(encoding="utf-8")
     assert 'bash "${repo_root}/ci/check_openapi_spec.sh"' in harness
-    assert harness.count("observed_test_count=7") == 1
+    assert harness.count("  openapi)\n    observed_test_count=7\n") == 1
     assert "assert_openapi_replay_marker" in harness
     assert "openapi_require_signed=0" in harness
     assert "openapi_require_signed=1" in harness
@@ -669,16 +669,25 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
         "SumeragiDiagnosticsModels.kt",
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2Wire.kt",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/"
-        "transport/BoundedResponseBodyReader.java",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-        "NativeAmxV2Models.java",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-        "SumeragiDiagnosticsModels.java",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-        "SumeragiV2Wire.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+        "transport/BoundedResponseBodyReader.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
+        "SumeragiDiagnosticsSerialization.kt",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/"
+        "SumeragiDiagnosticsJavaConsumerTest.java",
     }
     assert required_omissions_closed <= all_paths
+    # Both source languages compile and execute against Kotlin's production SDK.
+    assert not any(path.startswith("java/") for path in all_paths)
+    for harness in module.EXPECTED_HARNESSES.values():
+        source = (ROOT / harness).read_text(encoding="utf-8")
+        java_branch = source.split("\n  java)\n", 1)[1].split("\n    ;;", 1)[0]
+        assert '${repo_root}/kotlin/gradlew' in java_branch
+        assert '--project-dir "${repo_root}/kotlin"' in java_branch
+        assert ':core-jvm:test' in java_branch
+        assert 'org.hyperledger.iroha.sdk.consensus.' in java_branch
+        assert 'java/iroha_android' not in java_branch
+        assert 'org.hyperledger.iroha.android.' not in java_branch
     assert {
         module.PurePosixPath(
             "crates/connect_norito_bridge/src/platform_jni.rs"
@@ -705,7 +714,7 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
             "SumeragiV2WireFixtureTest.kt"
         ),
         module.PurePosixPath(
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+            "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/"
             "SumeragiV2WireFixtureTests.java"
         ),
         module.PurePosixPath(
@@ -930,12 +939,9 @@ def _sdk_dependency_fixture(
         "zipStoreBase=GRADLE_USER_HOME\n"
         "zipStorePath=wrapper/dists\n"
     ).encode()
-    for wrapper in (
-        repository / "kotlin/gradle/wrapper/gradle-wrapper.properties",
-        repository / "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
-    ):
-        wrapper.parent.mkdir(parents=True)
-        wrapper.write_bytes(wrapper_bytes)
+    wrapper = repository / "kotlin/gradle/wrapper/gradle-wrapper.properties"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_bytes(wrapper_bytes)
     distribution = external / "gradle-9.3.0-bin.zip"
     with zipfile.ZipFile(distribution, "w") as archive:
         archive.writestr("gradle-9.3.0/bin/gradle", b"#!/bin/sh\n")
@@ -983,9 +989,6 @@ def _sdk_dependency_fixture(
             "distribution_url": helper.SDK_GRADLE_DISTRIBUTION_URL,
             "gradle_user_home": str(gradle_home),
             "gradle_user_home_inventory": source_inventory(gradle_home),
-            "java_wrapper_properties_sha256": hashlib.sha256(
-                wrapper_bytes
-            ).hexdigest(),
             "kotlin_wrapper_properties_sha256": hashlib.sha256(
                 wrapper_bytes
             ).hexdigest(),
@@ -1085,6 +1088,11 @@ def test_sdk_dependency_bundle_withholds_paths_and_uses_new_inodes(
     assert stat.S_IMODE(archived_openapi_node.stat().st_mode) == 0o400
     assert inventory["bindings"]["openapi_node"]["node_modules_archive_name"] \
         == "openapi/node_modules"
+    kotlin_wrapper = output / "sdk-inputs/gradle/kotlin-gradle-wrapper.properties"
+    assert inventory["bindings"]["gradle"]["wrapper_properties_sha256"] == {
+        "kotlin": hashlib.sha256(kotlin_wrapper.read_bytes()).hexdigest(),
+    }
+    assert not (output / "sdk-inputs/gradle/java-gradle-wrapper.properties").exists()
 
     archived_swift = output / "sdk-inputs/swiftpm/cache/checkouts/example/.git/HEAD"
     working_swift = output / "sdk-work/swiftpm/checkouts/example/.git/HEAD"
@@ -1134,6 +1142,35 @@ def test_sdk_dependency_bundle_withholds_paths_and_uses_new_inodes(
         )
     helper.cleanup_sdk_command_work(output / "sdk-inputs", command_work)
     assert not command_work.exists()
+
+
+@pytest.mark.parametrize("mutation", ("obsolete_java_wrapper", "missing_kotlin_wrapper"))
+def test_sdk_dependency_source_requires_only_canonical_kotlin_wrapper(
+    tmp_path: Path, mutation: str,
+) -> None:
+    helper, arguments, _, output = _sdk_dependency_fixture(tmp_path)
+    manifest_path = arguments[0]
+    assert isinstance(manifest_path, Path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "obsolete_java_wrapper":
+        document["gradle"]["java_wrapper_properties_sha256"] = document["gradle"][
+            "kotlin_wrapper_properties_sha256"
+        ]
+    else:
+        del document["gradle"]["kotlin_wrapper_properties_sha256"]
+    manifest_path.chmod(0o600)
+    manifest_path.write_bytes(helper._canonical_payload(document))
+    manifest_path.chmod(0o400)
+    rebound = (
+        manifest_path,
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        *arguments[2:],
+    )
+    with pytest.raises(
+        helper.CacheCopyError, match="SDK dependency source sections are not exact",
+    ):
+        helper.copy_sdk_dependencies(*rebound)
+    assert not (output / "sdk-dependency-bundle.tar").exists()
 
 
 def test_sdk_dependency_bundle_rejects_hardlinked_inputs(tmp_path: Path) -> None:
@@ -1340,9 +1377,10 @@ def test_release_runner_keeps_sdk_sources_private_and_budgets_before_build() -> 
     assert "build_efficiency_provenance_pipeline_status[1] != 0" in source
     assert (
         '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py '
-        "\\\n    --require-objective"
+        "\\\n    2>&1 | tee"
         in source
     )
+    assert "--require-objective" not in source
     assert (
         'readonly source_budget_log="${release_source_bound_root}/source-file-budget.log"'
         in source

@@ -2,19 +2,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
 
-// pqcrypto-internals 0.2.11 emits untyped link directives after cc's static
-// directives. Explicitly bundle its C helpers into this final staticlib so
-// Swift/C consumers receive the same SHA3/SHAKE closure as Rust executables.
-// These conditions match the helper archives built by pqcrypto-internals;
-// the bridge's iroha_crypto dependency always enables the pqc feature.
-#[link(name = "pqclean_common", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-#[cfg(all(target_arch = "aarch64", not(target_env = "msvc")))]
-#[link(name = "keccak2x", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[link(name = "keccak4x", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
+// Native PQClean archives are bundled by their owning pqcrypto-internals
+// dependency. Repeating +bundle links here duplicates the same object members
+// and breaks the mandatory complete-archive Apple C consumer link.
 
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
@@ -67,11 +57,13 @@ use iroha_data_model::{
     name::Name,
     nexus::DataSpaceId,
     privacy::{
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
         PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogV1,
         PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
-        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_exact12_fixture_bundle_v1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
+        validate_privacy_exact12_fixture_bundle_v1,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -177,6 +169,8 @@ pub use kagemusha_sender_release_evidence::{
 #[cfg(test)]
 mod kagemusha_fixture_tests;
 mod parliament_timed_ovn_ffi;
+#[cfg(test)]
+mod privacy_capability_ffi_tests;
 pub use parliament_timed_ovn_ffi::{
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
@@ -2511,6 +2505,33 @@ pub unsafe extern "C" fn iroha_privacy_validate_compiled_profile_catalog_v1(
     }
     let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
+}
+/// Validate canonical Exact12 capability evidence with the authoritative Rust verifier.
+///
+/// Returns the stable [`PrivacyCapabilityArchiveValidationStatusV1`] code. Only zero accepts the
+/// complete archive, including release/audit signatures, deployment signatures, exact evidence
+/// counts, and recomputed digests. Callers must additionally compare the committed compiled
+/// tuples to their local catalog and obtain network state through authenticated Torii transport.
+///
+/// # Safety
+///
+/// For a non-zero `archive_len`, `archive_ptr` must reference at least that many readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_validate_exact12_capability_manifest_v1(
+    archive_ptr: *const c_uchar,
+    archive_len: c_ulong,
+) -> c_int {
+    if archive_ptr.is_null() {
+        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+    }
+    let Ok(archive_len) = usize::try_from(archive_len) else {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    };
+    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    }
+    let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
+    validate_privacy_capability_archive_v1(archive).code()
 }
 /// Return the complete Rust-derived exact-12 transaction-layer KAT bundle.
 ///
@@ -6131,6 +6152,7 @@ mod detached_transaction_scaffold_tests {
         assert!(inspect_detached_transaction_scaffold(b"not norito").is_err());
         assert!(inspect_detached_transaction_scaffold(&[]).is_err());
     }
+    #[test]
     fn inspector_rejects_genesis_domain() {
         let keypair = fixture_keypair(0x39);
         let authority = AccountId::new(keypair.public_key().clone());
@@ -10071,9 +10093,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     }
 }
 
-/// Return the exact KAGEMUSHA Core coordinator contract to the signed-app JNI adapter.
-///
-/// The generic Kotlin SDK entry point below delegates to the same implementation.
+/// Return the exact KAGEMUSHA Core coordinator contract to the Kotlin Android SDK.
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10081,7 +10101,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jintArray {
@@ -10102,7 +10122,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeC
     output.into_raw()
 }
 
-/// Open the qualified KAGEMUSHA Core coordinator from the signed-app JNI adapter.
+/// Open the qualified KAGEMUSHA Core coordinator through the Kotlin Android SDK.
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10110,7 +10130,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeC
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     storage_path: jni::objects::JString<'_>,
@@ -10136,7 +10156,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeO
     }
 }
 
-/// Invoke one closed KAGEMUSHA Core coordinator method from the signed-app JNI adapter.
+/// Invoke one closed KAGEMUSHA Core coordinator method through the Kotlin Android SDK.
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10144,7 +10164,7 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeO
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     handle: jni::sys::jlong,
@@ -10248,57 +10268,6 @@ pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeI
         }
     }
     output.into_raw()
-}
-
-/// Return the native coordinator contract to the generic Kotlin Android SDK.
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1(
-    env: jni::JNIEnv<'_>,
-    class: jni::objects::JClass<'_>,
-) -> jni::sys::jintArray {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1(env, class)
-}
-
-/// Open the same qualified native coordinator through the generic Kotlin Android SDK.
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1(
-    env: jni::JNIEnv<'_>,
-    class: jni::objects::JClass<'_>,
-    storage_path: jni::objects::JString<'_>,
-) -> jni::sys::jlong {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1(env, class, storage_path)
-}
-
-/// Invoke the closed coordinator schema through the generic Kotlin Android SDK.
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1(
-    env: jni::JNIEnv<'_>,
-    class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-    method: jni::sys::jint,
-    fields: jni::objects::JObjectArray<'_>,
-) -> jni::sys::jobjectArray {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(
-        env, class, handle, method, fields,
-    )
 }
 
 #[cfg(any(

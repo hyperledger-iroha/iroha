@@ -4,6 +4,7 @@
 package org.hyperledger.iroha.sdk.privacy
 
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -13,6 +14,35 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class PrivacyExact12CapabilityManifestV1Test {
+    @Test
+    fun decodedArchivesNeverGrantAdmissionIncludingClaimedQualifiedRows() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        for (manifest in listOf(
+            parseInspection(inspection()),
+            parseInspection(inspection(mapOf(protocol to qualifiedAvailableRow()), qualification())),
+        )) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(manifest, protocol)
+            }
+            assertEquals(
+                "Exact12 admission requires an authenticated Torii response; decoded archives are inspection-only",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun deploymentRequiresAnExactCanonicalNetworkIdentity() {
+        val qualified = inspection(qualification = qualification())
+        val literal = NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }).literal
+        val parsed = parseInspection(qualified)
+        assertEquals(literal, parsed.qualification!!.deploymentQualification.networkId.literal)
+        for (invalid in listOf("kotlin-test-network", literal.lowercase(), "")) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(qualified.replace(literal, invalid))
+            }
+        }
+    }
     @Test
     fun parsesSevenFieldRowsAndPreservesCanonicalManifestState() {
         val manifest = parseInspection(inspection())
@@ -239,7 +269,7 @@ class PrivacyExact12CapabilityManifestV1Test {
         "activation",
     )
 
-    private fun qualification(pgcActivationHeight: Int, convergenceHeight: Int): String {
+    private fun qualification(pgcActivationHeight: Int = 2, convergenceHeight: Int = 3): String {
         val releaseDigest = bytes(177, 32)
         val bindings = PrivacyProtocolIdV1.values().joinToString(",") { protocol ->
             releaseBinding(protocol)
@@ -253,7 +283,7 @@ class PrivacyExact12CapabilityManifestV1Test {
             """{"protocol_id":${protocolTag(protocol)},"activation_height":$height}"""
         }
         val release = """{"version":1,"catalog_id":"iroha-privacy-exact12-v1","catalog_commitment":${catalogCommitment()},"source":{"source_tree_digest":${bytes(161, 32)},"source_tree_clean":true,"toolchain_id":"kotlin-test-toolchain","toolchain_digest":${bytes(162, 32)},"cargo_lock_digest":${bytes(163, 32)}},"abi_version":1,"abi_hash":${bytes(164, 32)},"syscall_list_digest":${bytes(165, 32)},"executables":[],"protocols":[$bindings],"stage_receipts":[],"proof_artifacts":[],"sdk_packages":[],"hardware_results":[],"release_artifact_set_digest":${bytes(166, 32)},"audits":[],"audit_bundle_digest":${bytes(226, 32)},"release_signatures":[],"manifest_digest":$releaseDigest}"""
-        val deployment = """{"version":1,"chain_id":"kotlin-test-chain","network_id":"kotlin-test-network","genesis_hash":${bytes(208, 32)},"release_manifest_digest":$releaseDigest,"activation_transaction_digest":${bytes(209, 32)},"activations":[$activations],"validator_roster_digest":${bytes(210, 32)},"endpoint_version":"v1","convergence_height":$convergenceHeight,"converged_state_digest":${bytes(211, 32)},"validator_canaries":[],"validator_signatures":[],"qualification_digest":${bytes(228, 32)}}"""
+        val deployment = """{"version":1,"chain_id":"kotlin-test-chain","network_id":"${NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }).literal}","genesis_hash":${bytes(209, 32)},"release_manifest_digest":$releaseDigest,"activation_transaction_digest":${bytes(209, 32)},"activations":[$activations],"validator_roster_digest":${bytes(210, 32)},"endpoint_version":"v1","convergence_height":$convergenceHeight,"converged_state_digest":${bytes(211, 32)},"validator_canaries":[],"validator_signatures":[],"qualification_digest":${bytes(228, 32)}}"""
         return """{"release_manifest":$release,"deployment_qualification":$deployment}"""
     }
 

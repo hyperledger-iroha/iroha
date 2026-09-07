@@ -23,9 +23,9 @@ pub use proof::{
     race_state_root_v1, race_transcript_root_v1, verify_race_proof_v1,
 };
 pub use registry::{
-    compiled_execution_profile_v1, compiled_execution_profiles_v1, game_resource_requirements_v1, initial_game_state_root_v1,
-    validate_game_input_v1, validate_game_manifest_v1, validate_game_participant_v1,
-    verify_execution_proof_v1, verify_game_proof_for_history_v1,
+    compiled_execution_profile_v1, compiled_execution_profiles_v1, game_resource_requirements_v1,
+    initial_game_state_root_v1, validate_game_input_v1, validate_game_manifest_v1,
+    validate_game_participant_v1, verify_execution_proof_v1, verify_game_proof_for_history_v1,
 };
 
 pub use race::{

@@ -20,6 +20,7 @@ packages = [
   "iroha_primitives_derive",
   "iroha_schema",
   "iroha_schema_derive",
+  "iroha_service_model",
   "iroha_telemetry",
   "iroha_telemetry_derive",
   "iroha_version",
@@ -81,7 +82,9 @@ description = "SoraFS, SoraNet, bridge, binding, settlement, and application ser
 packages = [
   "connect_norito_bridge",
   "iroha_js_host",
+  "iroha_musubi_service",
   "iroha_sccp",
+  "iroha_storage_client",
   "mochi-core",
   "mochi-integration",
   "mochi-ui",
@@ -98,6 +101,7 @@ packages = [
   "soranet-handshake-harness",
   "soranet-puzzle-service",
   "soranet-relay",
+  "soranet_incentives",
   "soranet_pq",
 ]
 
@@ -131,6 +135,37 @@ packages = [
 [lanes.integration]
 description = "Cross-component, multi-peer integration coverage."
 packages = ["integration_tests"]
+
+# Only these package tests start external nodes. Sibling executable tests use
+# Cargo's CARGO_BIN_EXE_* paths and do not need downloaded release artifacts.
+# Authenticated message-control and Parliament signer daemons remain owned by
+# iroha_test_network's feature-isolated build/provenance protocol.
+[package_binaries]
+iroha_test_network = ["iroha3d", "iroha"]
+izanami = ["iroha3d", "iroha"]
+integration_tests = ["iroha3d", "iroha"]
+
+# Non-Cargo consumers participate in the same artifact-union calculation.
+# Package triggers use the expanded reverse-dependency closure. Unknown/shared
+# inputs and ci/full select every consumer; ordinary prose changes do not.
+[consumers.consistency]
+packages = ["iroha_cli", "iroha_kagami", "iroha_swarm"]
+paths = ["defaults/**", "scripts/tests/consistency.sh"]
+binaries = ["iroha", "kagami"]
+
+[consumers.kotodama_docs]
+packages = ["ivm", "kotodama_lang"]
+# Source projections use the checker's exact fence/heredoc parser and Git base.
+# New, changed, deleted, or malformed executable inputs require the compiler;
+# prose and docs/history evidence do not. Inventory edits also select this job.
+kotodama_document_inventory = "specs/kotodama_v1_docs.json"
+paths = ["fixtures/documentation/**"]
+binaries = ["koto"]
+
+[consumers.pytests]
+packages = ["irohad", "iroha_cli", "iroha_torii"]
+paths = ["pytests/iroha_cli_tests/**", "pytests/iroha_torii_tests/**"]
+binaries = ["iroha3d", "iroha", "kagami"]
 
 [paths]
 # Generated work products never seed a compile lane, including when nested in a

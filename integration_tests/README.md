@@ -36,6 +36,30 @@ This crate hosts cross-component tests for Iroha.
 - For faster local full runs, `scripts/run_full_tests.sh --fast` routes all cargo calls through `scripts/cargo_fast.sh`; add `--fast-zero-debug` and `--no-incremental` when you want the more aggressive local-throughput mode.
 
 ## Fixtures
+
+The native SoraFS repair corridor runs with
+`IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api sorafs_repair_ledger:: -- --nocapture`.
+The SoraFS scenarios give genesis preexecution and Tokio workers explicit 32 MiB
+stacks and configure a 1 GiB storage ceiling per validator through the ordinary
+Nexus configuration. This bounds the local test allocation independently of the
+capacity of a shared host filesystem. No extra stack environment setting is
+required by the tests.
+It uses four NPoS voting validators with mandatory DA/RBC, submits duplicate
+reports and competing claims through different peers, revokes an active owner,
+rejects stale completion, and verifies one terminal result plus byte-identical
+finalized task/counter/event projections before and after a validator restart.
+This is native-ledger qualification; provider storage execution, lease-expiry
+timing, slash/appeal orchestration and production evidence require their own
+tests and deployment runs.
+
+The orderbook and reserve corridors use the same harness with the filters
+`sorafs_orderbook_ledger::` and `sorafs_reserve_ledger::`. They bootstrap provider
+ownership through the production pre-genesis configuration, then submit signed
+native instructions for policy, funding and custody changes. Both check distinct
+transaction races, exact authority failures, balance conservation and matching
+finalized projections after a validator restart. Orderbook partial fills and
+expiry, elapsed rent collection, and hardware signing remain separate coverage.
+
 - IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:

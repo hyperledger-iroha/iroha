@@ -27,6 +27,23 @@ const torii = new ToriiClient(TAIRA_TESTNET_PROFILE.toriiBaseUrl, {
 });
 ```
 
+Before an account exists, `ToriiClient.getAccountCapabilities({ signal })` and
+the browser client's matching method read public `GET /v1/accounts/capabilities`.
+The closed `AccountCapabilitiesV1` JSON response contains `schema_version: 1`,
+the canonical `network_id`, a u16 `network_prefix`, the current `allowed_signing`
+admission set, and explicit `default_signing: "ed25519"`. Ed25519 is the
+first-release account-bootstrap policy and is mandatory in node admission;
+array ordering and the node's default hash do not express signing preferences.
+Compare the returned network identity with the user's selected network before
+creating an identity. This advert is endpoint discovery, not signed network
+evidence or permission to submit a transaction.
+
+These SDK calls omit configured credentials, reject redirects, accept only the
+exact V1 JSON shape, enforce a 4 KiB streamed response limit, and support abort
+through body consumption. The route accepts no query or request body. Standard
+Torii listener access controls still apply; permission-aware
+`GET /v1/node/capabilities` retains its existing account authentication.
+
 From an Iroha source checkout, run the native build (wrapping
 `cargo build -p iroha_js_host`) before using native-backed APIs:
 
@@ -44,6 +61,13 @@ peer processes, toolchain, build scripts, procedural macros, dependencies, and
 build environment. It is not a reproducible-build or hostile-executor proof.
 Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
+
+Loading a debug artifact from a dirty source tree verifies its recorded source
+seal in a separate process before loading native code. This verifier has a
+15-second timeout and does not inherit `NODE_OPTIONS`. In Electron, it runs
+with `ELECTRON_RUN_AS_NODE=1` so verification cannot launch another application
+or renderer. Verification failure or timeout prevents the native binding from
+loading.
 
 Native publication also assumes that the configured Cargo target is on a
 single-host local, hard-link-capable filesystem and that cooperating builders
@@ -308,7 +332,7 @@ cryptographic-review, and artifact-publication gates.
 
 ## Native Privacy Bridge
 
-The first-release native surface exposes local build metadata only:
+The first-release native catalog surface exposes local build metadata:
 `isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
 latter returns this binary's canonical Norito
 `PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
@@ -316,14 +340,51 @@ committed height, consensus policy, activation, or readiness projection and
 cannot authorize a network operation. Import
 `getPrivacyExact12CapabilityManifestV1` from
 `@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
-manifest through the Node/N-API client. The authenticated ABI23 binding applies
+manifest through the Node/N-API client with an HTTPS origin and immutable
+`LocalSigningContext`. Explicit custom fetch implementations are trusted transport
+dependencies and must preserve HTTPS authentication, response URL, and redirect semantics.
+Public archive decoding is inspection-only; copying or re-decoding transport
+bytes loses admission authority. The authenticated ABI23 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state, registered production qualification, and byte-exact equality with the
-selected local compiled-profile row. There is no browser, JSON snapshot, or
+selected local compiled-profile row and deployment network. The admission result
+retains that exact network and Torii origin. There is no browser, JSON snapshot, or
 mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
+
+`buildKaigiAuthorizationProofV1()` consumes a mutable, canonical nonzero Pasta
+Fp blinding and returns raw 32-byte commitment, nullifier, authorization, and
+pre-roster-root buffers plus the canonical proof envelope. Its required context
+is a typed deployment `NetworkId`, canonical call domain/name, full original host
+and participant `AccountId` values, an exact `bigint` participation sequence,
+one of `hostCreate`, `join`, `leave`, or `hostEnd`, and the exact pre-state root.
+The blinding buffer is cleared on success and rejection; callers must keep any
+separate copies under their own secret-lifetime policy. This API requires the
+native prover, which verifies the generated envelope through the canonical Core
+backend before returning it. Browser calls clear a supplied mutable blinding
+and fail closed.
+
+`buildKaigiUsageProofV1()` proves billing with that same host opening. Supply the
+typed `networkId`, canonical `callId` and original `hostId`, exact current
+`preRosterRoot`, the ledger's `segmentIndex` as an integer from zero through
+`2^32 - 1`, positive `durationMs` and unsigned `billedGas` as `bigint` u64 values,
+the stored raw `hostCommitment`, and mutable `blinding` bytes. It rejects an
+opening that does not match the stored host C before proving, and returns
+`{ hostCommitment, usageCommitment, preRosterRoot, proof }` only after Core verifies
+the final 25-row usage relation. The supplied blinding is cleared on every call.
+Use `usageCommitment` and `proof` in `buildRecordKaigiUsageInstruction` with those
+same public metrics. Native authorization and usage cache only each fixed
+circuit's public proving material; caller secrets remain owned by the invocation.
+
+Pass `{ commitment: result.commitment }` and `{ digest: result.nullifier }` into
+the matching Kaigi instruction builder. These values use raw canonical Pasta
+field bytes, including in the Norito JSON byte-array representation. The signed
+transaction identifies the participant; a proof binds its opening to the
+retained original account and current action, while ledger validation enforces
+membership and rekey lineage. Local proof construction alone does not establish
+network admission or production qualification.
 
 Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
 by a production confidential wallet or prover. The JavaScript SDK does not
@@ -1959,6 +2020,10 @@ applications live on `GET /v1/sumeragi/diagnostics`; they are parsed by the
 separate `getSumeragiDiagnosticsTyped()` helper and are not consensus
 authority. The general `GET /status` API remains another distinct
 operational-health snapshot.
+
+Parsed Native AMX participant settlements own frozen receipt arrays and receipt
+entries. Mutating the input payload cannot change a settlement after its hash
+has been checked against the Prepare and Commit certificates.
 
 All Sumeragi status helpers accept the standard `{signal}` option:
 

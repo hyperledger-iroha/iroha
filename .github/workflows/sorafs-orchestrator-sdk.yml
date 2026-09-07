@@ -66,6 +66,13 @@ on:
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "scripts/check_sorafs_mobile_parity_reports.py"
+      - "scripts/tests/check_sorafs_mobile_parity_reports_test.py"
+      - "scripts/sorafs_evidence_json.py"
+      - "scripts/sorafs_evidence_paths.py"
+      - "scripts/sorafs_evidence_sensitivity.py"
+      - "scripts/sorafs_path_identity.py"
+      - "tools/kotlin-fixture-gen/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain"
@@ -123,8 +130,21 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install Apple Rust targets
         run: |
+          resolve_mobile_tool() {
+            "$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import sys
+          sys.path.insert(0, "scripts")
+          from pathlib import Path
+          from sorafs_path_identity import resolve_path_identity
+          errors = []
+          identity = resolve_path_identity(Path(sys.argv[1]), errors, label="mobile SDK Rustup")
+          if identity is None or errors:
+              raise SystemExit("mobile SDK Rustup path identity could not be resolved")
+          print(identity)
+          ' "$1"
+          }
           rustup_source="$(command -v rustup)"
-          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          rustup_source="$(resolve_mobile_tool "$rustup_source")"
           [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
           rustup_tools="$RUNNER_TEMP/iroha-sorafs-apple-tools"
           mkdir -p "$rustup_tools"
@@ -133,7 +153,7 @@ jobs:
           test ! -e "$rustup_path"
           /bin/cp "$rustup_source" "$rustup_path"
           chmod 0700 "$rustup_path"
-          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          rustup_path="$(resolve_mobile_tool "$rustup_path")"
           [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
           echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
           "$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
@@ -252,6 +272,73 @@ jobs:
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Fetch the locked Rust dependency graph
         run: cargo fetch --locked
+      - name: Build and authenticate the exact ABI-23 Kotlin bridge
+        shell: bash
+        run: |
+          target=x86_64-unknown-linux-gnu
+          native_root="$RUNNER_TEMP/sorafs-mobile-native"
+          test ! -e "$native_root"
+          mkdir -m 0700 "$native_root"
+          cargo build --locked --offline --release -p connect_norito_bridge \
+            --target "$target" --target-dir "$native_root/cargo-target"
+          cargo build --locked --offline --release -p kotlin-fixture-gen \
+            --features dev-tools --bin kotlin-fixture-gen \
+            --target "$target" --target-dir "$native_root/cargo-target"
+          native_dir="$native_root/cargo-target/$target/release"
+          artifact="$native_dir/libconnect_norito_bridge.so"
+          manifest="$native_root/native-sdk-abi23.json"
+          python3 -I scripts/check_native_sdk_abi23_artifact.py record \
+            --artifact "$artifact" --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE" --sdk c-jni --target "$target"
+          python3 -I scripts/check_native_sdk_abi23_artifact.py verify \
+            --artifact "$artifact" --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE"
+          echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"
+          echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$native_dir/kotlin-fixture-gen" >> "$GITHUB_ENV"
+          echo "SORAFS_MOBILE_NATIVE_MANIFEST=$manifest" >> "$GITHUB_ENV"
+      - name: Prepare canonical Kotlin test outputs
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/sorafs-mobile-parity"
+          test ! -e "$artifact_dir"
+          mkdir -m 0700 "$artifact_dir"
+          echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
+        working-directory: kotlin
+        shell: bash
+        run: |
+          # core-jvm includes Java-source consumers of the canonical Kotlin API.
+          ./gradlew --no-daemon --no-build-cache --rerun-tasks \
+            --no-configuration-cache \
+            --project-cache-dir "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/project-cache" \
+            :core-jvm:test :tools:test \
+            :client-android:testDebugUnitTest \
+            :client-android:testDebugHostNative \
+            :kagemusha-wallet-android:testDebugUnitTest --console=plain
+      - name: Validate every mobile parity test lane
+        shell: bash
+        run: |
+          python3 -I scripts/check_sorafs_mobile_parity_reports.py \
+            --report-root "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk" \
+            > "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/test-execution.json"
+      - name: Reauthenticate the consumed Kotlin bridge
+        shell: bash
+        run: |
+          python3 -I scripts/check_native_sdk_abi23_artifact.py verify \
+            --artifact "$IROHA_NATIVE_LIBRARY_PATH/libconnect_norito_bridge.so" \
+            --manifest "$SORAFS_MOBILE_NATIVE_MANIFEST" \
+            --source-root "$GITHUB_WORKSPACE"
+      - name: Upload Kotlin and Java native parity evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-orchestrator-mobile-parity-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/sorafs-mobile-native/native-sdk-abi23.json
+            ${{ runner.temp }}/sorafs-mobile-parity/test-execution.json
+            ${{ runner.temp }}/sorafs-mobile-parity/gradle-build/iroha_kotlin_sdk/*/test-results/**/TEST-*.xml
+          if-no-files-found: error
+          retention-days: 30
 
   csharp-parity:
     runs-on: ubuntu-24.04

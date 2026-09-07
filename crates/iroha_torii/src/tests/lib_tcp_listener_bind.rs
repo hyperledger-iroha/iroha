@@ -45,7 +45,6 @@ fn invalid_http_transport_is_rejected_before_serving() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn panicked_http_connection_is_contained_to_its_socket() {
-    let remote = StdSocketAddr::from((Ipv4Addr::LOCALHOST, 41_337));
     let mut connections = JoinSet::new();
     connections.spawn(crate::panic_recovery::catch_async_recoverable(async move {
         assert!(
@@ -54,7 +53,10 @@ async fn panicked_http_connection_is_contained_to_its_socket() {
         );
         panic!("injected attacker-controlled HTTP connection panic");
         #[allow(unreachable_code)]
-        (remote, Ok::<(), hyper::Error>(()))
+        (
+            StdSocketAddr::from((Ipv4Addr::LOCALHOST, 41_337)),
+            Ok::<(), hyper::Error>(()),
+        )
     }));
 
     let completion = connections

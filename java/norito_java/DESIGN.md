@@ -56,21 +56,15 @@
   - `NoritoHeader`, `CRC64`, `Varint`, `NoritoEncoder`, `NoritoDecoder`,
     `TypeAdapter`, adapter classes, `NoritoCodec`, `NoritoAdapters`, `SchemaHash`,
     `Result`, and CLI `NoritoDump`.
-- `java/norito_java/src/test/java/org/hyperledger/iroha/norito/`
-  - `NoritoTests` main class (assert-based tests executed via `java`).
-- `java/norito_java/README.md` – usage, build, testing, roadmap.
-- `java/norito_java/run_tests.sh` – compiles and runs the test harness.
-- `java/norito_java/LICENSE` – Apache-2.0 to match the workspace.
-- `java/norito_java/CHANGELOG.md` – release notes.
-- `java/norito_java/BUILDING.md` (alias README build section) if needed.
+- Runtime qualification lives in Kotlin's `core-jvm` module. Its Java-source
+  `NoritoJavaConsumerTest` exercises the Kotlin-owned implementation, including
+  every assertion from the former Java harness.
 
-## Testing Strategy
-- Provide `run_tests.sh` as a small wrapper around the Gradle `runNoritoTests` task so compilation,
-  assertions, and the pinned Zstandard runtime use the published dependency graph.
-- Tests assert roundtrips for signed/unsigned ints, strings, sequences (packed
-  offsets are fixed u64 in v1), options, and struct adapter behaviours; verify
-  header validation and CRC mismatch detection.
-- No external testing frameworks to avoid network/build dependencies.
+## Testing
+
+Run `cd kotlin && ./gradlew :core-jvm:test --tests
+'org.hyperledger.iroha.sdk.norito.*' --console=plain` from the repository root.
+The test runtime enables assertions, and Java consumers compile against JDK 8.
 
 ## Compression Profiles & Packaging
 - `CompressionConfig.zstdProfile(profile, payloadLen)` accepts the typed `FAST`,

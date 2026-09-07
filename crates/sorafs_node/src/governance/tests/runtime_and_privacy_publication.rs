@@ -749,19 +749,373 @@ fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restar
     );
 }
 #[test]
-fn runtime_dag_payload_preflight_counts_without_allocating_dummy_envelopes() {
-    let (settlement, encoded) = sample_settlement();
-    let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement));
+fn runtime_dag_decoder_rejects_compression_before_allocation() {
+    let (value, _) = sample_settlement();
+    let canonical = norito::encode_canonical(&value).unwrap();
     assert_eq!(
-        canonical_runtime_source_payload_len(&payload).expect("count canonical source"),
-        encoded.len()
+        decode_canonical_runtime_dag::<DealSettlementV1>(&canonical, "settlement").unwrap(),
+        value
     );
-    preflight_runtime_signed_dag_payload(&payload, encoded.len())
-        .expect("small canonical payload fits every runtime DAG envelope");
-    assert!(
-        preflight_runtime_signed_dag_payload(&payload, encoded.len().saturating_add(1)).is_err(),
-        "source-length substitution must fail before publication"
+    let compressed =
+        norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default())).unwrap();
+    assert_eq!(
+        norito::decode_from_bytes::<DealSettlementV1>(&compressed).unwrap(),
+        value
     );
+    let mut tagged = canonical.clone();
+    let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+    let compression_offset = header.magic.len() + 2 + header.schema.len();
+    tagged[compression_offset] = norito::Compression::Zstd as u8;
+    let mut oversized_header = tagged[..norito::core::Header::SIZE].to_vec();
+    oversized_header[compression_offset + 1..compression_offset + 9]
+        .copy_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(
+        norito::core::Header::read(tagged.as_slice())
+            .unwrap()
+            .compression,
+        norito::Compression::Zstd
+    );
+    let oversized = norito::core::Header::read(oversized_header.as_slice()).unwrap();
+    assert_eq!(oversized.compression, norito::Compression::Zstd);
+    assert_eq!(oversized.length, u64::MAX);
+    let no_allocation = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    for flags in governance_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        for bytes in [&compressed, &tagged, &oversized_header] {
+            let error = norito::with_decode_limits_scope(no_allocation, || {
+                decode_canonical_runtime_dag::<DealSettlementV1>(bytes, "settlement")
+            })
+            .expect_err("reject forbidden compression before charging payload allocation");
+            assert!(matches!(error, GovernancePublishError::Other(ref message)
+                if message == "settlement bytes are noncanonical"));
+        }
+        let error = norito::with_decode_limits_scope(no_allocation, || {
+            decode_canonical_runtime_dag::<DealSettlementV1>(&canonical, "settlement")
+        })
+        .expect_err("control frame must encounter the active zero allocation limit");
+        assert!(matches!(error, GovernancePublishError::Other(ref message)
+            if message.contains("allocation") && message.contains("decode failed")));
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+}
+#[test]
+fn runtime_dag_payload_preflight_and_bytes_ignore_caller_layout() {
+    let (mut settlement, _) = sample_settlement();
+    settlement.audit_notes = Some("canonical runtime source".to_owned());
+    let encoded = norito::encode_canonical(&settlement).expect("independent canonical source");
+    let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement.clone()));
+    let mut alternate_frames = 0;
+    for flags in governance_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            canonical_runtime_source_payload_len(&payload).expect("count canonical source"),
+            encoded.len(),
+            "layout {flags:#04x}"
+        );
+        assert_eq!(
+            canonical_runtime_source_payload_bytes(&payload).unwrap(),
+            encoded
+        );
+        preflight_runtime_signed_dag_payload(&payload, encoded.len())
+            .expect("canonical payload fits every runtime DAG envelope");
+        assert!(
+            preflight_runtime_signed_dag_payload(&payload, encoded.len() + 1).is_err(),
+            "source-length substitution must fail before publication"
+        );
+        ensure_canonical_governance_encoding(&settlement, &encoded, "deal_settlement")
+            .expect("canonical publication is independent of the caller layout");
+        let alternate = norito::core::to_bytes(&settlement).expect("supported caller layout");
+        if alternate != encoded {
+            alternate_frames += 1;
+            assert_eq!(
+                norito::decode_from_bytes::<DealSettlementV1>(&alternate).unwrap(),
+                settlement
+            );
+            assert!(
+                ensure_canonical_governance_encoding(&settlement, &alternate, "deal_settlement")
+                    .is_err(),
+                "matching ambient flags cannot authorize an alternate publication frame"
+            );
+        }
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+    assert!(alternate_frames > 0);
+}
+#[test]
+fn runtime_dag_source_full_frame_boundary_ignores_caller_layout() {
+    let limit = GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES;
+    let (mut settlement, _) = sample_settlement();
+    // Exercise the byte-admission helper, independently of settlement semantics.
+    // Keep the string length in the same varint band while calibrating the frame.
+    settlement.audit_notes = Some("x".repeat(limit));
+    let initial_len = norito::encode_canonical(&settlement).unwrap().len();
+    let note_len = limit - (initial_len - limit);
+    settlement
+        .audit_notes
+        .as_mut()
+        .unwrap()
+        .truncate(note_len - 1);
+    for expected_len in [limit - 1, limit, limit + 1] {
+        let baseline = norito::encode_canonical(&settlement).expect("independent boundary frame");
+        assert_eq!(baseline.len(), expected_len);
+        let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement.clone()));
+        for flags in governance_caller_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            if expected_len <= limit {
+                assert_eq!(
+                    canonical_runtime_source_payload_len(&payload).unwrap(),
+                    expected_len
+                );
+                assert_eq!(
+                    canonical_runtime_source_payload_bytes(&payload).unwrap(),
+                    baseline
+                );
+                preflight_runtime_signed_dag_payload(&payload, expected_len)
+                    .expect("the exact canonical source ceiling is inclusive");
+                assert!(preflight_runtime_signed_dag_payload(&payload, expected_len - 1).is_err());
+            } else {
+                assert!(canonical_runtime_source_payload_len(&payload).is_err());
+                assert!(canonical_runtime_source_payload_bytes(&payload).is_err());
+                assert!(preflight_runtime_signed_dag_payload(&payload, limit).is_err());
+            }
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        settlement.audit_notes.as_mut().unwrap().push('x');
+    }
+}
+#[test]
+fn runtime_dag_transition_archive_and_persistence_ignore_caller_layout() {
+    let temp = tempdir().unwrap();
+    let mut publisher = signed_runtime_publisher(temp.path());
+    let (settlement, bytes) = sample_settlement();
+    publisher
+        .publish_deal_settlement(&settlement, &bytes)
+        .unwrap();
+    for (revision, seed) in [(2, 0x32), (3, 0x33)] {
+        let store = publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .unwrap()
+            .clone();
+        publisher
+            .transition_qualified_runtime_dag_providers(
+                qualified_test_runtime_dag_signer(revision, seed),
+                store,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        publisher
+            .compact_runtime_dag_qualification_history(1)
+            .unwrap(),
+        1
+    );
+    let signer = publisher.runtime_dag_signer.as_ref().unwrap();
+    let binding = runtime_dag_provider_binding(
+        signer,
+        publisher.runtime_dag_checkpoint_store.as_ref().unwrap(),
+    );
+    let (history, summary) =
+        read_runtime_dag_qualification_history(temp.path(), publisher.root_guard(), Some(&binding))
+            .unwrap()
+            .unwrap();
+    let archive = read_runtime_dag_qualification_archive(
+        temp.path(),
+        summary.archive_generation,
+        summary.archive_digest,
+        history.root_digest,
+    )
+    .unwrap();
+    let archive_path = runtime_dag_qualification_archive_path(
+        temp.path(),
+        summary.archive_generation,
+        summary.archive_digest,
+    );
+    let transition = &archive.body.transitions[0];
+    let hash_frame = |domain: &[u8], bytes: &[u8]| {
+        let mut hash = blake3::Hasher::new();
+        hash.update(domain);
+        hash.update(bytes);
+        *hash.finalize().as_bytes()
+    };
+    // Build independent preimages before entering any alternate layout scope.
+    let transition_body_bytes = norito::encode_canonical(&transition.body).unwrap();
+    let expected_body_digest = hash_frame(
+        b"sorafs.governance-dag.provider-transition-body.v1\0",
+        &transition_body_bytes,
+    );
+    let mut transition_preimage = b"sorafs.governance-dag.key-transition.v1\0".to_vec();
+    transition_preimage.extend(
+        norito::encode_canonical(&RuntimeDagKeyTransitionSigningPayloadV1 {
+            version: GOVERNANCE_RUNTIME_DAG_KEY_TRANSITION_VERSION_V1,
+            outgoing_segment_revision: transition.body.generation,
+            incoming_segment_revision: transition.body.generation + 1,
+            transition_body_digest: expected_body_digest,
+        })
+        .unwrap(),
+    );
+    let expected_transition_digest = hash_frame(
+        b"sorafs.governance-dag.provider-transition-digest.v1\0",
+        &norito::encode_canonical(transition).unwrap(),
+    );
+    let mut archive_preimage = b"sorafs.governance-dag.qualification-archive.v1\0".to_vec();
+    archive_preimage.extend(norito::encode_canonical(&archive.body).unwrap());
+    let archive_bytes = norito::encode_canonical(&archive).unwrap();
+    let expected_archive_digest = hash_frame(
+        b"sorafs.governance-dag.qualification-archive-digest.v1\0",
+        &archive_bytes,
+    );
+    assert_eq!(summary.archive_digest, expected_archive_digest);
+    let qualification_store =
+        open_runtime_dag_qualification_store_v1(temp.path(), publisher.root_guard()).unwrap();
+    let (state, mut snapshot) =
+        load_runtime_dag_qualification_state_v1(&qualification_store).unwrap();
+    let state_bytes = norito::encode_canonical(&state).unwrap();
+    assert_eq!(snapshot.payload(), state_bytes);
+    let mut alternate_frames = 0;
+    for flags in governance_caller_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            runtime_dag_transition_body_digest(&transition.body).unwrap(),
+            expected_body_digest
+        );
+        assert_eq!(
+            governance_dag_key_transition_signing_payload_v1(
+                transition.body.generation,
+                transition.body.generation + 1,
+                expected_body_digest,
+            )
+            .unwrap(),
+            transition_preimage
+        );
+        assert_eq!(
+            runtime_dag_transition_digest(transition).unwrap(),
+            expected_transition_digest
+        );
+        assert_eq!(
+            runtime_dag_archive_signing_bytes(&archive.body).unwrap(),
+            archive_preimage
+        );
+        assert_eq!(
+            runtime_dag_archive_digest(&archive).unwrap(),
+            expected_archive_digest
+        );
+        for (provider, signature) in [
+            (
+                &transition.body.previous,
+                &transition.key_transition.outgoing_signature,
+            ),
+            (
+                &transition.body.next,
+                &transition.key_transition.incoming_signature,
+            ),
+        ] {
+            verify_runtime_dag_binding_signature(
+                provider,
+                &transition_preimage,
+                signature,
+                "transition",
+            )
+            .expect("each key authenticates the independent canonical transition preimage");
+        }
+        assert_eq!(
+            validate_runtime_dag_qualification_transition(transition, history.root_digest).unwrap(),
+            expected_transition_digest
+        );
+        assert_eq!(
+            validate_runtime_dag_qualification_archive(&archive, history.root_digest).unwrap(),
+            expected_archive_digest
+        );
+        assert_eq!(
+            runtime_dag_raw_signature(
+                signer,
+                GovernanceDagSigningPurposeV1::QualificationArchive,
+                &runtime_dag_archive_signing_bytes(&archive.body).unwrap()
+            )
+            .unwrap(),
+            archive.signature
+        );
+        assert_eq!(
+            write_runtime_dag_qualification_state(
+                publisher.root_guard(),
+                &archive_path,
+                &archive,
+                GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_MAX_BYTES_V1,
+                true,
+            )
+            .unwrap(),
+            archive_bytes
+        );
+        assert_eq!(fs::read(&archive_path).unwrap(), archive_bytes);
+        assert_eq!(
+            encode_governance_two_slot_value_v1(&state, "qualification").unwrap(),
+            state_bytes
+        );
+        assert_eq!(
+            load_runtime_dag_qualification_state_v1(&qualification_store)
+                .unwrap()
+                .0,
+            state
+        );
+        let mut tampered_transition = transition.clone();
+        tampered_transition.body.predecessor_checkpoint_revision[0] ^= 1;
+        assert!(
+            validate_runtime_dag_qualification_transition(
+                &tampered_transition,
+                history.root_digest
+            )
+            .is_err()
+        );
+        let mut tampered_archive = archive.clone();
+        tampered_archive.signature[0] ^= 1;
+        assert!(
+            validate_runtime_dag_qualification_archive(&tampered_archive, history.root_digest)
+                .is_err()
+        );
+        let alternate_archive = norito::core::to_bytes(&archive).unwrap();
+        if alternate_archive != archive_bytes {
+            alternate_frames += 1;
+            assert_eq!(
+                norito::decode_from_bytes::<RuntimeDagQualificationArchiveV1>(&alternate_archive)
+                    .unwrap(),
+                archive
+            );
+            let error = decode_canonical_runtime_dag::<RuntimeDagQualificationArchiveV1>(
+                &alternate_archive,
+                "archive",
+            )
+            .expect_err("alternate archive layout cannot pass under matching ambient flags");
+            assert!(error.to_string().contains("noncanonical"));
+        }
+        let alternate_state = norito::core::to_bytes(&state).unwrap();
+        if alternate_state != state_bytes {
+            assert_eq!(
+                norito::decode_from_bytes::<RuntimeDagQualificationStateV1>(&alternate_state)
+                    .unwrap(),
+                state
+            );
+            // Commit with the real store CAS, preserving a valid outer revision.
+            snapshot = compare_and_swap_governance_two_slot_store_v1(
+                &qualification_store,
+                &snapshot,
+                &alternate_state,
+                "alternate qualification",
+            )
+            .unwrap();
+            let error = load_runtime_dag_qualification_state_v1(&qualification_store)
+                .expect_err("authenticated persistence cannot admit noncanonical inner bytes");
+            assert!(error.to_string().contains("noncanonical"));
+            snapshot = compare_and_swap_governance_two_slot_store_v1(
+                &qualification_store,
+                &snapshot,
+                &state_bytes,
+                "canonical qualification",
+            )
+            .unwrap();
+        }
+        assert_eq!(norito::core::get_decode_flags(), flags);
+    }
+    assert!(alternate_frames > 0);
 }
 #[test]
 fn runtime_dag_audit_rejects_substituted_generated_at_in_committed_state() {
@@ -1476,7 +1830,8 @@ fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
             "non-canonical or weak",
         ),
     ] {
-        let mut signer = TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x31);
+        let mut signer =
+            TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x31);
         signer.public_key_override = Some(public_key);
         let signer = Arc::new(signer);
         let error = GovernanceRuntimeDagSigner::try_new(

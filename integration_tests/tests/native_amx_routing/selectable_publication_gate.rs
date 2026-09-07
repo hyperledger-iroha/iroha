@@ -80,7 +80,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                 .status()
                 .await
                 .wrap_err_with(|| format!("{context}: query pre-cut status from peer {index}"))?;
-            let blocks = peer.client().query(FindBlocks).execute_all()?;
+            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
             let latest = blocks
                 .first()
                 .ok_or_else(|| eyre!("{context}: pre-cut peer {index} returned an empty chain"))?;
@@ -216,7 +216,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                     .enumerate()
                     .filter(|(index, _)| *index != target_index)
                 {
-                    let blocks = peer.client().query(FindBlocks).execute_all()?;
+                    let blocks = peer.client().client().query(FindBlocks).execute_all()?;
                     let latest = blocks.first().ok_or_else(|| {
                         eyre!("{context}: live peer {index} returned an empty chain")
                     })?;
@@ -275,14 +275,19 @@ async fn run_selectable_musubi_publication_phase_cut(
                 block
             }
         };
-        let barrier_transaction = live_submitter.build_transaction(
+        let barrier_transaction ={
+    let account = live_submitter.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(Log::new(
                 Level::INFO,
                 format!("Musubi selectable publication {phase_label} restart barrier"),
             ))],
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
-        );
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
         submit_approved_and_wait_for_all_peers(
             &network,
             &live_submitter,
@@ -315,7 +320,7 @@ async fn run_selectable_musubi_publication_phase_cut(
             } else {
                 canonical_snapshot = Some(snapshot);
             }
-            let blocks = client.query(FindBlocks).execute_all()?;
+            let blocks = client.client().query(FindBlocks).execute_all()?;
             let empty_successors = blocks
                 .iter()
                 .filter(|block| {

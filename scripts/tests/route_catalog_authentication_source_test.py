@@ -28,7 +28,7 @@ CASE_SHA256 = {
     "sorafs_inventory_and_storage_reads_declare_fail_closed_admission":
         "fbf41bff1530fb54baa7196b8a867223541129659d1ec7b0fc2ed41c0aad773b",
     "soracloud_commands_require_exact_account_authentication_and_honest_effects":
-        "91ee004a2a315253c8ed2dfcfa937d8b98e871a3f77a1621205871b006d9b8b3",
+        "7ec7a0029190e8ee81dc11c86eaeabbed46def37ae1db8b94ffc55c494a7208c",
     "soracloud_sensitive_reads_require_exact_account_authentication":
         "c1fbf275eb9fe58794452febcea15edd0cda222f718679850f936493714e3642",
     "soracloud_public_reads_are_bounded_single_object_discovery":
@@ -43,6 +43,8 @@ CASE_SHA256 = {
         "1250b5a5efe35d2462d6712c568bc84396ae21d7f9bd4ef1d8b9efd721216320",
     "zk_compute_routes_require_exact_account_authentication":
         "df31661cceec27a27c968294c1cb1c10a7472cbbbea04a3e50d64b0cb87c27fc",
+    "account_bootstrap_capabilities_are_public_without_changing_node_authentication":
+        "a7fed43afb2e44c31e14f55f5c2d6c9e052cbd03a87cbc46b64c209616b34c66",
     "state_backed_runtime_and_governance_routes_require_exact_account_authentication":
         "cf6f62b98ae1923914f4869080e1405a9d0587c193943f6c9f0270b7b4e659ee",
     "moderation_dead_letter_routes_are_account_signed_operator_role_posts":

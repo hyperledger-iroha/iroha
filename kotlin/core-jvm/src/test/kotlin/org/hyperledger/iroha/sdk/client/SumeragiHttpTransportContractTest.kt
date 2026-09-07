@@ -252,7 +252,7 @@ class SumeragiHttpTransportContractTest {
     @Test
     fun `operator reads reject missing and fallback authentication before dispatch`() {
         val executor = FixedResponseExecutor(jsonResponse(statusJson().toByteArray()))
-        val missing = HttpClientTransport.withExecutor(
+        val missing = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -261,7 +261,7 @@ class SumeragiHttpTransportContractTest {
         assertFails { missing.getSumeragiStatus() }
         assertTrue(!executor.hasRequest())
 
-        val fallback = HttpClientTransport.withExecutor(
+        val fallback = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -274,7 +274,7 @@ class SumeragiHttpTransportContractTest {
     }
 
     private fun transport(executor: HttpTransportExecutor): HttpClientTransport =
-        HttpClientTransport.withExecutor(
+        HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))

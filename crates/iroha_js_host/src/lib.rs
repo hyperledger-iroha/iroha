@@ -11,6 +11,11 @@
     clippy::unnecessary_wraps
 )]
 mod authenticated_block_proofs;
+mod kaigi_authorization_v1;
+mod kaigi_proof_v1;
+mod kaigi_usage_v1;
+pub use kaigi_authorization_v1::{JsKaigiAuthorizationProofV1, build_kaigi_authorization_proof_v1};
+pub use kaigi_usage_v1::{JsKaigiUsageProofV1, build_kaigi_usage_proof_v1};
 mod private_settlement_response;
 mod secure_private_fs;
 mod sorafs_orderbook_submission;
@@ -29,25 +34,6 @@ macro_rules! norito_json {
 }
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
-#[cfg(test)]
-use halo2_proofs::{
-    SerdeFormat,
-    halo2curves::{
-        ff::PrimeField as _,
-        pasta::{EqAffine as Halo2Curve, Fp as Halo2Scalar},
-    },
-    plonk::{VerifyingKey, create_proof, keygen_pk, keygen_vk},
-    poly::commitment::ParamsProver,
-    poly::ipa::{
-        commitment::{IPACommitmentScheme, ParamsIPA},
-        multiopen::ProverIPA,
-    },
-    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
-};
-use iroha::da::{
-    DaProofConfig as IrohaDaProofConfig,
-    generate_da_proof_summary as iroha_generate_da_proof_summary,
-};
 use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
@@ -55,8 +41,6 @@ use iroha_core::zk::confidential_v2::{
     self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
     ConfidentialUnshieldOutputV3,
 };
-#[cfg(test)]
-use iroha_core::zk::hash_vk;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
     confidential_memo::generate_confidential_memo_keypair_v1 as generate_confidential_memo_native_keypair_v1,
@@ -122,7 +106,7 @@ use iroha_data_model::{
     },
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
-        KaigiRelayRegistration, NewKaigi,
+        KaigiRelayRegistration, NewKaigi, scalar::KaigiAuthorizationScalarV1,
     },
     metadata::Metadata,
     ministry::AgendaProposalV1,
@@ -164,6 +148,10 @@ use iroha_data_model::{
     },
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
+use iroha_storage_client::da::{
+    DaProofConfig as IrohaDaProofConfig,
+    generate_da_proof_summary as iroha_generate_da_proof_summary,
+};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
@@ -181,8 +169,6 @@ use std::{
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]
 use iroha_data_model::isi::settlement::FxCorridorOracleEvidence;
-#[cfg(test)]
-use iroha_data_model::proof::VerifyingKeyBox;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -191,13 +177,7 @@ use iroha_primitives::{
         derive_gateway_hosts_with_profile,
     },
 };
-use kaigi_zk::empty_roster_root_hash;
-#[cfg(test)]
-use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CANONICAL_CIRCUIT_ID, KAIGI_ROSTER_CIRCUIT_K,
-    KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1, KaigiRosterJoinCircuit, compute_commitment,
-    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, roster_root_limbs,
-};
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
 use kotodama_lang::{encoding, instruction, metadata::ProgramMetadata, syscalls};
 use napi::{
     ValueType,
@@ -212,8 +192,6 @@ use norito::{
     core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
-#[cfg(test)]
-use rand_core_06::OsRng;
 use sorafs_car::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, ChunkStoreError, FilePlan, InMemoryPayload,
     PorProof,
@@ -259,8 +237,8 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
-    RolloutPhase, TransportPolicy, WriteModeHint, fetch_via_gateway,
+    FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
+    fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
@@ -270,10 +248,6 @@ use tokio::runtime::Runtime;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
-#[cfg(test)]
-const KAIGI_VK_REGISTRY_BACKEND: &str = "halo2/ipa";
-#[cfg(test)]
-const ZK1_ENVELOPE_PREFIX: &[u8] = b"ZK1\0";
 const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
 const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
 const SORAFS_ALIAS_HARD_EXPIRY_SECS: u64 = 15 * 60;
@@ -728,18 +702,6 @@ pub struct JsConfidentialKeyset {
     /// Full view key (fvk).
     pub fvk: Buffer,
 }
-/// Proof artefacts required for a privacy-mode Kaigi join.
-#[napi(object)]
-pub struct JsKaigiRosterJoinProof {
-    /// Commitment digest bound into the Kaigi roster.
-    pub commitment: Buffer,
-    /// Join nullifier digest used for replay protection.
-    pub nullifier: Buffer,
-    /// Roster root that the proof binds to.
-    pub roster_root: Buffer,
-    /// Norito-encoded `OpenVerifyEnvelope` payload.
-    pub proof: Buffer,
-}
 /// Canonical SM2 fixture describing deterministic signing outputs.
 #[napi(object)]
 pub struct JsSm2Fixture {
@@ -1088,205 +1050,6 @@ fn parse_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     let mut out = [0u8; 32];
     out.copy_from_slice(bytes);
     Ok(out)
-}
-#[cfg(test)]
-fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"iroha-js:kaigi:roster-join:v1");
-    hasher.update(label);
-    hasher.update(seed);
-    let digest = hasher.finalize();
-    let mut scalar = [0u8; 8];
-    scalar.copy_from_slice(&digest.as_bytes()[..8]);
-    let value = u64::from_le_bytes(scalar);
-    if value == 0 { 1 } else { value }
-}
-fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
-    let Some(raw) = value.map(|entry| entry.trim().to_owned()) else {
-        return Ok(empty_roster_root_hash());
-    };
-    if raw.is_empty() {
-        return Ok(empty_roster_root_hash());
-    }
-    let trimmed = raw.strip_prefix("0x").unwrap_or(raw.as_str());
-    let decoded = hex::decode(trimmed).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("rosterRootHex must be valid hex: {err}"),
-        )
-    })?;
-    if decoded.len() != Hash::LENGTH {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-                "rosterRootHex must be {} bytes, got {}",
-                Hash::LENGTH,
-                decoded.len()
-            ),
-        ));
-    }
-    let mut bytes = [0u8; Hash::LENGTH];
-    bytes.copy_from_slice(decoded.as_slice());
-    Ok(Hash::prehashed(bytes))
-}
-#[cfg(test)]
-fn usize_to_u32_len(len: usize, context: &str) -> u32 {
-    u32::try_from(len).unwrap_or_else(|_| panic!("{context} length exceeds u32::MAX"))
-}
-#[cfg(test)]
-fn zk1_append_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
-    buf.extend_from_slice(&tag);
-    buf.extend_from_slice(&usize_to_u32_len(payload.len(), "zk1 tlv payload").to_le_bytes());
-    buf.extend_from_slice(payload);
-}
-#[cfg(test)]
-fn zk1_append_proof(buf: &mut Vec<u8>, proof: &[u8]) {
-    zk1_append_tlv(buf, *b"PROF", proof);
-}
-#[cfg(test)]
-fn zk1_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
-    zk1_append_tlv(buf, *b"IPAK", &k.to_le_bytes());
-}
-#[cfg(test)]
-fn zk1_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
-    zk1_append_tlv(buf, *b"CID1", circuit_id.as_bytes());
-}
-#[cfg(test)]
-fn zk1_append_vk_pasta(buf: &mut Vec<u8>, vk: &VerifyingKey<Halo2Curve>) {
-    zk1_append_tlv(buf, *b"H2VK", &vk.to_bytes(SerdeFormat::Processed));
-}
-#[cfg(test)]
-fn kaigi_roster_vk_box(verifying_key: &VerifyingKey<Halo2Curve>) -> VerifyingKeyBox {
-    let mut bytes = ZK1_ENVELOPE_PREFIX.to_vec();
-    zk1_append_ipa_k(&mut bytes, KAIGI_ROSTER_CIRCUIT_K);
-    zk1_append_circuit_id(&mut bytes, KAIGI_ROSTER_CANONICAL_CIRCUIT_ID);
-    zk1_append_vk_pasta(&mut bytes, verifying_key);
-    VerifyingKeyBox::new(KAIGI_VK_REGISTRY_BACKEND.to_owned(), bytes)
-}
-#[cfg(test)]
-fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
-    if columns.is_empty() {
-        return;
-    }
-    let rows = columns[0].len();
-    if columns.iter().any(|column| column.len() != rows) {
-        return;
-    }
-    let mut payload =
-        Vec::with_capacity(8 + rows * columns.len() * core::mem::size_of::<Halo2Scalar>());
-    payload
-        .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
-    payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
-    for row in 0..rows {
-        for column in columns {
-            payload.extend_from_slice(column[row].to_repr().as_ref());
-        }
-    }
-    zk1_append_tlv(buf, *b"I10P", payload.as_slice());
-}
-#[cfg(test)]
-fn build_kaigi_roster_join_candidate_proof_bytes(
-    seed: &[u8],
-    roster_root: &Hash,
-) -> napi::Result<JsKaigiRosterJoinProof> {
-    let account_idx = derive_kaigi_scalar_u64(seed, b"account");
-    let domain_salt = derive_kaigi_scalar_u64(seed, b"domain");
-    let nullifier_seed = derive_kaigi_scalar_u64(seed, b"nullifier");
-    let account_scalar = Halo2Scalar::from(account_idx);
-    let domain_scalar = Halo2Scalar::from(domain_salt);
-    let nullifier_scalar = Halo2Scalar::from(nullifier_seed);
-    let root_scalars = roster_root_limbs(roster_root);
-    let params: ParamsIPA<Halo2Curve> = ParamsIPA::new(KAIGI_ROSTER_CIRCUIT_K);
-    let verifying_key = keygen_vk(&params, &KaigiRosterJoinCircuit::default()).map_err(|err| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            format!("failed to generate Kaigi roster verifying key: {err}"),
-        )
-    })?;
-    let circuit = KaigiRosterJoinCircuit::new(
-        account_scalar,
-        domain_scalar,
-        nullifier_scalar,
-        root_scalars,
-    );
-    let proving_key = keygen_pk(&params, verifying_key.clone(), &circuit).map_err(|err| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            format!("failed to generate Kaigi roster proving key: {err}"),
-        )
-    })?;
-    let commitment_scalar = compute_commitment(account_scalar, domain_scalar);
-    let nullifier_scalar_public = compute_nullifier(account_scalar, nullifier_scalar);
-    let mut instance_columns = vec![vec![commitment_scalar], vec![nullifier_scalar_public]];
-    instance_columns.extend(root_scalars.iter().map(|scalar| vec![*scalar]));
-    let instance_refs: Vec<&[Halo2Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
-    let proof_instances = vec![instance_refs.as_slice()];
-    let mut transcript = Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
-    create_proof::<
-        IPACommitmentScheme<Halo2Curve>,
-        ProverIPA<'_, Halo2Curve>,
-        Challenge255<Halo2Curve>,
-        _,
-        _,
-        _,
-    >(
-        &params,
-        &proving_key,
-        &[circuit],
-        &proof_instances,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            format!("failed to create Kaigi roster proof: {err}"),
-        )
-    })?;
-    let proof_payload = transcript.finalize();
-    let mut zk1 = ZK1_ENVELOPE_PREFIX.to_vec();
-    zk1_append_proof(&mut zk1, proof_payload.as_slice());
-    zk1_append_instances_cols(&mut zk1, instance_refs.as_slice());
-    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
-        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
-        vk_hash: hash_vk(&kaigi_roster_vk_box(&verifying_key)),
-        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-        proof_bytes: zk1,
-        aux: Vec::new(),
-    };
-    let encoded = norito::encode_canonical(&envelope).map_err(|err| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            format!("failed to encode Kaigi roster proof envelope: {err}"),
-        )
-    })?;
-    Ok(JsKaigiRosterJoinProof {
-        commitment: Buffer::from(compute_commitment_bytes(account_idx, domain_salt).to_vec()),
-        nullifier: Buffer::from(compute_nullifier_bytes(account_idx, nullifier_seed).to_vec()),
-        roster_root: Buffer::from(<[u8; 32]>::from(*roster_root).to_vec()),
-        proof: Buffer::from(encoded),
-    })
-}
-/// Reject Kaigi roster-join proof construction while the V1 statement lacks
-/// signed-participant binding.
-#[napi(js_name = "buildKaigiRosterJoinProof")]
-#[allow(clippy::needless_pass_by_value)]
-pub fn build_kaigi_roster_join_proof(
-    seed: Uint8Array,
-    roster_root_hex: Option<String>,
-) -> napi::Result<JsKaigiRosterJoinProof> {
-    if seed.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "seed must be non-empty",
-        ));
-    }
-    let _ = parse_kaigi_roster_root_hex(roster_root_hex)?;
-    Err(napi::Error::new(
-        napi::Status::GenericFailure,
-        "Kaigi ZkRosterV1 proof construction is unavailable until the circuit binds the signed participant authority",
-    ))
 }
 fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
     if seed.len() != 32 {
@@ -3409,7 +3172,7 @@ struct ProofReport {
     verified: bool,
 }
 fn build_car_plan_from_manifest(manifest: &DaManifestV1) -> napi::Result<CarBuildPlan> {
-    sorafs_car::build_plan_from_da_manifest(manifest)
+    iroha_storage_client::da::build_car_plan_from_manifest(manifest)
         .map_err(|err| invalid_arg(format!("failed to build CAR plan: {err}")))
 }
 fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> napi::Result<()> {
@@ -6420,37 +6183,29 @@ fn parse_keyed_hash(value: json::Value, context: &str) -> napi::Result<KeyedHash
     )?;
     Ok(KeyedHash { pepper_id, digest })
 }
+fn parse_optional_kaigi_scalar(
+    value: Option<json::Value>,
+    context: &str,
+) -> napi::Result<Option<KaigiAuthorizationScalarV1>> {
+    match value {
+        None | Some(json::Value::Null) => Ok(None),
+        Some(value) => json::from_value(value)
+            .map(Some)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, format!("{context}: {err}"))),
+    }
+}
 fn parse_optional_commitment(
     value: Option<json::Value>,
     context: &str,
 ) -> napi::Result<Option<KaigiParticipantCommitment>> {
     match value {
         None | Some(json::Value::Null) => Ok(None),
-        Some(json::Value::Object(mut map)) => {
-            let commitment_value = map.remove("commitment").ok_or_else(|| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    format!("{context}.commitment field missing"),
-                )
-            })?;
-            let commitment = parse_hash_value(commitment_value, &format!("{context}.commitment"))?;
-            let alias_tag_value = map.remove("alias_tag").or_else(|| map.remove("aliasTag"));
-            let alias_tag = match alias_tag_value {
-                None | Some(json::Value::Null) => None,
-                Some(json::Value::String(s)) => Some(s),
-                Some(other) => {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("{context}.alias_tag must be a string when present, got {other:?}"),
-                    ));
-                }
-            };
-            Ok(Some(KaigiParticipantCommitment {
-                commitment,
-                alias_tag,
-            }))
-        }
-        Some(other) => json::from_value(other).map(Some).map_err(norito_to_napi),
+        Some(value) => json::from_value(value).map(Some).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context}.commitment: {err}"),
+            )
+        }),
     }
 }
 fn parse_optional_nullifier(
@@ -6459,32 +6214,18 @@ fn parse_optional_nullifier(
 ) -> napi::Result<Option<KaigiParticipantNullifier>> {
     match value {
         None | Some(json::Value::Null) => Ok(None),
-        Some(json::Value::Object(mut map)) => {
-            let digest_value = map.remove("digest").ok_or_else(|| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    format!("{context}.digest field missing"),
-                )
-            })?;
-            let digest = parse_hash_value(digest_value, &format!("{context}.digest"))?;
-            let issued_at_value = map
-                .remove("issued_at_ms")
-                .or_else(|| map.remove("issuedAtMs").or_else(|| map.remove("issuedAt")));
-            let issued_at_ms: u64 = issued_at_value
-                .ok_or_else(|| {
-                    napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("{context}.issued_at_ms field missing"),
-                    )
-                })
-                .and_then(|value| json::from_value(value).map_err(norito_to_napi))?;
-            Ok(Some(KaigiParticipantNullifier {
-                digest,
-                issued_at_ms,
-            }))
-        }
-        Some(other) => json::from_value(other).map(Some).map_err(norito_to_napi),
+        Some(value) => json::from_value(value).map(Some).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context}.nullifier: {err}"),
+            )
+        }),
     }
+}
+fn optional_kaigi_scalar_to_json(value: Option<&KaigiAuthorizationScalarV1>) -> json::Value {
+    value.map_or(json::Value::Null, |scalar| {
+        json::to_value(scalar).expect("Kaigi scalar serialization")
+    })
 }
 fn optional_hash_to_json(value: Option<&Hash>) -> json::Value {
     value.map_or(json::Value::Null, |hash| {
@@ -6493,35 +6234,12 @@ fn optional_hash_to_json(value: Option<&Hash>) -> json::Value {
 }
 fn optional_commitment_to_json(value: Option<&KaigiParticipantCommitment>) -> json::Value {
     value.map_or(json::Value::Null, |commitment| {
-        let mut map = json::Map::new();
-        map.insert(
-            "commitment".to_owned(),
-            json::to_value(&commitment.commitment).expect("commitment serialization"),
-        );
-        map.insert(
-            "alias_tag".to_owned(),
-            commitment
-                .alias_tag
-                .as_ref()
-                .map_or(json::Value::Null, |alias| {
-                    json::Value::String(alias.clone())
-                }),
-        );
-        json::Value::Object(map)
+        json::to_value(commitment).expect("Kaigi commitment serialization")
     })
 }
 fn optional_nullifier_to_json(value: Option<&KaigiParticipantNullifier>) -> json::Value {
     value.map_or(json::Value::Null, |nullifier| {
-        let mut map = json::Map::new();
-        map.insert(
-            "digest".to_owned(),
-            json::to_value(&nullifier.digest).expect("nullifier serialization"),
-        );
-        map.insert(
-            "issued_at_ms".to_owned(),
-            json::Value::Number(json::Number::U64(nullifier.issued_at_ms)),
-        );
-        json::Value::Object(map)
+        json::to_value(nullifier).expect("Kaigi nullifier serialization")
     })
 }
 fn optional_proof_to_json(value: Option<&Vec<u8>>) -> json::Value {
@@ -8899,7 +8617,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                         .map(|value| json::from_value(value).map_err(norito_to_napi))
                         .transpose()?
                         .unwrap_or_default();
-                    let usage_commitment = parse_optional_hash(
+                    let usage_commitment = parse_optional_kaigi_scalar(
                         usage_fields.remove("usage_commitment"),
                         "RecordKaigiUsage.usage_commitment",
                     )?;
@@ -10779,7 +10497,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         payload.insert(
             "usage_commitment".to_owned(),
-            optional_hash_to_json(usage.usage_commitment().as_ref()),
+            optional_kaigi_scalar_to_json(usage.usage_commitment().as_ref()),
         );
         payload.insert(
             "proof".to_owned(),
@@ -11276,11 +10994,14 @@ pub fn privacy_exact12_capability_manifest_json_v1(archive: Uint8Array) -> napi:
     json::to_json(&manifest).map_err(norito_to_napi)
 }
 #[napi(js_name = "privacyRequireExact12CapabilityTupleV1")]
-/// Require active committed admission and exact equality with this binary's local profile row.
+/// Require active committed admission, the authenticated transport's expected network,
+/// and exact equality with this binary's local profile row.
 pub fn privacy_require_exact12_capability_tuple_v1(
     archive: Uint8Array,
     protocol_id: String,
+    expected_network_id: Uint8Array,
 ) -> napi::Result<bool> {
+    let expected_network_id = parse_transaction_network_id_bytes(expected_network_id.as_ref())?;
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(&protocol_id).ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -11288,6 +11009,17 @@ pub fn privacy_require_exact12_capability_tuple_v1(
         )
     })?;
     let manifest = decode_privacy_exact12_capability_manifest_v1(archive.as_ref())?;
+    let qualification = manifest.qualification.as_ref().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "Exact12 admission requires target-network production qualification",
+        )
+    })?;
+    require_privacy_exact12_network_v1(
+        &qualification.deployment_qualification.network_id,
+        &qualification.deployment_qualification.genesis_hash,
+        &expected_network_id,
+    )?;
     let network_row = manifest
         .protocols
         .iter()
@@ -11328,6 +11060,20 @@ pub fn privacy_require_exact12_capability_tuple_v1(
         ));
     }
     Ok(true)
+}
+
+fn require_privacy_exact12_network_v1(
+    actual: &NetworkId,
+    genesis_hash: &[u8; Hash::LENGTH],
+    expected: &NetworkId,
+) -> napi::Result<()> {
+    if actual != expected || genesis_hash != expected.as_bytes() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "Exact12 deployment qualification does not match the authenticated Torii network",
+        ));
+    }
+    Ok(())
 }
 /// Result of signing a transaction via the native helper.
 #[napi(object)]
@@ -13184,7 +12930,6 @@ mod tests {
             AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
         },
         name::Name,
-        nexus::LaneId,
         nft::NftId,
         peer::{Peer, PeerId},
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
@@ -13207,6 +12952,7 @@ mod tests {
             validation_fee_payout_recipient_share,
         },
     };
+    use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
         NoritoDeserialize,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
@@ -13223,9 +12969,8 @@ mod tests {
         StorageClass, StreamTokenBodyV1, StreamTokenV1,
     };
     use sorafs_orchestrator::{
-        AnonymityPolicy, GatewayCarVerification, OrchestratorConfig, PolicyOverride, PolicyReport,
-        PolicyStatus, RolloutPhase, TransportPolicy, prelude::BrowserExtensionManifest,
-        proxy::ProxyMode,
+        GatewayCarVerification, OrchestratorConfig, PolicyOverride, PolicyReport, PolicyStatus,
+        prelude::BrowserExtensionManifest, proxy::ProxyMode,
     };
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
     use tempfile::tempdir;
@@ -13750,6 +13495,7 @@ seiyaku Privacy {
             privacy_require_exact12_capability_tuple_v1(
                 Uint8Array::from(archive.clone()),
                 active_protocol.canonical_label().to_owned(),
+                test_network_id_bytes(b"privacy-exact12-network"),
             )
             .is_err()
         );
@@ -13759,6 +13505,7 @@ seiyaku Privacy {
                 PrivacyProtocolIdV1::IrohaZkAmsV1
                     .canonical_label()
                     .to_owned(),
+                test_network_id_bytes(b"privacy-exact12-network"),
             )
             .is_err(),
             "local compilation without committed Active state must not authorize"
@@ -13772,6 +13519,7 @@ seiyaku Privacy {
                 privacy_require_exact12_capability_tuple_v1(
                     Uint8Array::from(archive.clone()),
                     retired.to_owned(),
+                    test_network_id_bytes(b"privacy-exact12-network"),
                 )
                 .is_err(),
                 "accepted retired or aliased protocol {retired}"
@@ -13783,6 +13531,21 @@ seiyaku Privacy {
             privacy_validate_exact12_capability_manifest_v1(Uint8Array::from(suffixed)),
             iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
         );
+    }
+    #[test]
+    fn privacy_exact12_admission_binds_expected_network_and_genesis() {
+        let expected = test_network_id(b"privacy-exact12-network");
+        let other = test_network_id(b"privacy-exact12-other-network");
+        assert!(
+            require_privacy_exact12_network_v1(&expected, expected.as_bytes(), &expected).is_ok()
+        );
+        assert!(
+            require_privacy_exact12_network_v1(&other, expected.as_bytes(), &expected).is_err()
+        );
+        assert!(
+            require_privacy_exact12_network_v1(&expected, other.as_bytes(), &expected).is_err()
+        );
+        assert!(require_privacy_exact12_network_v1(&other, other.as_bytes(), &expected).is_err());
     }
     fn disable_packed_struct_once() {
         static ONCE: std::sync::Once = std::sync::Once::new();
@@ -13796,37 +13559,6 @@ seiyaku Privacy {
             Value::String(s) => s,
             other => panic!("expected hash literal string, got {other:?}"),
         }
-    }
-    #[test]
-    fn kaigi_roster_join_candidate_builder_emits_strict_envelope() {
-        let proof =
-            build_kaigi_roster_join_candidate_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
-                .expect("build candidate proof");
-        assert_eq!(proof.commitment.len(), Hash::LENGTH);
-        assert_eq!(proof.nullifier.len(), Hash::LENGTH);
-        assert_eq!(proof.roster_root.len(), Hash::LENGTH);
-        assert!(!proof.proof.is_empty());
-        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-            norito::decode_canonical(proof.proof.as_ref()).expect("decode canonical envelope");
-        assert_eq!(envelope.circuit_id, KAIGI_ROSTER_BACKEND);
-        assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1);
-        assert_ne!(envelope.vk_hash, [0u8; Hash::LENGTH]);
-    }
-    #[test]
-    fn public_kaigi_roster_join_builder_fails_closed() {
-        let err = build_kaigi_roster_join_proof(
-            Uint8Array::from(vec![0x42; 32]),
-            Some(hex::encode(<[u8; Hash::LENGTH]>::from(
-                empty_roster_root_hash(),
-            ))),
-        )
-        .err()
-        .expect("production roster proof builder must be unavailable");
-        assert!(
-            err.reason
-                .contains("binds the signed participant authority"),
-            "unexpected error: {err}"
-        );
     }
     #[test]
     fn lane_relay_envelope_sample_uses_checked_validator_generation() {
@@ -15028,13 +14760,98 @@ seiyaku Privacy {
         );
     }
     #[test]
+    fn kaigi_final_scalar_wire_matches_javascript_fixture() {
+        let fixtures: json::Value = json::from_str(include_str!(
+            "../../../javascript/iroha_js/test/fixtures/kaigi_authorization_scalar_wire_v1.json"
+        ))
+        .unwrap();
+        let rows = fixtures.as_array().unwrap();
+        assert_eq!(rows.len(), 5);
+        for row in rows {
+            let value = row.get("instruction").unwrap().clone();
+            let encoded = STANDARD
+                .decode(row.get("wire_base64").unwrap().as_str().unwrap())
+                .unwrap();
+            let instruction = value_to_instruction(value.clone()).unwrap();
+            let native = norito_encode_instruction(json::to_json(&value).unwrap()).unwrap();
+            assert_eq!(
+                native.as_ref(),
+                encoded.as_slice(),
+                "exact JS/native Kaigi instruction wire"
+            );
+            let decoded: InstructionBox = decode_from_bytes(&encoded).unwrap();
+            assert_eq!(decoded, instruction);
+            assert_eq!(instruction_to_json_value(&decoded).unwrap(), value);
+        }
+    }
+    #[test]
+    fn kaigi_scalar_json_rejects_retired_fields_and_noncanonical_bytes() {
+        let scalar = KaigiAuthorizationScalarV1::from_le_bytes([0x12; 32]).unwrap();
+        let commitment = KaigiParticipantCommitment { commitment: scalar };
+        let nullifier = KaigiParticipantNullifier { digest: scalar };
+        let c = optional_commitment_to_json(Some(&commitment));
+        let n = optional_nullifier_to_json(Some(&nullifier));
+        assert_eq!(
+            parse_optional_commitment(Some(c.clone()), "test").unwrap(),
+            Some(commitment)
+        );
+        assert_eq!(
+            parse_optional_nullifier(Some(n.clone()), "test").unwrap(),
+            Some(nullifier)
+        );
+        assert_eq!(
+            parse_optional_kaigi_scalar(Some(optional_kaigi_scalar_to_json(Some(&scalar))), "test")
+                .unwrap(),
+            Some(scalar)
+        );
+        assert_eq!(parse_optional_commitment(None, "test").unwrap(), None);
+        assert_eq!(
+            parse_optional_nullifier(Some(json::Value::Null), "test").unwrap(),
+            None
+        );
+        assert_eq!(parse_optional_kaigi_scalar(None, "test").unwrap(), None);
+        for field in ["alias_tag", "aliasTag", "unknown"] {
+            let mut value = c.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::Value::Null);
+            assert!(parse_optional_commitment(Some(value), "test").is_err());
+        }
+        for field in ["issued_at_ms", "issuedAtMs", "issuedAt", "hash"] {
+            let mut value = n.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::to_value(&0_u64).unwrap());
+            assert!(parse_optional_nullifier(Some(value), "test").is_err());
+        }
+        for value in [
+            json::Value::Array(vec![json::Value::Number(json::Number::U64(255)); 32]),
+            json::Value::Array(vec![json::Value::Number(json::Number::U64(0)); 31]),
+            json::Value::String(hash_literal(0x12)),
+        ] {
+            assert!(parse_optional_kaigi_scalar(Some(value.clone()), "test").is_err());
+            let mut changed_c = c.clone();
+            changed_c
+                .as_object_mut()
+                .unwrap()
+                .insert("commitment".into(), value.clone());
+            assert!(parse_optional_commitment(Some(changed_c), "test").is_err());
+            let mut changed_n = n.clone();
+            changed_n
+                .as_object_mut()
+                .unwrap()
+                .insert("digest".into(), value);
+            assert!(parse_optional_nullifier(Some(changed_n), "test").is_err());
+        }
+    }
+    #[test]
     fn kaigi_commitment_option_roundtrip() {
         disable_packed_struct_once();
-        let mut buf = [0x11u8; Hash::LENGTH];
-        buf[buf.len() - 1] |= 1;
+        let buf = [0x11u8; 32];
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::prehashed(buf),
-            alias_tag: Some("alice".to_owned()),
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes(buf).unwrap(),
         };
         let option = Some(commitment.clone());
         let bytes = option.encode();
@@ -15926,11 +15743,17 @@ seiyaku Privacy {
         call_id.insert("domain_id".into(), Value::String("wonderland.sora".into()));
         call_id.insert("call_name".into(), Value::String("weekly-sync".into()));
         let mut commitment = json::Map::new();
-        commitment.insert("commitment".into(), Value::String(hash_literal(0x11)));
-        commitment.insert("alias_tag".into(), Value::String("alice".into()));
+        commitment.insert(
+            "commitment".into(),
+            json::to_value(&KaigiAuthorizationScalarV1::from_le_bytes([0x11; 32]).unwrap())
+                .unwrap(),
+        );
         let mut nullifier = json::Map::new();
-        nullifier.insert("digest".into(), Value::String(hash_literal(0x22)));
-        nullifier.insert("issued_at_ms".into(), Value::Number(json::Number::U64(99)));
+        nullifier.insert(
+            "digest".into(),
+            json::to_value(&KaigiAuthorizationScalarV1::from_le_bytes([0x22; 32]).unwrap())
+                .unwrap(),
+        );
         let participant = sample_account("wonderland");
         let mut join = json::Map::new();
         join.insert("call_id".into(), Value::Object(call_id));
@@ -16091,12 +15914,10 @@ seiyaku Privacy {
             relay_manifest: Some(manifest),
         };
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::new(b"commitment::host"),
-            alias_tag: Some("host".to_owned()),
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x11; 32]).unwrap(),
         };
         let nullifier = KaigiParticipantNullifier {
-            digest: Hash::new(b"nullifier::host"),
-            issued_at_ms: 7,
+            digest: KaigiAuthorizationScalarV1::from_le_bytes([0x22; 32]).unwrap(),
         };
         let instruction: InstructionBox = Box::new(CreateKaigi {
             call,
@@ -16122,12 +15943,10 @@ seiyaku Privacy {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
         let participant = sample_account("wonderland");
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::new(b"commitment::alice"),
-            alias_tag: Some("alice".to_owned()),
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x11; 32]).unwrap(),
         };
         let nullifier = KaigiParticipantNullifier {
-            digest: Hash::new(b"nullifier::alice"),
-            issued_at_ms: 42,
+            digest: KaigiAuthorizationScalarV1::from_le_bytes([0x22; 32]).unwrap(),
         };
         let roster_root = Hash::new(b"roster-root");
         let proof = vec![0xCA, 0xFE, 0xBA, 0xBE];
@@ -16163,12 +15982,10 @@ seiyaku Privacy {
                     },
                     "participant": "__PARTICIPANT__",
                     "commitment": {
-                        "commitment": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
-                        "alias_tag": null
+                        "commitment": [17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17]
                     },
                     "nullifier": {
-                        "digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
-                        "issued_at_ms": 1700000000000
+                        "digest": [34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34]
                     },
                     "roster_root": "hash:3333333333333333333333333333333333333333333333333333333333333333#70D6",
                     "proof": "qrvM"
@@ -16205,12 +16022,10 @@ seiyaku Privacy {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
         let participant = sample_account("wonderland");
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::new(b"commitment::leave"),
-            alias_tag: None,
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x11; 32]).unwrap(),
         };
         let nullifier = KaigiParticipantNullifier {
-            digest: Hash::new(b"nullifier::leave"),
-            issued_at_ms: 84,
+            digest: KaigiAuthorizationScalarV1::from_le_bytes([0x22; 32]).unwrap(),
         };
         let roster_root = Hash::new(b"leave-root");
         let proof = vec![0xDE, 0xAD];
@@ -16237,12 +16052,10 @@ seiyaku Privacy {
     fn end_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
         let commitment = KaigiParticipantCommitment {
-            commitment: Hash::new(b"commitment::host"),
-            alias_tag: Some("host".to_owned()),
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x11; 32]).unwrap(),
         };
         let nullifier = KaigiParticipantNullifier {
-            digest: Hash::new(b"nullifier::end"),
-            issued_at_ms: 99,
+            digest: KaigiAuthorizationScalarV1::from_le_bytes([0x22; 32]).unwrap(),
         };
         let end = EndKaigi {
             call_id: call_id.clone(),
@@ -16266,7 +16079,7 @@ seiyaku Privacy {
     #[test]
     fn record_kaigi_usage_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
-        let usage_commitment = Hash::new(b"usage::commitment");
+        let usage_commitment = KaigiAuthorizationScalarV1::from_le_bytes([0x33; 32]).unwrap();
         let proof = vec![0xAB, 0xCD];
         let usage = RecordKaigiUsage {
             call_id: call_id.clone(),
@@ -17555,7 +17368,8 @@ seiyaku Privacy {
                 .expect_err("noncanonical signed transaction must fail closed");
             assert_eq!(error.status, napi::Status::InvalidArg, "{label}");
             let public_error = encode_signed_transaction_versioned(Uint8Array::from(rejected))
-                .expect_err("public canonical V1 validator must reject noncanonical bytes");
+                .err()
+                .expect("public canonical V1 validator must reject noncanonical bytes");
             assert_eq!(public_error.status, napi::Status::InvalidArg, "{label}");
         }
     }
@@ -17747,7 +17561,7 @@ seiyaku Privacy {
             norito_json!({
                 "DeactivateContractInstance": norito_json!({
                     "contract_address": contract_address.to_string(),
-                    "reason": null,
+                    "reason": Value::Null,
                 }),
             }),
         ] {
@@ -17782,6 +17596,10 @@ seiyaku Privacy {
                         "billing_account": billing_account,
                         "privacy_mode": norito_json!({
                             "mode": "ZkRosterV1",
+                            "state": json::Value::Null
+                        }),
+                        "room_policy": norito_json!({
+                            "policy": "Authenticated",
                             "state": json::Value::Null
                         }),
                         "relay_manifest": norito_json!({

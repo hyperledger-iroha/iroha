@@ -237,11 +237,17 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
     // Submit the transaction to all peers so one healthy peer can accept it
     // even if another peer is timing out under load.
-    let tx = client.build_transaction_from_items(
-        [isi],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        iroha_data_model::metadata::Metadata::default(),
-    );
+    let tx = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [isi],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                iroha_data_model::metadata::Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let mut accepted = false;
     let mut submit_last_err: Option<Report> = None;
     for submit_client in &peer_clients {
@@ -293,6 +299,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let mut next_client_idx = 0usize;
     let snapshot = loop {
         let mut url = peer_clients[next_client_idx % peer_clients.len()]
+            .client()
             .torii_url
             .clone();
         next_client_idx = next_client_idx.wrapping_add(1);

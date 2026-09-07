@@ -113,6 +113,8 @@ const TRANSCRIPT_ROLE_V1: &[u8] = b"fiat-shamir-transcript";
 const MERKLE_LEAF_PHASE_V1: &[u8] = b"leaf";
 const MERKLE_NODE_PHASE_V1: &[u8] = b"node";
 const MERKLE_EMPTY_PHASE_V1: &[u8] = b"empty-root";
+/// Transcript domain for the permission lookup grand-product accumulator.
+pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 
 /// Typed native-STARK Merkle role; the role and FRI round are bound into every internal node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -164,13 +166,15 @@ pub const TRANSCRIPT_TAG_INIT: &str = "fastpq:v1:init";
 pub const TRANSCRIPT_TAG_ROOTS: &str = "fastpq:v1:roots";
 pub const TRANSCRIPT_TAG_TRACE_ROOT: &str = "fastpq:v1:trace_root";
 pub const TRANSCRIPT_TAG_COLUMN_MIX_PREFIX: &str = "fastpq:v1:column_mix";
+/// Fiat–Shamir domain for the permission lookup challenge.
+pub const TRANSCRIPT_TAG_GAMMA: &str = "fastpq:v1:gamma";
 pub const TRANSCRIPT_TAG_ALPHA_PREFIX: &str = "fastpq:v1:alpha";
 pub const TRANSCRIPT_TAG_AIR_ROOTS: &str = "fastpq:v1:air_roots";
 pub const TRANSCRIPT_TAG_QUERY_INDEX: &str = "fastpq:v1:query_index";
 pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
-const AIR_BOOLEAN_RESIDUE_COUNT: usize = 3;
-const AIR_RELATION_RESIDUE_COUNT: usize = 3;
+const AIR_BOOLEAN_RESIDUE_COUNT: usize = 8;
+const AIR_RELATION_RESIDUE_COUNT: usize = 4;
 const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS + 2;
 /// Number of V1 AIR composition challenges derived from the transcript.
 ///
@@ -188,7 +192,7 @@ pub const AIR_QUOTIENT_DEGREE_EXPANSION_V1: usize =
 pub enum ExecutionMode {
     /// Run the prover using the scalar CPU implementation.
     Cpu,
-    /// Prefer GPU acceleration when available.
+    /// Require GPU execution; final-V1 proof construction rejects this until implemented.
     Gpu,
     /// Detect hardware support at runtime and pick the best available mode.
     Auto,
@@ -240,6 +244,18 @@ impl ExecutionMode {
         log_execution_resolution(self, resolved);
         resolved
     }
+}
+
+/// Check whether the complete final-V1 native proof pipeline can execute on GPU.
+///
+/// The current six-lane commitment and proof FFT/LDE paths execute on CPU.
+/// Standalone scalar permutation or FFT kernel parity cannot qualify this
+/// pipeline. Callers requiring GPU proofs must reject admission when false.
+#[must_use]
+pub const fn preflight_native_v1_gpu_backend() -> bool {
+    // TODO: enable only after lane-aware digest dispatch, complete proof
+    // integration, and fail-closed device parity checks are implemented.
+    false
 }
 fn gpu_workload_mutex() -> &'static Mutex<()> {
     GPU_WORKLOAD_LOCK.get_or_init(|| Mutex::new(()))
@@ -938,7 +954,7 @@ mod observer_tests {
         assert_eq!(observed.load(Ordering::SeqCst), 1);
     }
     #[test]
-    fn backend_prove_uses_configured_execution_and_poseidon_modes() {
+    fn native_v1_proof_auto_reports_cpu_execution_and_poseidon() {
         let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
         let _poseidon_lock = crate::trace::POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
             .lock()
@@ -964,11 +980,7 @@ mod observer_tests {
 
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
-        for requested_poseidon in [
-            PoseidonExecutionMode::Auto,
-            PoseidonExecutionMode::Cpu,
-            PoseidonExecutionMode::Gpu,
-        ] {
+        for requested_poseidon in [PoseidonExecutionMode::Auto, PoseidonExecutionMode::Cpu] {
             let backend = StarkBackend::new(
                 BackendConfig::new(params)
                     .with_execution_mode(ExecutionMode::Cpu)
@@ -1186,6 +1198,7 @@ impl BackendConfig {
         self
     }
     /// Return the requested execution mode.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn execution_mode(&self) -> ExecutionMode {
         self.execution_mode
@@ -1194,6 +1207,21 @@ impl BackendConfig {
     #[must_use]
     pub(crate) fn poseidon_mode(&self) -> PoseidonExecutionMode {
         self.poseidon_mode
+    }
+    /// Reject requested proof execution paths that have no native-V1 implementation.
+    pub(crate) fn validate_native_v1_modes(&self) -> Result<()> {
+        if self.execution_mode == ExecutionMode::Gpu
+            || self.poseidon_mode == PoseidonExecutionMode::Gpu
+        {
+            return Err(Error::NativeV1GpuUnavailable);
+        }
+        Ok(())
+    }
+    /// Resolve and report the execution path actually used by native-V1 proofs.
+    fn resolve_native_v1_execution_mode(&self) -> Result<ExecutionMode> {
+        self.validate_native_v1_modes()?;
+        log_execution_resolution(self.execution_mode, ExecutionMode::Cpu);
+        Ok(ExecutionMode::Cpu)
     }
 }
 /// Deterministic artifact emitted by the native STARK backend.
@@ -1216,7 +1244,11 @@ pub(crate) struct BackendArtifact {
     pub(crate) lde_root: GoldilocksDigest384V1,
     /// Number of evaluation rows committed under `lde_root`.
     pub(crate) lde_domain_size: u32,
-    /// Fp4 composition challenges sampled after both trace roots and the mixed LDE root.
+    /// Permission accumulator over the canonical witness LDE.
+    pub(crate) lookup_grand_product: u64,
+    /// Transcript-derived permission accumulator challenge.
+    pub(crate) lookup_challenge: u64,
+    /// Fp4 composition challenges sampled after the trace roots and permission challenge.
     pub(crate) alphas: Vec<GoldilocksFp4V1>,
     /// Commitment to each joint FRI layer plus the terminal root.
     pub(crate) fri_layers: Vec<GoldilocksDigest384V1>,
@@ -1252,6 +1284,10 @@ impl StarkBackend {
 
     pub(crate) fn parameter_name(&self) -> &'static str {
         self.config.params.name
+    }
+    /// Validate proof execution before statement or witness preprocessing.
+    pub(crate) fn validate_native_v1_modes(&self) -> Result<()> {
+        self.config.validate_native_v1_modes()
     }
 }
 
@@ -1562,9 +1598,13 @@ fn hash_fp4_single_leaves_with_role(
 #[derive(Debug)]
 struct AirColumnLayout {
     boolean_selectors: [usize; AIR_BOOLEAN_RESIDUE_COUNT],
-    operation_selectors: [usize; 2],
+    operation_selectors: [usize; 6],
+    numeric_selectors: [usize; 3],
+    permission_selectors: [usize; 2],
     s_active: usize,
     s_transfer: usize,
+    s_perm: usize,
+    perm_hash: usize,
     delta: usize,
     value_old_limbs: Vec<usize>,
     value_new_limbs: Vec<usize>,
@@ -1584,7 +1624,13 @@ impl AirColumnLayout {
         };
         let s_active = required("s_active")?;
         let s_transfer = required("s_transfer")?;
+        let s_mint = required("s_mint")?;
+        let s_burn = required("s_burn")?;
+        let s_role_grant = required("s_role_grant")?;
+        let s_role_revoke = required("s_role_revoke")?;
         let s_meta_set = required("s_meta_set")?;
+        let s_perm = required("s_perm")?;
+        let perm_hash = required("perm_hash")?;
         let delta = required("delta")?;
         let mut stable_columns = [0usize; AIR_STABLE_RESIDUE_COUNT];
         for (limb, column) in stable_columns[..crate::trace::METADATA_COMMITMENT_LIMBS]
@@ -1609,10 +1655,30 @@ impl AirColumnLayout {
             None
         };
         Ok(Self {
-            boolean_selectors: [s_active, s_transfer, s_meta_set],
-            operation_selectors: [s_transfer, s_meta_set],
+            boolean_selectors: [
+                s_active,
+                s_transfer,
+                s_mint,
+                s_burn,
+                s_role_grant,
+                s_role_revoke,
+                s_meta_set,
+                s_perm,
+            ],
+            operation_selectors: [
+                s_transfer,
+                s_mint,
+                s_burn,
+                s_role_grant,
+                s_role_revoke,
+                s_meta_set,
+            ],
+            numeric_selectors: [s_transfer, s_mint, s_burn],
+            permission_selectors: [s_role_grant, s_role_revoke],
             s_active,
             s_transfer,
+            s_perm,
+            perm_hash,
             delta,
             value_old_limbs: contiguous_limb_columns(column_names, "value_old_limb_"),
             value_new_limbs: contiguous_limb_columns(column_names, "value_new_limb_"),
@@ -1691,6 +1757,12 @@ fn air_constraint_residues_with_layout<C, N>(
         .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
     residues[residue_index] = sub_mod(current(layout.s_active), operation_sum);
     residue_index += 1;
+    let permission_sum = layout
+        .permission_selectors
+        .iter()
+        .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
+    residues[residue_index] = sub_mod(current(layout.s_perm), permission_sum);
+    residue_index += 1;
     residues[residue_index] = mul_mod(
         next(layout.s_active),
         sub_mod(FIELD_ONE, current(layout.s_active)),
@@ -1699,8 +1771,12 @@ fn air_constraint_residues_with_layout<C, N>(
     let value_old = packed_column_value_at(&layout.value_old_limbs, &current);
     let value_new = packed_column_value_at(&layout.value_new_limbs, &current);
     let expected_delta = sub_mod(value_new, value_old);
+    let numeric_selector = layout
+        .numeric_selectors
+        .iter()
+        .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
     residues[residue_index] = mul_mod(
-        current(layout.s_transfer),
+        numeric_selector,
         sub_mod(expected_delta, current(layout.delta)),
     );
     residue_index += 1;
@@ -1828,7 +1904,7 @@ fn combine_air_quotients<F: AirCombinationField>(
         let weighted = alpha.mul_base(residue);
         // Prefix shape and stability relate adjacent rows. Their zerofier
         // excludes the last row; all other constraints hold at every row.
-        if index == AIR_BOOLEAN_RESIDUE_COUNT + 1
+        if index == AIR_BOOLEAN_RESIDUE_COUNT + 2
             || (AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT
                 ..AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT)
                 .contains(&index)
@@ -2275,6 +2351,7 @@ fn merkle_paths_for_leaf_indices(
 /// # Errors
 /// Returns an error if an internal node hash cannot be computed.
 #[cfg(test)]
+#[allow(clippy::unnecessary_wraps)]
 pub fn verify_merkle_path(
     root: GoldilocksDigest384V1,
     leaf: GoldilocksDigest384V1,
@@ -2318,79 +2395,130 @@ pub fn verify_merkle_path_for_role(
     // left/right branches and therefore accept the same path.
     Ok(index == 0 && current == root)
 }
-#[allow(clippy::unnecessary_wraps)]
+fn merkle_digest_execution_v1(
+    mode: ExecutionMode,
+) -> Result<crate::digest_executor::DigestExecutionV1> {
+    use crate::digest_executor::DigestExecutionV1;
+    match mode {
+        ExecutionMode::Cpu | ExecutionMode::Auto => Ok(DigestExecutionV1::Cpu),
+        ExecutionMode::Gpu => {
+            #[cfg(feature = "fastpq-gpu")]
+            {
+                use crate::digest384_gpu::Digest384GpuBackendV1;
+                let backend = match current_gpu_backend() {
+                    Some(GpuBackend::Metal) => Digest384GpuBackendV1::Metal,
+                    Some(GpuBackend::Cuda) => Digest384GpuBackendV1::Cuda,
+                    _ => {
+                        return Err(Error::NativeDigestExecution {
+                            details: "no supported explicit six-lane device backend".into(),
+                        });
+                    }
+                };
+                Ok(DigestExecutionV1::Device(backend))
+            }
+            #[cfg(not(feature = "fastpq-gpu"))]
+            {
+                Err(Error::NativeDigestExecution {
+                    details: "six-lane device support is not compiled".into(),
+                })
+            }
+        }
+    }
+}
+
 fn build_merkle_levels_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     mode: ExecutionMode,
 ) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
-    let _ = mode;
+    build_merkle_levels_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
+}
+
+fn build_merkle_levels_with_execution_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execution: crate::digest_executor::DigestExecutionV1,
+) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
+    let levels = build_merkle_levels_with_executor_v1(leaves, role, &mut |frames| {
+        crate::digest_executor::execute_digest384_frames_v1(frames, execution)
+    })?;
+    #[cfg(test)]
+    if !leaves.is_empty() {
+        use crate::digest_executor::DigestExecutionV1;
+        crate::trace::notify_trace_merkle_mode_observer(match execution {
+            DigestExecutionV1::Cpu => ExecutionMode::Cpu,
+            #[cfg(feature = "fastpq-gpu")]
+            DigestExecutionV1::Device(_) => ExecutionMode::Gpu,
+        });
+    }
+    Ok(levels)
+}
+
+fn build_merkle_levels_with_executor_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execute: &mut impl FnMut(
+        &[fastpq_isi::GoldilocksDigest384FrameV1<'_>],
+    ) -> Result<Vec<GoldilocksDigest384V1>>,
+) -> Result<Vec<Vec<GoldilocksDigest384V1>>> {
     if leaves.is_empty() {
         return Ok(Vec::new());
     }
     let mut levels = Vec::new();
     let mut current = leaves.to_vec();
     loop {
-        if current.len() % 2 == 1 {
-            let last = *current.last().expect("non-empty Merkle level");
-            current.push(last);
+        if !current.len().is_multiple_of(2) {
+            current.push(*current.last().expect("non-empty Merkle level"));
         }
         levels.push(current.clone());
         let level = levels.len();
-        let prefix =
-            digest_domain_prefix_v1(role.role(), MERKLE_NODE_PHASE_V1, level, role.counter())?;
-        let hash_parent = |(index, pair): (usize, &[GoldilocksDigest384V1])| {
-            hash_at_prefix_v1(
-                &prefix,
-                index,
-                &[&pair[0].to_le_bytes(), &pair[1].to_le_bytes()],
-            )
-        };
-        #[cfg(test)]
-        if role == MerkleTreeRoleV1::Trace {
-            crate::trace::notify_trace_merkle_mode_observer(ExecutionMode::Cpu);
-        }
-        let next = if current.len() >= 64 {
-            // Independent parents retain their exact role, level and natural
-            // index. Indexed collection preserves the scalar tree and selects
-            // any error in the same deterministic left-to-right order.
-            let results: Vec<Result<_>> = current
-                .par_chunks_exact(2)
-                .enumerate()
-                .map(hash_parent)
-                .collect();
-            results.into_iter().collect::<Result<Vec<_>>>()?
-        } else {
-            current
-                .chunks_exact(2)
-                .enumerate()
-                .map(hash_parent)
-                .collect::<Result<Vec<_>>>()?
-        };
+        let next = crate::digest_executor::hash_digest384_pairs_v1(
+            &current,
+            |index| {
+                digest_domain_v1(
+                    role.role(),
+                    MERKLE_NODE_PHASE_V1,
+                    level,
+                    index,
+                    role.counter(),
+                )
+            },
+            execute,
+        )?;
         if next.len() == 1 {
-            levels.push(next.clone());
+            levels.push(next);
             break;
         }
         current = next;
     }
     Ok(levels)
 }
+
 fn merkle_root_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     mode: ExecutionMode,
 ) -> Result<GoldilocksDigest384V1> {
-    let levels = build_merkle_levels_with_mode(leaves, role, mode)?;
+    merkle_root_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
+}
+
+fn merkle_root_with_execution_v1(
+    leaves: &[GoldilocksDigest384V1],
+    role: MerkleTreeRoleV1,
+    execution: crate::digest_executor::DigestExecutionV1,
+) -> Result<GoldilocksDigest384V1> {
+    let levels = build_merkle_levels_with_execution_v1(leaves, role, execution)?;
     match levels.last().and_then(|level| level.first()).copied() {
         Some(root) => Ok(root),
-        None => hash_bytes_v1(
-            role.role(),
-            MERKLE_EMPTY_PHASE_V1,
-            0,
-            0,
-            role.counter(),
-            &[],
-        ),
+        None => {
+            let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
+                digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
+                &[],
+            )
+            .ok_or(Error::PayloadLengthOverflow { length: 0 })?;
+            let result = crate::digest_executor::execute_digest384_frames_v1(&[frame], execution)?;
+            Ok(result[0])
+        }
     }
 }
 
@@ -2416,6 +2544,68 @@ fn merkle_node_hash(
         role.counter(),
         &[&left.to_le_bytes(), &right.to_le_bytes()],
     )
+}
+
+/// Compute the Fiat–Shamir lookup grand-product accumulator over canonical
+/// Goldilocks selector and witness evaluations.
+///
+/// Every non-zero `s_perm` evaluation selects the matching `perm_hash`
+/// evaluation. The accumulator therefore multiplies `(perm_hash + γ)` for
+/// exactly those selected positions, using the committed LDE columns rather
+/// than the unextended trace.
+///
+/// TODO: Before permission operations can enter the production semantic
+/// profile, extend this commitment with a table-side product plus a running
+/// product trace constrained at both boundaries and bind that table to the
+/// permission root. This deterministic accumulator alone is not a membership
+/// or non-membership proof.
+///
+/// # Errors
+///
+/// Returns [`Error::LookupColumnLengthMismatch`] when the columns have
+/// different lengths, or [`Error::NonCanonicalGoldilocksElement`] when the
+/// challenge or an evaluation is outside the canonical field range.
+pub fn compute_lookup_grand_product(
+    selector_values: &[u64],
+    witness_values: &[u64],
+    gamma: u64,
+) -> Result<u64> {
+    if selector_values.len() != witness_values.len() {
+        return Err(Error::LookupColumnLengthMismatch {
+            selector_len: selector_values.len(),
+            witness_len: witness_values.len(),
+        });
+    }
+    if gamma >= GOLDILOCKS_MODULUS {
+        return Err(Error::NonCanonicalGoldilocksElement {
+            context: "lookup_challenge",
+            indices: Vec::new(),
+        });
+    }
+
+    let mut accumulator = FIELD_ONE;
+    for (index, (&selector, &witness)) in selector_values
+        .iter()
+        .zip(witness_values.iter())
+        .enumerate()
+    {
+        if selector >= GOLDILOCKS_MODULUS {
+            return Err(Error::NonCanonicalGoldilocksElement {
+                context: "lookup_selector",
+                indices: vec![index],
+            });
+        }
+        if witness >= GOLDILOCKS_MODULUS {
+            return Err(Error::NonCanonicalGoldilocksElement {
+                context: "lookup_witness",
+                indices: vec![index],
+            });
+        }
+        if selector != 0 {
+            accumulator = mul_mod(accumulator, add_mod(witness, gamma));
+        }
+    }
+    Ok(accumulator)
 }
 
 #[cfg(test)]
@@ -3142,6 +3332,8 @@ struct PreparedBatch {
     air_composition_root: GoldilocksDigest384V1,
     lde_root: GoldilocksDigest384V1,
     lde_domain_size: u32,
+    lookup_grand_product: u64,
+    lookup_challenge: u64,
     alphas: Vec<GoldilocksFp4V1>,
     lde_columns: Vec<Vec<u64>>,
     lde_values: Vec<GoldilocksFp4V1>,
@@ -3167,6 +3359,10 @@ pub struct BatchDerivedCommitments {
     pub lde_root: GoldilocksDigest384V1,
     /// Canonical LDE evaluation-domain size.
     pub lde_domain_size: u32,
+    /// Canonical permission lookup grand-product accumulator.
+    pub lookup_grand_product: u64,
+    /// Canonical transcript-derived permission lookup challenge.
+    pub lookup_challenge: u64,
 }
 
 fn hash_trace_columns_v1(
@@ -3257,6 +3453,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         .iter()
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
+    let air_layout = AirColumnLayout::from_names(&column_names)?;
     let planner = Planner::new(params);
     let poseidon_mode = ExecutionMode::Cpu;
     let polynomial_data = derive_polynomial_data(&trace, &planner);
@@ -3307,6 +3504,12 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
     );
+    let lookup_challenge = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
+    let lookup_grand_product = compute_lookup_grand_product(
+        &lde_columns[air_layout.s_perm],
+        &lde_columns[air_layout.perm_hash],
+        lookup_challenge,
+    )?;
     let alpha_count = air_composition_alpha_count(&column_names);
     let mut alphas = Vec::with_capacity(alpha_count);
     for idx in 0..alpha_count {
@@ -3329,6 +3532,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         ]
         .concat(),
     );
+    transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
     Ok(PreparedBatch {
         trace_commitment,
         trace_root,
@@ -3336,6 +3540,8 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         air_composition_root,
         lde_root,
         lde_domain_size,
+        lookup_grand_product,
+        lookup_challenge,
         alphas,
         lde_columns,
         lde_values,
@@ -3347,7 +3553,8 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
     })
 }
 
-/// Recompute every proof-carried root that is deterministic from the batch.
+/// Recompute every proof-carried root and lookup value that is deterministic
+/// from the batch.
 pub fn derive_batch_commitments(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
@@ -3369,6 +3576,8 @@ pub fn derive_batch_commitments(
         air_composition_root: prepared.air_composition_root,
         lde_root: prepared.lde_root,
         lde_domain_size: prepared.lde_domain_size,
+        lookup_grand_product: prepared.lookup_grand_product,
+        lookup_challenge: prepared.lookup_challenge,
     })
 }
 
@@ -3390,7 +3599,7 @@ impl StarkBackend {
         protocol_version: u16,
         transcript_trace_root: Option<GoldilocksDigest384V1>,
     ) -> Result<BackendArtifact> {
-        let execution_mode = self.config.execution_mode().resolve();
+        let execution_mode = self.config.resolve_native_v1_execution_mode()?;
         let poseidon_policy =
             PoseidonPipelinePolicy::new(self.config.poseidon_mode(), execution_mode);
         // Native Digest384 commitments and opening paths currently run on CPU.
@@ -3403,6 +3612,8 @@ impl StarkBackend {
             air_composition_root,
             lde_root,
             lde_domain_size,
+            lookup_grand_product,
+            lookup_challenge,
             alphas,
             lde_columns,
             lde_values,
@@ -3472,6 +3683,8 @@ impl StarkBackend {
             air_composition_root,
             lde_root,
             lde_domain_size,
+            lookup_grand_product,
+            lookup_challenge,
             alphas,
             fri_layers,
             fri_betas,
@@ -3509,8 +3722,7 @@ impl Transcript {
         // This first-release schema binds the quotient and exact-u64 AIR layout,
         // Fp4 aggregation, joint trace degree check and complete terminal opening. It is not a security-review
         // or production-qualification identifier.
-        const SCHEMA: &str =
-            "fastpq:v1:air-quotient-exact-u64:fp4-oracles:joint-trace-degree:fri-terminal4";
+        const SCHEMA: &str = "fastpq:v1:balance-key-v1:six-operation-air:air-quotient-exact-u64:fp4-oracles:joint-trace-degree:fri-terminal4";
         let params = fastpq_isi::FASTPQ_FINAL_V1;
         let field_and_hash = (
             params.field.name,
@@ -3609,7 +3821,6 @@ impl Transcript {
         let tag = format!("{TRANSCRIPT_TAG_BETA_PREFIX}:{round}");
         GoldilocksFp4V1::from_digest(self.challenge_digest(&tag))
     }
-    #[cfg(test)]
     pub fn challenge_field(&mut self, tag: &str) -> u64 {
         self.challenge_digest(tag).words()[0]
     }
@@ -4284,7 +4495,7 @@ mod tests {
             .collect();
         let columns = derive_polynomial_data(&trace, &Planner::new(&params)).into_lde_columns();
         let mut alphas = vec![0; AIR_COMPOSITION_ALPHA_COUNT];
-        alphas[AIR_BOOLEAN_RESIDUE_COUNT + 1] = 1;
+        alphas[AIR_BOOLEAN_RESIDUE_COUNT + 2] = 1;
         let domain = AirQuotientDomain::new(&params, columns[0].len()).expect("disjoint coset");
         let values = air_quotient_values(&params, &names, &columns, &alphas).expect("quotients");
         let next_step = params.fri.blowup_factor as usize;
@@ -4623,17 +4834,96 @@ mod tests {
             assert_eq!(accelerated, scalar, "FRI layer length {length}");
         }
     }
-    #[cfg(feature = "fastpq-gpu")]
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
-    fn native_stark_merkle_roots_are_byte_identical_across_execution_modes() {
+    #[ignore = "requires actual Metal execution; no device skip is accepted"]
+    fn native_merkle_metal_levels_roots_and_chunk_boundaries_match_cpu() {
+        use crate::digest_executor::{
+            DigestExecutionV1, execute_bounded_digest384_frames_v1, execute_digest384_frames_v1,
+        };
+        let device = DigestExecutionV1::Device(crate::digest384_gpu::Digest384GpuBackendV1::Metal);
+        for role in [
+            MerkleTreeRoleV1::Trace,
+            MerkleTreeRoleV1::Lde,
+            MerkleTreeRoleV1::AirTrace,
+            MerkleTreeRoleV1::AirComposition,
+            MerkleTreeRoleV1::Fri(0),
+            MerkleTreeRoleV1::Fri(7),
+        ] {
+            for len in [0, 1, 3, 5, 17] {
+                let leaves: Vec<_> = (0..len)
+                    .map(|i| GoldilocksDigest384V1::new([i; 6]).unwrap())
+                    .collect();
+                let cpu =
+                    build_merkle_levels_with_execution_v1(&leaves, role, DigestExecutionV1::Cpu)
+                        .unwrap();
+                let mut dispatch_sizes = Vec::new();
+                let metal = build_merkle_levels_with_executor_v1(&leaves, role, &mut |frames| {
+                    execute_bounded_digest384_frames_v1(
+                        frames,
+                        2,
+                        frames[0].word_count() * 2,
+                        &mut |chunk| {
+                            dispatch_sizes.push(chunk.len());
+                            execute_digest384_frames_v1(chunk, device)
+                        },
+                    )
+                })
+                .expect("actual bounded Metal node dispatch");
+                assert_eq!(metal, cpu, "role {role:?}, leaves {len}");
+                if len == 17 {
+                    assert!(dispatch_sizes.len() > cpu.len());
+                    assert!(dispatch_sizes.contains(&1));
+                }
+                assert_eq!(
+                    merkle_root_with_execution_v1(&leaves, role, device).unwrap(),
+                    merkle_root_with_execution_v1(&leaves, role, DigestExecutionV1::Cpu).unwrap()
+                );
+            }
+        }
         let leaves =
             hash_lde_leaves_with_mode(&(0_u64..513).collect::<Vec<_>>(), 2, ExecutionMode::Cpu)
-                .expect("native-STARK LDE leaves");
-        let scalar = merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Cpu)
-            .expect("scalar native-STARK Merkle root");
-        let accelerated = merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Gpu)
-            .expect("accelerated native-STARK Merkle root");
-        assert_eq!(accelerated, scalar);
+                .unwrap();
+        assert_eq!(
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Lde, device).unwrap(),
+            merkle_root_with_mode(&leaves, MerkleTreeRoleV1::Lde, ExecutionMode::Cpu).unwrap()
+        );
+        assert_ne!(
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Fri(0), device).unwrap(),
+            merkle_root_with_execution_v1(&leaves, MerkleTreeRoleV1::Fri(7), device).unwrap()
+        );
+        assert!(!preflight_native_v1_gpu_backend());
+    }
+
+    #[test]
+    fn native_merkle_device_failure_aborts_tree_without_cpu_substitution() {
+        use crate::digest_executor::{
+            DigestExecutionV1, execute_bounded_digest384_frames_v1, execute_digest384_frames_v1,
+        };
+        let leaves: Vec<_> = (0..17)
+            .map(|i| GoldilocksDigest384V1::new([i; 6]).unwrap())
+            .collect();
+        let mut calls = 0;
+        let result = build_merkle_levels_with_executor_v1(
+            &leaves,
+            MerkleTreeRoleV1::Fri(7),
+            &mut |frames| {
+                execute_bounded_digest384_frames_v1(frames, 2, 1000, &mut |chunk| {
+                    calls += 1;
+                    if calls == 2 {
+                        Err(Error::NativeDigestExecution {
+                            details: "injected Merkle device failure".into(),
+                        })
+                    } else {
+                        execute_digest384_frames_v1(chunk, DigestExecutionV1::Cpu)
+                    }
+                })
+            },
+        );
+        assert!(
+            matches!(result, Err(Error::NativeDigestExecution { details }) if details == "injected Merkle device failure")
+        );
+        assert_eq!(calls, 2);
     }
     #[test]
     fn indexed_prefix_hashes_preserve_all_domain_coordinates_and_payload_framing() {
@@ -4835,7 +5125,7 @@ mod tests {
                     .collect::<Vec<_>>();
                 let expected = scalar_levels(&leaves, role);
                 for pool in &pools {
-                    for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+                    for mode in [ExecutionMode::Cpu, ExecutionMode::Auto] {
                         let actual = pool
                             .install(|| build_merkle_levels_with_mode(&leaves, role, mode))
                             .unwrap();
@@ -5322,9 +5612,9 @@ mod tests {
     fn retained_fri_layers_preserve_full_field_roots_transcript_and_opening_bytes() {
         for (length, offset, mode) in [
             (1, 7, ExecutionMode::Cpu),
-            (2, 11, ExecutionMode::Gpu),
+            (2, 11, ExecutionMode::Auto),
             (4, 7, ExecutionMode::Cpu),
-            (32, 11, ExecutionMode::Gpu),
+            (32, 11, ExecutionMode::Auto),
             (128, 7, ExecutionMode::Cpu),
         ] {
             let mut params = fastpq_isi::FASTPQ_FINAL_V1;

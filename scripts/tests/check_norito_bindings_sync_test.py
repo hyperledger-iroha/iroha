@@ -16,83 +16,40 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def test_run_java_parity_checks_skips_without_jdk_outside_strict_mode(
+def test_run_jvm_parity_checks_skips_without_jdk_outside_strict_mode(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.delenv("NORITO_JAVA_SKIP_TESTS", raising=False)
-    monkeypatch.delenv("NORITO_JAVA_STRICT", raising=False)
+    monkeypatch.delenv("NORITO_JVM_SKIP_TESTS", raising=False)
+    monkeypatch.delenv("NORITO_JVM_STRICT", raising=False)
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(MODULE, "ensure_java_tool", lambda _tool: None)
 
-    MODULE.run_java_parity_checks()
+    MODULE.run_jvm_parity_checks()
 
     stderr = capsys.readouterr().err
     assert "skipping JVM parity checks outside strict mode" in stderr
 
 
-def test_run_java_parity_checks_fails_without_jdk_in_strict_mode(
+def test_run_jvm_parity_checks_fails_without_jdk_in_strict_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("NORITO_JAVA_SKIP_TESTS", raising=False)
-    monkeypatch.setenv("NORITO_JAVA_STRICT", "1")
+    monkeypatch.delenv("NORITO_JVM_SKIP_TESTS", raising=False)
+    monkeypatch.setenv("NORITO_JVM_STRICT", "1")
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(MODULE, "ensure_java_tool", lambda _tool: None)
 
     with pytest.raises(MODULE.CheckError, match="javac not found"):
-        MODULE.run_java_parity_checks()
+        MODULE.run_jvm_parity_checks()
 
 
-def test_run_java_parity_checks_rejects_skip_in_strict_mode(
+def test_run_jvm_parity_checks_rejects_skip_in_strict_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("NORITO_JAVA_SKIP_TESTS", "1")
-    monkeypatch.setenv("NORITO_JAVA_STRICT", "1")
+    monkeypatch.setenv("NORITO_JVM_SKIP_TESTS", "1")
+    monkeypatch.setenv("NORITO_JVM_STRICT", "1")
 
-    with pytest.raises(MODULE.CheckError, match="forbidden in strict Java parity mode"):
-        MODULE.run_java_parity_checks()
-
-
-def test_java_checks_are_strict_when_ci_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NORITO_JAVA_STRICT", raising=False)
-    monkeypatch.setenv("CI", "true")
-
-    assert MODULE.java_checks_are_strict() is True
-
-
-def test_run_kotlin_parity_checks_skips_without_jdk_outside_strict_mode(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv("NORITO_KOTLIN_SKIP_TESTS", raising=False)
-    monkeypatch.delenv("NORITO_KOTLIN_STRICT", raising=False)
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setattr(MODULE, "ensure_java_tool", lambda _tool: None)
-
-    MODULE.run_kotlin_parity_checks()
-
-    stderr = capsys.readouterr().err
-    assert "skipping Kotlin parity checks outside strict mode" in stderr
-
-
-def test_run_kotlin_parity_checks_fails_without_jdk_in_strict_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("NORITO_KOTLIN_SKIP_TESTS", raising=False)
-    monkeypatch.setenv("NORITO_KOTLIN_STRICT", "1")
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setattr(MODULE, "ensure_java_tool", lambda _tool: None)
-
-    with pytest.raises(MODULE.CheckError, match="javac not found"):
-        MODULE.run_kotlin_parity_checks()
-
-
-def test_run_kotlin_parity_checks_rejects_skip_in_strict_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("NORITO_KOTLIN_SKIP_TESTS", "1")
-    monkeypatch.setenv("NORITO_KOTLIN_STRICT", "1")
-
-    with pytest.raises(MODULE.CheckError, match="forbidden in strict Kotlin parity mode"):
-        MODULE.run_kotlin_parity_checks()
+    with pytest.raises(MODULE.CheckError, match="forbidden in strict JVM parity mode"):
+        MODULE.run_jvm_parity_checks()
 
 
 def test_update_flags_marks_kotlin_binding_changes() -> None:
@@ -117,7 +74,7 @@ def test_main_requires_kotlin_binding_updates_for_norito_changes(
         lambda _merge_base: MODULE.PathFlags(
             needs_reference_update=True,
             python_updated=True,
-            java_updated=True,
+            java_affected=True,
             kotlin_updated=False,
         ),
     )
@@ -137,11 +94,10 @@ def test_main_force_all_runs_every_binding_lane_on_clean_tree(
     monkeypatch.setattr(MODULE, "compute_merge_base", lambda _base_ref: "merge-base")
     monkeypatch.setattr(MODULE, "gather_flags", lambda _merge_base: MODULE.PathFlags())
     monkeypatch.setattr(MODULE, "run_python_parity_checks", lambda: calls.append("python"))
-    monkeypatch.setattr(MODULE, "run_java_parity_checks", lambda: calls.append("java"))
-    monkeypatch.setattr(MODULE, "run_kotlin_parity_checks", lambda: calls.append("kotlin"))
+    monkeypatch.setattr(MODULE, "run_jvm_parity_checks", lambda: calls.append("jvm"))
 
     assert MODULE.main() == 0
-    assert calls == ["python", "java", "kotlin"]
+    assert calls == ["python", "jvm"]
 
 
 def test_ci_binding_gate_is_forced_strict_and_workflow_owned() -> None:
@@ -152,6 +108,53 @@ def test_ci_binding_gate_is_forced_strict_and_workflow_owned() -> None:
     )
 
     assert 'export NORITO_BINDINGS_CHECK_ALL="1"' in gate
-    assert 'export NORITO_JAVA_STRICT="1"' in gate
-    assert 'export NORITO_KOTLIN_STRICT="1"' in gate
+    assert 'export NORITO_JVM_STRICT="1"' in gate
     assert "bash ci/check_norito_bindings_sync.sh" in workflow
+
+
+@pytest.mark.parametrize("ci_value", ["true", "1", "yes", "on"])
+def test_jvm_checks_are_strict_in_ci(monkeypatch: pytest.MonkeyPatch, ci_value: str) -> None:
+    monkeypatch.delenv("NORITO_JVM_STRICT", raising=False)
+    monkeypatch.setenv("CI", ci_value)
+    assert MODULE.jvm_checks_are_strict()
+
+
+def test_jvm_lane_runs_java_consumers_and_kotlin_fixtures(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NORITO_JVM_SKIP_TESTS", raising=False)
+    monkeypatch.setattr(MODULE, "ensure_java_tool", lambda tool: f"/jdk/bin/{tool}")
+    calls = []
+    monkeypatch.setattr(MODULE, "run_command", lambda args, **kwargs: calls.append((args, kwargs)))
+    MODULE.run_jvm_parity_checks()
+    assert len(calls) == 1
+    args, options = calls[0]
+    assert args[0] == MODULE.REPO_ROOT / "kotlin" / "gradlew"
+    assert options["cwd"] == MODULE.REPO_ROOT / "kotlin"
+    assert "org.hyperledger.iroha.sdk.norito.*" in args
+    assert "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest" in args
+    assert "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest" in args
+
+
+def test_java_source_changes_select_canonical_jvm_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    flags = MODULE.PathFlags()
+    MODULE.update_flags(flags, "java/norito_java/src/main/java/Codec.java")
+    monkeypatch.delenv("NORITO_BINDINGS_CHECK_ALL", raising=False)
+    monkeypatch.setattr(MODULE, "determine_base_ref", lambda: "origin/main")
+    monkeypatch.setattr(MODULE, "compute_merge_base", lambda _: "base")
+    monkeypatch.setattr(MODULE, "gather_flags", lambda _: flags)
+    monkeypatch.setattr(MODULE, "run_jvm_parity_checks", lambda: calls.append("jvm"))
+    assert MODULE.main() == 0
+    assert calls == ["jvm"]
+
+
+def test_rust_changes_require_only_canonical_binding_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.delenv("NORITO_BINDINGS_CHECK_ALL", raising=False)
+    monkeypatch.setattr(MODULE, "determine_base_ref", lambda: "origin/main")
+    monkeypatch.setattr(MODULE, "compute_merge_base", lambda _: "base")
+    monkeypatch.setattr(MODULE, "gather_flags", lambda _: MODULE.PathFlags(
+        needs_reference_update=True, python_updated=True, kotlin_updated=True))
+    monkeypatch.setattr(MODULE, "run_python_parity_checks", lambda: calls.append("python"))
+    monkeypatch.setattr(MODULE, "run_jvm_parity_checks", lambda: calls.append("jvm"))
+    assert MODULE.main() == 0
+    assert calls == ["python", "jvm"]

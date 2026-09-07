@@ -58,13 +58,15 @@ fn remittance_batch() -> TransitionBatch {
     let from_account = deterministic_account("alice", &domain);
     let to_account = deterministic_account("bob", &domain);
     batch.push(StateTransition::new(
-        format!("asset/{asset_definition}/{from_account}").into_bytes(),
+        iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &from_account)
+            .expect("canonical balance key"),
         encode_u64(ALICE_START),
         encode_u64(ALICE_START - REMIT_AMOUNT),
         OperationKind::Transfer,
     ));
     batch.push(StateTransition::new(
-        format!("asset/{asset_definition}/{to_account}").into_bytes(),
+        iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &to_account)
+            .expect("canonical balance key"),
         encode_u64(BOB_START),
         encode_u64(BOB_START + REMIT_AMOUNT),
         OperationKind::Transfer,
@@ -91,8 +93,7 @@ fn remittance_batch() -> TransitionBatch {
 fn combined_batch() -> TransitionBatch {
     let mut governance = governance_batch();
     let mut remit = remittance_batch();
-    governance.public_inputs.old_root = remit.public_inputs.old_root;
-    governance.public_inputs.new_root = remit.public_inputs.new_root;
+    governance.public_inputs = remit.public_inputs;
     governance.transitions.append(&mut remit.transitions);
     governance.metadata.extend(remit.metadata);
     governance.sort();
@@ -110,13 +111,13 @@ fn assert_strict_state_profile_rejects(mut batch: TransitionBatch) {
     assert!(matches!(
         prover.prove(&batch),
         Err(Error::InvalidProofSemantics {
-            profile: "transfer_state_transition",
+            profile: "state_transition",
             ..
         })
     ));
 }
 #[test]
-fn opaque_governance_flow_fails_closed_under_transfer_semantics() {
+fn governance_metadata_flow_fails_closed_without_a_tree_witness() {
     assert_strict_state_profile_rejects(governance_batch());
 }
 #[test]

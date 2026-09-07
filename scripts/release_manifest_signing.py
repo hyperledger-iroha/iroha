@@ -24,6 +24,14 @@ executable into an owner-private directory, invokes that snapshot, and rejects
 path, permission, hard-link, digest, or identity drift. The verifier receives
 owner-private snapshots of the inspected manifest, key, and signature under a
 minimal environment, never their mutable source paths.
+Executable snapshots are streamed under a fixed 1 GiB ceiling, including files
+that grow while being copied; the trusted digest does not replace this bound.
+
+Release output directories remain descriptor-pinned across external execution.
+Publication and rollback operate relative to those directories, and substituted
+parents or changed output inodes abort the complete output transaction.
+Hosts without descriptor-relative, no-follow publication support fail before
+the external signer or verifier runs; there is no pathname-based fallback.
 """
 from __future__ import annotations
 
@@ -39,12 +47,12 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
 ED25519_PUBLIC_KEY_SIZE = 32
 ED25519_SIGNATURE_SIZE = 64
 ED25519_FIELD_MODULUS = (1 << 255) - 19
 ED25519_SCALAR_ORDER = (1 << 252) + 27742317777372353535851937790883648493
 MAX_MANIFEST_SIZE = 1024 * 1024
+MAX_EXECUTABLE_SIZE = 1024 * 1024 * 1024
 TIMED_OVN_AUDIT_MANIFEST_SIZE = 301
 TIMED_OVN_AUDIT_TOTAL_ARTIFACT_SIZE = 1024 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -52,6 +60,9 @@ NATIVE_VERIFIER_PROTOCOL = "sorafs-validate-release-manifest-v1"
 NATIVE_TIMED_OVN_AUDIT_PROTOCOL = "sorafs-validate-timed-ovn-release-audit-v1"
 EXTERNAL_TOOL_UID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_UID"
 EXTERNAL_TOOL_GID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_GID"
+RELEASE_OUTPUT_DIR_FD_SUPPORTED = all(
+    operation in os.supports_dir_fd for operation in (os.open, os.stat, os.unlink)
+)
 
 
 class ReleaseManifestSignatureError(RuntimeError):
@@ -226,6 +237,11 @@ def _stable_digest(
     executable: bool = False,
 ) -> Tuple[str, FileIdentity]:
     before = _inspect_regular(path, label, executable=executable)
+    if executable and (before.st_size <= 0 or before.st_size > MAX_EXECUTABLE_SIZE):
+        raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
+    # Stable hashing cannot legitimately consume more bytes than the inspected
+    # immutable file. Bound rechecks too, including growth after native execution.
+    maximum = before.st_size
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -239,12 +255,16 @@ def _stable_digest(
     closed: Optional[os.stat_result] = None
     try:
         opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        if _identity(opened) != _identity(before):
             raise ReleaseManifestSignatureError(f"{label} changed while it was opened")
+        consumed = 0
         while True:
-            chunk = os.read(descriptor, 1024 * 1024)
+            chunk = os.read(descriptor, min(1024 * 1024, maximum + 1 - consumed))
             if not chunk:
                 break
+            consumed += len(chunk)
+            if consumed > maximum:
+                raise ReleaseManifestSignatureError(f"{label} grew beyond its inspected byte bound")
             digest.update(chunk)
         closed = os.fstat(descriptor)
     finally:
@@ -389,6 +409,163 @@ def _install_exclusive(
     return _identity(installed)
 
 
+def _open_release_output_parent(
+    path: Path,
+) -> tuple[int, tuple[tuple[int, int], ...], tuple[int, ...]]:
+    """Open an output parent without following any component and bind its lineage."""
+
+    if (
+        not RELEASE_OUTPUT_DIR_FD_SUPPORTED
+        or not hasattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise ReleaseManifestSignatureError(
+            "descriptor-anchored release output publication is unavailable"
+        )
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    lineage = []
+    try:
+        descriptor = os.open(path.anchor, flags)
+        descriptors.append(descriptor)
+        metadata = os.fstat(descriptor)
+        lineage.append((metadata.st_dev, metadata.st_ino))
+        for component in path.parts[1:]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            descriptors.append(child)
+            descriptor = child
+            metadata = os.fstat(descriptor)
+            lineage.append((metadata.st_dev, metadata.st_ino))
+        return descriptor, tuple(lineage), tuple(descriptors)
+    except (OSError, NotImplementedError) as exc:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise ReleaseManifestSignatureError(
+            "release output parent directory could not be opened without links"
+        ) from exc
+
+
+class _ReleaseOutputTransaction:
+    """Retain output directory and inode authority until the whole set commits."""
+
+    def __init__(self, outputs: list[tuple[Path, str]]) -> None:
+        self.outputs = dict(outputs)
+        self.parents: dict[
+            Path, tuple[int, tuple[tuple[int, int], ...], tuple[int, ...]]
+        ] = {}
+        self.created: list[tuple[Path, int, FileIdentity]] = []
+
+    def __enter__(self):
+        try:
+            for path, label in self.outputs.items():
+                if path.parent not in self.parents:
+                    self.parents[path.parent] = _open_release_output_parent(path.parent)
+                _require_new_output(path, label)
+            self.assert_unchanged()
+        except BaseException:
+            self.__exit__(*sys.exc_info())
+            raise
+        return self
+
+    def assert_unchanged(self) -> None:
+        """Reject path-lineage replacement and changes to any installed output."""
+
+        for parent, (_, expected_lineage, _) in self.parents.items():
+            _, lineage, descriptors = _open_release_output_parent(parent)
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+            if lineage != expected_lineage:
+                raise ReleaseManifestSignatureError(
+                    "release output parent directory was replaced"
+                )
+        for path, descriptor, expected_identity in self.created:
+            try:
+                named = os.stat(
+                    path.name,
+                    dir_fd=self.parents[path.parent][0],
+                    follow_symlinks=False,
+                )
+                opened = os.fstat(descriptor)
+            except OSError as exc:
+                raise ReleaseManifestSignatureError(
+                    "release output changed during publication"
+                ) from exc
+            if (
+                not stat.S_ISREG(named.st_mode)
+                or _identity(named) != expected_identity
+                or _identity(opened) != expected_identity
+            ):
+                raise ReleaseManifestSignatureError(
+                    "release output changed during publication"
+                )
+
+    def install(
+        self, path: Path, payload: bytes, label: str, *, mode: int = 0o644
+    ) -> None:
+        """Create and retain one exclusive output under its preflight directory."""
+
+        if path not in self.outputs:
+            raise ReleaseManifestSignatureError("unbound release output path")
+        self.assert_unchanged()
+        parent_descriptor = self.parents[path.parent][0]
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        try:
+            descriptor = os.open(path.name, flags, mode, dir_fd=parent_descriptor)
+        except OSError as exc:
+            raise ReleaseManifestSignatureError(f"cannot create {label}: {exc}") from exc
+        self.created.append((path, descriptor, _identity(os.fstat(descriptor))))
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise ReleaseManifestSignatureError(
+                        f"short write while creating {label}"
+                    )
+                view = view[written:]
+            os.fsync(descriptor)
+            installed = os.fstat(descriptor)
+            if installed.st_nlink != 1 or installed.st_mode & 0o022:
+                raise ReleaseManifestSignatureError(
+                    "release output changed during publication"
+                )
+            self.created[-1] = (path, descriptor, _identity(installed))
+            self.assert_unchanged()
+            os.fsync(parent_descriptor)
+        except OSError as exc:
+            raise ReleaseManifestSignatureError(f"cannot publish {label}: {exc}") from exc
+
+    def __exit__(self, exception_type, exception, traceback) -> None:
+        committed = False
+        try:
+            if exception_type is None:
+                self.assert_unchanged()
+                committed = True
+        finally:
+            for path, descriptor, identity in reversed(self.created):
+                if not committed:
+                    # Truncate our retained inode even if an attacker moved or
+                    # hardlinked it; never remove a substituted file by pathname.
+                    try:
+                        os.ftruncate(descriptor, 0)
+                        os.fsync(descriptor)
+                        parent_descriptor = self.parents[path.parent][0]
+                        named = os.stat(
+                            path.name,
+                            dir_fd=parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                        if (named.st_dev, named.st_ino) == identity[:2]:
+                            os.unlink(path.name, dir_fd=parent_descriptor)
+                            os.fsync(parent_descriptor)
+                    except OSError:
+                        pass
+                os.close(descriptor)
+            for _, _, descriptors in self.parents.values():
+                for descriptor in reversed(descriptors):
+                    os.close(descriptor)
+
+
 def _unlink_if_identity(path: Path, expected_identity: FileIdentity) -> None:
     try:
         metadata = path.lstat()
@@ -414,6 +591,8 @@ def _snapshot_executable(
         label,
         executable=True,
     )
+    if before.st_size <= 0 or before.st_size > MAX_EXECUTABLE_SIZE:
+        raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
     snapshot_label = f"{label} snapshot"
     _require_new_output(destination, snapshot_label)
     read_flags = os.O_RDONLY
@@ -427,6 +606,8 @@ def _snapshot_executable(
     try:
         read_descriptor = os.open(source, read_flags)
         opened = os.fstat(read_descriptor)
+        if opened.st_size <= 0 or opened.st_size > MAX_EXECUTABLE_SIZE:
+            raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise ReleaseManifestSignatureError(
                 f"{label} changed while it was opened"
@@ -434,10 +615,14 @@ def _snapshot_executable(
         write_descriptor = os.open(destination, write_flags, 0o700)
         snapshot_identity = _identity(os.fstat(write_descriptor))
         digest = hashlib.sha256()
+        copied = 0
         while True:
-            chunk = os.read(read_descriptor, 1024 * 1024)
+            chunk = os.read(read_descriptor, min(1024 * 1024, MAX_EXECUTABLE_SIZE + 1 - copied))
             if not chunk:
                 break
+            copied += len(chunk)
+            if copied > MAX_EXECUTABLE_SIZE:
+                raise ReleaseManifestSignatureError(f"{label} exceeds the executable byte bound")
             digest.update(chunk)
             view = memoryview(chunk)
             while view:
@@ -1233,10 +1418,13 @@ def sign_release_manifest(
             len(manifest_payload),
         )
 
-    with tempfile.TemporaryDirectory(
-        prefix="iroha-release-manifest-sign-",
-        dir=str(manifest.parent),
-    ) as signer_temp_raw:
+    with (
+        _ReleaseOutputTransaction(outputs) as output_transaction,
+        tempfile.TemporaryDirectory(
+            prefix="iroha-release-manifest-sign-",
+            dir=str(manifest.parent),
+        ) as signer_temp_raw,
+    ):
         signer_temp = Path(signer_temp_raw)
         _prepare_external_tool_directory(signer_temp, execution_identity)
         signature_temp = signer_temp / "release_manifest.json.sig"
@@ -1348,6 +1536,7 @@ def sign_release_manifest(
             raise ReleaseManifestSignatureError(
                 "external signer snapshot does not match the inspected executable"
             )
+        output_transaction.assert_unchanged()
         _invoke_external_signer(
             signer_snapshot,
             signer_manifest_snapshot,
@@ -1355,6 +1544,7 @@ def sign_release_manifest(
             signer_temp,
             execution_identity,
         )
+        output_transaction.assert_unchanged()
         if timed_ovn_audit_records is not None:
             _assert_timed_ovn_release_audit_inputs_unchanged(
                 timed_ovn_audit_records
@@ -1437,76 +1627,65 @@ def sign_release_manifest(
             exact_size=ED25519_SIGNATURE_SIZE,
         )
 
-        installed: List[Tuple[Path, FileIdentity]] = []
-        try:
-            public_identity = _install_exclusive(
-                public_key_output,
-                raw_public_key,
-                "aggregate raw public-key output",
-            )
-            installed.append((public_key_output, public_identity))
-            signature_identity = _install_exclusive(
-                signature_output,
-                signature,
-                "aggregate signature output",
-            )
-            installed.append((signature_output, signature_identity))
-            verification = verify_release_manifest(
-                manifest,
-                signature_output,
-                public_key_output,
-                trusted_fingerprint,
-                native_verifier,
-                trusted_release_manifest_verifier_sha256,
-            )
-            verification.update(
-                {
-                    "manifest": str(manifest),
-                    "signature": str(signature_output),
-                    "public_key": str(public_key_output),
-                    "timed_ovn_release_audit_verified": (
-                        timed_ovn_audit_records is not None
-                    ),
-                    "timed_ovn_release_audit_protocol": (
-                        NATIVE_TIMED_OVN_AUDIT_PROTOCOL
-                        if timed_ovn_audit_records is not None
-                        else None
-                    ),
-                    "timed_ovn_release_audit_manifest_sha256": (
-                        timed_ovn_audit_records[0][2]
-                        if timed_ovn_audit_records is not None
-                        else None
-                    ),
-                    "timed_ovn_release_audit_reviewer_key_sha256": (
-                        timed_ovn_audit_records[1][2]
-                        if timed_ovn_audit_records is not None
-                        else None
-                    ),
-                }
-            )
-            if verification_summary_output is not None:
-                verification_payload = (
-                    json.dumps(
-                        verification,
-                        indent=2,
-                        sort_keys=True,
-                        allow_nan=False,
-                    )
-                    + "\n"
-                ).encode("utf-8")
-                verification_identity = _install_exclusive(
-                    verification_summary_output,
-                    verification_payload,
-                    "aggregate verification-summary output",
-                    mode=0o600,
+        output_transaction.install(
+            public_key_output,
+            raw_public_key,
+            "aggregate raw public-key output",
+        )
+        output_transaction.install(
+            signature_output,
+            signature,
+            "aggregate signature output",
+        )
+        verification = verify_release_manifest(
+            manifest,
+            signature_output,
+            public_key_output,
+            trusted_fingerprint,
+            native_verifier,
+            trusted_release_manifest_verifier_sha256,
+        )
+        verification.update(
+            {
+                "manifest": str(manifest),
+                "signature": str(signature_output),
+                "public_key": str(public_key_output),
+                "timed_ovn_release_audit_verified": (
+                    timed_ovn_audit_records is not None
+                ),
+                "timed_ovn_release_audit_protocol": (
+                    NATIVE_TIMED_OVN_AUDIT_PROTOCOL
+                    if timed_ovn_audit_records is not None
+                    else None
+                ),
+                "timed_ovn_release_audit_manifest_sha256": (
+                    timed_ovn_audit_records[0][2]
+                    if timed_ovn_audit_records is not None
+                    else None
+                ),
+                "timed_ovn_release_audit_reviewer_key_sha256": (
+                    timed_ovn_audit_records[1][2]
+                    if timed_ovn_audit_records is not None
+                    else None
+                ),
+            }
+        )
+        if verification_summary_output is not None:
+            verification_payload = (
+                json.dumps(
+                    verification,
+                    indent=2,
+                    sort_keys=True,
+                    allow_nan=False,
                 )
-                installed.append(
-                    (verification_summary_output, verification_identity)
-                )
-        except BaseException:
-            for installed_path, installed_identity in reversed(installed):
-                _unlink_if_identity(installed_path, installed_identity)
-            raise
+                + "\n"
+            ).encode("utf-8")
+            output_transaction.install(
+                verification_summary_output,
+                verification_payload,
+                "aggregate verification-summary output",
+                mode=0o600,
+            )
 
     return verification
 

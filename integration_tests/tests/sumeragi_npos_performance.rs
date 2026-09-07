@@ -98,20 +98,20 @@ fn pick_submit_peer_index(
 }
 fn submit_client_for_network(
     network: &sandbox::SerializedNetwork,
-    _probe: &iroha::client::Client,
-) -> iroha::client::Client {
+    _probe: &iroha::blocking::Client,
+) -> iroha::blocking::Client {
     let peer_count = network.peers().len();
     let status = network.peers().iter().find_map(|peer| {
         if !peer.is_running() {
             return None;
         }
-        peer.client().get_status().ok()
+        peer.client().client().get_status().ok()
     });
     let sumeragi = network.peers().iter().find_map(|peer| {
         if !peer.is_running() {
             return None;
         }
-        peer.client().get_sumeragi_status().ok()
+        peer.client().client().get_sumeragi_status().ok()
     });
     let leader_index = sumeragi
         .as_ref()
@@ -159,7 +159,13 @@ async fn wait_for_submit_connectivity(
         let peer_counts = network
             .peers()
             .iter()
-            .filter_map(|peer| peer.client().get_status().ok().map(|status| status.peers))
+            .filter_map(|peer| {
+                peer.client()
+                    .client()
+                    .get_status()
+                    .ok()
+                    .map(|status| status.peers)
+            })
             .collect::<Vec<_>>();
         if !peer_counts.is_empty() {
             last_snapshot.clone_from(&peer_counts);
@@ -295,6 +301,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         .wrap_err("submit connectivity not ready before baseline sampling")?;
     let client = network.client();
     let status_before = client
+        .client()
         .get_status()
         .wrap_err("fetch initial status snapshot")?;
     let start_non_empty = status_before.blocks_non_empty;
@@ -318,6 +325,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     }
     let http = integration_tests::http::client();
     let metrics_url = client
+        .client()
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
@@ -360,6 +368,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
             view_change_installs.push(installs);
         }
         last_status = client
+            .client()
             .get_status()
             .wrap_err("fetch status during sampling")?;
         if next_seed <= target_non_empty
@@ -564,6 +573,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     );
     let client = network.client();
     let metrics_url = client
+        .client()
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;

@@ -327,6 +327,7 @@ fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_q
         );
         let ready_signers = in_flight_first_release_validator_mask(expected_quorum);
         let mut before = initial;
+        before.payload_binding_a = ready_signers | initial.producer;
         before.history.ever_ready_authorized = ready_signers;
         before.history.ready_signed = ready_signers;
         let mut after = before;
@@ -467,6 +468,7 @@ fn in_flight_first_release_ready_state_with_selected_count(
         .after;
     for actor in [1u128, 2, 4] {
         let before = state;
+        state.payload_binding_a |= actor;
         state.carrier.kura_active |= actor;
         state = checked_in_flight_first_release_step(
             IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
@@ -1112,6 +1114,103 @@ fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
         .expect("direct release must expose its terminal FIFO owner");
     assert!(terminal.ordinary_fifo_owner);
     assert!(!terminal.canonical_wsv_owner);
+    let with_replica_body =
+        check_production_in_flight_first_release_fanout_from_producer_transition(reserved, 2)
+            .expect("transport can deliver a replica body before authenticated activation")
+            .into_projection()
+            .after;
+    assert_eq!(with_replica_body.payload_binding_a, reserved.producer);
+    let mut activated_replica = with_replica_body;
+    activated_replica.payload_binding_a |= 2;
+    activated_replica.carrier.kura_active |= 2;
+    let activate = ProductionInFlightFirstReleaseTransitionProjection {
+        action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+        actor: 2,
+        target: 0,
+        before: with_replica_body,
+        after: activated_replica,
+    };
+    assert!(check_production_in_flight_first_release_transition(activate).is_some());
+    let mut missing_binding = activate;
+    missing_binding.after.payload_binding_a = missing_binding.before.payload_binding_a;
+    assert!(check_production_in_flight_first_release_transition(missing_binding).is_none());
+    let mut extra_binding = activate;
+    extra_binding.after.payload_binding_a |= 4;
+    assert!(production_in_flight_first_release_state_kernel(
+        extra_binding.after
+    ));
+    assert!(check_production_in_flight_first_release_transition(extra_binding).is_none());
+    let mut transport_binding = with_replica_body;
+    transport_binding.payload_binding_a |= 2;
+    assert!(production_in_flight_first_release_state_kernel(
+        transport_binding
+    ));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER,
+                actor: reserved.producer,
+                target: 2,
+                before: reserved,
+                after: transport_binding,
+            }
+        )
+        .is_none(),
+        "outbound transport must not confer authenticated recipient custody"
+    );
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
+                actor: 0,
+                target: 0,
+                before: with_replica_body,
+                after: transport_binding,
+            }
+        )
+        .is_none(),
+        "snapshot stutter must preserve the complete custody mask"
+    );
+    for owned in [activated_replica, in_flight_first_release_ready_state()] {
+        assert!(production_in_flight_first_release_state_kernel(owned));
+        let mut directly_released = owned;
+        directly_released.queue.reservation_state =
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
+        directly_released.release.fifo_restored = true;
+        assert!(!production_in_flight_first_release_state_kernel(
+            directly_released
+        ));
+        assert!(production_in_flight_first_release_terminal_owner(directly_released).is_none());
+        assert!(
+            check_production_in_flight_first_release_transition(
+                ProductionInFlightFirstReleaseTransitionProjection {
+                    action: IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
+                    actor: 0,
+                    target: 0,
+                    before: owned,
+                    after: directly_released,
+                }
+            )
+            .is_none(),
+            "live Kura or READY custody cannot become an actor-free FIFO release"
+        );
+    }
+    let mut fifo_and_commit = after;
+    fifo_and_commit.decision.lane_commit_owner = fifo_and_commit.producer;
+    fifo_and_commit.decision.lane_commit_scope = fifo_and_commit.binding_a;
+    assert!(!production_in_flight_first_release_state_kernel(
+        fifo_and_commit
+    ));
+    assert!(production_in_flight_first_release_terminal_owner(fifo_and_commit).is_none());
+    let applied = in_flight_first_release_applied_state_with_selected_count(2);
+    assert!(production_in_flight_first_release_state_kernel(applied));
+    let mut fifo_and_wsv = applied;
+    fifo_and_wsv.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
+    fifo_and_wsv.release.fifo_restored = true;
+    assert!(!production_in_flight_first_release_state_kernel(
+        fifo_and_wsv
+    ));
+    assert!(production_in_flight_first_release_terminal_owner(fifo_and_wsv).is_none());
     let mut fabricated = reserved;
     fabricated.decision.wsv_committed = true;
     fabricated.decision.application_count = 1;
@@ -1277,6 +1376,11 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         "canonical WSV application must prevent volatile custody resurrection"
     );
     let mut terminal = ready;
+    terminal.decision.release_owner = 4;
+    terminal.decision.release_scope = terminal.binding_a;
+    terminal.release.kura_retired = true;
+    terminal.release.pending_prefix = terminal.queue.selected_count;
+    terminal.history.pending_high_water = terminal.queue.selected_count;
     terminal.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
     terminal.release.fifo_restored = true;
     terminal.session.bodies &= !4;

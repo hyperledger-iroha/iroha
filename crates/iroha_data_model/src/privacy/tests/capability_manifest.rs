@@ -144,7 +144,8 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
     let decoded_json: PrivacyExact12CapabilityManifestV1 =
         norito::json::from_json(&json).expect("decode manifest JSON");
     assert_eq!(decoded_json, manifest);
-    assert!(json.contains("production-qualified"));
+    assert!(!json.contains("\"readiness\":\"production-qualified\""));
+    assert!(json.contains("missing-production-qualification"));
     assert!(!json.contains("available-experimental"));
     assert!(!json.contains("limitation"));
     let pgc = &manifest.protocols[1];

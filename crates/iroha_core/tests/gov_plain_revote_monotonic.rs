@@ -1,10 +1,10 @@
-//! Plain ballot re-vote monotonicity and implicit-authority ownership tests.
+//! Plain ballot re-vote monotonicity and authority-bound ownership tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
     Registrable,
@@ -16,7 +16,8 @@ use iroha_data_model::{
     prelude::{Account, Domain, Grant},
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
-use iroha_test_samples::ALICE_ID;
+use iroha_test_samples::{ALICE_ID, BOB_ID};
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 #[test]
 fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
@@ -37,15 +38,15 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let rid = "rid-revote".to_string();
     let ballot_perm: Permission = CanSubmitGovernanceBallot {
-        referendum_id: "any".to_string(),
+        referendum_id: rid.clone(),
     }
     .into();
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
-    let rid = "rid-revote".to_string();
-    stx.world.put_governance_referendum_for_testing(
+    stx.world.governance_referenda_mut().insert(
         rid.clone(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
@@ -53,17 +54,16 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
             // window so the monotonic-lock check is the rejecting contract.
             h_end: 11,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
-            final_tally: None,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
     // First vote by ALICE
     let first = CastPlainBallot {
         referendum_id: rid.clone(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 100_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 100_u64.into(),
+        duration_blocks: 200,
     };
     first
         .execute(&ALICE_ID, &mut stx)
@@ -76,11 +76,10 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     // Re-vote with shorter duration should be rejected
     let shorter = CastPlainBallot {
         referendum_id: rid.clone(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 100_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 100_u64.into(),
+        duration_blocks: 10,
     };
     let err = shorter.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s = format!("{err}");
@@ -93,11 +92,10 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     // Re-vote with smaller amount should be rejected
     let smaller = CastPlainBallot {
         referendum_id: rid.clone(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 50_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 50_u64.into(),
+        duration_blocks: 200,
     };
     let err2 = smaller.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s2 = format!("{err2}");
@@ -105,11 +103,10 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     // Re-vote with longer duration (extend) should work and emit LockExtended
     let extend = CastPlainBallot {
         referendum_id: rid.clone(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: 120_u64.into(),
-            duration_blocks: core::num::NonZeroU64::new(400).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 120_u64.into(),
+        duration_blocks: 400,
     };
     extend
         .execute(&ALICE_ID, &mut stx)
@@ -121,9 +118,33 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     )));
     let retained = stx
         .world
-        .governance_locks
+        .governance_locks()
         .get(&rid)
         .and_then(|locks| locks.locks.get(&ALICE_ID))
-        .expect("implicit-authority lock retained");
+        .expect("authority-bound lock retained");
     assert_eq!(retained.owner, *ALICE_ID);
+    assert_eq!(retained.amount, 120_u64.into());
+    assert_eq!(retained.expiry_height, 401);
+    let mismatched_owner = CastPlainBallot {
+        referendum_id: rid.clone(),
+        owner: BOB_ID.clone(),
+        direction: 0,
+        amount: 120_u64.into(),
+        duration_blocks: 400,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("ballot owner must equal authority");
+    assert!(
+        mismatched_owner
+            .to_string()
+            .contains("owner must equal authority")
+    );
+    assert!(
+        !stx.world
+            .governance_locks()
+            .get(&rid)
+            .unwrap()
+            .locks
+            .contains_key(&BOB_ID)
+    );
 }

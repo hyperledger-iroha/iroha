@@ -453,20 +453,15 @@ where
         maximum_bytes.saturating_mul(4),
         HEDGING_DECODE_MAX_DEPTH_V1,
     );
-    let payload: T = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
-        HedgingPayloadDecodeError::Decode {
-            reason: error.to_string(),
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            HedgingPayloadDecodeError::NonCanonicalEncoding
+        } else {
+            HedgingPayloadDecodeError::Decode {
+                reason: error.to_string(),
+            }
         }
-    })?;
-    let canonical = norito::to_bytes(&payload).map_err(|error| {
-        HedgingPayloadDecodeError::CanonicalEncoding {
-            reason: error.to_string(),
-        }
-    })?;
-    if canonical != bytes {
-        return Err(HedgingPayloadDecodeError::NonCanonicalEncoding);
-    }
-    Ok(payload)
+    })
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BillingTotals {
@@ -880,7 +875,7 @@ fn hash_norito<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], HedgingValidationError> {
-    let bytes = norito::to_bytes(value)?;
+    let bytes = norito::encode_canonical(value)?;
     let encoded_len =
         u64::try_from(bytes.len()).map_err(|_| HedgingValidationError::LengthOverflow)?;
     let mut hasher = Hasher::new();
@@ -1977,11 +1972,22 @@ mod tests {
     #[test]
     fn bounded_hedging_decoder_accepts_exact_canonical_archive() {
         let feed = single_feed("primary", 1_000_000, 1_799);
-        let encoded = norito::to_bytes(&feed).expect("encode feed");
-        assert_eq!(
-            decode_hedging_price_feed_v1(&encoded).expect("decode canonical feed"),
-            feed
-        );
+        let encoded = norito::encode_canonical(&feed).expect("encode feed");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                decode_hedging_price_feed_v1(&encoded).expect("decode canonical feed"),
+                feed
+            );
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        let tagged = crate::canonical_test_support::with_compression_tag(&feed);
+        for bytes in [&tagged[..], &tagged[..norito::core::Header::SIZE]] {
+            assert_eq!(
+                decode_hedging_price_feed_v1(bytes),
+                Err(HedgingPayloadDecodeError::NonCanonicalEncoding)
+            );
+        }
     }
     #[test]
     fn bounded_hedging_decoder_rejects_oversize_and_trailing_bytes() {

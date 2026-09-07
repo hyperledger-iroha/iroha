@@ -1,6 +1,7 @@
 use super::*;
 isi! {
     /// Claim a promotional reward for an active Twitter follow binding.
+    #[norito_schema(name = "iroha_data_model::isi::social::ClaimTwitterFollowReward")]
     pub struct ClaimTwitterFollowReward {
         /// Binding hash (keyed) proven by the soracles feed.
         pub binding_hash: crate::oracle::KeyedHash,
@@ -8,6 +9,7 @@ isi! {
 }
 isi! {
     /// Send a reward to a Twitter handle; funds are escrowed until the binding appears.
+    #[norito_schema(name = "iroha_data_model::isi::social::SendToTwitter")]
     pub struct SendToTwitter {
         /// Binding hash (keyed) for the target handle.
         pub binding_hash: crate::oracle::KeyedHash,
@@ -17,6 +19,7 @@ isi! {
 }
 isi! {
     /// Cancel an existing escrow created by [`SendToTwitter`].
+    #[norito_schema(name = "iroha_data_model::isi::social::CancelTwitterEscrow")]
     pub struct CancelTwitterEscrow {
         /// Binding hash (keyed) for the escrow.
         pub binding_hash: crate::oracle::KeyedHash,

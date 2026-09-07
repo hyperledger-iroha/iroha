@@ -22,6 +22,8 @@ pub const DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX: u32 = 16;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::admission::AccountAdmissionMode")]
 pub enum AccountAdmissionMode {
     /// Only explicit `Register<Account>` may create accounts.
     ExplicitOnly,
@@ -35,6 +37,8 @@ pub enum AccountAdmissionMode {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "destination", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::admission::ImplicitAccountFeeDestination")]
 pub enum ImplicitAccountFeeDestination {
     /// Burn the fee.
     Burn,
@@ -47,6 +51,8 @@ pub enum ImplicitAccountFeeDestination {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::admission::ImplicitAccountCreationFee")]
 pub struct ImplicitAccountCreationFee {
     /// Asset definition used to pay the fee.
     pub asset_definition_id: AssetDefinitionId,
@@ -61,6 +67,8 @@ pub struct ImplicitAccountCreationFee {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::admission::AccountAdmissionPolicy")]
 pub struct AccountAdmissionPolicy {
     /// Whether implicit account creation is enabled.
     pub mode: AccountAdmissionMode,
@@ -300,3 +308,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_admission_schema_tests;

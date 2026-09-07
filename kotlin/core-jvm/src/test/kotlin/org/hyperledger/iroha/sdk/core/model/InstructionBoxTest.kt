@@ -23,6 +23,42 @@ class InstructionBoxTest {
     private val samplePayloadBase64 = Base64.encode(samplePayloadBytes)
 
     @Test
+    fun `custom wire payload cannot change identity or bytes after construction`() {
+        var selectedWireName = "iroha.custom"
+        val bytes = byteArrayOf(1, 2, 3)
+        val payload = object : WirePayload {
+            override val wireName: String get() = selectedWireName
+            override val payloadBytes: ByteArray get() = bytes
+            override val kind = InstructionKind.CUSTOM
+            override val arguments = emptyMap<String, String>()
+        }
+        val box = InstructionBox.of(payload)
+        selectedWireName = "iroha.privacy.submit_proof.v1"
+        bytes[0] = 99
+        assertEquals("iroha.custom", box.name)
+        assertContentEquals(byteArrayOf(1, 2, 3), (box.payload as WirePayload).payloadBytes)
+    }
+
+    @Test
+    fun `custom privacy wire cannot hide its identity from admission guards`() {
+        var selectedWireName = "iroha.privacy.submit_proof.v1"
+        val payload = object : WirePayload {
+            override val wireName: String get() = selectedWireName
+            override val payloadBytes: ByteArray get() = samplePayloadBytes.copyOf()
+            override val kind = InstructionKind.CUSTOM
+            override val arguments = emptyMap<String, String>()
+        }
+        val box = InstructionBox.of(payload)
+        selectedWireName = "iroha.custom"
+        assertFailsWith<IllegalArgumentException> {
+            box.requirePrivacyExact12ConstructionAdmission()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            box.requirePrivacyExact12Network(NetworkId.fromBytes(ByteArray(32) { 1 }))
+        }
+    }
+
+    @Test
     fun `fromWirePayload creates box with correct kind`() {
         val box = InstructionBox.fromWirePayload("iroha.register.domain", samplePayloadBytes)
         assertEquals(InstructionKind.REGISTER, box.kind)

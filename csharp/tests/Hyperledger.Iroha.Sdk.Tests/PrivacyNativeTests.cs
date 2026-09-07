@@ -15,7 +15,6 @@ public sealed class PrivacyNativeTests
     private static readonly IReadOnlyList<string[]> Matrix = LoadExact12Matrix();
     private static readonly IReadOnlyList<string[]> ProtocolRows = Rows("protocol");
     private static readonly IReadOnlyList<string[]> TypedEnvelopeRows = Rows("typed-envelope");
-    private static readonly string[] Retired = Rows("retired").Select(row => row[1]).ToArray();
     private static readonly string[] Expected = ProtocolRows.Select(row => row[2]).ToArray();
 
     [Fact]
@@ -45,7 +44,7 @@ public sealed class PrivacyNativeTests
     {
         Assert.True(
             new HashSet<string>(
-                new[] { "matrix-version", "registry-sha256", "protocol", "typed-envelope", "retired" },
+                new[] { "matrix-version", "registry-sha256", "protocol", "typed-envelope" },
                 StringComparer.Ordinal).SetEquals(Matrix.Select(row => row[0])));
         Assert.Equal(new[] { new[] { "matrix-version", "1" } }, Rows("matrix-version"));
         Assert.Equal(
@@ -77,8 +76,7 @@ public sealed class PrivacyNativeTests
                 Assert.NotEqual(new string('0', 64), digest);
             }
         }
-        Assert.Equal(Retired.Length, Retired.Distinct(StringComparer.Ordinal).Count());
-        Assert.Empty(Retired.Intersect(Expected, StringComparer.Ordinal));
+        Assert.Empty(Rows("retired"));
     }
 
     [Theory]
@@ -132,9 +130,16 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void EveryRetiredMatrixProtocolIsRejected()
+    public void RetiredProtocolsAreNotPartOfTheFirstReleaseMatrix()
     {
-        foreach (var retired in Retired)
+        foreach (var retired in new[]
+        {
+            "jindo-lattice-pcs-zk-v0",
+            "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
+            "silent-threshold-anoncred-v0",
+            "zk-ams-recursive-admission-v0",
+        })
         {
             Assert.Throws<ArgumentException>(
                 () => PrivacyProtocolsV1.ParseCanonicalLabel(retired));
@@ -172,6 +177,14 @@ public sealed class PrivacyNativeTests
         Assert.Equal(
             "iroha_privacy_validate_compiled_profile_catalog_v1",
             validator.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
+                .EntryPoint);
+        var capabilityValidator = typeof(PrivacyNative).GetMethod(
+            "NativeValidateExact12CapabilityManifest",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(capabilityValidator);
+        Assert.Equal(
+            "iroha_privacy_validate_exact12_capability_manifest_v1",
+            capabilityValidator!.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
                 .EntryPoint);
         var fixtureQuery = typeof(PrivacyNative).GetMethod(
             "NativeExact12FixtureBundle",

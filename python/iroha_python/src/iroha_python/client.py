@@ -9998,6 +9998,17 @@ def _strict_nonempty_string(payload: Mapping[str, Any], field_name: str, context
     return value
 
 
+def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
+    """Decode one canonical signed Numeric without unbounded decimal input."""
+
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str):
+        raise TypeError(f"{context} `{field_name}` must be a numeric string")
+    if len(value) > 156:
+        raise ValueError(f"{context} `{field_name}` exceeds the numeric text length bound")
+    return str(NumericV1Codec.decode_decimal_json(value))
+
+
 def _strict_hex_string(
     payload: Mapping[str, Any],
     field_name: str,
@@ -10338,6 +10349,112 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
             descriptor=parsed_descriptor,
             proposal_hash=proposal_hash,
             payload_block_hint=None,
+        )
+
+
+def _parse_sumeragi_lane_settlement_receipts(
+    receipts_payload: Any, context: str
+) -> List[SumeragiLaneSettlementReceipt]:
+    if not isinstance(receipts_payload, list):
+        raise TypeError(f"{context} receipts must be a list")
+    receipts: List[SumeragiLaneSettlementReceipt] = []
+    for index, receipt in enumerate(receipts_payload):
+        if not isinstance(receipt, Mapping):
+            raise TypeError(f"{context} receipts must be objects")
+        receipt_context = f"{context} receipt at index {index}"
+        _strict_exact_fields(
+            receipt,
+            {
+                "source_id",
+                "local_amount",
+                "xor_due",
+                "xor_after_haircut",
+                "xor_variance",
+                "timestamp_ms",
+            },
+            receipt_context,
+        )
+        source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
+        receipt_local = _strict_quantity_string(receipt, "local_amount", receipt_context)
+        receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
+        receipt_after = _strict_quantity_string(receipt, "xor_after_haircut", receipt_context)
+        receipt_variance = _strict_quantity_string(receipt, "xor_variance", receipt_context)
+        receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
+        receipts.append(
+            SumeragiLaneSettlementReceipt(
+                source_id=source_id,
+                local_amount=receipt_local,
+                xor_due=receipt_due,
+                xor_after_haircut=receipt_after,
+                xor_variance=receipt_variance,
+                timestamp_ms=receipt_timestamp,
+            )
+        )
+    return receipts
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxParticipantSettlement:
+    """Exact nonrecursive settlement certified by a Native AMX participant."""
+
+    block_height: int
+    lane_id: int
+    lane_incarnation: str
+    dataspace_id: int
+    tx_count: int
+    total_local_amount: str
+    total_xor_due: str
+    total_xor_after_haircut: str
+    total_xor_variance: str
+    swap_metadata: None
+    receipts: Tuple[SumeragiLaneSettlementReceipt, ...]
+    nexus_fee_receipts: Tuple[()]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxParticipantSettlement":
+        context = "native AMX participant settlement"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+            },
+            context,
+        )
+        if payload["swap_metadata"] is not None or payload["nexus_fee_receipts"] != []:
+            raise ValueError(f"{context} cannot contain swap metadata or fee receipts")
+        receipts_payload = payload["receipts"]
+        if not isinstance(receipts_payload, list):
+            raise TypeError(f"{context} receipts must be a list")
+        if not 1 <= len(receipts_payload) <= _MAX_NATIVE_AMX_GROUP_SOURCES:
+            raise ValueError(f"{context} receipts must be bounded and non-empty")
+        return cls(
+            block_height=_strict_uint(payload, "block_height", 64, context),
+            lane_id=_strict_uint(payload, "lane_id", 32, context),
+            lane_incarnation=_strict_hash_literal(payload, "lane_incarnation", context),
+            dataspace_id=_strict_uint(payload, "dataspace_id", 64, context),
+            tx_count=_strict_uint(payload, "tx_count", 64, context),
+            total_local_amount=_strict_quantity_string(payload, "total_local_amount", context),
+            total_xor_due=_strict_quantity_string(payload, "total_xor_due", context),
+            total_xor_after_haircut=_strict_quantity_string(
+                payload, "total_xor_after_haircut", context
+            ),
+            total_xor_variance=_strict_quantity_string(payload, "total_xor_variance", context),
+            swap_metadata=None,
+            receipts=tuple(_parse_sumeragi_lane_settlement_receipts(receipts_payload, context)),
+            nexus_fee_receipts=(),
         )
 
 
@@ -10721,13 +10838,13 @@ class SumeragiLaneSwapMetadata:
     epsilon_bps: int
     twap_window_seconds: int
     liquidity_profile: str
-    twap_local_per_xor: str
+    twap_local_per_xor: str  # Canonical signed Numeric, with scale at most 28.
     volatility_class: str
 
 
 @dataclass(frozen=True)
 class SumeragiLaneSettlementCommitment:
-    """Lane settlement totals and receipts bundled into sumeragi status."""
+    """Lane settlement totals and immutable receipts bundled into sumeragi status."""
 
     block_height: int
     lane_id: int
@@ -10738,10 +10855,15 @@ class SumeragiLaneSettlementCommitment:
     total_xor_due: str
     total_xor_after_haircut: str
     total_xor_variance: str
-    receipts: List[SumeragiLaneSettlementReceipt]
+    receipts: Tuple[SumeragiLaneSettlementReceipt, ...]
     nexus_fee_receipts: Tuple[SumeragiNexusFeeReceipt, ...]
     native_amx_receipts: Tuple[SumeragiNativeAmxReceipt, ...]
     swap_metadata: Optional[SumeragiLaneSwapMetadata]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "receipts", tuple(self.receipts))
+        object.__setattr__(self, "nexus_fee_receipts", tuple(self.nexus_fee_receipts))
+        object.__setattr__(self, "native_amx_receipts", tuple(self.native_amx_receipts))
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLaneSettlementCommitment":
@@ -10778,42 +10900,9 @@ class SumeragiLaneSettlementCommitment:
             payload, "total_xor_after_haircut", context
         )
         total_xor_variance = _strict_quantity_string(payload, "total_xor_variance", context)
-        receipts_payload = _required_field(payload, "receipts", context)
-        if not isinstance(receipts_payload, list):
-            raise TypeError("lane settlement `receipts` must be a list")
-        receipts: List[SumeragiLaneSettlementReceipt] = []
-        for index, receipt in enumerate(receipts_payload):
-            if not isinstance(receipt, Mapping):
-                raise TypeError("lane settlement receipts must be objects")
-            receipt_context = f"lane settlement receipt at index {index}"
-            _strict_exact_fields(
-                receipt,
-                {
-                    "source_id",
-                    "local_amount",
-                    "xor_due",
-                    "xor_after_haircut",
-                    "xor_variance",
-                    "timestamp_ms",
-                },
-                receipt_context,
-            )
-            source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
-            receipt_local = _strict_quantity_string(receipt, "local_amount", receipt_context)
-            receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
-            receipt_after = _strict_quantity_string(receipt, "xor_after_haircut", receipt_context)
-            receipt_variance = _strict_quantity_string(receipt, "xor_variance", receipt_context)
-            receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
-            receipts.append(
-                SumeragiLaneSettlementReceipt(
-                    source_id=source_id,
-                    local_amount=receipt_local,
-                    xor_due=receipt_due,
-                    xor_after_haircut=receipt_after,
-                    xor_variance=receipt_variance,
-                    timestamp_ms=receipt_timestamp,
-                )
-            )
+        receipts = _parse_sumeragi_lane_settlement_receipts(
+            _required_field(payload, "receipts", context), context
+        )
         nexus_fee_payload = _required_field(payload, "nexus_fee_receipts", context)
         if not isinstance(nexus_fee_payload, list):
             raise TypeError("lane settlement `nexus_fee_receipts` must be a list")
@@ -10897,7 +10986,7 @@ class SumeragiLaneSettlementCommitment:
                     variants=("Tier1", "Tier2", "Tier3"),
                     context="lane swap metadata",
                 ),
-                twap_local_per_xor=_strict_nonempty_string(
+                twap_local_per_xor=_strict_numeric_string(
                     swap_metadata_payload, "twap_local_per_xor", "lane swap metadata"
                 ),
                 volatility_class=_strict_tagged_unit_enum(
@@ -10921,7 +11010,7 @@ class SumeragiLaneSettlementCommitment:
             total_xor_due=total_xor_due,
             total_xor_after_haircut=total_xor_after_haircut,
             total_xor_variance=total_xor_variance,
-            receipts=receipts,
+            receipts=tuple(receipts),
             nexus_fee_receipts=nexus_fee_receipts,
             native_amx_receipts=native_amx_receipts,
             swap_metadata=swap_metadata,
@@ -13613,6 +13702,7 @@ __all__ = [
     "SumeragiNativeAmxParticipantLaneBlockProposal",
     "SumeragiNativeAmxParticipantSettlement",
     "SumeragiNativeAmxLeg",
+    "SumeragiNativeAmxParticipantSettlement",
     "SumeragiNativeAmxReceipt",
     "SumeragiParamsSnapshot",
     "SumeragiLeaderSnapshot",
@@ -13951,6 +14041,50 @@ def _hijiri_quote_cache_control_is_private_no_store(value: str) -> bool:
     return has_private and has_no_store
 
 
+def _fetch_authenticated_privacy_capabilities_archive_v1(
+    client: "ToriiClient", canonical_auth: ToriiCanonicalRequestAuth
+) -> bytes:
+    """Fixed transport entry used by native admission; never accepts archived bytes."""
+    if type(client) is not ToriiClient:
+        raise TypeError("Exact12 admission requires the configured SDK ToriiClient")
+    context = "Exact12 privacy capability manifest"
+    expected_network = client._require_local_signing_context(context).network_id
+    if urlparse(client._base_url).scheme != "https":
+        raise ValueError("Exact12 privacy capabilities require an HTTPS Torii endpoint")
+    if (
+        not isinstance(canonical_auth, ToriiCanonicalRequestAuth)
+        or canonical_auth.network_id != expected_network.literal
+    ):
+        raise ValueError("Exact12 canonical authentication belongs to a different network")
+    response = client._account_request(
+        "GET", "/v1/privacy/capabilities",
+        canonical_auth=canonical_auth,
+        headers={
+            "Accept": "application/x-norito",
+            "Accept-Encoding": "identity",
+            "Cache-Control": "no-store",
+        },
+        stream=True,
+        context=context,
+    )
+    try:
+        if response.url != f"{client._base_url}/v1/privacy/capabilities" or response.history:
+            raise ValueError("Exact12 capability response must come from the exact signed URL without redirects")
+        if response.headers.get("Content-Type") != "application/x-norito":
+            raise ValueError("privacy capabilities response must use exact application/x-norito")
+        if response.headers.get("Content-Encoding") not in (None, "identity"):
+            raise ValueError("Exact12 capability response Content-Encoding must be identity")
+        if response.status_code != 200:
+            raise ValueError("Exact12 capability response status must be 200")
+        body = _read_bounded_sccp_response_body(response, 256 * 1024, context)
+        declared_length = response.headers.get("Content-Length")
+        if not body or (declared_length is not None and int(declared_length) != len(body)):
+            raise ValueError("Exact12 capability response must have an exact nonempty body length")
+        return body
+    finally:
+        response.close()
+
+
 class ToriiClient(
     _ToriiClientSpaceDirectoryMixin,
     ToriiClientExpensiveQueryAuthMixin,
@@ -14184,37 +14318,14 @@ class ToriiClient(
     def privacy_capabilities_v1(
         self, *, canonical_auth: ToriiCanonicalRequestAuth
     ) -> "PrivacyExact12CapabilityManifestV1":
-        """Fetch the authoritative committed manifest as exact canonical bytes.
+        """Fetch native-validated committed state for this exact HTTPS Torii network.
 
-        The native decoder retains the byte-identical Torii payload and checks
-        its schema, bounds, canonical encoding, ordered rows, derived tuple
-        fields, activation state, and self-digest. A local compiled-profile
-        catalog is never used as network-availability authority.
+        The native boundary owns the immutable origin seal used by transaction
+        construction. Public archive decoding remains inspection-only.
         """
-
-        response = self._account_request(
-            "GET",
-            "/v1/privacy/capabilities",
-            canonical_auth=canonical_auth,
-            headers={"Accept": "application/x-norito"},
-            context="Exact12 privacy capability manifest",
+        return _require_crypto()._fetch_privacy_exact12_capability_manifest_v1(
+            self, canonical_auth
         )
-        crypto = _require_crypto()
-        self._expect_status(
-            response,
-            [200],
-            maximum_body_bytes=(
-                crypto.PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1
-            ),
-            context="Exact12 privacy capability manifest",
-        )
-        content_type = response.headers.get("Content-Type", "")
-        media_type = content_type.split(";", 1)[0].strip().lower()
-        if media_type != "application/x-norito":
-            raise ValueError(
-                "privacy capabilities response must use application/x-norito media type"
-            )
-        return crypto.privacy_exact12_capability_manifest_v1(response.content)
 
     def quote_validation_fee_hijiri(
         self,

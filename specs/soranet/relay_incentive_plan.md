@@ -73,7 +73,7 @@ the roadmap milestone.
   is required. The orchestrator emits sealed instructions referencing `RelayRewardInstructionV1`
   so the treasury daemon can batch them into XOR transactions.
 - `RelayPayoutService` (`crates/sorafs_orchestrator/src/treasury.rs`) bridges the reward engine with
-  `iroha_core::soranet_incentives::RelayPayoutLedger`, records per-epoch payouts, materialises XOR
+  `soranet_incentives::RelayPayoutLedger`, records per-epoch payouts, materialises XOR
   transfers, manages `RelayRewardDisputeV1` lifecycles (credit/debit/no-change), and exposes
   dashboard-ready aggregates for the treasury daemon.【crates/sorafs_orchestrator/src/treasury.rs:1】【crates/iroha_core/src/soranet_incentives.rs:351】
 - Operators can now drive the full payout workflow via `iroha app sorafs incentives service <subcommand>`:

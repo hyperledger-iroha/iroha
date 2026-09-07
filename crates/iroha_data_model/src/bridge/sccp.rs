@@ -50,6 +50,8 @@ pub const SCCP_TON_BASECHAIN_WORKCHAIN_V1: i32 = 0;
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "network", content = "profile")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpNetworkV1")]
 pub enum SccpNetworkV1 {
     /// The sole production SORA endpoint admitted by SCCP V1.
     #[codec(index = 64)]
@@ -80,8 +82,8 @@ impl SccpNetworkV1 {
             Self::SoraTaira => 0,
             Self::EthereumMainnet => 1,
             Self::BscMainnet => 2,
-            Self::TronMainnet => 3,
             Self::TonMainnet => 4,
+            Self::TronMainnet => 5,
         }
     }
     /// Return the canonical, stable textual key for this exact profile.
@@ -139,6 +141,8 @@ impl SccpNetworkV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpLaneIdV1")]
 pub struct SccpLaneIdV1 {
     /// Network on which the SCCP message originates.
     pub source: SccpNetworkV1,
@@ -188,6 +192,8 @@ impl SccpLaneIdV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpOutboundMessageContextV1")]
 pub struct SccpOutboundMessageContextV1 {
     /// Exact SORA-to-external lane on which the message is emitted.
     pub lane: SccpLaneIdV1,
@@ -236,6 +242,8 @@ impl SccpOutboundMessageContextV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpOutboundMessageKeyV1")]
 pub struct SccpOutboundMessageKeyV1 {
     /// Exact SORA-to-external lane on which the message was emitted.
     pub lane: SccpLaneIdV1,
@@ -268,6 +276,8 @@ impl SccpOutboundMessageKeyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpOutboundMessageIndexKeyV1")]
 pub struct SccpOutboundMessageIndexKeyV1 {
     /// Local SORA block height containing the recorded message.
     pub recorded_at_height: u64,
@@ -381,6 +391,8 @@ impl PartialOrd for SccpOutboundMessageIndexKeyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpOutboundMessageDescriptorV1")]
 pub struct SccpOutboundMessageDescriptorV1 {
     /// Governed destination binding authenticated at record admission.
     pub destination_binding_hash: [u8; 32],
@@ -422,6 +434,8 @@ impl SccpOutboundMessageDescriptorV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpOutboundPendingMessageRecordV1")]
 pub struct SccpOutboundPendingMessageRecordV1 {
     /// Governed destination binding authenticated at record admission.
     pub destination_binding_hash: [u8; 32],
@@ -483,6 +497,8 @@ impl SccpOutboundPendingMessageRecordV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpOutboundPendingUsageV1")]
 pub struct SccpOutboundPendingUsageV1 {
     /// Number of payload-bearing pending messages.
     pub message_count: u64,
@@ -531,6 +547,8 @@ impl SccpOutboundPendingUsageV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpInboundAnchorHighWaterKeyV1")]
 pub struct SccpInboundAnchorHighWaterKeyV1 {
     /// Exact external-to-SORA lane on which evidence was admitted.
     pub lane: SccpLaneIdV1,
@@ -564,6 +582,8 @@ impl SccpInboundAnchorHighWaterKeyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpEvmSourceEmitterV1")]
 pub struct SccpEvmSourceEmitterV1 {
     /// Canonical 20-byte contract address.
     pub address: [u8; 20],
@@ -583,6 +603,8 @@ pub struct SccpEvmSourceEmitterV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpTronSourceEmitterV1")]
 pub struct SccpTronSourceEmitterV1 {
     /// Canonical 20-byte TRON account payload, without the network prefix.
     pub address: [u8; 20],
@@ -601,6 +623,8 @@ pub struct SccpTronSourceEmitterV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpTonAddressV1")]
 pub struct SccpTonAddressV1 {
     /// Signed TON workchain identifier.
     pub workchain: i32,
@@ -632,6 +656,8 @@ impl SccpTonAddressV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpTonSourceEmitterV1")]
 pub struct SccpTonSourceEmitterV1 {
     /// Canonical raw basechain source-bridge address.
     pub address: SccpTonAddressV1,
@@ -647,6 +673,8 @@ pub struct SccpTonSourceEmitterV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "emitter", content = "identity")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpSourceEmitterV1")]
 pub enum SccpSourceEmitterV1 {
     /// EVM contract identity used by Ethereum and BSC profiles.
     #[codec(index = 0)]
@@ -723,6 +751,8 @@ impl SccpSourceEmitterV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp::SccpSourceIdentityV1")]
 pub struct SccpSourceIdentityV1 {
     /// Inbound lane whose source identity is being authenticated.
     pub lane: SccpLaneIdV1,
@@ -874,7 +904,7 @@ mod tests {
         assert_eq!(SccpNetworkV1::SoraTaira.domain_id(), 0);
         assert_eq!(SccpNetworkV1::EthereumMainnet.domain_id(), 1);
         assert_eq!(SccpNetworkV1::BscMainnet.domain_id(), 2);
-        assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 3);
+        assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 5);
         assert_eq!(SccpNetworkV1::TonMainnet.domain_id(), 4);
     }
     #[test]
@@ -1488,3 +1518,6 @@ mod tests {
         assert!(next.admits_anchor_interval_height(201, None));
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_schema_tests;

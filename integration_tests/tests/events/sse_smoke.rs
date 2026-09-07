@@ -94,7 +94,7 @@ fn sse_smoke_scenarios() -> Result<()> {
             .expect("trigger action fixture satisfies validation invariants"),
         ));
         if sandbox::handle_result(
-            client.submit_blocking(
+            client.submit(
                 register,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ),
@@ -105,7 +105,7 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         if sandbox::handle_result(
-            client.submit_blocking(
+            client.submit(
                 ExecuteTrigger::new(trigger_id),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ),
@@ -152,7 +152,7 @@ fn sse_smoke_scenarios() -> Result<()> {
             .expect("trigger action fixture satisfies validation invariants"),
         );
         if sandbox::handle_result(
-            client.submit_blocking(
+            client.submit(
                 Register::trigger(time_trigger),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ),
@@ -163,7 +163,7 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         if sandbox::handle_result(
-            client.submit_blocking(
+            client.submit(
                 Log::new(Level::INFO, "trigger tick".to_string()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ),

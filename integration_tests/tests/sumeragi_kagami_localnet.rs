@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{kagami::resolve_kagami_bin, process as test_process, sandbox};
 use iroha::{
-    client::Client,
+    blocking::Client,
     config::{Config, LoadPath},
     data_model::{Level, isi::Log},
 };
@@ -48,8 +48,8 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         )?;
         let client = load_localnet_client(&out_dir)?;
         wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
-        let baseline = client.get_status()?.blocks_non_empty;
-        client.submit_blocking(
+        let baseline = client.client().get_status()?.blocks_non_empty;
+        client.submit(
             Log::new(Level::INFO, "kagami localnet smoke".to_string()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -238,7 +238,7 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
         )
     })?;
     config.transaction_status_timeout = READY_TIMEOUT;
-    Ok(Client::new(config))
+    Client::new(config)
 }
 async fn wait_for_status_ready(
     client: &Client,
@@ -250,7 +250,7 @@ async fn wait_for_status_ready(
         if Instant::now() >= deadline {
             return Err(eyre!("timed out waiting for localnet status"));
         }
-        if client.get_status().is_ok() {
+        if client.client().get_status().is_ok() {
             return Ok(());
         }
         if let Some(report) = localnet.unexpected_exit_report()? {
@@ -273,10 +273,10 @@ async fn wait_for_blocks_non_empty(
     client: &Client,
     target: u64,
     timeout: Duration,
-) -> Result<iroha::client::Status> {
+) -> Result<iroha_torii_shared::status::Status> {
     let deadline = Instant::now() + timeout;
     loop {
-        let status = client.get_status()?;
+        let status = client.client().get_status()?;
         if status.blocks_non_empty >= target {
             return Ok(status);
         }
@@ -303,11 +303,11 @@ async fn wait_for_validator_count_and_reducer(
                 "timed out waiting for validator count and reducer readiness: expected_peers={expected_peers}, last_validator_count={last_validator_count:?}, reducer_available={reducer_available}"
             ));
         }
-        if let Ok(status) = client.get_status() {
+        if let Ok(status) = client.client().get_status() {
             last_status_peers = Some(status.peers);
             // Status.peers excludes the reporting peer, so add 1 for the validator count.
             if status.peers.saturating_add(1) == expected_peers
-                && let Ok(sumeragi) = client.get_sumeragi_status()
+                && let Ok(sumeragi) = client.client().get_sumeragi_status()
             {
                 reducer_available = sumeragi.protocol_version
                     == iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;

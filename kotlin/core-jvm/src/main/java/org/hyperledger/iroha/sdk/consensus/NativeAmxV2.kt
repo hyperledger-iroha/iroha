@@ -15,6 +15,7 @@ import org.hyperledger.iroha.sdk.crypto.Blake2b
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
+import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
 /**
  * Strict JSON models for Native AMX V2 control receipts.
@@ -185,6 +186,11 @@ object NativeAmxV2 {
         val height: BigInteger,
         val view: BigInteger,
     ) {
+        init {
+            positiveU64(height, "round.height")
+            unsignedU64(view, "round.view")
+        }
+
         override fun equals(other: Any?): Boolean =
             other is Round &&
                 contextId == other.contextId &&
@@ -643,6 +649,7 @@ object NativeAmxV2 {
             "$path.total_xor_after_haircut",
         )
         canonicalQuantity(record["total_xor_variance"], "$path.total_xor_variance")
+        validateSwapMetadata(record["swap_metadata"], "$path.swap_metadata")
         array(record["receipts"], "$path.receipts")
         array(record["nexus_fee_receipts"], "$path.nexus_fee_receipts")
         val nativeReceipts = array(
@@ -1324,10 +1331,37 @@ object NativeAmxV2 {
 
     private fun canonicalQuantity(value: Any?, path: String): String {
         val text = string(value, path)
-        require(text.length <= 155 && QUANTITY.matches(text)) {
+        require(text.length <= 155) {
             "$path must be a canonical bounded non-negative quantity"
         }
-        return text
+        return NumericV1Codec.decodeQuantityJson(text).toString()
+    }
+
+    private fun validateSwapMetadata(value: Any?, path: String) {
+        if (value == null) return
+        val record = exactObject(value, SWAP_METADATA_FIELDS, path)
+        boundedInt(record["epsilon_bps"], "$path.epsilon_bps", 0, 0xffff)
+        laneId(record["twap_window_seconds"], "$path.twap_window_seconds")
+        val numeric = string(record["twap_local_per_xor"], "$path.twap_local_per_xor")
+        require(numeric.length <= 156) { "$path.twap_local_per_xor exceeds the Numeric text bound" }
+        NumericV1Codec.decodeDecimalJson(numeric)
+        val liquidity = exactObject(
+            record["liquidity_profile"],
+            setOf("profile", "state"),
+            "$path.liquidity_profile",
+        )
+        require(liquidity["profile"] in setOf("Tier1", "Tier2", "Tier3") && liquidity["state"] == null) {
+            "$path.liquidity_profile must be a canonical tagged liquidity profile"
+        }
+        val volatility = exactObject(
+            record["volatility_class"],
+            setOf("bucket", "state"),
+            "$path.volatility_class",
+        )
+        require(
+            volatility["bucket"] in setOf("Stable", "Elevated", "Dislocated") &&
+                volatility["state"] == null,
+        ) { "$path.volatility_class must be a canonical tagged volatility class" }
     }
 
     private fun canonicalBlsNormalValidatorSet(
@@ -1693,7 +1727,13 @@ object NativeAmxV2 {
     private val SOURCE_ID = Regex("^[0-9A-F]{64}$")
     private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
     private val BLS_NORMAL_PEER_ID = Regex("^ea0130[0-9A-F]{96}$")
-    private val QUANTITY = Regex("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{0,27}[1-9])?$")
+    private val SWAP_METADATA_FIELDS = setOf(
+        "epsilon_bps",
+        "twap_window_seconds",
+        "liquidity_profile",
+        "twap_local_per_xor",
+        "volatility_class",
+    )
 
     private val GROUP_FIELDS = setOf(
         "block_height",

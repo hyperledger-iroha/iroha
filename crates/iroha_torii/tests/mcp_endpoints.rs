@@ -14,6 +14,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{
+    account::AccountId,
     isi::musubi::SetMusubiReleaseYankV1,
     musubi::{MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1},
     nexus::DataSpaceId,
@@ -24,7 +25,13 @@ use iroha_torii_shared::mcp::{
     MODERN_PROTOCOL_VERSION as MODERN_MCP_PROTOCOL_VERSION,
 };
 use norito::json::Value;
-use std::{collections::BTreeSet, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::SocketAddr,
+    num::{NonZeroU8, NonZeroU32, NonZeroU64},
+    sync::Arc,
+    time::Duration,
+};
 use tower::ServiceExt as _;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
@@ -196,6 +203,25 @@ fn initialize_request(id: u64) -> Value {
         "method": "initialize",
         "params": (initialize_params())
     })
+}
+fn enable_test_faucet(cfg: &mut iroha_config::parameters::actual::Root) {
+    let signer = cfg.common.key_pair.clone();
+    cfg.torii.faucet = Some(iroha_config::parameters::actual::ToriiFaucet {
+        authority: AccountId::new(signer.public_key().clone()),
+        private_key_file: "/runtime-only/mcp-discovery-faucet.key".into(),
+        signer,
+        asset_definition_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
+        amount: 1_u32.into(),
+        pow_difficulty_bits: NonZeroU8::new(1).expect("nonzero difficulty"),
+        pow_scrypt_log_n: 1,
+        pow_scrypt_r: 1,
+        pow_scrypt_p: 1,
+        pow_max_anchor_age_blocks: NonZeroU64::new(1).expect("nonzero anchor age"),
+        pow_adaptive_lookback_blocks: 1,
+        pow_adaptive_claims_per_extra_bit: 1,
+        pow_adaptive_max_extra_bits: 1,
+        pow_beacon_seed_enabled: false,
+    });
 }
 fn modern_request(id: &str, method: &str, params: Value) -> Value {
     let Value::Object(mut params) = params else {
@@ -990,6 +1016,7 @@ async fn mcp_all_published_tool_schemas_are_top_level_objects() {
     app.shutdown().await;
 }
 include!("mcp_endpoints/native_protocol_tests.rs");
+include!("mcp_endpoints/admission_and_cancellation_tests.rs");
 #[tokio::test]
 async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
     let _data_dir = test_utils::TestDataDirGuard::new();
@@ -1159,93 +1186,6 @@ async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
-    const CANCELLATION_NONCE: &str = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
-    const API_TOKEN: &str = "cancellation-client-0000000000000";
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
-    cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
-    let app = build_router(cfg);
-
-    let call_request = Request::builder()
-        .method("POST")
-        .uri("/v1/mcp")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2025-06-18")
-        .header("x-api-token", API_TOKEN)
-        .body(Body::from(
-            norito::json::to_vec(&norito::json!({
-                "jsonrpc": "2.0",
-                "id": "cancel-me",
-                "method": "tools/call",
-                "params": {
-                    "name": "iroha.transactions.wait",
-                    "arguments": {
-                        "query": { "hash": ("ab".repeat(32)) },
-                        "timeout_ms": 600_000,
-                        "poll_interval_ms": 100
-                    },
-                    "_meta": { "iroha/cancellationNonce": (CANCELLATION_NONCE) }
-                }
-            }))
-            .expect("serialize call"),
-        ))
-        .expect("valid call request");
-    let call_app_clone = app.clone();
-    let mut live_call = tokio::spawn(async move { call_app(&call_app_clone, call_request).await });
-
-    let cancelled = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let cancellation_request = Request::builder()
-                .method("POST")
-                .uri("/v1/mcp")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::ACCEPT, "application/json, text/event-stream")
-                .header("MCP-Protocol-Version", "2025-06-18")
-                .header("x-api-token", API_TOKEN)
-                .body(Body::from(
-                    norito::json::to_vec(&norito::json!({
-                        "jsonrpc": "2.0",
-                        "method": "notifications/cancelled",
-                        "params": {
-                            "requestId": "cancel-me",
-                            "reason": "integration test",
-                            "_meta": { "iroha/cancellationNonce": (CANCELLATION_NONCE) }
-                        }
-                    }))
-                    .expect("serialize cancellation"),
-                ))
-                .expect("valid cancellation request");
-            let cancellation = call_app(&app, cancellation_request).await;
-            assert_eq!(cancellation.status(), StatusCode::ACCEPTED);
-            assert!(read_body_bytes(cancellation).await.is_empty());
-
-            tokio::select! {
-                result = &mut live_call => return result.expect("live request task joins"),
-                () = tokio::time::sleep(Duration::from_millis(10)) => {}
-            }
-        }
-    })
-    .await
-    .expect("repeated cancellation reaches the registered request");
-    assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
-    assert_eq!(
-        cancelled
-            .headers()
-            .get(header::CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok()),
-        Some("private, no-store")
-    );
-    assert!(read_body_bytes(cancelled).await.is_empty());
-    app.shutdown().await;
-}
-#[tokio::test]
 async fn mcp_jsonrpc_response_messages_return_accepted_without_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -1336,13 +1276,13 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
             "expected `{required}` in visible tool list, got {names:?}"
         );
     }
-    for required in [
+    for unavailable in [
         "iroha.accounts.faucet.prepare",
         "iroha.accounts.faucet.submit",
     ] {
         assert!(
-            names.iter().any(|name| name == required),
-            "consensus consume-once faucet tool `{required}` must be exposed to writers"
+            names.iter().all(|name| name != unavailable),
+            "disabled faucet tool `{unavailable}` leaked into writer discovery"
         );
     }
     for operator_only in [
@@ -1365,6 +1305,12 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
             "retired server-side deployment tool leaked into MCP: {retired}"
         );
     }
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("torii.post_v1_accounts_faucet")),
+        "generic OpenAPI faucet aliases must never be projected"
+    );
     assert!(
         !names.iter().any(|name| name.starts_with("torii.")),
         "raw torii.* tools must be hidden by the public allowlist"
@@ -1628,147 +1574,6 @@ async fn mcp_jsonrpc_requires_protocol_header_after_initialize() {
         let response = call_app(&app, request).await;
         assert_eq!(response.status(), expected_status);
     }
-    app.shutdown().await;
-}
-#[tokio::test]
-async fn mcp_jsonrpc_enforces_rate_limit() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(1).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(1).expect("nonzero burst"));
-    let app = build_router(cfg);
-    let request = initialize_request(1);
-    let (status, _) = post_mcp(&app, request.clone()).await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, body) = post_mcp(&app, request).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32029)
-    );
-    app.shutdown().await;
-}
-#[tokio::test]
-async fn mcp_jsonrpc_charges_each_inner_tool_batch_dispatch() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(1).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(2).expect("nonzero burst"));
-    let app = build_router(cfg);
-    let (status, body) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": "two-inner-dispatches",
-            "method": "tools/call_batch",
-            "params": {
-                "calls": [
-                    { "name": "iroha.health", "arguments": {} },
-                    { "name": "iroha.health", "arguments": {} }
-                ]
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        body.get("result").is_some(),
-        "batch should consume its two-token budget"
-    );
-
-    let (status, body) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": "after-inner-dispatches",
-            "method": "ping"
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32029)
-    );
-    app.shutdown().await;
-}
-#[tokio::test]
-async fn mcp_one_per_minute_rate_does_not_round_up_to_one_per_second() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(1).expect("nonzero rate"));
-    cfg.torii.mcp.burst = Some(NonZeroU32::new(1).expect("nonzero burst"));
-    let app = build_router(cfg);
-    let request = norito::json!({
-        "jsonrpc": "2.0",
-        "id": "one-per-minute",
-        "method": "ping"
-    });
-    let (status, _) = post_mcp(&app, request.clone()).await;
-    assert_eq!(status, StatusCode::OK);
-
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
-
-    let (status, body) = post_mcp(&app, request).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32029)
-    );
-    app.shutdown().await;
-}
-#[tokio::test]
-async fn mcp_jsonrpc_rejects_oversized_payload() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.max_request_bytes = 32;
-    let app = build_router(cfg);
-    let request_body =
-        norito::json::to_vec(&initialize_request(1)).expect("serialize initialize request");
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mcp")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(request_body))
-                .expect("valid request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let body = read_json_body(response).await;
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(-32600)
-    );
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("max_request_bytes"))
-            .and_then(Value::as_u64),
-        Some(32)
-    );
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("error_code"))
-            .and_then(Value::as_str),
-        Some("request_payload_too_large")
-    );
     app.shutdown().await;
 }
 #[tokio::test]
@@ -3011,6 +2816,7 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     cfg.torii.mcp.max_tools_per_list = 5;
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.mcp.expose_operator_routes = true;
+    enable_test_faucet(&mut cfg);
     let app = build_router(cfg);
     let tools = list_all_tools(&app).await;
     let names = tools
@@ -3420,6 +3226,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         name.as_str(),
         "iroha.accounts.onboard" | "iroha.accounts.faucet"
     )));
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("torii.post_v1_accounts_faucet")),
+        "generic OpenAPI faucet aliases must never be projected"
+    );
     assert!(
         names
             .iter()

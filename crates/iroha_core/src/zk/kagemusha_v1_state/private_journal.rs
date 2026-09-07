@@ -524,7 +524,8 @@ mod tests {
         // Spawning a utility can transiently inherit a parallel test's flock before
         // close-on-exec, making that journal appear open after its owner has dropped.
         #[cfg(target_vendor = "apple")]
-        #[allow(unsafe_code)] // rustix does not expose mkfifoat on Apple; this test owns the path.
+        #[allow(unsafe_code)]
+        // rustix does not expose mkfifoat on Apple; this test owns the path.
         {
             use std::os::unix::ffi::OsStrExt as _;
             unsafe extern "C" {

@@ -1,0 +1,5 @@
+error: registration builder schema_name must be nonempty without surrounding whitespace or control characters
+ --> tests/ui_fail/registrable_builder_identity_invalid.rs:5:37
+  |
+5 | #[registrable_builder(schema_name = " leading whitespace")]
+  |                                     ^^^^^^^^^^^^^^^^^^^^^

@@ -11,15 +11,12 @@
 //!   polynomial commit/open with IPA proofs, and ships deterministic backends
 //!   for Pasta/Pallas and BN254. Their IPA bases use the curve implementations'
 //!   domain-separated hash-to-curve maps so no public discrete-log relationship
-//!   is introduced between bases. An optional, algebraic Goldilocks backend
-//!   remains available only for compatibility testing.
+//!   is introduced between bases.
 //! - Cryptographic security depends on the chosen backend curve/field. Both
 //!   production backends derive generators transparently from the generator DST so
-//!   proofs are reproducible across hosts. The Goldilocks test backend is not a
-//!   cryptographically binding commitment group. Additional backends can be
-//!   added in the future as deterministic implementations mature.
-//! - API is designed to be no-std-friendly in the future, but currently
-//!   targets `std` for simplicity.
+//!   proofs are reproducible across hosts. Goldilocks is a STARK field, not an IPA
+//!   commitment group; IPA envelopes with that field identity are rejected.
+//! - The implementation targets `std`.
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 #[cfg(feature = "full")]
@@ -59,12 +56,6 @@ pub mod vega;
 #[cfg(feature = "model-primitives")]
 pub mod vega_constants;
 // Re-exports for the default (Pallas) backend.
-#[cfg(all(feature = "full", feature = "goldilocks_backend"))]
-pub use backend::goldilocks::{
-    Group as GoldilocksGroup, IpaProof as GoldilocksIpaProof, IpaProver as GoldilocksIpaProver,
-    IpaVerifier as GoldilocksIpaVerifier, Params as GoldilocksParams,
-    Polynomial as GoldilocksPolynomial, Scalar as GoldilocksScalar,
-};
 #[cfg(feature = "full")]
 pub use backend::{
     IpaBackend, IpaGroup, IpaScalar, bn254,
@@ -355,41 +346,9 @@ pub mod norito_helpers {
                     p_g,
                 })
             }
-            ZkCurveId::Goldilocks => {
-                #[cfg(feature = "goldilocks_backend")]
-                {
-                    let params =
-                        params_from_wire::<backend::goldilocks::GoldilocksBackend>(&env.params)?;
-                    let proof = proof_from_wire_backend::<backend::goldilocks::GoldilocksBackend>(
-                        &env.proof,
-                    )?;
-                    let z =
-                        <backend::goldilocks::GoldilocksBackend as IpaBackend>::Scalar::from_bytes(
-                            &env.public.z,
-                        )?;
-                    let t =
-                        <backend::goldilocks::GoldilocksBackend as IpaBackend>::Scalar::from_bytes(
-                            &env.public.t,
-                        )?;
-                    let p_g =
-                        <backend::goldilocks::GoldilocksBackend as IpaBackend>::Group::from_bytes(
-                            &env.public.p_g,
-                        )?;
-                    Ok(DecodedEnvelope::Goldilocks {
-                        params,
-                        proof: Box::new(proof),
-                        z,
-                        t,
-                        p_g,
-                    })
-                }
-                #[cfg(not(feature = "goldilocks_backend"))]
-                {
-                    Err(Error::UnsupportedBackend {
-                        backend: ZkCurveId::Goldilocks,
-                    })
-                }
-            }
+            ZkCurveId::Goldilocks => Err(Error::UnsupportedBackend {
+                backend: ZkCurveId::Goldilocks,
+            }),
             ZkCurveId::Bn254 => {
                 let params = params_from_wire::<backend::bn254::Bn254Backend>(&env.params)?;
                 let proof = proof_from_wire_backend::<backend::bn254::Bn254Backend>(&env.proof)?;
@@ -503,23 +462,6 @@ pub mod norito_helpers {
             /// Commitment to coefficients.
             p_g: backend::pallas::Group,
         },
-        /// Goldilocks backend contents.
-        #[cfg(feature = "goldilocks_backend")]
-        Goldilocks {
-            /// Parameters (generator set).
-            params: Arc<crate::params::Params<backend::goldilocks::GoldilocksBackend>>,
-            /// IPA proof body.
-            proof: Box<crate::ipa::IpaProof<backend::goldilocks::GoldilocksBackend>>,
-            /// Evaluation point.
-            z: backend::goldilocks::Scalar,
-            /// Claimed evaluation.
-            t: backend::goldilocks::Scalar,
-            /// Commitment to coefficients.
-            p_g: backend::goldilocks::Group,
-        },
-        #[cfg(not(feature = "goldilocks_backend"))]
-        /// Goldilocks backend placeholder when the backend is not compiled in.
-        Goldilocks,
         /// BN254 backend contents.
         Bn254 {
             /// Parameters (generator set).
@@ -669,18 +611,6 @@ pub mod batch {
                 proof.as_ref(),
                 metadata,
             ),
-            #[cfg(feature = "goldilocks_backend")]
-            DecodedEnvelope::Goldilocks { .. } => {
-                return Err(Error::UnsupportedBackend {
-                    backend: ZkCurveId::Goldilocks,
-                });
-            }
-            #[cfg(not(feature = "goldilocks_backend"))]
-            DecodedEnvelope::Goldilocks => {
-                return Err(Error::UnsupportedBackend {
-                    backend: ZkCurveId::Goldilocks,
-                });
-            }
         };
         match result {
             Ok(()) => Ok(true),

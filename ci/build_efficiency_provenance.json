@@ -81,7 +81,7 @@
     }
   },
   "object_format": "sha1",
-  "schema_version": 1,
+  "schema_version": 3,
   "selected_paths": [
     {
       "donor": {
@@ -257,15 +257,14 @@
     }
   },
   "source_budget": {
-    "baseline": 5067263,
-    "ceiling": 4540000,
-    "commit_role": "source_budget_baseline",
     "excluded_prefixes": [
       "docs/portal/node_modules/",
       "target/",
       "vendor/"
     ],
     "path": "ci/source_file_budget.json",
-    "schema_version": 1
+    "production_limit": 5000,
+    "schema_version": 2,
+    "test_limit": 3000
   }
 }

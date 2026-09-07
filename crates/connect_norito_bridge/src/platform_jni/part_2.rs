@@ -61,6 +61,7 @@ pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
 pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
+    expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     if archive.is_null() {
         return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
@@ -77,14 +78,109 @@ pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
     if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
     }
-    match env.convert_byte_array(&archive) {
-        Ok(bytes) => validate_privacy_capability_archive_v1(&bytes).code(),
-        Err(_) => PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+    let Ok(bytes) = env.convert_byte_array(&archive) else {
+        return PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code();
+    };
+    let status = validate_privacy_capability_archive_v1(&bytes);
+    if !status.is_valid() || expected_network.is_null() {
+        return status.code();
+    }
+    let Some(network) = java_privacy_expected_network(env, &expected_network) else {
+        return PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest.code();
+    };
+    let Ok(manifest) = norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(&bytes)
+    else {
+        return PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code();
+    };
+    if java_privacy_manifest_network_matches(&manifest, &network) {
+        status.code()
+    } else {
+        PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest.code()
+    }
+}
+fn java_privacy_expected_network(
+    env: &mut jni::JNIEnv<'_>,
+    network: &jni::objects::JByteArray<'_>,
+) -> Option<[u8; 32]> {
+    if network.is_null() || env.get_array_length(network).ok()? != 32 {
+        return None;
+    }
+    let bytes: [u8; 32] = env.convert_byte_array(network).ok()?.try_into().ok()?;
+    (bytes[31] & 1 == 1).then_some(bytes)
+}
+fn java_privacy_manifest_network_matches(
+    manifest: &PrivacyExact12CapabilityManifestV1,
+    expected_network: &[u8; 32],
+) -> bool {
+    expected_network[31] & 1 == 1
+        && manifest.qualification.as_ref().is_none_or(|qualification| {
+            java_privacy_deployment_network_matches(
+                &qualification.deployment_qualification.network_id,
+                &qualification.deployment_qualification.genesis_hash,
+                expected_network,
+            )
+        })
+}
+fn java_privacy_deployment_network_matches(
+    network: &NetworkId,
+    genesis_hash: &[u8; 32],
+    expected_network: &[u8; 32],
+) -> bool {
+    expected_network[31] & 1 == 1
+        && network.as_bytes() == expected_network
+        && genesis_hash == expected_network
+}
+
+#[cfg(test)]
+mod privacy_capability_network_tests {
+    use super::*;
+
+    #[test]
+    fn deployment_and_raw_genesis_must_match_the_exact_expected_network() {
+        let expected = [0xA5; 32];
+        let other = [0xA7; 32];
+        let network = network_id_from_raw_bytes(&expected).expect("canonical network");
+        let other_network = network_id_from_raw_bytes(&other).expect("other canonical network");
+        assert!(java_privacy_deployment_network_matches(
+            &network, &expected, &expected
+        ));
+        assert!(!java_privacy_deployment_network_matches(
+            &network, &expected, &other
+        ));
+        assert!(!java_privacy_deployment_network_matches(
+            &other_network,
+            &other,
+            &expected
+        ));
+        assert!(!java_privacy_deployment_network_matches(
+            &network, &other, &expected
+        ));
+        assert!(!java_privacy_deployment_network_matches(
+            &network,
+            &expected,
+            &[0xA4; 32]
+        ));
+    }
+
+    #[test]
+    fn tuple_and_construction_reject_malformed_archives_before_admission() {
+        assert!(!java_privacy_exact12_capability_tuple_admitted(
+            b"archived-shell",
+            0,
+            &[0xA5; 32]
+        ));
+        assert!(!java_privacy_exact12_submit_proof_admitted(
+            b"archived-shell",
+            0,
+            b"instruction",
+            &[0xA5; 32],
+        ));
     }
 }
 pub(super) fn java_privacy_exact12_capability_tuple_admitted(
     archive: &[u8],
     protocol_index: jni::sys::jint,
+    expected_network: &[u8; 32],
 ) -> bool {
     if !validate_privacy_capability_archive_v1(archive).is_valid() {
         return false;
@@ -99,6 +195,9 @@ pub(super) fn java_privacy_exact12_capability_tuple_admitted(
     else {
         return false;
     };
+    if !java_privacy_manifest_network_matches(&manifest, expected_network) {
+        return false;
+    }
     let Ok(catalog) = compiled_privacy_profile_catalog_v1() else {
         return false;
     };
@@ -116,8 +215,12 @@ pub(super) fn java_native_privacy_require_exact12_capability_tuple(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
+    expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    let Some(network) = java_privacy_expected_network(env, &expected_network) else {
+        return JNI_FALSE;
+    };
     if archive.is_null() {
         return JNI_FALSE;
     }
@@ -134,7 +237,8 @@ pub(super) fn java_native_privacy_require_exact12_capability_tuple(
     let Ok(mut archive_bytes) = env.convert_byte_array(&archive) else {
         return JNI_FALSE;
     };
-    let admitted = java_privacy_exact12_capability_tuple_admitted(&archive_bytes, protocol_index);
+    let admitted =
+        java_privacy_exact12_capability_tuple_admitted(&archive_bytes, protocol_index, &network);
     archive_bytes.fill(0);
     if admitted { JNI_TRUE } else { JNI_FALSE }
 }
@@ -142,9 +246,13 @@ pub(super) fn java_privacy_exact12_submit_proof_admitted(
     manifest_archive: &[u8],
     protocol_index: jni::sys::jint,
     instruction_archive: &[u8],
+    expected_network: &[u8; 32],
 ) -> bool {
-    if !java_privacy_exact12_capability_tuple_admitted(manifest_archive, protocol_index)
-        || instruction_archive.is_empty()
+    if !java_privacy_exact12_capability_tuple_admitted(
+        manifest_archive,
+        protocol_index,
+        expected_network,
+    ) || instruction_archive.is_empty()
         || instruction_archive.len()
             > usize::try_from(TAIRA_PRIVACY_MAX_ACTION_BYTES_V1)
                 .expect("u32 privacy action limit fits usize")
@@ -175,6 +283,13 @@ pub(super) fn java_privacy_exact12_submit_proof_admitted(
     instruction.envelope.protocol_id == expected_protocol
         && instruction
             .envelope
+            .statement
+            .context()
+            .network_id
+            .as_bytes()
+            == expected_network
+        && instruction
+            .envelope
             .validate_against_activation(
                 activation,
                 &manifest.consensus_policy.current_limits,
@@ -187,8 +302,12 @@ pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
     manifest_archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
     instruction_archive: jni::objects::JByteArray<'_>,
+    expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    let Some(network) = java_privacy_expected_network(env, &expected_network) else {
+        return JNI_FALSE;
+    };
     if manifest_archive.is_null() || instruction_archive.is_null() {
         return JNI_FALSE;
     }
@@ -227,6 +346,7 @@ pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
         &manifest_bytes,
         protocol_index,
         &instruction_bytes,
+        &network,
     );
     manifest_bytes.fill(0);
     instruction_bytes.fill(0);

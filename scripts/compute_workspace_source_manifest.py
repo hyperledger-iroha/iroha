@@ -188,6 +188,9 @@ def _git_source_paths(root: Path) -> list[str]:
         ":(top).gitignore",
         ":(glob)**/.gitignore",
     )
+    untracked_ignore_policy = _effective_untracked_ignore_policy(
+        root, untracked_ignore_policy
+    )
     if untracked_ignore_policy:
         raise DirtyReleaseSourceError(
             "workspace has untracked ignore policy: "
@@ -215,6 +218,57 @@ def _git_source_paths(root: Path) -> list[str]:
     # explicit so future ignore-policy drift cannot remove it from evidence.
     paths.add(_WORKSPACE_LOCKFILE)
     return sorted(paths, key=os.fsencode)
+
+
+def _effective_untracked_ignore_policy(root: Path, policies: list[str]) -> list[str]:
+    """Reject unsigned ignore rules except below already excluded directories.
+
+    Git never reads a nested ignore policy below an excluded parent directory.
+    Only exclusions from tracked ignore files establish that boundary here;
+    repository-local excludes and an untracked policy cannot authorize it.
+    Ignoring just the policy filename does not exclude its parent directory.
+    """
+
+    parents = {
+        os.fsencode(posixpath.dirname(path) + "/")
+        for path in policies
+        if posixpath.dirname(path)
+    }
+    if not parents:
+        return policies
+    tracked = {
+        os.fsencode(path)
+        for path in _git_paths(
+            root, "ls-files", "--cached", "--",
+            ":(top).gitignore", ":(glob)**/.gitignore",
+        )
+    }
+    result = subprocess.run(
+        _git_command(
+            root, "check-ignore", "--no-index", "--verbose", "-z", "--stdin"
+        ),
+        input=b"".join(parent + b"\0" for parent in sorted(parents)),
+        cwd=root,
+        env=_git_read_only_environment(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    fields = result.stdout.split(b"\0")
+    if fields.pop() != b"" or len(fields) % 4:
+        raise RuntimeError("git returned malformed parent ignore rules")
+    excluded = set()
+    for offset in range(0, len(fields), 4):
+        policy, _line, pattern, parent = fields[offset : offset + 4]
+        if parent not in parents:
+            raise RuntimeError("git returned an unexpected ignore parent")
+        if policy in tracked and pattern and not pattern.startswith(b"!"):
+            excluded.add(parent)
+    return [
+        path for path in policies
+        if os.fsencode(posixpath.dirname(path) + "/") not in excluded
+    ]
 
 
 def _git_stdout(root: Path, *arguments: str) -> str:

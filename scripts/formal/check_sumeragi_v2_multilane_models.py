@@ -10,7 +10,6 @@ output as deductive proof.
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import re
@@ -216,54 +215,6 @@ def _validate_queue_plan_autonomous_only_contract(
     )
 
 
-def _replace_exact_tokens(tokens: tuple[str, ...], replacements: dict[str, str]) -> tuple[str, ...]:
-    """Return the reviewed token list rebound to the merged production spelling."""
-
-    return tuple(replacements.get(token, token) for token in tokens)
-
-
-_QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS = {
-    "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(": (
-        "IrohaNetwork::start_with_crypto_and_initial_authorities("
-    ),
-}
-QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = tuple(
-    (
-        relative,
-        kind,
-        symbol,
-        _replace_exact_tokens(tokens, _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS),
-    )
-    for relative, kind, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_BINDINGS
-)
-QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = tuple(
-    (
-        relative,
-        kind,
-        symbol,
-        _replace_exact_tokens(tokens, _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS),
-    )
-    for relative, kind, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS
-)
-QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = tuple(
-    (
-        (
-            relative,
-            "queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation",
-            (
-                'expect_err("wrong-network journal entrypoint must fail startup")',
-                "failed canonical stateless validation",
-                "assert!(!replay_queue.txs.contains_key(&hash));",
-                "live_record_count()",
-                "stateless failure must not append a tombstone or replacement",
-            ),
-        )
-        if symbol
-        == "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup"
-        else (relative, symbol, tokens)
-    )
-    for relative, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS
-)
 _INFLIGHT_CURRENT_PRODUCTION_BINDINGS = {
     (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -424,24 +375,6 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = tuple(
     )
     for relative, kind, symbol, tokens in INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS
 )
-_SUPERSEDED_NATIVE_RECOVERY_BINDINGS = frozenset(
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        symbol,
-    )
-    for symbol in (
-        "pending_native_participant_recovery_markers",
-        "retire_native_participant_recovery_request",
-        "reconcile_native_participant_recovery_requests",
-        "service_next_native_participant_recovery_request",
-        "schedule_native_participant_recovery_request",
-        "validate_native_participant_recovery_request",
-        "serve_historical_recovery_request",
-        "accept_native_participant_recovery_response",
-        "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
-        "V2LaneWorkAdapter::repair_globally_applied_lane_receipts",
-    )
-)
 _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
@@ -459,35 +392,29 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
         "CanonicalExecutedBlockRecovery::accept_with_ingress_ownership",
         "CanonicalExecutedBlockRecovery::accept_response",
+        "CanonicalExecutedBlockRecovery::need_capacity",
+        "CanonicalExecutedBlockRecovery::retire_outstanding_request",
+        "CanonicalExecutedBlockRecovery::reset_front_assembly",
+        "CanonicalExecutedBlockRecovery::reconcile_cached_front",
+    )
+).union(
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        symbol,
+    )
+    for symbol in (
+        "serve_historical_recovery_request",
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
+        "V2LaneWorkAdapter::ensure_globally_applied_lane_receipts_durable",
+        "V2LaneWorkAdapter::activate_after_lane_drain_queue_install",
     )
 )
-_ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset()
 _PRODUCTION_TOKEN_REBINDINGS = {
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "V2LaneWorkAdapter::has_pending_historical_recovery",
-        "native_participant_recovery_requests.is_empty",
-    ): "!self.historical_recovery_sessions.is_empty()",
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "V2LaneWorkAdapter::has_pending_historical_recovery",
-        "pending_native_participant_recovery_markers",
-    ): "!self.historical_recovery_sessions.is_empty()",
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "V2LaneWorkAdapter::has_pending_historical_recovery",
-        "Err(_) => true",
-    ): "!self.historical_recovery_sessions.is_empty()",
     (
         "crates/iroha_core/src/queue.rs",
         "release_lane_reservations_in_order_inner",
         "let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;",
     ): "self.fifo_with_released_reservations_locked(&released_records)?;",
-    (
-        "crates/irohad/src/main.rs",
-        "Iroha::start_with_runtime_deps",
-        "finalize_plan_journal_startup_recovery()",
-    ): "replay_plan_journal(&state)",
 }
 
 _RELEASE_SOURCE_TOKEN_REBINDINGS = {
@@ -1932,6 +1859,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
             "queue_plan_pending_route_member_marker_key",
             "decode_exact_queue_plan_pending_route_member_marker",
+            "marker != expected",
             "present = present.saturating_add(1)",
             "present == obligation.routes.len()",
             "QueuePlanPendingRouteMemberState::AllPresent",
@@ -1999,6 +1927,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "retains pending reverse index",
             "terminal.binding_hash == registry_binding_hash",
             "Some(terminal.signed_transaction_hash)",
+            "conflicts with registry ownership or committed membership",
             "QueuePlanAdmissionApplicationState::Applied",
         ),
     ),
@@ -2091,12 +2020,113 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "classify_pending_queue_plan_admission",
         (
-            "pending_queue_plan_admission_registry_lookup",
+            "let state_view = self.view();",
+            "Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "classify_pending_queue_plan_admission_in_view",
+        (
+            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?",
             "QueuePlanAdmissionApplicationState::PendingStale",
             "PendingQueuePlanAdmissionDisposition::Stale",
             "QueuePlanAdmissionApplicationState::Pending",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
             "QueuePlanAdmissionApplicationState::Applied",
-            "PendingQueuePlanAdmissionDisposition::Exact",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "Queue::classify_plan_admission_context_in_view(",
+            "PendingQueuePlanAdmissionDisposition::Future",
+            "Self::validate_queue_plan_admissions_for_carrier_in_view(",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "pending_queue_plan_admission_registry_lookup_in_view",
+        (
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "state_view.network_id()",
+            "Self::queue_plan_admission_registry_match_in_view(",
+            "admission.registry_key.entrypoint_hash.clone()",
+            "admission.registry_value.binding_hash",
+            "map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?",
+            "Self::queue_plan_admission_application_state(state_view, &admission)?",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "persist_classified_queue_plan_admission",
+        (
+            "const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);",
+            "self.queue_plan_admission_persistence_lock.lock()",
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "pending_queue_plan_admission_certificate(incoming_hash)?",
+            "pending_queue_plan_admission_certificates_bounded(",
+            "self.kura.pending_queue_plan_admission_capacity()",
+            "existing.registry_key != incoming.registry_key",
+            "existing.certificate.binding == incoming.certificate.binding",
+            "self.state_commit_lock.lock()",
+            "Self::classify_pending_queue_plan_admission_in_view(",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
+            "verify_pending_queue_plan_admission_durable_height(committed_height)",
+            "another live QueuePlan binding already owns the same logical admission",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "expected_durable_height != committed_height",
+            "one_ahead != Some(actual_durable_height)",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "Instant::now() >= *deadline",
+            "std::thread::yield_now();",
+            "Err(error) => return Err(error.into())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+        (
+            "self.ensure_canonical_storage_not_poisoned()?",
+            "self.canonical_chain_lock.lock()",
+            "self.block_store.lock().read_exact_durable_index_count()?",
+            "actual_durable_height != expected_durable_height",
+            "Error::QueuePlanAdmissionDurableHeightMismatch",
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "verify_pending_queue_plan_admission_durable_height",
+        (
+            "self.ensure_canonical_storage_not_poisoned()?",
+            "self.canonical_chain_lock.lock()",
+            "self.block_store.lock().read_exact_durable_index_count()?",
+            "actual_durable_height != expected_durable_height",
+            "Error::QueuePlanAdmissionDurableHeightMismatch",
+            "Ok(())",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/lib.rs",
+        "fn",
+        "persist_queue_plan_admission_certificate",
+        (
+            "QueuePlanAdmissionCertificateStrengthV1::Quorum",
+            ".persist_classified_queue_plan_admission(&snapshot.body)",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
+            "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
+            "admission.certificate.binding != *expected_binding",
+            "snapshot.body = durable_certificate;",
+            "disseminate_queue_plan_admission_publication",
+            "notify_pending_queue_plan_admission",
+            "torii_proxy_snapshot_to_response",
         ),
     ),
     (
@@ -2253,6 +2283,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "queue_plan_pending_signed_alias_members_from_storage",
             "let mut affected_routes = BTreeSet::new()",
             "for (entrypoint_hash, expected_binding_hash) in &pending_obligations",
+            "decode_exact_queue_plan_pending_obligation_marker",
             "affected_routes.extend(obligation.routes.iter().copied())",
             "for member in alias_members.iter().flatten()",
             "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
@@ -2285,42 +2316,6 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "resolve_required_queue_plan_pending_obligations(required, committed_signed_identities)",
         ),
     ),
-)
-# These helpers are the exact replicated replay-terminal projection layered on
-# the original admission-registry model.  They are source-bound here even
-# though the model ledger still names only the admission-facing projection;
-# skipping its stale token rows avoids treating obsolete helper shapes as
-# authority while retaining stricter checks against the current State code.
-QUEUE_PLAN_PENDING_MEMBERSHIP_SOURCE_REBIND_SYMBOLS = frozenset(
-    {
-        "QueuePlanPendingSignedAliasMemberV1",
-        "QueuePlanSignedAliasTerminalV1",
-        "queue_plan_pending_exact_route_member_state_in_storage",
-        "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
-        "prevalidate_queue_plan_pending_route_rosters",
-        "queue_plan_pending_signed_alias_member_from_obligation",
-        "queue_plan_terminal_signed_alias_member_from_obligation",
-        "queue_plan_pending_signed_alias_member_marker_prefix",
-        "queue_plan_pending_signed_alias_member_marker_key",
-        "queue_plan_pending_signed_alias_member_marker_payload",
-        "decode_exact_queue_plan_pending_signed_alias_member_marker",
-        "queue_plan_signed_alias_terminal_marker_key",
-        "queue_plan_signed_alias_terminal_marker_key_from_claim",
-        "queue_plan_signed_alias_terminal_marker_payload",
-        "decode_exact_queue_plan_signed_alias_terminal_marker",
-        "require_queue_plan_pending_signed_alias_member_marker",
-        "queue_plan_pending_signed_alias_members_from_storage",
-        "queue_plan_registry_owner_application_state_in_view",
-        "queue_plan_binding_application_state",
-        "queue_plan_binding_application_state_in_storage",
-        "queue_plan_binding_application_evidence_in_view",
-        "stage_queue_plan_pending_obligation_marker_in_storage",
-        "resolve_queue_plan_pending_obligation_in_storage",
-        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
-        "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
-        "resolve_required_queue_plan_pending_obligations",
-        "resolve_queue_plan_pending_obligations_from_block",
-    }
 )
 QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN = (
     QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
@@ -2532,14 +2527,61 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
-        "classify_pending_queue_plan_admission",
+        "classify_pending_queue_plan_admission_in_view",
         (
+            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?",
             "QueuePlanAdmissionApplicationState::PendingStale => {\n"
-            "                        PendingQueuePlanAdmissionDisposition::Stale\n"
-            "                    }",
-            "QueuePlanAdmissionApplicationState::Pending\n"
-            "                    | QueuePlanAdmissionApplicationState::Applied => {",
-            "PendingQueuePlanAdmissionDisposition::Exact",
+            "                            PendingQueuePlanAdmissionDisposition::Stale",
+            "QueuePlanAdmissionApplicationState::Pending => {",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
+            "QueuePlanAdmissionApplicationState::Applied => {",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "persist_classified_queue_plan_admission",
+        (
+            "let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();",
+            "pending_queue_plan_admission_certificates_bounded(",
+            "let state_commit = self.state_commit_lock.lock();",
+            "let state_view = self.view();",
+            "let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(",
+            "let persistence_result =",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "match persistence_result {",
+            "one_ahead != Some(actual_durable_height)",
+            "drop(state_view);",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            ".get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT)",
+            "Instant::now() >= *deadline",
+            "std::thread::yield_now();",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+        (
+            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;",
+            "if actual_durable_height != expected_durable_height",
+            "return Err(Error::QueuePlanAdmissionDurableHeightMismatch",
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/lib.rs",
+        "fn",
+        "persist_queue_plan_admission_certificate",
+        (
+            "validate_queue_plan_admission_certificate_for_network_digest_v1(",
+            ".persist_classified_queue_plan_admission(&snapshot.body)",
+            "let (certificate_hash, durable_certificate) = match outcome",
+            "snapshot.body = durable_certificate;",
+            "disseminate_queue_plan_admission_publication(",
+            "notify_pending_queue_plan_admission)",
         ),
     ),
     (
@@ -2555,6 +2597,52 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
     ),
 )
 QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "pending_queue_plan_persistence_serializes_alternate_quorum_subsets",
+        (
+            "assert_ne!(first_certificate, second_certificate)",
+            "first_state.persist_classified_queue_plan_admission(&first_certificate)",
+            "second_state.persist_classified_queue_plan_admission(&second_certificate)",
+            "scans_before + 1",
+            "assert_eq!(first, second)",
+            "assert_eq!(inventory, vec![first])",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "pending_queue_plan_persistence_yields_to_one_ahead_state_publication",
+        (
+            "store_block(Arc::new(successor.clone()))",
+            "admission_state.persist_classified_queue_plan_admission(&certificate)",
+            "drop(state_commit_guard)",
+            "commit_block_metadata_to_state(&state, &successor)",
+            "assert_eq!(persisted_hash, certificate_hash)",
+            "assert!(inserted)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew",
+        (
+            "QueuePlanAdmissionDurableHeightMismatch",
+            "one-ahead Kura must time out when State never publishes",
+            "a timed-out frontier reconciliation must not persist the certificate",
+            "Kura more than one ahead must fail closed",
+            "a hard frontier mismatch must not persist the certificate",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/tests/03_preflight_and_merge_entry.rs",
+        "pending_queue_plan_admission_exact_height_rejects_frontier_drift_before_write",
+        (
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(1, &bytes)",
+            "!kura.pending_queue_plan_admission_dir().exists()",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(0, &bytes)",
+            "verify_pending_queue_plan_admission_durable_height(1)",
+            "Some(bytes)",
+        ),
+    ),
     (
         "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
         "queue_plan_native_staging_is_an_exact_idempotent_compare_and_set",
@@ -3307,7 +3395,7 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$INFLIGHT_FIRST_RELEASE_MODULE" \\
   inflight_first_release_fixed.cfg \\
   18 \\
-  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV1ConjunctionBeforeReservationV1, MLReservationV1BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV1SelectedConjunctionBound4096\"""",
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV1ConjunctionBeforeReservationV1, MLReservationV1BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLDirectReleaseRequiresAbsentKura, MLTerminalDispositionExclusive, MLQueuePlanV1SelectedConjunctionBound4096\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -3416,6 +3504,9 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "inflight_first_release_release_complete_before_released_bug.cfg",
         "inflight_first_release_forget_release_before_fifo_bug.cfg",
         "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
+        "inflight_first_release_direct_release_with_active_kura_bug.cfg",
+        "inflight_first_release_direct_release_commit_conflict_bug.cfg",
+        "inflight_first_release_kura_without_payload_binding_bug.cfg",
     ):
         if forbidden in source:
             errors.append(
@@ -3575,6 +3666,8 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         APALACHE_INSTALLER_RELATIVE,
         TLC_RUNNER_RELATIVE,
         TLC_MUTATION_RUNNER_RELATIVE,
+        Path("scripts/formal/sumeragi_v2_tlc_artifacts.py"),
+        Path("scripts/tests/sumeragi_v2_tlc_artifacts_test.py"),
         *FORMAL_WORKFLOW_RELATIVES,
         Path("scripts/formal/check_sumeragi_v2_multilane_models.py"),
         Path("scripts/formal/sumeragi_v2_multilane_inflight_validation.py"),
@@ -3815,22 +3908,8 @@ def _validate_model(
         if Path(relative).is_absolute() or ".." in Path(relative).parts:
             errors.append(f"{module}: production path must stay within repo: {relative}")
             continue
-        if (
-            module == NATIVE_PREPUBLICATION_MODULE
-            and (relative, symbol) in _SUPERSEDED_NATIVE_RECOVERY_BINDINGS
-        ):
-            # The merged implementation replaced the adapter-local Native-only
-            # retry graph with the already source-bound generic canonical-body
-            # recovery corridor above.  Retain the legacy ledger rows as an
-            # explicit migration audit, but never pretend those deleted owners
-            # still exist in production.
-            continue
         key = (relative, symbol)
-        if key in seen_bindings and (
-            module,
-            relative,
-            symbol,
-        ) not in _ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS:
+        if key in seen_bindings:
             errors.append(f"{module}: duplicate production binding {relative}!{symbol}")
         seen_bindings.add(key)
         path, source = _read_reviewed_rust_source(
@@ -4800,13 +4879,13 @@ def _validate_native_exact_object_prune_contract(
                 )
 
 
-def _validate_queue_plan_pending_membership_contract(
-    root: Path, models: Any, errors: list[str]
-) -> None:
-    """Bind exact QueuePlan route members to bounded, all-route WSV updates."""
+def _validate_queue_plan_pending_membership_model_bindings(
+    models: Any, errors: list[str]
+) -> bool:
+    """Require one exact ledger row for every current QueuePlan owner."""
 
     if not isinstance(models, list):
-        return
+        return False
     queue_models = [
         model
         for model in models
@@ -4818,16 +4897,14 @@ def _validate_queue_plan_pending_membership_contract(
             "QueuePlan pending-membership source contract requires exactly one "
             f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE} model"
         )
-        return
+        return False
     production_symbols = queue_models[0].get("production_symbols")
     if not isinstance(production_symbols, list):
-        return
+        return False
 
     for relative, kind, symbol, expected_tokens in (
         QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
     ):
-        if symbol in QUEUE_PLAN_PENDING_MEMBERSHIP_SOURCE_REBIND_SYMBOLS:
-            continue
         matches = [
             binding
             for binding in production_symbols
@@ -4852,6 +4929,16 @@ def _validate_queue_plan_pending_membership_contract(
                 f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}: reviewed pending "
                 f"route-membership tokens changed for {relative}!{symbol}"
             )
+    return True
+
+
+def _validate_queue_plan_pending_membership_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind exact QueuePlan route members to bounded, all-route WSV updates."""
+
+    if not _validate_queue_plan_pending_membership_model_bindings(models, errors):
+        return
 
     state_path = root / QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
     if _regular_file(
@@ -5328,37 +5415,6 @@ exec(
 )
 
 
-def _models_with_current_component_tokens(models: Any) -> Any:
-    """Project ledger bindings through spelling-only merged-tree rebindings."""
-
-    if not isinstance(models, list):
-        return models
-    current = copy.deepcopy(models)
-    replacements = _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS
-    for model in current:
-        if not isinstance(model, dict):
-            continue
-        for binding in model.get("production_symbols", ()):
-            if not isinstance(binding, dict):
-                continue
-            tokens = binding.get("required_tokens")
-            if isinstance(tokens, list):
-                current_tokens = [
-                    replacements.get(token, token) for token in tokens
-                ]
-                if (
-                    binding.get("path") == "crates/irohad/src/main.rs"
-                    and binding.get("symbol") == "Iroha::start_with_runtime_deps"
-                ):
-                    current_tokens = [
-                        token
-                        for token in current_tokens
-                        if token != "finalize_plan_journal_startup_recovery()"
-                    ]
-                binding["required_tokens"] = current_tokens
-    return current
-
-
 def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     """Return structural/source-binding errors for the multilane model slice."""
 
@@ -5407,9 +5463,8 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         ledger.get(KURA_RETENTION_CONTRACT_KEY),
         errors,
     )
-    current_component_models = _models_with_current_component_tokens(models)
     validate_autonomous_terminal_recovery_contract(
-        root, current_component_models, errors, _rust_binding_item
+        root, models, errors, _rust_binding_item
     )
     _validate_stable_generation_diagnostics_contract(root, models, errors)
     _validate_native_participant_application_classifier_contract(
@@ -5420,9 +5475,9 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     _validate_native_exact_object_prune_contract(root, models, errors)
     _validate_queue_plan_pending_membership_contract(root, models, errors)
     _validate_queue_plan_startup_replay_contract(
-        root, current_component_models, errors
+        root, models, errors
     )
-    validate_queue_plan_autonomous_only_contract(root, formal_dir, current_component_models, errors, _rust_binding_item, _regular_file, TLA_DECLARATION_TEMPLATE)
+    validate_queue_plan_autonomous_only_contract(root, formal_dir, models, errors, _rust_binding_item, _regular_file, TLA_DECLARATION_TEMPLATE)
     _validate_inflight_layout_contract(
         root,
         formal_dir,

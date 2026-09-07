@@ -12,12 +12,14 @@ pub mod role {
             #[derive(Copy, Display)]
             #[display("Find all roles")]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            #[norito_schema(name = "iroha_data_model::query::role::model::FindRoles")]
             pub struct FindRoles;
             /// [`FindRoleIds`] Iroha Query finds `RoleId`s of
             /// all `Role`s presented.
             #[derive(Copy, Display)]
             #[display("Find all role ids")]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            #[norito_schema(name = "iroha_data_model::query::role::model::FindRoleIds")]
             pub struct FindRoleIds;
             /// [`FindRolesByAccountId`] Iroha Query finds all `Role`s for a specified account.
             #[derive(Display)]
@@ -26,6 +28,7 @@ pub mod role {
             // SAFETY: `FindRolesByAccountId` has no trap representation in `AccountId`
     /// Query for roles associated with a given account.
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            #[norito_schema(name = "iroha_data_model::query::role::model::FindRolesByAccountId")]
             pub struct FindRolesByAccountId {
                 /// `Id` of an account to find.
                 pub id: AccountId,
@@ -59,6 +62,7 @@ pub mod permission {
             // SAFETY: `FindPermissionsByAccountId` has no trap representation in `AccountId`
     /// Query for permissions associated with a given account.
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            #[norito_schema(name = "iroha_data_model::query::permission::model::FindPermissionsByAccountId")]
             pub struct FindPermissionsByAccountId {
                 /// `Id` of an account to find.
                 pub id: AccountId,
@@ -91,6 +95,8 @@ pub mod account {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::account::AccountAliasBindingRecord")]
     pub struct AccountAliasBindingRecord {
         /// Canonical account identifier that owns the binding.
         pub account_id: crate::account::AccountId,
@@ -121,6 +127,7 @@ pub mod account {
             #[derive(Display)]
             #[display("Find account `{id}`")]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountById")]
             pub struct FindAccountById {
                 /// Domainless account identifier to resolve.
                 pub id: crate::account::AccountId,
@@ -130,6 +137,7 @@ pub mod account {
             #[display("Find account by alias `{alias:?}`")]
             #[repr(transparent)]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountByAlias")]
             pub struct FindAccountByAlias {
                 /// Stable account alias whose bound account should be resolved.
                 pub alias: crate::account::AccountAlias,
@@ -138,11 +146,13 @@ pub mod account {
             #[derive(Copy, Display)]
             #[display("Find all accounts")]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccounts")]
             pub struct FindAccounts;
             /// [`FindAccountIds`] Iroha Query finds identifiers of all `Account`s presented.
             #[derive(Copy, Display)]
             #[display("Find all account ids")]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountIds")]
             pub struct FindAccountIds;
             /// [`FindAccountsWithAsset`] Iroha Query gets [`crate::asset::definition::AssetDefinition`] ids as input and
             /// finds all [`crate::account::Account`]s storing [`crate::asset::value::Asset`] with such definition.
@@ -152,6 +162,7 @@ pub mod account {
             // SAFETY: `FindAccountsWithAsset` has no trap representation in `AssetDefinitionId`
     /// Query for accounts that hold a specific asset.
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountsWithAsset")]
             pub struct FindAccountsWithAsset {
                 /// `Id` of the definition of the asset which should be stored in founded accounts.
                 pub asset_definition: AssetDefinitionId,
@@ -160,6 +171,7 @@ pub mod account {
             #[derive(Display)]
             #[display("Find aliases bound to account `{id}`")]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAliasesByAccountId")]
             pub struct FindAliasesByAccountId {
                 /// Domainless account identifier whose alias bindings should be resolved.
                 pub id: crate::account::AccountId,
@@ -175,6 +187,7 @@ pub mod account {
             #[display("Find recovery policy for alias `{alias:?}`")]
             #[repr(transparent)]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountRecoveryPolicyByAlias")]
             pub struct FindAccountRecoveryPolicyByAlias {
                 /// Stable account alias whose recovery policy should be loaded.
                 pub alias: crate::account::AccountAlias,
@@ -184,6 +197,7 @@ pub mod account {
             #[display("Find recovery request for alias `{alias:?}`")]
             #[repr(transparent)]
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountRecoveryRequestByAlias")]
             pub struct FindAccountRecoveryRequestByAlias {
                 /// Stable account alias whose recovery request should be loaded.
                 pub alias: crate::account::AccountAlias,
@@ -241,6 +255,9 @@ pub mod account {
             FindAccountsWithAsset, FindAliasesByAccountId,
         };
     }
+
+    #[cfg(test)]
+    mod captured_domain_queries_schema_tests;
 }
 pub mod asset {
     //! Asset-related query definitions.
@@ -256,17 +273,20 @@ pub mod asset {
         #[derive(Copy, Display)]
         #[display("Find all assets")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssets")]
         pub struct FindAssets;
         /// [`FindAssetsDefinitions`] Iroha Query finds all `AssetDefinition`s presented.
         #[derive(Copy, Display)]
         #[display("Find all asset definitions")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetsDefinitions")]
         pub struct FindAssetsDefinitions;
         /// [`FindAssetsByAccountId`] Iroha Query finds all `Asset`s owned by an account.
         #[derive(Display)]
         #[display("Find assets owned by `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetsByAccountId")]
         pub struct FindAssetsByAccountId {
             /// Identifier of the account that owns the assets.
             pub id: AccountId,
@@ -276,6 +296,7 @@ pub mod asset {
         #[display("Find asset `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetById")]
         pub struct FindAssetById {
             /// Identifier of the asset to look up.
             pub id: AssetId,
@@ -285,6 +306,7 @@ pub mod asset {
         #[display("Find asset definition `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetDefinitionById")]
         pub struct FindAssetDefinitionById {
             /// Identifier of the asset definition to look up.
             pub id: AssetDefinitionId,
@@ -326,6 +348,7 @@ pub mod repo {
         #[derive(Copy, Display)]
         #[display("Find all repo agreements")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::repo::model::FindRepoAgreements")]
         pub struct FindRepoAgreements;
     }
     pub mod prelude {
@@ -345,11 +368,13 @@ pub mod escrow {
         #[derive(Copy, Display)]
         #[display("Find all asset escrows")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::escrow::model::FindAssetEscrows")]
         pub struct FindAssetEscrows;
         /// Find a native asset escrow by identifier.
         #[derive(Display)]
         #[display("Find asset escrow `{escrow_id:?}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::escrow::model::FindAssetEscrowById")]
         pub struct FindAssetEscrowById {
             /// Escrow identifier.
             pub escrow_id: EscrowId,
@@ -358,6 +383,7 @@ pub mod escrow {
         #[derive(Display)]
         #[display("Find asset escrows by seller `{seller}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::escrow::model::FindAssetEscrowsBySeller")]
         pub struct FindAssetEscrowsBySeller {
             /// Seller account identifier.
             pub seller: AccountId,
@@ -366,6 +392,7 @@ pub mod escrow {
         #[derive(Display)]
         #[display("Find asset escrows by buyer `{buyer}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::escrow::model::FindAssetEscrowsByBuyer")]
         pub struct FindAssetEscrowsByBuyer {
             /// Buyer account identifier.
             pub buyer: AccountId,
@@ -374,6 +401,7 @@ pub mod escrow {
         #[derive(Display)]
         #[display("Find asset escrows by status `{status:?}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::escrow::model::FindAssetEscrowsByStatus")]
         pub struct FindAssetEscrowsByStatus {
             /// Lifecycle status filter.
             pub status: AssetEscrowStatus,
@@ -402,12 +430,14 @@ pub mod oracle {
         #[derive(Copy, Display)]
         #[display("Find oracle feeds")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleFeeds")]
         pub struct FindOracleFeeds;
         /// Find a registered oracle feed by id.
         #[derive(Display)]
         #[display("Find oracle feed `{feed_id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleFeedById")]
         pub struct FindOracleFeedById {
             /// Feed identifier to look up.
             pub feed_id: FeedId,
@@ -417,6 +447,7 @@ pub mod oracle {
         #[display("Find oracle history for feed `{feed_id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleHistoryByFeedId")]
         pub struct FindOracleHistoryByFeedId {
             /// Feed identifier whose history should be returned.
             pub feed_id: FeedId,
@@ -426,6 +457,7 @@ pub mod oracle {
         #[display("Find oracle provider stats for feed `{feed_id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleProviderStatsByFeedId")]
         pub struct FindOracleProviderStatsByFeedId {
             /// Feed identifier whose provider stats should be returned.
             pub feed_id: FeedId,
@@ -435,6 +467,7 @@ pub mod oracle {
         #[display("Find oracle provider stats `{key:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleProviderStatsByKey")]
         pub struct FindOracleProviderStatsByKey {
             /// Provider statistics key.
             pub key: OracleProviderKey,
@@ -443,12 +476,14 @@ pub mod oracle {
         #[derive(Copy, Display)]
         #[display("Find oracle disputes")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleDisputes")]
         pub struct FindOracleDisputes;
         /// Find an oracle dispute by id.
         #[derive(Display)]
         #[display("Find oracle dispute `{dispute_id:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleDisputeById")]
         pub struct FindOracleDisputeById {
             /// Dispute identifier to look up.
             pub dispute_id: OracleDisputeId,
@@ -458,6 +493,7 @@ pub mod oracle {
         #[display("Find oracle disputes for feed `{feed_id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleDisputesByFeedId")]
         pub struct FindOracleDisputesByFeedId {
             /// Feed identifier whose disputes should be returned.
             pub feed_id: FeedId,
@@ -466,12 +502,14 @@ pub mod oracle {
         #[derive(Copy, Display)]
         #[display("Find oracle changes")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleChanges")]
         pub struct FindOracleChanges;
         /// Find an oracle change proposal by id.
         #[derive(Display)]
         #[display("Find oracle change `{change_id:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleChangeById")]
         pub struct FindOracleChangeById {
             /// Oracle change identifier to look up.
             pub change_id: OracleChangeId,
@@ -481,6 +519,7 @@ pub mod oracle {
         #[display("Find twitter bindings for `{uaid:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindTwitterBindingsByUaid")]
         pub struct FindTwitterBindingsByUaid {
             /// Universal account id to look up.
             pub uaid: UniversalAccountId,
@@ -490,6 +529,7 @@ pub mod oracle {
         #[display("Find twitter binding `{binding_hash:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindTwitterBindingByHash")]
         pub struct FindTwitterBindingByHash {
             /// Pseudonymous keyed hash used to look up the binding.
             pub binding_hash: KeyedHash,
@@ -499,6 +539,7 @@ pub mod oracle {
         #[display("Find DeFi oracle attestations for `{key:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindDefiOracleAttestationsByKey")]
         pub struct FindDefiOracleAttestationsByKey {
             /// Domain and subject id key.
             pub key: DefiOracleAttestationKey,
@@ -508,6 +549,7 @@ pub mod oracle {
         #[display("Find latest DeFi oracle attestation for `{key:?}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::oracle::model::FindLatestDefiOracleAttestation")]
         pub struct FindLatestDefiOracleAttestation {
             /// Domain and subject id key.
             pub key: DefiOracleAttestationKey,
@@ -538,23 +580,27 @@ pub mod da {
     queries! {
         /// Fetch a DA pin intent by its storage ticket.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::da::model::FindDaPinIntentByTicket")]
         pub struct FindDaPinIntentByTicket {
             /// Storage ticket to look up.
             pub storage_ticket: StorageTicketId,
         }
         /// Fetch a DA pin intent by its manifest digest.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::da::model::FindDaPinIntentByManifest")]
         pub struct FindDaPinIntentByManifest {
             /// Manifest digest to look up.
             pub manifest_hash: ManifestDigest,
         }
         /// Fetch a DA pin intent by its alias.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::da::model::FindDaPinIntentByAlias")]
         pub struct FindDaPinIntentByAlias {
             /// Alias to look up.
             pub alias: String,
         }
         /// Fetch a DA pin intent by lane/epoch/sequence tuple.
+        #[norito_schema(name = "iroha_data_model::query::da::model::FindDaPinIntentByLaneEpochSequence")]
         pub struct FindDaPinIntentByLaneEpochSequence {
             /// Lane identifier associated with the intent.
             pub lane_id: LaneId,
@@ -578,9 +624,11 @@ pub mod settlement {
     queries! {
         /// Fetch the complete protected native FX corridor policy registry.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::settlement::model::FindFxCorridorPolicyRegistry")]
         pub struct FindFxCorridorPolicyRegistry;
         /// Fetch one native FX corridor policy by its stable identifier.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::settlement::model::FindFxCorridorPolicyById")]
         pub struct FindFxCorridorPolicyById {
             /// Policy identifier to look up.
             pub policy_id: Name,
@@ -606,24 +654,29 @@ pub mod nexus {
     queries! {
         /// Fetch a verified lane relay by its canonical reference.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::nexus::model::FindLaneRelayEnvelopeByRef")]
         pub struct FindLaneRelayEnvelopeByRef {
             /// Canonical relay reference to look up.
             pub relay_ref: LaneRelayEnvelopeRef,
         }
         /// Find all fee sponsor programs.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::nexus::model::FindFeeSponsorPrograms")]
         pub struct FindFeeSponsorPrograms;
         /// Find all fee sponsor program identifiers.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::nexus::model::FindFeeSponsorProgramIds")]
         pub struct FindFeeSponsorProgramIds;
         /// Find all fee sponsor programs owned by a sponsor account.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::nexus::model::FindFeeSponsorProgramsBySponsor")]
         pub struct FindFeeSponsorProgramsBySponsor {
             /// Sponsor account identifier.
             pub sponsor: AccountId,
         }
         /// Fetch one fee sponsor program by identifier.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::nexus::model::FindFeeSponsorProgramById")]
         pub struct FindFeeSponsorProgramById {
             /// Program identifier to look up.
             pub id: FeeSponsorProgramId,
@@ -662,6 +715,7 @@ pub mod nft {
         #[display("Find NFT `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::nft::model::FindNftById")]
         pub struct FindNftById {
             /// Canonical identifier of the NFT to find.
             pub id: NftId,
@@ -670,12 +724,14 @@ pub mod nft {
         #[derive(Copy, Display)]
         #[display("Find all NFTs")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::nft::model::FindNfts")]
         pub struct FindNfts;
         /// [`FindNftsByAccountId`] Iroha Query finds all `Nft`s owned by an account.
         #[derive(Display)]
         #[display("Find NFTs owned by `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::nft::model::FindNftsByAccountId")]
         pub struct FindNftsByAccountId {
             /// Identifier of the account that owns the NFTs.
             pub id: AccountId,
@@ -709,6 +765,7 @@ pub mod rwa {
         #[derive(Copy, Display)]
         #[display("Find all RWAs")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::rwa::model::FindRwas")]
         pub struct FindRwas;
     }
     pub mod prelude {
@@ -730,6 +787,7 @@ pub mod domain {
         #[display("Find domain `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomainById")]
         pub struct FindDomainById {
             /// Fully qualified domain identifier to resolve.
             pub id: crate::domain::DomainId,
@@ -738,12 +796,14 @@ pub mod domain {
         #[derive(Copy, Display)]
         #[display("Find all domains")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomains")]
         pub struct FindDomains;
         /// [`FindDomainsByAccountId`] Iroha Query finds all `Domain`s owned by an account.
         #[derive(Display)]
         #[display("Find domains owned by `{id}`")]
         #[repr(transparent)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomainsByAccountId")]
         pub struct FindDomainsByAccountId {
             /// Identifier of the account that owns the domains.
             pub id: AccountId,
@@ -777,6 +837,7 @@ pub mod endorsement {
         #[derive(Display)]
         #[display("Find endorsements for domain `{domain_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::endorsement::model::FindDomainEndorsements")]
         pub struct FindDomainEndorsements {
             /// Domain identifier to filter by.
             pub domain_id: DomainId,
@@ -785,6 +846,7 @@ pub mod endorsement {
         #[derive(Display)]
         #[display("Find endorsement policy for domain `{domain_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::endorsement::model::FindDomainEndorsementPolicy")]
         pub struct FindDomainEndorsementPolicy {
             /// Domain identifier to fetch the policy for.
             pub domain_id: DomainId,
@@ -793,6 +855,7 @@ pub mod endorsement {
         #[derive(Display)]
         #[display("Find domain committee `{committee_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::endorsement::model::FindDomainCommittee")]
         pub struct FindDomainCommittee {
             /// Committee identifier.
             pub committee_id: String,
@@ -814,6 +877,7 @@ pub mod peer {
         #[derive(Copy, Display)]
         #[display("Find all peers")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::peer::model::FindPeers")]
         pub struct FindPeers;
     }
     pub mod prelude {
@@ -832,11 +896,13 @@ pub mod executor {
         #[derive(Copy, Display)]
         #[display("Find executor data model")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::executor::model::FindExecutorDataModel")]
         pub struct FindExecutorDataModel;
         /// [`FindParameters`] Iroha Query finds all defined executor configuration parameters.
         #[derive(Copy, Display)]
         #[display("Find all peers parameters")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::executor::model::FindParameters")]
         pub struct FindParameters;
     }
     pub mod prelude {
@@ -854,6 +920,7 @@ pub mod runtime {
         #[derive(Copy, Display)]
         #[display("Find active ABI version")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::runtime::model::FindAbiVersion")]
         pub struct FindAbiVersion;
     }
     /// Response type for `FindAbiVersion` query.
@@ -873,6 +940,8 @@ pub mod runtime {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::runtime::AbiVersion")]
     pub struct AbiVersion {
         /// The ABI version currently active on the node.
         pub abi_version: u16,
@@ -881,6 +950,9 @@ pub mod runtime {
         //! Prelude re-exports.
         pub use super::FindAbiVersion;
     }
+
+    #[cfg(test)]
+    mod captured_domain_queries_schema_tests;
 }
 pub mod proof {
     //! Proof-related query definitions.
@@ -893,6 +965,7 @@ pub mod proof {
         #[derive(Display)]
         #[display("Find proof record by `{id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::proof::model::FindProofRecordById")]
         pub struct FindProofRecordById {
             /// Proof identifier (backend + proof hash).
             pub id: crate::proof::ProofId,
@@ -900,11 +973,13 @@ pub mod proof {
         /// Find all proof verification records.
         #[derive(Copy, Display)]
         #[display("Find all proof records")]
+        #[norito_schema(name = "iroha_data_model::query::proof::model::FindProofRecords")]
         pub struct FindProofRecords;
         /// Find all proof verification records for a given backend identifier.
         #[derive(Display)]
         #[display("Find proof records for backend `{backend}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::proof::model::FindProofRecordsByBackend")]
         pub struct FindProofRecordsByBackend {
             /// Backend identifier (e.g., "halo2/ipa").
             pub backend: iroha_schema::Ident,
@@ -913,6 +988,7 @@ pub mod proof {
         #[derive(Display)]
         #[display("Find proof records with status `{status:?}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::proof::model::FindProofRecordsByStatus")]
         pub struct FindProofRecordsByStatus {
             /// Proof verification status to filter by.
             pub status: crate::proof::ProofStatus,
@@ -959,12 +1035,14 @@ pub mod sorafs {
     queries! {
         /// Fetch the registered owner for a `SoraFS` provider.
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsProviderOwner")]
         pub struct FindSorafsProviderOwner {
             /// Provider identifier to resolve.
             pub provider_id: ProviderId,
         }
         /// Fetch one chain-authoritative pin manifest at a finalized state anchor.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPinManifest")]
         pub struct FindSorafsPinManifest {
             /// Canonical manifest digest to resolve.
             pub digest: ManifestDigest,
@@ -973,6 +1051,7 @@ pub mod sorafs {
         }
         /// Fetch a finalized exclusive-keyset page of bounded pin-manifest summaries.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPinManifests")]
         pub struct FindSorafsPinManifests {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<PinManifestFinalizedCursorV1>,
@@ -987,10 +1066,12 @@ pub mod sorafs {
         }
         /// Fetch the active authoritative `SoraFS` orderbook policy.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookPolicy")]
         pub struct FindSorafsOrderbookPolicy;
         /// Fetch an authoritative `SoraFS` order by its identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookOrderById")]
         pub struct FindSorafsOrderbookOrderById {
             /// Canonical order identifier.
             pub order_id: [u8; 32],
@@ -998,6 +1079,7 @@ pub mod sorafs {
         /// Fetch an admitted cancellation by the cancelled order identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookCancellationByOrderId")]
         pub struct FindSorafsOrderbookCancellationByOrderId {
             /// Canonical cancelled order identifier.
             pub order_id: [u8; 32],
@@ -1005,6 +1087,7 @@ pub mod sorafs {
         /// Fetch an authoritative settlement receipt by its identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookReceiptById")]
         pub struct FindSorafsOrderbookReceiptById {
             /// Canonical settlement receipt identifier.
             pub receipt_id: [u8; 32],
@@ -1012,6 +1095,7 @@ pub mod sorafs {
         /// Fetch an authoritative trade by its identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookTradeById")]
         pub struct FindSorafsOrderbookTradeById {
             /// Canonical trade identifier.
             pub trade_id: [u8; 32],
@@ -1019,15 +1103,18 @@ pub mod sorafs {
         /// Fetch an authoritative settlement channel by its identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookChannelById")]
         pub struct FindSorafsOrderbookChannelById {
             /// Canonical settlement channel identifier.
             pub channel_id: [u8; 32],
         }
         /// Fetch constant-time authoritative orderbook counters.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookStatus")]
         pub struct FindSorafsOrderbookStatus;
         /// Fetch an exclusive-cursor, status-filtered page of authoritative orders.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookOrders")]
         pub struct FindSorafsOrderbookOrders {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
@@ -1040,6 +1127,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor page of authoritative settlement receipts.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookReceipts")]
         pub struct FindSorafsOrderbookReceipts {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
@@ -1052,6 +1140,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor page of authoritative trades.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookTrades")]
         pub struct FindSorafsOrderbookTrades {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
@@ -1062,6 +1151,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor, status-filtered page of settlement channels.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookChannels")]
         pub struct FindSorafsOrderbookChannels {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
@@ -1074,6 +1164,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor page of committed orderbook events.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsOrderbookEvents")]
         pub struct FindSorafsOrderbookEvents {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
@@ -1084,10 +1175,12 @@ pub mod sorafs {
         }
         /// Fetch the active authoritative reserve/rent policy.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReservePolicy")]
         pub struct FindSorafsReservePolicy;
         /// Fetch one provider reserve account.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveProviderById")]
         pub struct FindSorafsReserveProviderById {
             /// Provider registry identifier.
             pub provider_id: ProviderId,
@@ -1095,6 +1188,7 @@ pub mod sorafs {
         /// Fetch one reserve movement by identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveMovementById")]
         pub struct FindSorafsReserveMovementById {
             /// Canonical movement identifier.
             pub movement_id: [u8; 32],
@@ -1102,12 +1196,14 @@ pub mod sorafs {
         /// Fetch one reserve appeal by identifier.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveAppealById")]
         pub struct FindSorafsReserveAppealById {
             /// Canonical appeal identifier.
             pub appeal_id: [u8; 32],
         }
         /// Fetch an exclusive-provider-id page of authoritative reserve accounts.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveProviders")]
         pub struct FindSorafsReserveProviders {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
@@ -1118,6 +1214,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-movement-id page of authoritative reserve movements.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveMovements")]
         pub struct FindSorafsReserveMovements {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
@@ -1128,6 +1225,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-appeal-id page of authoritative reserve appeals.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveAppeals")]
         pub struct FindSorafsReserveAppeals {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
@@ -1138,6 +1236,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor page of committed reserve-ledger events.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReserveEvents")]
         pub struct FindSorafsReserveEvents {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
@@ -1148,10 +1247,12 @@ pub mod sorafs {
         }
         /// Fetch the active authoritative `PoP` issuer policy.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopIssuerPolicy")]
         pub struct FindSorafsPopIssuerPolicy;
         /// Fetch a payload-free credential record by its exact commitment.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopCredentialCommitmentByDigest")]
         pub struct FindSorafsPopCredentialCommitmentByDigest {
             /// Canonical signed-credential commitment.
             pub credential_commitment: [u8; 32],
@@ -1159,6 +1260,7 @@ pub mod sorafs {
         /// Fetch a commitment-root publication by monotonic tree version.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopCommitmentRootByVersion")]
         pub struct FindSorafsPopCommitmentRootByVersion {
             /// Monotonic tree version.
             pub tree_version: u64,
@@ -1166,6 +1268,7 @@ pub mod sorafs {
         /// Fetch a revocation publication by monotonic list version.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopRevocationPublicationByVersion")]
         pub struct FindSorafsPopRevocationPublicationByVersion {
             /// Monotonic revocation-list version.
             pub list_version: u64,
@@ -1173,6 +1276,7 @@ pub mod sorafs {
         /// Fetch a revocation by the domain-separated private nonce commitment.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopRevocationByNonceCommitment")]
         pub struct FindSorafsPopRevocationByNonceCommitment {
             /// Domain-separated revocation-nonce commitment.
             pub revocation_nonce_commitment: [u8; 32],
@@ -1180,24 +1284,29 @@ pub mod sorafs {
         /// Fetch one registry audit link by monotonic sequence.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopAuditDigestBySequence")]
         pub struct FindSorafsPopAuditDigestBySequence {
             /// Monotonic audit sequence.
             pub sequence: u64,
         }
         /// Fetch constant-time authoritative `PoP` registry anchors and counters.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsPopRegistryStatus")]
         pub struct FindSorafsPopRegistryStatus;
         /// Fetch one commitment-only citizen bond by its immutable serial commitment.
         #[derive(Copy)]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsCitizenBondBySerialCommitment")]
         pub struct FindSorafsCitizenBondBySerialCommitment {
             /// Immutable hidden bond serial commitment.
             pub serial_commitment: [u8; 32],
         }
         /// Fetch the current frozen citizen-bond membership snapshot.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsCitizenBondSnapshot")]
         pub struct FindSorafsCitizenBondSnapshot;
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsRepairTask")]
         pub struct FindSorafsRepairTask {
             /// Canonical repair ticket identifier.
             pub ticket_id: String,
@@ -1206,6 +1315,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor page of chain-authoritative repair tasks.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsRepairTasks")]
         pub struct FindSorafsRepairTasks {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
@@ -1216,6 +1326,7 @@ pub mod sorafs {
         }
         /// Fetch constant-time chain-authoritative repair-ledger counters.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsRepairStatus")]
         pub struct FindSorafsRepairStatus {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
@@ -1226,6 +1337,7 @@ pub mod sorafs {
         /// page bound to the selected finalized cursor. Statusless orphaned
         /// repair state remains an error and fails closed.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsRepairEvents")]
         pub struct FindSorafsRepairEvents {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
@@ -1236,6 +1348,7 @@ pub mod sorafs {
         }
         /// Fetch one finalized chain-authoritative PDP or `PoTR` proof outcome.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsProofOutcome")]
         pub struct FindSorafsProofOutcome {
             /// Proof protocol namespace for the exactly-once identity.
             pub kind: ProofOutcomeKindV1,
@@ -1246,6 +1359,7 @@ pub mod sorafs {
         }
         /// Fetch an exclusive-cursor page of finalized PDP/PoTR proof-outcome events.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsProofOutcomeEvents")]
         pub struct FindSorafsProofOutcomeEvents {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<ProofOutcomeFinalizedCursorV1>,
@@ -1256,9 +1370,11 @@ pub mod sorafs {
         }
         /// Fetch the active authoritative reputation-journal authority policy.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReputationJournalAuthorityPolicy")]
         pub struct FindSorafsReputationJournalAuthorityPolicy;
         /// Fetch one finalized reputation-journal event by authoritative source identifier.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReputationJournalEventBySourceId")]
         pub struct FindSorafsReputationJournalEventBySourceId {
             /// Domain-separated native source identifier.
             pub source_id: ReputationJournalSourceIdV1,
@@ -1270,6 +1386,7 @@ pub mod sorafs {
         /// Each event exposes the authenticated source time and the distinct
         /// consensus-stamped recorded time.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsReputationJournalEvents")]
         pub struct FindSorafsReputationJournalEvents {
             /// Optional finalized anchor; absent selects the latest committed view.
             pub expected_finalized_cursor: Option<ReputationJournalFinalizedCursorV1>,
@@ -1280,12 +1397,14 @@ pub mod sorafs {
         }
         /// Fetch the active authoritative moderation policy.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationPolicy")]
         pub struct FindSorafsModerationPolicy;
         /// Fetch one authoritative appeal-intake and sortition record.
         #[allow(
             clippy::struct_field_names,
             reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
         )]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationAppeal")]
         pub struct FindSorafsModerationAppeal {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1293,6 +1412,7 @@ pub mod sorafs {
             pub round_id: String,
         }
         /// Fetch one payload-free `PoP` eligibility record.
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationJurorEligibility")]
         pub struct FindSorafsModerationJurorEligibility {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1306,6 +1426,7 @@ pub mod sorafs {
             clippy::struct_field_names,
             reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
         )]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationCase")]
         pub struct FindSorafsModerationCase {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1313,6 +1434,7 @@ pub mod sorafs {
             pub round_id: String,
         }
         /// Fetch one authoritative juror commitment.
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationCommit")]
         pub struct FindSorafsModerationCommit {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1322,6 +1444,7 @@ pub mod sorafs {
             pub juror: AccountId,
         }
         /// Fetch one authoritative juror reveal.
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationReveal")]
         pub struct FindSorafsModerationReveal {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1335,6 +1458,7 @@ pub mod sorafs {
             clippy::struct_field_names,
             reason = "query model expansion cannot fulfill lint expectations; case, round, and challenge are distinct keys"
         )]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationChallenge")]
         pub struct FindSorafsModerationChallenge {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1348,6 +1472,7 @@ pub mod sorafs {
             clippy::struct_field_names,
             reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
         )]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationOutcome")]
         pub struct FindSorafsModerationOutcome {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1355,6 +1480,7 @@ pub mod sorafs {
             pub round_id: String,
         }
         /// Fetch one derived no-show penalty record.
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationNoShow")]
         pub struct FindSorafsModerationNoShow {
             /// Moderation case identifier.
             pub case_id: String,
@@ -1365,9 +1491,11 @@ pub mod sorafs {
         }
         /// Fetch constant-time authoritative moderation-ledger counters.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationStatus")]
         pub struct FindSorafsModerationStatus;
         /// Fetch a complete bounded moderation projection at one finalized block.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationSnapshot")]
         pub struct FindSorafsModerationSnapshot {
             /// Maximum appeals and activated cases accepted in the projection.
             pub max_cases: u32,
@@ -1376,6 +1504,7 @@ pub mod sorafs {
         }
         /// Fetch a cursor-bounded page of committed moderation events.
         #[derive(Copy)]
+        #[norito_schema(name = "iroha_data_model::query::sorafs::model::FindSorafsModerationEvents")]
         pub struct FindSorafsModerationEvents {
             /// Finalized anchor that must still identify the immutable state view.
             pub expected_finalized_cursor: ModerationFinalizedCursorV1,
@@ -2094,6 +2223,7 @@ pub mod game {
         #[derive(Display)]
         #[display("Find native game session `{session_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::game::model::FindGameSessionById")]
         pub struct FindGameSessionById {
             /// Immutable session identifier.
             pub session_id: iroha_crypto::Hash,
@@ -2102,6 +2232,7 @@ pub mod game {
         #[derive(Display)]
         #[display("Find execution proof verification `{verification_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::game::model::FindExecutionProofVerificationById")]
         pub struct FindExecutionProofVerificationById {
             /// Network-bound profile and statement receipt identifier.
             pub verification_id: iroha_crypto::Hash,
@@ -2121,11 +2252,14 @@ pub mod nft_market {
         #[derive(Display)]
         #[display("Find native NFT offer `{offer_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::nft_market::model::FindNftSaleOfferById")]
         pub struct FindNftSaleOfferById {
             /// Exact permanent offer identifier.
             pub offer_id: iroha_crypto::Hash,
         }
     }
     /// Native NFT marketplace query exports.
-    pub mod prelude { pub use super::FindNftSaleOfferById; }
+    pub mod prelude {
+        pub use super::FindNftSaleOfferById;
+    }
 }

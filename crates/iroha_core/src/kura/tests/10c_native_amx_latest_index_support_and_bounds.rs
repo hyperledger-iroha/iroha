@@ -158,6 +158,32 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
                 .all(|pair| pair[0].checked_add(1) == Some(pair[1])),
         "Native AMX evidence fixture heights must be a non-zero contiguous suffix"
     );
+    let lane_incarnation = Hash::new(
+        format!(
+            "kura-lane-incarnation:{}:{}",
+            entry.lane_id.as_u32(),
+            entry.dataspace_id.as_u64()
+        )
+        .as_bytes(),
+    );
+    if entry.lane_id == LaneId::SINGLE {
+        let configured_catalog_hash = kura
+            .configured_lane_catalog_baseline()
+            .expect("read Native AMX fixture configured-catalog baseline")
+            .expect("Native AMX fixture uses an authenticated configured catalog");
+        // Match production State initialization: durably bind the configured primary geometry
+        // before its incarnation marker or any Native AMX evidence is published.
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            entry,
+            lane_incarnation,
+            configured_catalog_hash,
+        )
+        .expect("bind Native AMX fixture configured-primary geometry");
+    } else {
+        // Secondary-lane callers establish the catalog geometry before using this fixture.
+        kura.install_lane_incarnation_marker_for_test(entry, lane_incarnation, 0)
+            .expect("install active Native AMX participant incarnation");
+    }
     let block = store_dummy_block_arcs(kura, 1)
         .into_iter()
         .next()
@@ -203,6 +229,10 @@ fn install_native_amx_evidence_fixture_at_block(
             participant_height,
         );
         let mut proposal = session.proposal;
+        assert_eq!(
+            proposal.descriptor.lane_incarnation, lane_incarnation,
+            "Native AMX proposal fixture must use the geometry bound before evidence publication"
+        );
         proposal.descriptor.proposal_height = application_block_height;
         if let Some(predecessor) = proposals.last().or(previous_proposal) {
             proposal.descriptor.previous_lane_block_height =
@@ -279,13 +309,6 @@ fn install_native_amx_evidence_fixture_at_block(
         leaves.push(leaf);
         previous_native_settlement_hash = Some(settlement_hash);
     }
-    let lane_incarnation = proposals
-        .first()
-        .expect("non-empty Native AMX fixture proposals")
-        .descriptor
-        .lane_incarnation;
-    kura.install_lane_incarnation_marker_for_test(entry, lane_incarnation, 0)
-        .expect("install active Native AMX participant incarnation");
     let tree = leaves.iter().map(HashOf::new).collect::<MerkleTree<_>>();
     let manifest_root = tree
         .root()
@@ -830,8 +853,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");

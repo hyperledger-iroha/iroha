@@ -401,7 +401,7 @@ mod tests {
             )
             .is_err()
         );
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         assert!(matches!(
             AxtTransferBatch::new(
                 &ordinary,

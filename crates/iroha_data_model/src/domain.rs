@@ -37,6 +37,8 @@ mod model {
     #[display("{name}.{dataspace}")]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::domain::model::DomainId")]
     pub struct DomainId {
         /// Domain label unique only within its parent dataspace.
         pub name: Name,
@@ -50,6 +52,8 @@ mod model {
     #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::domain::model::Domain")]
     pub struct Domain {
         /// Identification of this [`Domain`].
         pub id: DomainId,
@@ -125,6 +129,60 @@ impl DomainId {
             return Err(ParseError::new("domain id segments must not be empty"));
         }
         Self::try_new(name, dataspace)
+    }
+
+    /// Parse one canonical JSON object-key spelling with bounded decode accounting.
+    #[cfg(feature = "json")]
+    pub(crate) fn parse_json_object_key(candidate: &str) -> Result<Self, norito::json::Error> {
+        let mut segments = candidate.split('.');
+        let Some(name) = segments.next() else {
+            return Err(norito::json::Error::Message(
+                "domain key must use `domain.dataspace` format".to_owned(),
+            ));
+        };
+        let Some(dataspace) = segments.next() else {
+            return Err(norito::json::Error::Message(
+                "domain key must use `domain.dataspace` format".to_owned(),
+            ));
+        };
+        if name.is_empty() || dataspace.is_empty() || segments.next().is_some() {
+            return Err(norito::json::Error::Message(
+                "domain key must use `domain.dataspace` format".to_owned(),
+            ));
+        }
+        if !candidate.is_ascii() {
+            return Err(norito::json::Error::Message(
+                "domain key must use its canonical ASCII spelling".to_owned(),
+            ));
+        }
+        if name.len() > crate::name::MAX_NAME_BYTES || dataspace.len() > crate::name::MAX_NAME_BYTES
+        {
+            return Err(norito::json::Error::Message(
+                "domain key segment exceeds the 255-byte UTF-8 limit".to_owned(),
+            ));
+        }
+
+        // For canonical ASCII input, each component requests one temporary
+        // `String` from UTS-46 and one retained `ConstString` in `Name`.
+        // Reserve both before either attacker-sized component is allocated.
+        let component_bytes = name
+            .len()
+            .checked_add(dataspace.len())
+            .ok_or(norito::json::Error::DecodeResourceLimit)?;
+        let requested_bytes = component_bytes
+            .checked_mul(2)
+            .ok_or(norito::json::Error::DecodeResourceLimit)?;
+        norito::core::reserve_decode_allocation(requested_bytes)
+            .map_err(norito::json::Error::from_decode_resource)?;
+
+        let parsed = Self::parse_fully_qualified(candidate)
+            .map_err(|error| norito::json::Error::Message(error.reason().into()))?;
+        if parsed.name().as_ref() != name || parsed.dataspace().as_ref() != dataspace {
+            return Err(norito::json::Error::Message(
+                "domain key must use its canonical lowercase spelling".to_owned(),
+            ));
+        }
+        Ok(parsed)
     }
 }
 #[cfg(feature = "json")]

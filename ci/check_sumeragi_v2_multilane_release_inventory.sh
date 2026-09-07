@@ -58,9 +58,9 @@ readonly native_test="native_amx_rotating_validator_fault_soak_preserves_indepen
 readonly bpng_native_bootstrap_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"
 readonly bpng_native_bootstrap_function="${bpng_native_bootstrap_test##*::}"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=866
-readonly canonical_production_module_count=42
-readonly canonical_corridor_leg_count=83
+readonly canonical_production_test_count=881
+readonly canonical_production_module_count=43
+readonly canonical_corridor_leg_count=84
 
 for release_support_component in \
   "$release_runner_support" \
@@ -300,7 +300,7 @@ require_exact_token \
   "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=522"
+  "readonly expected_multilane_focus_test_count=531"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=106"
@@ -338,7 +338,7 @@ require_exact_token \
   "$grouped_parity_harness" \
   "readonly expected_negative_control_count=58"
 require_exact_fragment "$grouped_parity_harness" "    observed_test_count=" 6
-for grouped_surface_count in openapi:7 python:65 javascript:63 swift:7 kotlin:9 java:7; do
+for grouped_surface_count in openapi:7 python:67 javascript:65 swift:9 kotlin:11 java:7; do
   grouped_surface="${grouped_surface_count%%:*}"
   grouped_test_count="${grouped_surface_count#*:}"
   grouped_case="  ${grouped_surface})"
@@ -363,7 +363,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 58"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 522"
+  "_G_UNIT_TEST_COUNT = 531"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -396,22 +396,22 @@ require_exact_token \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
-  '    ("python", 65),' \
-  '    ("javascript", 63),' \
-  '    ("swift", 7),' \
-  '    ("kotlin", 9),' \
+  '    ("python", 67),' \
+  '    ("javascript", 65),' \
+  '    ("swift", 9),' \
+  '    ("kotlin", 11),' \
   '    ("java", 7),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 for sdk_diagnostics_suite in \
   '    ("python", 129),' \
-  '    ("javascript", 88),' \
+  '    ("javascript", 90),' \
   '    ("swift", 34),' \
-  '    ("kotlin", 44),' \
-  '    ("java", 43),'; do
+  '    ("kotlin", 50),' \
+  '    ("java", 59),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 129 88 34 44 43; do
+for sdk_diagnostics_test_count in 129 90 34 50 59; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"
@@ -420,17 +420,15 @@ require_exact_fragment \
   "$sdk_diagnostics_harness" \
   "SumeragiV2WireFixtureTests'" \
   1
-require_exact_fragment \
-  "$sdk_diagnostics_harness" \
-  "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest" \
-  1
-require_exact_fragment \
-  "$sdk_diagnostics_harness" \
-  "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests" \
-  1
 require_exact_token \
   "$sdk_diagnostics_harness" \
-  '      assert_node_tap "$javascript_transcript" 44'
+  '      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest \'
+require_exact_token \
+  "$sdk_diagnostics_harness" \
+  '      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests \'
+require_exact_token \
+  "$sdk_diagnostics_harness" \
+  '      assert_node_tap "$javascript_transcript" 45'
 require_exact_token \
   "$js_sdk_diagnostics_test" \
   '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",'
@@ -1233,7 +1231,7 @@ expected_apalache_refinement_results = (
         "autonomous-reservation-carrier",
         "SumeragiV2AutonomousReservationCarrier",
         "multilane_autonomous_reservation_carrier_fixed.cfg",
-        "10",
+        "12",
     ),
     (
         "queue-plan-admission-registry",
@@ -1267,22 +1265,23 @@ if (
         "plus the one layout-only result"
     )
 expected_changed_module_counts = {
+    "native_amx::participant_application_role_tests": 6,
     "kura::tests": 18,
     "sumeragi::authoritative_runtime_gate_tests": 42,
     "sumeragi::serviced_candidate_store::tests": 1,
     "queue::tests": 1,
     "sumeragi::v2_effects::tests": 66,
-    "sumeragi::v2::tests": 49,
+    "sumeragi::v2::tests": 52,
     "sumeragi::v2_runtime::tests": 65,
     "sumeragi::v2_certified_serve_payload_store::tests": 13,
-    "sumeragi::v2_lifecycle_coordinator": 43,
+    "sumeragi::v2_lifecycle_coordinator": 45,
     "sumeragi::v2_runner::lifecycle_height_driver::tests": 2,
     "merge_sidecar::tests": 118,
     "state::tests": 1,
-    "sumeragi::v2_lane_work::tests": 63,
+    "sumeragi::v2_lane_work::tests": 65,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
-    "sumeragi::v2_worker::tests": 90,
+    "sumeragi::v2_worker::tests": 92,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -1309,8 +1308,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "47a818de4cc0793664977d5e0f4b7e56"
-    "dda943580b647f15671c3b8aa8a5cd20"
+    "6045ac0993327ed787010c6262275808"
+    "99c1561aae9366318438840870f0c815"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1403,10 +1402,10 @@ native_amx_parity_inventory = """\
   )
   native_amx_grouped_parity_test_counts=(
     7
+    67
     65
-    63
-    7
     9
+    11
     7
   )"""
 if source.count(native_amx_parity_inventory) != 1:
@@ -1686,7 +1685,7 @@ if source_sealed_positions != sorted(source_sealed_positions):
     )
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 316,
+    "required_multilane_core_focus_tests": 325,
     "required_multilane_queue_journal_focus_tests": 143,
     "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
@@ -1730,9 +1729,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 522 or len(set(all_focus_entries)) != 522:
+if len(all_focus_entries) != 531 or len(set(all_focus_entries)) != 531:
     reject(
-        "multilane focus-test arrays must contain 522 globally distinct tests; "
+        "multilane focus-test arrays must contain 531 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -1742,7 +1741,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        316,
+        325,
         "--lib",
     ),
     (
@@ -1814,7 +1813,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 522 count is not published exactly once")
+        reject("G-UNIT expected 531 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -2972,7 +2971,7 @@ if [[ "$(grep -Fxc -- "authenticated_remote_recovery=passed exact_once=passed\";
   echo "mandatory Native AMX test must publish the exact grouped/pruning marker" >&2
   exit 1
 fi
-if [[ "$(grep -Fxc -- "        .submit_prepared_transaction_payload_batch_async(&payloads)" "$native_recovery_file" || true)" != 1 ]]; then
+if [[ "$(grep -Fxc -- "        .submit_prepared_transaction_payload_batch(&payloads)" "$native_recovery_file" || true)" != 1 ]]; then
   echo "mandatory Native AMX test must use one exact Torii batch submission" >&2
   exit 1
 fi
@@ -2989,4 +2988,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] ${canonical_corridor_leg_count} corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across ${canonical_production_module_count} modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, one sealed-child BPNG native bootstrap gate, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] ${canonical_corridor_leg_count} corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across ${canonical_production_module_count} modules, exact 531/531 G-UNIT (325 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, one sealed-child BPNG native bootstrap gate, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

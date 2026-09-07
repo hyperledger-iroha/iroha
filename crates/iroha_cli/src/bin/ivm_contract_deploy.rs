@@ -15,7 +15,8 @@ use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    client::Client,
+    blocking::Client,
+    client::FeeQuoteRequest,
     config::{self, Config},
     data_model::{
         isi::smart_contract_code::{
@@ -29,19 +30,16 @@ use iroha::{
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
-use iroha_config::parameters::{
-    actual::SorafsRolloutPhase,
-    defaults::{
-        sorafs::gateway::{DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE},
-        torii,
-    },
+use iroha_config::parameters::defaults::sorafs::gateway::{
+    DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE,
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_primitives::json::Json;
+use iroha_service_model::soranet::AnonymityPolicy;
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
-use sorafs_orchestrator::AnonymityPolicy;
 use std::{
     fs,
     io::Read as _,
@@ -119,21 +117,21 @@ struct ValidatedContractDeploymentState {
 use iroha::data_model::transaction::Executable;
 fn default_alias_cache_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
-        Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
 fn default_anonymity_policy() -> AnonymityPolicy {
     AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
 }
-fn default_rollout_phase() -> SorafsRolloutPhase {
-    SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
+fn default_rollout_phase() -> RolloutPhase {
+    RolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
 }
 #[allow(clippy::too_many_arguments)]
 fn make_client(
@@ -164,13 +162,11 @@ fn make_client(
         ),
         transaction_status_timeout: Duration::from_millis(status_timeout_ms),
         transaction_add_nonce: false,
-        connect_queue_root: config::default_connect_queue_root(),
-        soracloud_http_witness_file: None,
         sorafs_alias_cache: default_alias_cache_policy(),
         sorafs_anonymity_policy: default_anonymity_policy(),
         sorafs_rollout_phase: default_rollout_phase(),
     };
-    Ok(Client::new(config))
+    Client::new(config)
 }
 fn insert_string_metadata(
     metadata: &mut Metadata,
@@ -233,6 +229,7 @@ fn read_contract_deployment_state(
     chain_discriminant: u16,
 ) -> Result<ValidatedContractDeploymentState> {
     let response = client
+        .client()
         .post_contract_deployment_state(contract_alias)
         .wrap_err("failed to read authenticated contract deployment state")?;
     let status = response.status();
@@ -1296,7 +1293,7 @@ fn quote_and_resign_transaction(
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     let mut payload = draft.payload().clone();
     let quote = client
-        .quote_fees(&payload)
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact contract-deployment transaction fees")?;
     if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
@@ -1305,7 +1302,8 @@ fn quote_and_resign_transaction(
     }
     payload.fee_payment = quote.intent.clone();
     let transaction = client
-        .try_sign_transaction_payload(payload)
+        .account_client()
+        .sign_transaction(payload)
         .wrap_err("failed to sign exact quoted contract-deployment payload")?;
     Ok((transaction, quote))
 }
@@ -1361,7 +1359,7 @@ fn main() -> Result<()> {
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
     let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-        &client.network_id,
+        client.account_client().network_id(),
         &authority,
         deploy_nonce,
         dataspace_id,
@@ -1385,7 +1383,7 @@ fn main() -> Result<()> {
     let tx_metadata =
         deployment_transaction_metadata(&contract_address, &args.gov_manifest_approvers)?;
     let signing = TransactionSigningContext {
-        network_id: client.network_id,
+        network_id: client.account_client().network_id().clone(),
         authority: &authority,
         private_key: &private_key,
         transaction_ttl,
@@ -1466,7 +1464,7 @@ fn main() -> Result<()> {
     if !args.emit_only {
         for (name, _, tx) in &planned_txs {
             eprintln!("submitting {name} hash={}", tx.hash());
-            client.submit_transaction_blocking(tx)?;
+            client.submit_transaction_and_wait(tx)?;
         }
     }
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));

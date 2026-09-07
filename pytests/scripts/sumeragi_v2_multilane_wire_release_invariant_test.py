@@ -97,7 +97,7 @@ def test_wire_release_invariant_binds_current_semantic_sources() -> None:
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTests.java",
         "ci/run_sumeragi_v2_sdk_diagnostics.sh",
         "ci/sumeragi_v2_sdk_source_closure.json",
         "scripts/run_sumeragi_v2_release_gates.sh",

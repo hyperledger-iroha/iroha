@@ -22,6 +22,9 @@ use norito::codec::{Decode, Encode};
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(tag = "event", content = "payload"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::escrow::EscrowEvent")]
+#[event_set(schema_name = "iroha_data_model::events::data::escrow::EscrowEventSet")]
 pub enum EscrowEvent {
     /// Escrow opened and funded.
     Opened(AssetEscrowRecord),
@@ -65,6 +68,8 @@ impl EscrowEvent {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::escrow::ConditionalEscrowAttested")]
 pub struct ConditionalEscrowAttested {
     /// Full query-visible record after applying the attestation.
     pub escrow: AssetEscrowRecord,
@@ -81,6 +86,8 @@ pub struct ConditionalEscrowAttested {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::escrow::AssetEscrowDisputed")]
 pub struct AssetEscrowDisputed {
     /// Escrow record after entering disputed state.
     pub escrow: AssetEscrowRecord,
@@ -95,6 +102,8 @@ pub struct AssetEscrowDisputed {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::escrow::AssetEscrowResolved")]
 pub struct AssetEscrowResolved {
     /// Escrow record after resolution.
     pub escrow: AssetEscrowRecord,
@@ -113,3 +122,6 @@ pub mod prelude {
     };
     pub use crate::escrow::{AssetEscrowRecord, EscrowId};
 }
+
+#[cfg(test)]
+mod captured_escrow_schema_tests;

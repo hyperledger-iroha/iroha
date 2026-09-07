@@ -96,7 +96,7 @@ impl FastIterComponentDecoder {
             bytes.len(),
             elements,
             self.remaining_allocated_bytes,
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
         );
         let (decoded, usage) =
             norito::core::with_decode_limits_measured(limits, || decode_exact_in_scope::<T>(bytes));

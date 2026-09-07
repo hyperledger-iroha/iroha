@@ -177,6 +177,8 @@ class VerifyingKeyInstructionBuildersTest {
 
     private val unsafeBackends = listOf(
         "",
+        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
         "halo2/bn254",
         "groth16",
         "groth16/bls12-377",

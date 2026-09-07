@@ -25,23 +25,16 @@ def budget(**exceptions: int):
         test_limit=3_000,
         excluded_prefixes=("vendor/",),
         exceptions=exceptions,
-        aggregate_rust=None,
     )
 
 
-def test_parse_args_exposes_strict_objective_mode(
+def test_parse_args_rejects_retired_objective_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [str(MODULE_PATH), "--require-objective"],
-    )
-
-    parsed = MODULE.parse_args()
-
-    assert parsed.require_objective is True
-    assert parsed.write_baseline is False
+    monkeypatch.setattr(sys, "argv", [str(MODULE_PATH), "--require-objective"])
+    with pytest.raises(SystemExit) as error:
+        MODULE.parse_args()
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize(
@@ -92,127 +85,100 @@ def test_evaluate_requires_exact_ratcheting_baselines() -> None:
     )[0].message
 
 
-def test_evaluate_enforces_the_default_aggregate_rust_ratchet() -> None:
-    aggregate = MODULE.AggregateRustBudget(
-        baseline=1_000,
-        ceiling=900,
-        ratchet_ceiling=950,
-        working_target=850,
-    )
-    configured = MODULE.Budget(
-        production_limit=5_000,
-        test_limit=3_000,
-        excluded_prefixes=("vendor/",),
-        exceptions={},
-        aggregate_rust=aggregate,
-    )
-    counts = {
-        "crates/a/src/lib.rs": 600,
-        "crates/b/tests/cases.rs": 301,
-        "scripts/helper.py": 10,
-    }
-    assert MODULE.evaluate(counts, configured) == []
-    finding = MODULE.evaluate(
-        {
-            "crates/a/src/lib.rs": 650,
-            "crates/b/tests/cases.rs": 301,
-            "scripts/helper.py": 10,
-        },
-        configured,
-    )
-    assert [(item.path, item.message) for item in finding] == [
-        (
-            "<aggregate Rust>",
-            "951 lines exceeds the aggregate ratchet 950",
-        )
-    ]
-    assert MODULE.evaluate(
-        {"crates/a/src/lib.rs": 599, "crates/b/tests/cases.rs": 301},
-        configured,
-    ) == []
-
-
-def test_evaluate_can_require_the_aggregate_rust_objective() -> None:
-    aggregate = MODULE.AggregateRustBudget(
-        baseline=1_000,
-        ceiling=900,
-        ratchet_ceiling=950,
-        working_target=850,
-    )
-    configured = MODULE.Budget(
-        production_limit=5_000,
-        test_limit=3_000,
-        excluded_prefixes=("vendor/",),
-        exceptions={},
-        aggregate_rust=aggregate,
+@pytest.mark.parametrize(
+    ("path", "reviewed_limit"),
+    (
+        ("crates/sorafs_car/src/lib.rs", 9_141),
+        ("crates/sorafs_node/src/store.rs", 8_672),
+        ("crates/sorafs_node/src/transparency.rs", 8_134),
+        ("crates/sorafs_orchestrator/src/bin/sorafs_cli.rs", 21_365),
+        ("crates/sorafs_orchestrator/src/lib.rs", 9_608),
+        ("crates/sorafs_orchestrator/tests/sorafs_cli.rs", 4_787),
+        ("scripts/check_sorafs_production_readiness.py", 7_028),
+        ("scripts/tests/check_sorafs_production_readiness_test.py", 17_654),
+        ("scripts/tests/check_sorafs_rollout_gate_contract_test.py", 28_844),
+        ("xtask/src/sorafs.rs", 7_763),
+    ),
+)
+def test_sorafs_source_caps_reject_growth_after_reviewed_reductions(
+    path: str, reviewed_limit: int,
+) -> None:
+    """Removed source cannot be reclaimed by raising an existing SoraFS ratchet."""
+    candidate = MODULE.load_budget(MODULE_PATH.parents[1] / "ci/source_file_budget.json")
+    effective_limit = candidate.exceptions.get(path, MODULE.limit_for(path, candidate))
+    assert effective_limit <= reviewed_limit
+    scoped_budget = MODULE.Budget(
+        production_limit=candidate.production_limit,
+        test_limit=candidate.test_limit,
+        excluded_prefixes=candidate.excluded_prefixes,
+        exceptions={path: effective_limit} if path in candidate.exceptions else {},
     )
 
-    assert MODULE.evaluate(
-        {"crates/a/src/lib.rs": 599, "crates/b/tests/cases.rs": 301},
-        configured,
-        require_objective=True,
-    ) == []
-    findings = MODULE.evaluate(
-        {"crates/a/src/lib.rs": 600, "crates/b/tests/cases.rs": 301},
-        configured,
-        require_objective=True,
-    )
-    assert [(item.path, item.message) for item in findings] == [
-        (
-            "<aggregate Rust>",
-            "901 lines exceeds the aggregate objective ceiling 900",
-        )
-    ]
+    findings = MODULE.evaluate({path: reviewed_limit + 1}, scoped_budget)
+    assert len(findings) == 1
+    assert findings[0].path == path
+    assert "grew from baseline" in findings[0].message or "exceeds" in findings[0].message
 
 
 @pytest.mark.parametrize(
-    ("require_objective", "expected_exit_code"),
-    [(False, 0), (True, 1)],
+    ("path", "limit"),
+    (
+        ("crates/sorafs_car/src/bin/sorafs_fetch.rs", 5_000),
+        ("crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", 3_000),
+    ),
 )
-def test_main_applies_requested_aggregate_policy(
+def test_fetch_cli_modules_obey_default_caps_without_exceptions(path: str, limit: int) -> None:
+    """The owned test module removes the fetch CLI's oversized-source exception."""
+    candidate = MODULE.load_budget(MODULE_PATH.parents[1] / "ci/source_file_budget.json")
+    assert path not in candidate.exceptions
+    assert MODULE.limit_for(path, candidate) == limit
+    scoped_budget = MODULE.Budget(
+        production_limit=candidate.production_limit,
+        test_limit=candidate.test_limit,
+        excluded_prefixes=candidate.excluded_prefixes,
+        exceptions={},
+    )
+    source = MODULE_PATH.parents[1] / path
+    assert MODULE.evaluate({path: len(source.read_bytes().splitlines())}, scoped_budget) == []
+    findings = MODULE.evaluate({path: limit + 1}, scoped_budget)
+    assert len(findings) == 1
+    assert findings[0].path == path
+    assert "exceeds" in findings[0].message
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+def test_main_reports_all_rust_lines_and_enforces_only_file_limits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    require_objective: bool,
-    expected_exit_code: int,
+    oversized: bool,
 ) -> None:
-    aggregate = MODULE.AggregateRustBudget(
-        baseline=1_000,
-        ceiling=900,
-        ratchet_ceiling=950,
-        working_target=850,
-    )
-    configured = MODULE.Budget(
-        production_limit=5_000,
-        test_limit=3_000,
-        excluded_prefixes=(),
-        exceptions={},
-        aggregate_rust=aggregate,
-    )
+    counts = {f"crates/core/src/file_{i}.rs": 5_000 for i in range(1_002)}
+    counts["scripts/helper.py"] = 25
+    if oversized:
+        counts["crates/core/tests/network.rs"] = 3_001
     monkeypatch.setattr(
-        MODULE,
-        "parse_args",
-        lambda: MODULE.argparse.Namespace(
-            root=tmp_path,
-            baseline=Path("budget.json"),
-            write_baseline=False,
-            require_objective=require_objective,
-            json_out=None,
+        MODULE, "parse_args", lambda: MODULE.argparse.Namespace(
+            root=tmp_path, baseline=Path("budget.json"), write_baseline=False,
+            json_out=Path("-"),
         ),
     )
-    monkeypatch.setattr(MODULE, "load_budget", lambda _path: configured)
-    monkeypatch.setattr(MODULE, "tracked_paths", lambda _root: ["lib.rs"])
-    monkeypatch.setattr(
-        MODULE,
-        "collect_counts",
-        lambda _root, _paths, _excluded: {"lib.rs": 901},
-    )
+    monkeypatch.setattr(MODULE, "load_budget", lambda _path: budget())
+    monkeypatch.setattr(MODULE, "tracked_paths", lambda _root: list(counts))
+    monkeypatch.setattr(MODULE, "collect_counts", lambda *_args: counts)
 
-    assert MODULE.main() == expected_exit_code
-    output = capsys.readouterr().out
-    assert ("exceeds the aggregate objective ceiling 900" in output) is (
-        require_objective
-    )
+    assert MODULE.main() == int(oversized)
+    output = capsys.readouterr()
+    report = json.loads(output.out)
+    assert report["schema_version"] == 2
+    assert report["checked_files"] == len(counts)
+    assert report["rust_lines"] == 5_010_000 + (3_001 if oversized else 0)
+    assert report["production_limit"] == 5_000
+    assert report["test_limit"] == 3_000
+    assert len(report["findings"]) == int(oversized)
+    assert "aggregate_rust" not in report
+    assert "objective_met" not in report
+    assert "rust_lines=" in output.err
 
 
 def test_evaluate_rejects_stale_and_missing_exceptions() -> None:
@@ -248,114 +214,80 @@ def test_baseline_payload_only_records_oversized_sources() -> None:
     }
 
 
-def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
-    path = tmp_path / "budget.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "limits": {"production": 5_000, "test": 3_000},
-                "excluded_prefixes": ["vendor", "target/"],
-                "exceptions": {"crates/core/src/lib.rs": 6_000},
-                "aggregate_rust": {
-                    "baseline": 10_000,
-                    "ceiling": 9_000,
-                    "ratchet_ceiling": 10_250,
-                    "working_target": 8_500,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    parsed = MODULE.load_budget(path)
-    assert parsed.excluded_prefixes == ("target/", "vendor/")
-    assert parsed.exceptions == {"crates/core/src/lib.rs": 6_000}
-    assert parsed.aggregate_rust == MODULE.AggregateRustBudget(
-        baseline=10_000,
-        ceiling=9_000,
-        ratchet_ceiling=10_250,
-        working_target=8_500,
-    )
-
-
-def test_load_budget_requires_the_aggregate_rust_contract(tmp_path: Path) -> None:
-    path = tmp_path / "budget.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "limits": {"production": 5_000, "test": 3_000},
-                "excluded_prefixes": [],
-                "exceptions": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="aggregate_rust.*mandatory"):
-        MODULE.load_budget(path)
-
-
-def test_baseline_payload_preserves_aggregate_targets() -> None:
-    aggregate = MODULE.AggregateRustBudget(
-        baseline=10_000,
-        ceiling=9_000,
-        ratchet_ceiling=10_250,
-        working_target=8_500,
-    )
-    payload = MODULE.baseline_payload(
-        {"crates/core/src/lib.rs": 5_001},
-        production_limit=5_000,
-        test_limit=3_000,
-        excluded_prefixes=("vendor/",),
-        aggregate_rust=aggregate,
-    )
-    assert payload["aggregate_rust"] == {
-        "baseline": 10_000,
-        "ceiling": 9_000,
-        "ratchet_ceiling": 10_250,
-        "working_target": 8_500,
+def budget_payload() -> dict[str, object]:
+    """Return a complete active file-budget fixture."""
+    return {
+        "schema_version": 2,
+        "limits": {"production": 5_000, "test": 3_000},
+        "excluded_prefixes": ["vendor", "target/"],
+        "exceptions": {"crates/core/src/lib.rs": 6_000},
     }
 
 
+def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
+    path = tmp_path / "budget.json"
+    path.write_text(json.dumps(budget_payload()), encoding="utf-8")
+    parsed = MODULE.load_budget(path)
+    assert parsed.excluded_prefixes == ("target/", "vendor/")
+    assert parsed.exceptions == {"crates/core/src/lib.rs": 6_000}
+    assert (parsed.production_limit, parsed.test_limit) == (5_000, 3_000)
+
+
 @pytest.mark.parametrize(
-    ("aggregate", "message"),
+    ("field", "value", "message"),
     [
-        (
-            {
-                "baseline": 10_000,
-                "ceiling": 9_001,
-                "ratchet_ceiling": 10_250,
-            },
-            "at least a 10% reduction",
-        ),
-        (
-            {
-                "baseline": 10_000,
-                "ceiling": 9_000,
-                "ratchet_ceiling": 8_999,
-            },
-            "ratchet_ceiling must not be below",
-        ),
+        ("schema_version", 1, "schema_version must be 2"),
+        ("aggregate_rust", {"ceiling": 1}, "keys must be exactly"),
+        ("limits", {"production": True, "test": 3_000}, "non-negative integer"),
+        ("limits", {"production": 0, "test": 3_000}, "greater than zero"),
+        ("limits", {"production": 5_000, "test": 3_000, "total": 1}, "only production and test"),
+        ("excluded_prefixes", ["../hidden"], "invalid excluded prefix"),
+        ("exceptions", {"../hidden.rs": 6_000}, "invalid repository-relative path"),
     ],
 )
-def test_load_budget_rejects_invalid_aggregate_contract(
-    tmp_path: Path, aggregate: dict[str, int], message: str
+def test_load_budget_rejects_invalid_or_retired_policy(
+    tmp_path: Path, field: str, value: object, message: str,
 ) -> None:
+    payload = budget_payload()
+    payload[field] = value
     path = tmp_path / "budget.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "limits": {"production": 5_000, "test": 3_000},
-                "excluded_prefixes": [],
-                "exceptions": {},
-                "aggregate_rust": aggregate,
-            }
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         MODULE.load_budget(path)
+
+
+@pytest.mark.parametrize(
+    ("counts", "expected_exit", "exceptions"),
+    [
+        ({"crates/core/src/lib.rs": 5_500}, 0, {"crates/core/src/lib.rs": 5_500}),
+        ({"crates/core/src/lib.rs": 5_000}, 0, {}),
+        ({}, 0, {}),
+        ({"crates/core/src/lib.rs": 6_001}, 2, {"crates/core/src/lib.rs": 6_000}),
+        ({"crates/core/src/new.rs": 5_001}, 2, {"crates/core/src/lib.rs": 6_000}),
+    ],
+)
+def test_write_baseline_only_ratchets_existing_exceptions_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    counts: dict[str, int], expected_exit: int, exceptions: dict[str, int],
+) -> None:
+    path = tmp_path / "budget.json"
+    original = json.dumps(budget_payload())
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        MODULE, "parse_args", lambda: MODULE.argparse.Namespace(
+            root=tmp_path, baseline=Path("budget.json"), write_baseline=True,
+            json_out=None,
+        ),
+    )
+    monkeypatch.setattr(MODULE, "tracked_paths", lambda _root: list(counts))
+    monkeypatch.setattr(MODULE, "collect_counts", lambda *_args: counts)
+    assert MODULE.main() == expected_exit
+    refreshed = json.loads(path.read_text(encoding="utf-8"))
+    assert refreshed["exceptions"] == exceptions
+    assert refreshed["limits"] == budget_payload()["limits"]
+    assert "aggregate_rust" not in refreshed
+    if expected_exit:
+        assert path.read_text(encoding="utf-8") == original
 
 
 def test_source_line_count_uses_logical_lines_and_rejects_symlinks(
@@ -397,3 +329,18 @@ def test_tracked_paths_uses_the_complete_nonignored_candidate_tree(
         ],
         "cwd": tmp_path,
     }
+
+
+def test_collect_counts_includes_unstaged_and_untracked_sources(tmp_path: Path) -> None:
+    MODULE.subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "tracked.rs").write_text("old\n", encoding="utf-8")
+    MODULE.subprocess.run(["git", "add", "tracked.rs"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.rs").write_text("changed\nsecond\n", encoding="utf-8")
+    (tmp_path / "new.rs").write_text("new\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("ignored.rs\n", encoding="utf-8")
+    (tmp_path / "ignored.rs").write_text("ignored\n", encoding="utf-8")
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "vendor" / "external.rs").write_text("external\n", encoding="utf-8")
+    assert MODULE.collect_counts(
+        tmp_path, MODULE.tracked_paths(tmp_path), ("vendor/",)
+    ) == {"new.rs": 1, "tracked.rs": 2}

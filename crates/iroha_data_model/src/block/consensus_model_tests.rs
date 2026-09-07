@@ -5,10 +5,6 @@ use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommit
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
 use std::num::NonZeroU64;
-#[expect(
-    dead_code,
-    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
-)]
 #[derive(Clone, Copy, norito::codec::Encode)]
 struct RetiredQcRefFixture {
     height: Height,
@@ -17,10 +13,6 @@ struct RetiredQcRefFixture {
     subject_block_hash: HashOf<BlockHeader>,
     phase: CertPhase,
 }
-#[expect(
-    dead_code,
-    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
-)]
 #[derive(Clone, Copy, norito::codec::Encode)]
 struct RetiredConsensusBlockHeaderFixture {
     parent_hash: HashOf<BlockHeader>,
@@ -32,10 +24,6 @@ struct RetiredConsensusBlockHeaderFixture {
     epoch: u64,
     highest_qc: RetiredQcRefFixture,
 }
-#[expect(
-    dead_code,
-    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
-)]
 #[derive(Clone, Copy, norito::codec::Encode)]
 struct RetiredProposalFixture {
     header: RetiredConsensusBlockHeaderFixture,
@@ -186,15 +174,6 @@ fn sample_roster() -> Vec<PeerId> {
         .collect()
 }
 include!("consensus/wire_schema_tests.rs");
-fn sample_retired_qc_ref() -> RetiredQcRefFixture {
-    RetiredQcRefFixture {
-        height: 4,
-        view: 1,
-        epoch: 1,
-        subject_block_hash: dummy_hash(),
-        phase: CertPhase::Prepare,
-    }
-}
 #[test]
 fn committed_lane_block_status_progress_policy_is_fail_closed() {
     for (status, executable) in [
@@ -1928,7 +1907,37 @@ fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
     assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
 }
 #[test]
+fn native_amx_participant_settlement_declares_canonical_schema_identity() {
+    // This finite wire type was introduced after the immutable compiler capture.
+    let name = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement";
+    let hash = norito::core::schema_hash_for_name(name);
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::nominal_name(),
+        name
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::frame_name(),
+        name
+    );
+    assert_eq!(
+        norito::schema::identity::frame_hash::<NativeAmxParticipantSettlement>(),
+        hash
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSerialize>::schema_hash(),
+        hash
+    );
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoDeserialize>::schema_hash(),
+        hash
+    );
+}
+#[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
+    assert_eq!(
+        <NativeAmxParticipantSettlement as norito::NoritoSchema>::nominal_name(),
+        "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
+    );
     let source_id = [0xC7; 32];
     let fifo_sources = [[0xC8; 32], source_id];
     let body = sample_native_amx_qc(
@@ -1991,6 +2000,98 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
         norito::decode_from_bytes::<NativeAmxParticipantSettlement>(&encoded).unwrap(),
         settlement
     );
+}
+
+#[test]
+fn native_amx_v2_leg_rejects_removed_recursive_settlement_layout() {
+    use norito::core::{DecodeFlagsGuard, header_flags};
+
+    // This encode-only fixture supplies the removed field at its original nested boundary.
+    // Current QCs are retained so rejection cannot be attributed to stale QC validation.
+    #[derive(norito::codec::Encode)]
+    struct RemovedSettlementLeg {
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        participant_proposal: LaneBlockProposalV1,
+        participant_settlement: LaneBlockCommitment,
+        participant_settlement_hash: HashOf<LaneBlockCommitment>,
+        prepare_qc: NativeAmxAttestationQcV2,
+        commit_qc: NativeAmxAttestationQcV2,
+    }
+
+    let leg = sample_native_amx_leg(
+        [0xC9; 32],
+        Hash::new(b"native-amx-removed-settlement-layout"),
+        (LaneId::new(1), DataSpaceId::new(7)),
+        (LaneId::new(2), DataSpaceId::new(8)),
+        &sample_roster(),
+    );
+    let settlement = &leg.participant_settlement;
+    let removed = RemovedSettlementLeg {
+        lane_id: leg.lane_id,
+        dataspace_id: leg.dataspace_id,
+        participant_proposal: leg.participant_proposal.clone(),
+        participant_settlement: LaneBlockCommitment {
+            block_height: settlement.participant_lane_block_height(),
+            lane_id: settlement.lane_id(),
+            lane_incarnation: settlement.lane_incarnation(),
+            dataspace_id: settlement.dataspace_id(),
+            tx_count: settlement.tx_count(),
+            total_local_amount: Quantity::zero(),
+            total_xor_due: Quantity::zero(),
+            total_xor_after_haircut: Quantity::zero(),
+            total_xor_variance: Quantity::zero(),
+            swap_metadata: None,
+            receipts: settlement
+                .source_ids()
+                .iter()
+                .map(|source_id| LaneSettlementReceipt {
+                    source_id: *source_id,
+                    local_amount: Quantity::zero(),
+                    xor_due: Quantity::zero(),
+                    xor_after_haircut: Quantity::zero(),
+                    xor_variance: Quantity::zero(),
+                    timestamp_ms: settlement.authority_context_height(),
+                })
+                .collect(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        },
+        participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::from(
+            leg.participant_settlement_hash,
+        )),
+        prepare_qc: leg.prepare_qc.clone(),
+        commit_qc: leg.commit_qc.clone(),
+    };
+
+    for requested in [
+        0,
+        header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ,
+        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT
+            | header_flags::PACKED_SEQ
+            | header_flags::COMPACT_LEN
+            | header_flags::FIELD_BITSET,
+    ] {
+        let _flags = DecodeFlagsGuard::enter(requested);
+        let canonical = norito::to_bytes(&leg).expect("encode the current finite leg");
+        assert_eq!(
+            norito::decode_from_bytes::<NativeAmxLegRecordV2>(&canonical)
+                .expect("current finite leg must decode in the advertised layout"),
+            leg
+        );
+        let (payload, flags) = norito::codec::encode_with_header_flags(&removed);
+        // Use the current root identity to exercise the nested layout check itself.
+        let framed =
+            norito::core::frame_bare_with_header_flags::<NativeAmxLegRecordV2>(&payload, flags)
+                .expect("frame the removed leg layout");
+        assert!(
+            norito::decode_from_bytes::<NativeAmxLegRecordV2>(&framed).is_err(),
+            "accepted removed recursive settlement layout {flags:#x}"
+        );
+    }
 }
 
 #[test]

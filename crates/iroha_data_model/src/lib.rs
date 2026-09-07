@@ -99,6 +99,9 @@ pub mod fastpq;
 pub mod fraud;
 // Certificate-bearing Parliament data must remain available to the always-on
 // validation-fee registry without enabling governance instructions or events.
+/// Application-independent game session records and signed gameplay messages.
+pub mod game;
+pub mod game_resources;
 /// Governance protocol types.
 pub mod governance;
 mod governance_fingerprint;
@@ -115,6 +118,8 @@ pub mod isi;
 mod json_helpers;
 #[cfg(feature = "json")]
 mod json_key_codec;
+#[cfg(feature = "json")]
+mod json_object_key;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
 /// KAGEMUSHA hardware-backed cash commitments, proofs, and settlement models.
@@ -137,6 +142,8 @@ pub mod name;
 pub mod nexus;
 /// Non-fungible token structures and specs.
 pub mod nft;
+/// Native NFT custody and exact-price sale records.
+pub mod nft_market;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
 /// Runtime parameter definitions and schema.
@@ -162,11 +169,6 @@ pub mod qr_stream;
 pub mod query;
 /// Generic hidden-program RAM-LFE program policies and receipts.
 pub mod ram_lfe;
-/// Application-independent game session records and signed gameplay messages.
-pub mod game;
-pub mod game_resources;
-/// Native NFT custody and exact-price sale records.
-pub mod nft_market;
 /// Repo agreement descriptors and governance knobs.
 pub mod repo;
 /// Role-based access control definitions.
@@ -239,6 +241,8 @@ include!(concat!(
 // Slice-based Norito decoders for model types used in packed sequences and
 // options. These forward to the archived Norito representation to avoid
 // duplicating decoding logic.
+#[cfg(all(test, feature = "json"))]
+mod base_wire_fixtures;
 mod norito_slice_decode;
 /// Private module defining sealing traits for `iroha_data_model`.
 mod seal {
@@ -399,3 +403,6 @@ pub mod prelude {
         },
     };
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

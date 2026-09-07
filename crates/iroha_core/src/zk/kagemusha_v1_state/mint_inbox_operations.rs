@@ -721,23 +721,6 @@ where
         Ok(())
     }
 
-    pub(super) fn mint_recipient_key_is_retained(&self, key: DigestV1) -> bool {
-        self.mint_inbox
-            .reservations()
-            .values()
-            .any(|r| r.recipient_one_time_key() == key)
-            || self
-                .mint_inbox
-                .pending()
-                .values()
-                .any(|r| r.reservation().recipient_one_time_key() == key)
-            || self
-                .mint_inbox
-                .accepted()
-                .values()
-                .any(|r| r.recipient_one_time_key() == key)
-    }
-
     fn validate_mint_cross_kind_identity(
         &self,
         id: CreditIdV1,

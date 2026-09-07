@@ -7,6 +7,7 @@ isi! {
     ///
     /// The authority must hold `CanRegisterSmartContractCode`. The corresponding
     /// verified bytecode must already be present under the manifest's `code_hash`.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode")]
     pub struct RegisterSmartContractCode {
         /// Manifest containing `code_hash` (required) and `abi_hash`.
         pub manifest: ContractManifest,
@@ -19,6 +20,7 @@ isi! {
     /// The authority must be the address's current account lifecycle owner. Parliament-owned or
     /// delegated changes use the certified governance corridor. The address becomes unavailable
     /// immediately, while provenance information is emitted via the data event stream.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance")]
     pub struct DeactivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -38,6 +40,7 @@ isi! {
     /// is created only by atomic direct deployment or Parliament deployment. Rebinding an active
     /// address is an in-place `kaizen`/`改善` and stages the new artifact's declared hook. Until that
     /// exact hook succeeds, ordinary calls are rejected.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::ActivateContractInstance")]
     pub struct ActivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -51,6 +54,7 @@ impl crate::seal::Instruction for ActivateContractInstance {}
 isi! {
     #[norito(decode_from_slice)]
     /// Set or revoke the account owner's consensual Parliament lifecycle delegation.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation")]
     pub struct SetContractParliamentDelegation {
         /// Contract whose delegation changes.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -64,6 +68,7 @@ impl crate::seal::Instruction for SetContractParliamentDelegation {}
 isi! {
     #[norito(decode_from_slice)]
     /// Offer contract lifecycle ownership to an account or Parliament.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::OfferContractOwnership")]
     pub struct OfferContractOwnership {
         /// Contract whose ownership is offered.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -77,6 +82,7 @@ impl crate::seal::Instruction for OfferContractOwnership {}
 isi! {
     #[norito(decode_from_slice)]
     /// Accept an account-targeted contract ownership offer.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership")]
     pub struct AcceptContractOwnership {
         /// Contract whose ownership is accepted.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -88,6 +94,7 @@ impl crate::seal::Instruction for AcceptContractOwnership {}
 isi! {
     #[norito(decode_from_slice)]
     /// Cancel an outstanding contract ownership offer.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer")]
     pub struct CancelContractOwnershipOffer {
         /// Contract whose outstanding offer is cancelled.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -108,6 +115,7 @@ isi! {
     /// artifact registration only; it is not a deployment capability. Raw deployment into a
     /// protected namespace is rejected; those addresses can be created only by the certified
     /// Parliament deployment corridor.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment")]
     pub struct CommitContractDeployment {
         /// Exact next deployment nonce expected in the authority's reserved metadata.
         pub expected_deploy_nonce: u64,
@@ -131,6 +139,7 @@ isi! {
     /// `code_hash` equals the domain-separated canonical hash of the complete deployable `.to`
     /// artifact, including the execution header, `CNTR`, literals, and code, before storing. The
     /// authority must hold `CanRegisterSmartContractCode`.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes")]
     pub struct RegisterSmartContractBytes {
         /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,
@@ -145,6 +154,7 @@ isi! {
     /// Chunks are staged under `(authority, code_hash)` until an explicit
     /// [`FinalizeSmartContractCodeUpload`] verifies and atomically registers the
     /// complete artifact. Chunks may arrive out of order.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk")]
     pub struct UploadSmartContractCodeChunk {
         /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,
@@ -164,6 +174,7 @@ isi! {
     ///
     /// Failed finalization leaves the pending upload intact so the owner can
     /// retry it or cancel it explicitly.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload")]
     pub struct FinalizeSmartContractCodeUpload {
         /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,
@@ -178,6 +189,7 @@ isi! {
     /// Cancel the authority's pending upload for `code_hash`.
     ///
     /// Cancellation is owner-scoped and idempotent.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload")]
     pub struct CancelSmartContractCodeUpload {
         /// Hash identifying the pending artifact upload to discard.
         pub code_hash: iroha_crypto::Hash,
@@ -190,6 +202,7 @@ isi! {
     /// The authority must hold `CanRegisterSmartContractCode`. Removal succeeds only when no
     /// manifests or active instances reference the supplied `code_hash`. An optional audit reason
     /// surfaces alongside the emitted removal event.
+    #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes")]
     pub struct RemoveSmartContractBytes {
         /// Canonical hash of the complete deployable `.to` artifact to delete.
         pub code_hash: iroha_crypto::Hash,

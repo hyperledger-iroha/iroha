@@ -10,11 +10,9 @@ use axum::{
 };
 #[cfg(feature = "telemetry")]
 use http_body_util::BodyExt as _;
+use iroha_config::parameters::actual::{ConfidentialGas, Root, TelemetryProfile};
 #[cfg(feature = "telemetry")]
-use iroha_config::{
-    client_api::ConfigGetDTO,
-    parameters::actual::{ConfidentialGas, Root, TelemetryProfile},
-};
+use iroha_torii_shared::configuration::Configuration;
 #[cfg(feature = "telemetry")]
 use tower::ServiceExt as _;
 #[cfg(feature = "telemetry")]
@@ -114,7 +112,7 @@ fn assert_content_type_starts_with(response: &axum::response::Response, expected
 }
 #[cfg(feature = "telemetry")]
 fn assert_confidential_gas_matches(
-    actual: iroha_config::client_api::ConfidentialGas,
+    actual: iroha_torii_shared::configuration::ConfidentialGas,
     expected: ConfidentialGas,
 ) {
     assert_eq!(actual.proof_base, expected.proof_base);
@@ -458,7 +456,7 @@ async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, harness.cfg.confidential.gas);
     harness.shutdown().await;
 }
@@ -554,7 +552,7 @@ async fn configuration_endpoint_uses_configured_confidential_gas_values() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_content_type_starts_with(&resp, "application/json");
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, expected);
     harness.shutdown().await;
 }
@@ -583,7 +581,7 @@ async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
     harness.shutdown().await;
 }
@@ -604,7 +602,7 @@ async fn configuration_endpoint_accepts_vendor_json_content_type() {
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
     harness.shutdown().await;
 }
@@ -628,7 +626,7 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
     harness.shutdown().await;
 }
@@ -679,7 +677,7 @@ async fn configuration_endpoint_rejects_update_without_required_logger() {
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
     harness.shutdown().await;
 }
@@ -701,7 +699,7 @@ async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas()
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
     harness.shutdown().await;
 }
@@ -729,7 +727,7 @@ async fn configuration_endpoint_rejects_incomplete_confidential_gas_and_preserve
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
     harness.shutdown().await;
 }
@@ -751,7 +749,7 @@ async fn configuration_endpoint_rejects_malformed_json_update() {
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
-    let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
+    let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
     harness.shutdown().await;
 }

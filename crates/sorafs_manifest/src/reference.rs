@@ -62,7 +62,8 @@ const CATEGORY_POLICY: &str = "policy";
 const CATEGORY_SIGNATURE: &str = "signature";
 const CATEGORY_NORITO: &str = "norito";
 const CATEGORY_INTERNAL: &str = "internal";
-const POP_REFERENCE_PAYLOAD_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+/// Maximum complete Norito frame accepted by the PoP structural reference validator.
+pub const POP_REFERENCE_PAYLOAD_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 const PDP_STRUCTURAL_OK_CODE: &str = "SFS-PDP-DIAG-000";
 const PDP_TRUST_REQUIRED_CODE: &str = "SFS-PDP-004";
 const PDP_REFERENCE_DECODE_MAX_DEPTH_V1: usize = 64;
@@ -1012,7 +1013,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairEvidence => {
-            let evidence = decode_repair_bundle_payload::<RepairEvidenceV1>(payload, generated_at)?;
+            let evidence = decode_bundle_payload::<RepairEvidenceV1>(payload, generated_at)?;
             validate_repair_bundle_value(evidence.validate(), &evidence, payload, generated_at)?;
             links.observe_manifest(
                 evidence.manifest_digest,
@@ -1031,7 +1032,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairReport => {
-            let report = decode_repair_bundle_payload::<RepairReportV1>(payload, generated_at)?;
+            let report = decode_bundle_payload::<RepairReportV1>(payload, generated_at)?;
             validate_repair_bundle_value(report.validate(), &report, payload, generated_at)?;
             links.observe_manifest(
                 report.evidence.manifest_digest,
@@ -1050,7 +1051,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairTaskRecord => {
-            let task = decode_repair_bundle_payload::<RepairTaskRecordV1>(payload, generated_at)?;
+            let task = decode_bundle_payload::<RepairTaskRecordV1>(payload, generated_at)?;
             validate_repair_bundle_value(task.validate(), &task, payload, generated_at)?;
             links.observe_manifest(
                 task.manifest_digest,
@@ -1069,8 +1070,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairSlashProposal => {
-            let proposal =
-                decode_repair_bundle_payload::<RepairSlashProposalV1>(payload, generated_at)?;
+            let proposal = decode_bundle_payload::<RepairSlashProposalV1>(payload, generated_at)?;
             validate_repair_bundle_value(proposal.validate(), &proposal, payload, generated_at)?;
             links.observe_manifest(
                 proposal.manifest_digest,
@@ -1089,7 +1089,7 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::RepairTaskEvent => {
-            let event = decode_repair_bundle_payload::<RepairTaskEventV1>(payload, generated_at)?;
+            let event = decode_bundle_payload::<RepairTaskEventV1>(payload, generated_at)?;
             validate_repair_bundle_value(event.validate(), &event, payload, generated_at)?;
             links.observe_manifest(
                 event.manifest_digest,
@@ -1190,23 +1190,7 @@ fn decode_bundle_payload<T>(
 where
     T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
-    norito::decode_from_bytes::<T>(payload.bytes).map_err(|error| {
-        bundle_decode_error(
-            payload.kind,
-            &payload.label,
-            error.to_string(),
-            generated_at,
-        )
-    })
-}
-fn decode_repair_bundle_payload<T>(
-    payload: &FixtureBundlePayloadV1<'_>,
-    generated_at: u64,
-) -> Result<T, ValidationOutcomeV1>
-where
-    T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
-{
-    decode_repair_archive_payload::<T>(payload.bytes).map_err(|error| {
+    decode_reference_frame::<T>(payload.bytes).map_err(|error| {
         bundle_decode_error(
             payload.kind,
             &payload.label,
@@ -1322,7 +1306,7 @@ pub fn validate_governance_log_node_bytes(
 ) -> ValidationOutcomeV1 {
     let label = label.into();
     let inputs = vec![ValidationInputV1::new("governance_log_node", label.clone())];
-    let node = match norito::decode_from_bytes::<GovernanceLogNodeV1>(bytes) {
+    let node = match decode_reference_frame::<GovernanceLogNodeV1>(bytes) {
         Ok(node) => node,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -1458,7 +1442,7 @@ pub fn validate_governance_dag_block_bytes(
         "governance_dag_block",
         label.clone(),
     )];
-    let block = match norito::decode_from_bytes::<GovernanceDagBlockV1>(bytes) {
+    let block = match decode_reference_frame::<GovernanceDagBlockV1>(bytes) {
         Ok(block) => block,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -1557,7 +1541,7 @@ pub fn validate_governance_dag_head_chain_bytes(
             label.clone(),
         ));
     }
-    let head = match norito::decode_from_bytes::<GovernanceDagHeadV1>(head_bytes) {
+    let head = match decode_reference_frame::<GovernanceDagHeadV1>(head_bytes) {
         Ok(head) => head,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -1580,7 +1564,7 @@ pub fn validate_governance_dag_head_chain_bytes(
     };
     let mut blocks = Vec::with_capacity(block_payloads.len());
     for (bytes, label) in block_payloads {
-        match norito::decode_from_bytes::<GovernanceDagBlockV1>(bytes) {
+        match decode_reference_frame::<GovernanceDagBlockV1>(bytes) {
             Ok(block) => blocks.push(block),
             Err(error) => {
                 return ValidationOutcomeV1::error(
@@ -2216,6 +2200,10 @@ fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationC
         ValidationContextFieldV1::new("nullifier_hex", hex::encode(proof.nullifier)),
         ValidationContextFieldV1::new("challenge_digest_hex", hex::encode(proof.challenge_digest)),
         ValidationContextFieldV1::new("verifier_context", proof.verifier_context.clone()),
+        ValidationContextFieldV1::new(
+            "presentation_binding_digest_hex",
+            hex::encode(proof.presentation_binding_digest),
+        ),
         ValidationContextFieldV1::new(
             "proof_system",
             pop_membership_proof_system_label(proof.proof_system),
@@ -3341,6 +3329,10 @@ fn hedging_decode_error(
     )
 }
 /// Validates a Norito-encoded PoP credential payload and emits a reference outcome.
+///
+/// Membership-proof validation checks canonical wire shape and bounded metadata,
+/// including the required presentation binding. It does not verify the Halo2
+/// transcript, authenticate a recipient, or consume a replay nullifier.
 #[must_use]
 pub fn validate_pop_payload_bytes(
     kind: PopValidationPayloadKindV1,
@@ -3454,13 +3446,13 @@ where
         POP_REFERENCE_PAYLOAD_MAX_BYTES_V1.saturating_mul(4),
         64,
     );
-    let payload: T =
-        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| error.to_string())?;
-    let canonical = norito::to_bytes(&payload).map_err(|error| error.to_string())?;
-    if canonical != bytes {
-        return Err("PoP payload is not the canonical Norito encoding".to_owned());
-    }
-    Ok(payload)
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            "PoP payload is not the canonical Norito encoding".to_owned()
+        } else {
+            error.to_string()
+        }
+    })
 }
 fn validate_pop_payload_value(
     kind: PopValidationPayloadKindV1,
@@ -3596,7 +3588,7 @@ pub fn validate_repair_payload_bytes(
     let inputs = vec![input];
     macro_rules! decode_repair_payload {
         ($payload_type:ty) => {
-            match decode_repair_archive_payload::<$payload_type>(bytes) {
+            match decode_reference_frame::<$payload_type>(bytes) {
                 Ok(payload) => payload,
                 Err(error) => {
                     return ValidationOutcomeV1::error(
@@ -3703,7 +3695,8 @@ pub fn validate_repair_payload_bytes(
         generated_at,
     )
 }
-fn decode_repair_archive_payload<T>(bytes: &[u8]) -> Result<T, norito::Error>
+// One canonical uncompressed V1 outer frame; each caller retains its semantic/signature errors.
+fn decode_reference_frame<T>(bytes: &[u8]) -> Result<T, norito::Error>
 where
     T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
@@ -3805,7 +3798,7 @@ pub fn validate_replication_order_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("replication_order", input_label);
     let inputs = vec![input];
-    let order = match norito::decode_from_bytes::<ReplicationOrderV1>(bytes) {
+    let order = match decode_reference_frame::<ReplicationOrderV1>(bytes) {
         Ok(order) => order,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -3866,7 +3859,7 @@ pub fn validate_signed_replication_order_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("signed_replication_order", input_label);
     let inputs = vec![input];
-    let envelope = match norito::decode_from_bytes::<SignedReplicationOrderV1>(bytes) {
+    let envelope = match decode_reference_frame::<SignedReplicationOrderV1>(bytes) {
         Ok(envelope) => envelope,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -3950,7 +3943,7 @@ pub fn validate_provider_admission_envelope_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("provider_admission_envelope", input_label);
     let inputs = vec![input];
-    let envelope = match norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(bytes) {
+    let envelope = match decode_reference_frame::<ProviderAdmissionEnvelopeV1>(bytes) {
         Ok(envelope) => envelope,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4027,7 +4020,7 @@ pub fn validate_provider_admission_renewal_bytes(
         ValidationInputV1::new("provider_admission_envelope", previous_envelope_label),
         ValidationInputV1::new("provider_admission_renewal", renewal_label),
     ];
-    let previous_envelope = match norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(
+    let previous_envelope = match decode_reference_frame::<ProviderAdmissionEnvelopeV1>(
         previous_envelope_bytes,
     ) {
         Ok(envelope) => envelope,
@@ -4049,7 +4042,7 @@ pub fn validate_provider_admission_renewal_bytes(
             );
         }
     };
-    let renewal = match norito::decode_from_bytes::<ProviderAdmissionRenewalV1>(renewal_bytes) {
+    let renewal = match decode_reference_frame::<ProviderAdmissionRenewalV1>(renewal_bytes) {
         Ok(renewal) => renewal,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4150,7 +4143,7 @@ pub fn validate_provider_admission_revocation_bytes(
         ValidationInputV1::new("provider_admission_envelope", envelope_label),
         ValidationInputV1::new("provider_admission_revocation", revocation_label),
     ];
-    let envelope = match norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(envelope_bytes) {
+    let envelope = match decode_reference_frame::<ProviderAdmissionEnvelopeV1>(envelope_bytes) {
         Ok(envelope) => envelope,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4168,9 +4161,8 @@ pub fn validate_provider_admission_revocation_bytes(
             );
         }
     };
-    let revocation = match norito::decode_from_bytes::<ProviderAdmissionRevocationV1>(
-        revocation_bytes,
-    ) {
+    let revocation = match decode_reference_frame::<ProviderAdmissionRevocationV1>(revocation_bytes)
+    {
         Ok(revocation) => revocation,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4946,7 +4938,7 @@ pub fn validate_por_challenge_proof_bytes(
         ValidationInputV1::new("por_challenge", challenge_label),
         ValidationInputV1::new("por_proof", proof_label),
     ];
-    let challenge = match crate::por::decode_por_challenge_v1(challenge_bytes) {
+    let challenge = match crate::por::decode_por_challenge_payload_v1(challenge_bytes) {
         Ok(challenge) => challenge,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -4961,7 +4953,7 @@ pub fn validate_por_challenge_proof_bytes(
             );
         }
     };
-    let proof = match crate::por::decode_por_proof_v1(proof_bytes) {
+    let proof = match crate::por::decode_por_proof_payload_v1(proof_bytes) {
         Ok(proof) => proof,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -5136,7 +5128,7 @@ pub fn validate_potr_receipt_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("potr_receipt", input_label);
     let inputs = vec![input];
-    let receipt = match norito::decode_from_bytes::<PotrReceiptV1>(bytes) {
+    let receipt = match decode_reference_frame::<PotrReceiptV1>(bytes) {
         Ok(receipt) => receipt,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -6082,7 +6074,8 @@ fn pop_validation_code(error: &PopCredentialValidationError) -> &'static str {
         | PopCredentialValidationError::ReplayedProof
         | PopCredentialValidationError::ReplayCacheLimitExceeded
         | PopCredentialValidationError::ChallengeMismatch
-        | PopCredentialValidationError::VerifierContextMismatch => "SFS-POL-010",
+        | PopCredentialValidationError::VerifierContextMismatch
+        | PopCredentialValidationError::PresentationBindingMismatch => "SFS-POL-010",
         PopCredentialValidationError::ProofHolderCommitmentMismatch
         | PopCredentialValidationError::WrongCommitmentRoot
         | PopCredentialValidationError::RevocationRootMismatch
@@ -6471,7 +6464,8 @@ fn pop_validation_category(error: &PopCredentialValidationError) -> &'static str
         | PopCredentialValidationError::ReplayedProof
         | PopCredentialValidationError::ReplayCacheLimitExceeded
         | PopCredentialValidationError::ChallengeMismatch
-        | PopCredentialValidationError::VerifierContextMismatch => CATEGORY_POLICY,
+        | PopCredentialValidationError::VerifierContextMismatch
+        | PopCredentialValidationError::PresentationBindingMismatch => CATEGORY_POLICY,
         PopCredentialValidationError::InvalidPublicKeyLength { .. }
         | PopCredentialValidationError::InvalidSignatureLength { .. }
         | PopCredentialValidationError::InvalidPublicKey { .. }
@@ -7229,6 +7223,7 @@ mod tests {
             nullifier: pop_scalar(0x42),
             challenge_digest: pop_digest(0x43),
             verifier_context: "jury-case-1".to_owned(),
+            presentation_binding_digest: pop_digest(0x46),
             proof_system: crate::PopMembershipProofSystemV1::Halo2IpaPastaV1,
             verifier_material: crate::pop_credentials::PopMembershipVerifierMaterialV1 {
                 circuit_id: "sorafs-pop-membership-halo2-ipa-pasta-v1".to_owned(),
@@ -7243,6 +7238,24 @@ mod tests {
         };
         proof.validate().expect("validate PoP proof payload");
         proof
+    }
+    #[test]
+    fn pop_presentation_binding_is_in_validation_context_and_policy_errors() {
+        let proof = pop_membership_proof();
+        let context = pop_membership_proof_context(&proof);
+        assert_eq!(
+            context
+                .iter()
+                .filter(|field| field.key == "presentation_binding_digest_hex")
+                .collect::<Vec<_>>(),
+            vec![&ValidationContextFieldV1::new(
+                "presentation_binding_digest_hex",
+                hex::encode(proof.presentation_binding_digest)
+            )],
+        );
+        let error = PopCredentialValidationError::PresentationBindingMismatch;
+        assert_eq!(pop_validation_code(&error), "SFS-POL-010");
+        assert_eq!(pop_validation_category(&error), CATEGORY_POLICY);
     }
     fn signed_pop_material() -> (
         crate::PopCredentialV1,
@@ -8070,6 +8083,12 @@ mod tests {
         let mut challenge = por_challenge();
         let proof = por_proof();
         challenge.chunking_profile = "unknown.profile@1.0.0".to_owned();
+        let bytes = norito::encode_canonical(&challenge).unwrap();
+        assert!(crate::por::decode_por_challenge_v1(&bytes).is_err());
+        assert_eq!(
+            crate::por::decode_por_challenge_payload_v1(&bytes).unwrap(),
+            challenge
+        );
         let outcome = por_outcome(&challenge, &proof, "bad-challenge.to", "proof.to", 19);
         assert_failure(&outcome, "SFS-VAL-003", CATEGORY_VALIDATION);
     }
@@ -8078,6 +8097,12 @@ mod tests {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.auth_path.clear();
+        let bytes = norito::encode_canonical(&proof).unwrap();
+        assert!(crate::por::decode_por_proof_v1(&bytes).is_err());
+        assert_eq!(
+            crate::por::decode_por_proof_payload_v1(&bytes).unwrap(),
+            proof
+        );
         let outcome = por_outcome(&challenge, &proof, "challenge.to", "bad-proof.to", 20);
         assert_failure(&outcome, "SFS-VAL-009", CATEGORY_VALIDATION);
     }
@@ -8156,7 +8181,7 @@ mod tests {
         };
         assert_ne!(bytes, encoded(&task), "fixture must distinguish layouts");
         assert!(matches!(
-            decode_repair_archive_payload::<RepairTaskRecordV1>(&bytes),
+            decode_reference_frame::<RepairTaskRecordV1>(&bytes),
             Err(norito::Error::NonCanonicalEncoding)
         ));
         let outcome = validate_repair_payload_bytes(
@@ -8638,4 +8663,5 @@ mod tests {
         assert_eq!(field(&outcome.context, "canonical_bytes"), Some("85"));
     }
     include!("reference/tests/replication_and_cancel_validation.rs");
+    include!("reference/tests/canonical_signed_frames.rs");
 }

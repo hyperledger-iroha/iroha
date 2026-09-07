@@ -7,6 +7,17 @@ pub enum Error {
     /// The batch references a parameter set that does not exist.
     #[error("unknown FASTPQ parameter `{0}`")]
     UnknownParameter(String),
+    /// The requested GPU mode has no complete final-V1 native proof implementation.
+    #[error(
+        "FASTPQ final V1 GPU proof backend unavailable: six-lane commitments and the proof FFT/LDE pipeline execute on CPU"
+    )]
+    NativeV1GpuUnavailable,
+    /// Explicit native-digest execution failed without substituting another backend.
+    #[error("native digest execution failed: {details}")]
+    NativeDigestExecution {
+        /// Public diagnostic; staged frame contents are never included.
+        details: String,
+    },
     /// Batch parameter does not match the prover configuration.
     #[error("parameter mismatch: expected `{expected}`, got `{actual}`")]
     ParameterMismatch {
@@ -48,6 +59,22 @@ pub enum Error {
     /// Low-degree extension Merkle root mismatch detected during verification.
     #[error("LDE root mismatch")]
     LdeRootMismatch,
+    /// Lookup Fiat–Shamir challenge does not match the reconstructed transcript.
+    #[error("lookup challenge mismatch")]
+    LookupChallengeMismatch,
+    /// Lookup grand product does not match the reconstructed accumulator.
+    #[error("lookup grand product mismatch")]
+    LookupGrandProductMismatch,
+    /// Lookup selector and witness columns have different lengths.
+    #[error(
+        "lookup selector/witness column length mismatch: selector has {selector_len} values, witness has {witness_len}"
+    )]
+    LookupColumnLengthMismatch {
+        /// Number of selector evaluations supplied by the caller.
+        selector_len: usize,
+        /// Number of witness evaluations supplied by the caller.
+        witness_len: usize,
+    },
     /// AIR trace Merkle root mismatch detected during verification.
     #[error("AIR trace root mismatch")]
     AirTraceRootMismatch,
@@ -276,8 +303,14 @@ pub enum Error {
         length: usize,
     },
     /// A numeric asset operation did not use the canonical state-key shape.
-    #[error("invalid asset operation key; expected `asset/<asset-id>/<account>`")]
+    #[error("invalid asset operation key; expected a canonical `FastpqBalanceKeyV1` Norito frame")]
     InvalidAssetKey,
+    /// A mint or burn did not change the balance in its required direction.
+    #[error("{operation} must change the asset value in the required direction")]
+    InvalidAssetValueChange {
+        /// Stable operation name (`mint` or `burn`).
+        operation: &'static str,
+    },
     /// Metadata field has an unexpected length.
     #[error("metadata field `{key}` has length {actual}, expected {expected}")]
     MetadataLength {

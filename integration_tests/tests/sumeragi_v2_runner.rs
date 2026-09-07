@@ -4,7 +4,8 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, QueryError},
+    blocking::Client,
+    client::QueryError,
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
         Identifiable, Level, NetworkId, ValidationFail,
@@ -1071,7 +1072,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             validate_applied_successor_witness(snapshot, LOCKED_REPROPOSAL_HEIGHT)?;
         }
         let proof = fetch_bridge_finality_proof(&validators[0], LOCKED_REPROPOSAL_HEIGHT).await?;
-        verify_bridge_finality_proof(&proof, &network.client().network_id)
+        verify_bridge_finality_proof(&proof, &network.client().client().network_id)
             .wrap_err("recovered block finality proof failed cryptographic validation")?;
         let committed_hashes = try_join_all(all_participants.iter().map(|peer| {
             committed_hash_at_height(peer, LOCKED_REPROPOSAL_HEIGHT)
@@ -2805,7 +2806,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             validate_exact_finality_proof(
                 peer,
                 proof,
-                &client.network_id,
+                &client.client().network_id,
                 height,
                 second_view,
                 &second_reference,
@@ -2841,7 +2842,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
 }
 async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
     task::spawn_blocking(move || {
-        client.submit_blocking(
+        client.submit(
             Register::account(Account::new(account_id)),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2885,7 +2886,7 @@ fn fixture_account(seed_marker: u8) -> Result<AccountId> {
         .wrap_err("derive deterministic v2-runner test account")?;
     Ok(AccountId::new(key_pair.public_key().clone()))
 }
-async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Status>> {
+async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let mut statuses = Vec::with_capacity(peers.len());
     for peer in peers {
         statuses.push(
@@ -2953,7 +2954,7 @@ async fn wait_for_normal_statuses(
     peers: &[NetworkPeer],
     min_blocks: u64,
     timeout: Duration,
-) -> Result<Vec<iroha::client::Status>> {
+) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let deadline = Instant::now() + timeout;
     loop {
         let observation = match normal_statuses(peers).await {
@@ -3191,6 +3192,7 @@ async fn committed_block_metadata_at_height(
     let peer_name = peer.mnemonic().to_owned();
     task::spawn_blocking(move || {
         let blocks = client
+            .client()
             .query(FindBlocks)
             .execute_all()
             .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
@@ -3246,7 +3248,7 @@ async fn assert_account_registration_in_exact_block(
         async move {
             task::spawn_blocking(move || {
                 let blocks = client
-                    .query(FindBlocks)
+                    .client().query(FindBlocks)
                     .execute_all()
                     .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
                 let block = blocks
@@ -3284,11 +3286,12 @@ async fn fetch_bridge_finality_proof(
 ) -> Result<BridgeFinalityProof> {
     let client = peer.client();
     let url = client
+        .client()
         .torii_url
         .join(&format!("v1/bridge/finality/{height}"))
         .wrap_err("construct bridge-finality URL")?;
     let response = reqwest::Client::builder()
-        .timeout(client.torii_request_timeout)
+        .timeout(client.client().torii_request_timeout)
         .build()
         .wrap_err("build bridge-finality HTTP client")?
         .get(url)
@@ -3865,7 +3868,7 @@ async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -
             let expected_label = expected.to_string();
             let peer_name = peer.mnemonic().to_owned();
             let found = task::spawn_blocking(move || -> Result<bool> {
-                match client.query_single(FindAccountById::new(account)) {
+                match client.client().query_single(FindAccountById::new(account)) {
                     Ok(stored) if stored.id() == &expected => Ok(true),
                     Ok(stored) => Err(eyre!(
                         "account query for {expected} returned unexpected account {}",
@@ -3908,7 +3911,7 @@ async fn wait_for_accounts_visible(
                 let expected_label = expected.to_string();
                 let peer_name = peer.mnemonic().to_owned();
                 let visible = task::spawn_blocking(move || -> Result<bool> {
-                    match client.query_single(FindAccountById::new(account)) {
+                    match client.client().query_single(FindAccountById::new(account)) {
                         Ok(stored) if stored.id() == &expected => Ok(true),
                         Ok(stored) => Err(eyre!(
                             "account query for {expected} returned unexpected account {}",
@@ -3980,7 +3983,7 @@ async fn wait_for_v2_statuses(
 async fn fetch_v2_status(peer: &NetworkPeer) -> Result<V2StatusSnapshot> {
     let client = peer.client();
     let peer_name = peer.mnemonic().to_owned();
-    let value = task::spawn_blocking(move || client.get_sumeragi_status_json())
+    let value = task::spawn_blocking(move || client.client().get_sumeragi_status_json())
         .await
         .wrap_err_with(|| format!("v2 status task panicked for {peer_name}"))?
         .wrap_err_with(|| format!("fetch authoritative v2 status from {peer_name}"))?;

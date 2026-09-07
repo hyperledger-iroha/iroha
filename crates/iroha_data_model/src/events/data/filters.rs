@@ -66,7 +66,7 @@ mod model {
         /// Matches governance lifecycle events
         #[cfg(feature = "governance")]
         Governance(GovernanceEventFilter),
-            /// Native race events, optionally restricted to one race identifier.
+        /// Native race events, optionally restricted to one race identifier.
         GameSession(Option<iroha_crypto::Hash>),
     }
     /// An event filter for [`super::proof::ProofEvent`] values.
@@ -1606,7 +1606,9 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
             }
-            (DataEventFilter::GameSession(id), DataEvent::GameSession(event)) => id.as_ref().is_none_or(|id| id == &event.session_id),
+            (DataEventFilter::GameSession(id), DataEvent::GameSession(event)) => {
+                id.as_ref().is_none_or(|id| id == &event.session_id)
+            }
             (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
                 filter.matches(escrow_event)
             }

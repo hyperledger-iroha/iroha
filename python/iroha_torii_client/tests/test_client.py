@@ -6854,6 +6854,9 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         receipt = copy.deepcopy(leg["participant_settlement"]["source_ids"][0])
         leg["participant_settlement"]["source_ids"] = [receipt] * 4097
 
+    def empty_recursive_settlement(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = []
+
     def recursive_settlement(leg: Dict[str, Any]) -> None:
         leg["participant_settlement"]["native_amx_receipts"] = [{}]
 
@@ -6887,6 +6890,7 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         wrong_settlement_tx_count,
         empty_settlement,
         oversized_settlement,
+        empty_recursive_settlement,
         recursive_settlement,
     )
     for mutate in mutations:

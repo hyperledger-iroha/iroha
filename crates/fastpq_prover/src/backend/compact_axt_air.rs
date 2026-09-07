@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn constructor_rejects_non_axt_and_opaque_claim_semantics() {
         let fixture = Fixture::new(false);
-        let prepared = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let prepared = fixture.prepare(ProofSemantics::StateTransition);
         assert!(matches!(
             AxtTransferAir::new(
                 &prepared,

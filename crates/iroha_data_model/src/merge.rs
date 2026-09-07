@@ -196,6 +196,8 @@ pub const fn merge_execution_batch_size_within_limit(encoded_len: usize) -> bool
 /// Proof of possession for one signer selected by a merge QC bitmap.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeSignerProof")]
 pub struct MergeSignerProof {
     /// Signer index in [`MergeQuorumCertificate::validator_set`].
     pub signer: ValidatorIndex,
@@ -212,6 +214,8 @@ pub struct MergeSignerProof {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainNativeFrontierEvidenceV1")]
 pub struct LaneDrainNativeFrontierEvidenceV1 {
     /// Exact evidence layout version. Only version one is valid.
     pub version: u16,
@@ -262,6 +266,8 @@ impl LaneDrainNativeFrontierEvidenceV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainFrontierV1")]
 pub struct LaneDrainFrontierV1 {
     /// Exact frontier layout version. Only version one is valid.
     pub version: u8,
@@ -331,6 +337,8 @@ pub fn lane_drain_empty_unresolved_evidence_root() -> Hash {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainIntentV1")]
 pub struct LaneDrainIntentV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
@@ -382,6 +390,8 @@ impl LaneDrainIntentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainCertificateBodyV1")]
 pub struct LaneDrainCertificateBodyV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
@@ -407,6 +417,8 @@ impl LaneDrainCertificateBodyV1 {
 /// globally applied frontier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainCertificateV1")]
 pub struct LaneDrainCertificateV1 {
     /// Body signed by the authoritative lane committee.
     pub body: LaneDrainCertificateBodyV1,
@@ -436,6 +448,8 @@ impl LaneDrainCertificateV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainCommitmentV1")]
 pub struct LaneDrainCommitmentV1 {
     /// Exact commitment layout version. Only version one is valid.
     pub version: u8,
@@ -457,6 +471,8 @@ impl LaneDrainCommitmentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::LaneDrainStateV1")]
 pub struct LaneDrainStateV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
@@ -476,6 +492,8 @@ impl LaneDrainStateV1 {
 /// Canonical active lane incarnation and first eligible proposal height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneBinding")]
 pub struct MergeLaneBinding {
     /// Active lane identifier.
     pub lane_id: LaneId,
@@ -492,6 +510,8 @@ pub struct MergeLaneBinding {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneCommitteeRosterV1")]
 pub struct MergeLaneCommitteeRosterV1 {
     /// Version of the canonical validator-set hashing scheme.
     pub validator_set_hash_version: u16,
@@ -613,6 +633,8 @@ pub enum MergeLaneAuthorityCatalogError {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneAuthorityCatalogV1")]
 pub struct MergeLaneAuthorityCatalogV1 {
     /// Exact catalog layout. Only version one is supported.
     pub version: u8,
@@ -782,6 +804,8 @@ impl MergeLaneAuthorityCatalogV1 {
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeQuorumCertificate")]
 pub struct MergeQuorumCertificate {
     /// View number in which the merge committee formed the certificate.
     pub view: u64,
@@ -848,6 +872,8 @@ impl MergeQuorumCertificate {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeCommitteeSignature")]
 pub struct MergeCommitteeSignature {
     /// Current-only first-release wire layout version.
     ///
@@ -875,6 +901,8 @@ pub struct MergeCommitteeSignature {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneSnapshot")]
 pub struct MergeLaneSnapshot {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -907,6 +935,8 @@ pub struct MergeLaneSnapshot {
 /// Proof of possession retained for a signer of an embedded lane-local QC.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneSignerProof")]
 pub struct MergeLaneSignerProof {
     /// BLS public key whose ownership is proven.
     pub public_key: PublicKey,
@@ -917,6 +947,8 @@ pub struct MergeLaneSignerProof {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneFastpqTranscripts")]
 pub struct MergeLaneFastpqTranscripts {
     /// Canonically ordered transcript bundles keyed by lane entrypoint identity.
     pub fastpq_transcripts: Vec<TransferTranscriptBundle>,
@@ -942,6 +974,8 @@ impl<'a> IntoIterator for &'a MergeLaneFastpqTranscripts {
 /// One commit-certified lane block and its deterministic execution transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLaneExecution")]
 pub struct MergeLaneExecution {
     /// Canonical framed Norito bytes of the complete producer-authenticated
     /// payload, availability certificate, `NewView` chain, and lane QCs.
@@ -1013,6 +1047,8 @@ pub struct MergeLaneExecution {
 /// lane sidecars or local QC arrival order.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeExecutionBatch")]
 pub struct MergeExecutionBatch {
     /// Schema version. Version one is the only currently valid value.
     pub version: u8,
@@ -1047,6 +1083,8 @@ pub struct MergeExecutionBatch {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLedgerEntry")]
 pub struct MergeLedgerEntry {
     /// Exact first-release entry layout. Only version three is supported.
     pub version: u8,
@@ -1083,6 +1121,8 @@ pub struct MergeLedgerEntry {
 #[derive(Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::merge::MergeLedgerEntryWire")]
 struct MergeLedgerEntryWire {
     version: u8,
     epoch_id: u64,
@@ -2526,3 +2566,6 @@ mod tests {
         assert_eq!(decoded, signature);
     }
 }
+
+#[cfg(test)]
+mod captured_merge_schema_tests;

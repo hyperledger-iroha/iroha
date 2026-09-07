@@ -17,8 +17,8 @@ use iroha_config::{
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         defaults::kura::{
-            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES,
-            MERGE_LEDGER_CACHE_CAPACITY, LANE_HISTORY_RETENTION,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION, MAX_DISK_USAGE_BYTES,
+            MERGE_LEDGER_CACHE_CAPACITY,
         },
     },
 };

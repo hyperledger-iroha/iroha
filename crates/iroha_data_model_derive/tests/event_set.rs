@@ -4,6 +4,7 @@ mod events {
     use iroha_data_model_derive::EventSet;
     /// Test event enumeration used with the `EventSet` derive.
     #[derive(EventSet)]
+    #[event_set(schema_name = "derive_integration::event_set::events::TestEventSet")]
     pub enum TestEvent {
         Event1,
         Event2,
@@ -14,9 +15,128 @@ mod events {
 }
 use events::{AnotherEvent, TestEvent, TestEventSet};
 use norito::json::{self, Value};
+#[test]
+fn event_set_preserves_captured_identity() {
+    assert_eq!(
+        <TestEventSet as norito::NoritoSchema>::nominal_name(),
+        "derive_integration::event_set::events::TestEventSet",
+    );
+    let captured = [
+        159, 196, 218, 105, 112, 11, 120, 9, 55, 253, 142, 185, 70, 208, 133, 139,
+    ];
+    assert_eq!(
+        norito::schema::identity::frame_hash::<TestEventSet>(),
+        captured
+    );
+    assert_eq!(
+        <TestEventSet as norito::NoritoSerialize>::schema_hash(),
+        captured
+    );
+    assert_eq!(
+        <TestEventSet as norito::NoritoDeserialize>::schema_hash(),
+        captured
+    );
+}
 fn array(strings: &[&str]) -> Value {
     json::array(strings.iter().copied()).expect("serialize string array")
 }
+
+#[test]
+fn production_event_sets_preserve_captured_frames() {
+    fn hex(bytes: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut encoded = String::new();
+        for byte in bytes {
+            write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        encoded
+    }
+    fn framed<T>(value: &T) -> String
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + core::fmt::Debug
+            + PartialEq,
+    {
+        let bytes = norito::to_bytes(value).expect("frame encoding");
+        let decoded = norito::decode_from_bytes::<T>(&bytes).expect("frame decoding");
+        assert_eq!(&decoded, value);
+        hex(&bytes)
+    }
+    let mut rows = Vec::new();
+    macro_rules! record {
+        ($ty:ty) => {{
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$ty>(),
+                <$ty as norito::NoritoSerialize>::schema_hash(),
+            );
+            let all_json = json::to_value(&<$ty>::all()).expect("all event names");
+            let first_json =
+                Value::Array(vec![all_json.as_array().expect("event names")[0].clone()]);
+            let first: $ty = json::from_value(first_json).expect("first event");
+            let cases: Vec<Value> = [<$ty>::empty(), first, <$ty>::all()]
+                .into_iter()
+                .map(|value| {
+                    json::object([
+                        ("json", json::to_value(&value).expect("event JSON")),
+                        ("frame", Value::String(framed(&value))),
+                        ("vector_frame", Value::String(framed(&vec![value]))),
+                        ("option_frame", Value::String(framed(&Some(value)))),
+                    ])
+                    .expect("case object")
+                })
+                .collect();
+            rows.push(
+                json::object([
+                    (
+                        "nominal",
+                        Value::String(<$ty as norito::NoritoSchema>::nominal_name()),
+                    ),
+                    (
+                        "serialize_hash",
+                        Value::String(hex(&<$ty as norito::NoritoSerialize>::schema_hash())),
+                    ),
+                    (
+                        "deserialize_hash",
+                        Value::String(hex(&<$ty as norito::NoritoDeserialize>::schema_hash())),
+                    ),
+                    ("cases", Value::Array(cases)),
+                ])
+                .expect("type object"),
+            );
+        }};
+    }
+    record!(iroha_data_model::events::data::escrow::EscrowEventSet);
+    record!(iroha_data_model::events::data::prelude::AccountEventSet);
+    record!(iroha_data_model::events::data::prelude::AccountRecoveryEventSet);
+    record!(iroha_data_model::events::data::prelude::AssetDefinitionEventSet);
+    record!(iroha_data_model::events::data::prelude::AssetEventSet);
+    record!(iroha_data_model::events::data::prelude::BridgeEventSet);
+    record!(iroha_data_model::events::data::prelude::ConfigurationEventSet);
+    record!(iroha_data_model::events::data::prelude::DomainEventSet);
+    record!(iroha_data_model::events::data::prelude::ExecutorEventSet);
+    record!(iroha_data_model::events::data::prelude::NftEventSet);
+    record!(iroha_data_model::events::data::prelude::PeerEventSet);
+    record!(iroha_data_model::events::data::prelude::RepoAccountEventSet);
+    record!(iroha_data_model::events::data::prelude::RoleEventSet);
+    record!(iroha_data_model::events::data::prelude::RwaEventSet);
+    record!(iroha_data_model::events::data::prelude::TriggerEventSet);
+    record!(iroha_data_model::events::data::governance::GovernanceEventSet);
+    record!(iroha_data_model::events::data::musubi::MusubiEventSet);
+    record!(iroha_data_model::events::data::oracle::OracleEventSet);
+    record!(iroha_data_model::events::data::proof::ProofEventSet);
+    record!(iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEventSet);
+    record!(iroha_data_model::events::data::smart_contract::SmartContractEventSet);
+    record!(iroha_data_model::events::data::soradns::SoradnsDirectoryEventSet);
+    record!(iroha_data_model::events::data::sorafs::SorafsGatewayEventSet);
+    record!(iroha_data_model::events::data::space_directory::SpaceDirectoryEventSet);
+    record!(iroha_data_model::events::data::verifying_keys::VerifyingKeyEventSet);
+    let captured: Vec<Value> = json::from_str(include_str!("fixtures/event_set_frames.json"))
+        .expect("immutable pre-declaration frames");
+    assert_eq!(captured.len(), 25);
+    assert_eq!(rows, captured);
+}
+
 #[test]
 fn serialize() {
     assert_eq!(

@@ -1,0 +1,65 @@
+//! Immutable compiler-captured identities for this source owner’s existing codecs.
+
+#[test]
+fn captured_codec_schema_identities() {
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeSignerProof>(
+        "iroha_data_model::merge::MergeSignerProof",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainNativeFrontierEvidenceV1>(
+        "iroha_data_model::merge::LaneDrainNativeFrontierEvidenceV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainFrontierV1>(
+        "iroha_data_model::merge::LaneDrainFrontierV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainIntentV1>(
+        "iroha_data_model::merge::LaneDrainIntentV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainCertificateBodyV1>(
+        "iroha_data_model::merge::LaneDrainCertificateBodyV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainCertificateV1>(
+        "iroha_data_model::merge::LaneDrainCertificateV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainCommitmentV1>(
+        "iroha_data_model::merge::LaneDrainCommitmentV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::LaneDrainStateV1>(
+        "iroha_data_model::merge::LaneDrainStateV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneBinding>(
+        "iroha_data_model::merge::MergeLaneBinding",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneCommitteeRosterV1>(
+        "iroha_data_model::merge::MergeLaneCommitteeRosterV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneAuthorityCatalogV1>(
+        "iroha_data_model::merge::MergeLaneAuthorityCatalogV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeQuorumCertificate>(
+        "iroha_data_model::merge::MergeQuorumCertificate",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeCommitteeSignature>(
+        "iroha_data_model::merge::MergeCommitteeSignature",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneSnapshot>(
+        "iroha_data_model::merge::MergeLaneSnapshot",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneSignerProof>(
+        "iroha_data_model::merge::MergeLaneSignerProof",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneFastpqTranscripts>(
+        "iroha_data_model::merge::MergeLaneFastpqTranscripts",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeLaneExecution>(
+        "iroha_data_model::merge::MergeLaneExecution",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::MergeExecutionBatch>(
+        "iroha_data_model::merge::MergeExecutionBatch",
+    );
+    crate::captured_schema_tests::assert_serialize::<super::MergeLedgerEntry>(
+        "iroha_data_model::merge::MergeLedgerEntry",
+    );
+    crate::captured_schema_tests::assert_deserialize::<super::MergeLedgerEntryWire>(
+        "iroha_data_model::merge::MergeLedgerEntryWire",
+    );
+}

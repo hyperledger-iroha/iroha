@@ -2178,7 +2178,7 @@ async fn core_info_handlers_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     let config_bytes = torii_body_bytes(resp, "config body").await;
-    let config: ConfigGetDTO =
+    let config: Configuration =
         norito::json::from_slice(&config_bytes).expect("decode config payload");
     assert!(
         !config

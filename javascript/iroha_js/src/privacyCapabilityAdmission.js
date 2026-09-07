@@ -13,12 +13,12 @@ export function bindPrivacyExact12CapabilityAdmissionV1(manifest, admit) {
   exact12CapabilityAdmissions.set(manifest, admit);
 }
 
-/** Require a tuple from a native-validated canonical Exact12 manifest. */
+/** Require a tuple from a native-validated manifest fetched through authenticated Torii. */
 export function requirePrivacyExact12CapabilityTupleV1(manifest, protocolId) {
   const admit = exact12CapabilityAdmissions.get(manifest);
   if (!admit) {
     throw new TypeError(
-      "Exact12 capability admission requires a native-validated PrivacyExact12CapabilityManifestV1",
+      "Exact12 capability admission requires an authenticated Torii-origin PrivacyExact12CapabilityManifestV1",
     );
   }
   return admit(protocolId);

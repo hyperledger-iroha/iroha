@@ -5906,10 +5906,12 @@ fn inrou_stage_root(admitted: &HostAdmission) -> Result<PathBuf> {
     Ok(parent.join(&admitted.inventory.authorization_nonce))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn inrou_stage_cleanup_parent_path(admitted: &HostAdmission) -> Result<PathBuf> {
     Ok(host_coordination_path(admitted)?.join("inrou-stage-v1"))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn current_inrou_stage_path(admitted: &HostAdmission) -> Result<PathBuf> {
     Ok(inrou_stage_cleanup_parent_path(admitted)?.join(&admitted.inventory.authorization_nonce))
 }

@@ -2,7 +2,7 @@ package org.hyperledger.iroha.sdk.sorafs
 
 import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
-import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.stream.ServerSentEvent
@@ -28,19 +28,15 @@ import java.util.function.Function
  * Every method performs exactly one GET signed over the final path, canonical query, and empty
  * body. Raw authentication headers and witness authentication are intentionally not exposed.
  */
-class SorafsReputationClient(
+class SorafsReputationClient @JvmOverloads constructor(
     @JvmField val baseUri: URI,
     @JvmField val networkId: NetworkId,
-    private val transport: TransportExecutor,
-    @JvmField val timeout: Duration?,
-) {
-    /** Creates a client with executor defaults for request timeouts. */
-    constructor(baseUri: URI, networkId: NetworkId, transport: TransportExecutor) :
-        this(baseUri, networkId, transport, null)
-
-    /** Creates a client backed by the canonical platform transport. */
-    constructor(baseUri: URI, networkId: NetworkId) :
-        this(baseUri, networkId, PlatformHttpTransportExecutor.createDefault(), null)
+    transport: TransportExecutor? = null,
+    @JvmField val timeout: Duration? = null,
+) : AutoCloseable {
+    private val transport = HttpTransportScope.create(transport)
+    /** Cancels this client's requests and streams without closing an injected backend. */
+    override fun close() { transport.close() }
 
     init {
         require(baseUri.isAbsolute && baseUri.rawQuery == null && baseUri.rawFragment == null) {
@@ -317,7 +313,7 @@ class SorafsReputationClient(
                 target,
                 EMPTY_BODY,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
             )
         } else {
             require(timestampMs >= 0) { "timestampMs must be non-negative" }
@@ -327,7 +323,7 @@ class SorafsReputationClient(
                 target,
                 EMPTY_BODY,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
                 timestampMs,
                 nonce!!,
             )

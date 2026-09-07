@@ -1,3 +1,4 @@
+import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import {
   BASE58_ALPHABET_TEXT,
@@ -262,6 +263,8 @@ const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze(
   "signedTransactionHash",
 ]);
 const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
+  "wire_magic",
+  "catalog_commitment",
   "protocol_id",
   "proof_system_id",
   "engine_id",
@@ -273,6 +276,14 @@ const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "statement_digest",
   "statement",
   "proof",
+]);
+const PRIVACY_EXACT12_WIRE_MAGIC_V1 = /* @__PURE__ */ Buffer.from("4952485a4b31a55a", "hex");
+const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(
+  "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+  "hex",
+);
+const PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1 = /* @__PURE__ */ Object.freeze([
+  0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0,
 ]);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
@@ -2179,6 +2190,18 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1,
     `${context}.envelopeNorito.payload`,
   );
+  if (!envelopeFields.wire_magic.equals(PRIVACY_EXACT12_WIRE_MAGIC_V1)) {
+    throw new TypeError(`${context}.envelopeNorito carries an invalid final V1 wire marker`);
+  }
+  if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
+    throw new TypeError(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+  }
+  for (const field of ["proof_system_id", "engine_id"]) {
+    if (decodeU32Value(envelopeFields[field], `${context}.${field}`) !==
+        PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1[rowIndex]) {
+      throw new TypeError(`${context}.envelopeNorito carries a substituted ${field}`);
+    }
+  }
   if (
     decodeU32Value(
       envelopeFields.protocol_id,
@@ -4551,7 +4574,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
             ),
             usage_commitment: decodeOptionValue(
               fields.usage_commitment,
-              decodeHashValue,
+              decodeKaigiScalarValue,
               "Kaigi.RecordKaigiUsage.usage_commitment",
             ),
             proof: decodeOptionValue(
@@ -6761,7 +6784,7 @@ function encodeRecordKaigiUsagePayload(value) {
     [encodeKaigiIdValue(value.call_id, "Kaigi.RecordKaigiUsage.call_id")],
     [encodeU64NumberValue(value.duration_ms, "Kaigi.RecordKaigiUsage.duration_ms")],
     [encodeU64NumberValue(value.billed_gas, "Kaigi.RecordKaigiUsage.billed_gas")],
-    [encodeOptionValue(value.usage_commitment, encodeHashValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
+    [encodeOptionValue(value.usage_commitment, encodeKaigiScalarValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
     [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.RecordKaigiUsage.proof")],
   ]);
 }
@@ -7078,33 +7101,43 @@ function decodeNewKaigiPayload(payload, context) {
   };
 }
 
+function encodeKaigiScalarValue(value, context) {
+  return Buffer.from(kaigiScalarBytesV1(value, context));
+}
+
+function decodeKaigiScalarValue(payload, context) {
+  return Array.from(kaigiScalarBytesV1(payload, context));
+}
+
 function encodeKaigiParticipantCommitmentValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("commitment" in value)) {
+    throw new TypeError(`${context} requires only commitment`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.commitment, `${context}.commitment`)],
-    [encodeOptionValue(value.alias_tag, encodeNoritoStringValue, `${context}.alias_tag`)],
+    [encodeKaigiScalarValue(value.commitment, `${context}.commitment`)],
   ]);
 }
 
 function decodeKaigiParticipantCommitmentValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["commitment", "alias_tag"]);
+  const fields = decodeStructFields(payload, context, ["commitment"]);
   return {
-    commitment: decodeHashValue(fields.commitment, `${context}.commitment`),
-    alias_tag: decodeOptionValue(fields.alias_tag, decodeStringValue, `${context}.alias_tag`),
+    commitment: decodeKaigiScalarValue(fields.commitment, `${context}.commitment`),
   };
 }
 
 function encodeKaigiParticipantNullifierValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("digest" in value)) {
+    throw new TypeError(`${context} requires only digest`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.digest, `${context}.digest`)],
-    [encodeU64NumberValue(value.issued_at_ms, `${context}.issued_at_ms`)],
+    [encodeKaigiScalarValue(value.digest, `${context}.digest`)],
   ]);
 }
 
 function decodeKaigiParticipantNullifierValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["digest", "issued_at_ms"]);
+  const fields = decodeStructFields(payload, context, ["digest"]);
   return {
-    digest: decodeHashValue(fields.digest, `${context}.digest`),
-    issued_at_ms: decodeU64NumberValue(fields.issued_at_ms, `${context}.issued_at_ms`),
+    digest: decodeKaigiScalarValue(fields.digest, `${context}.digest`),
   };
 }
 
@@ -7569,13 +7602,15 @@ export function encodeAccountIdNoritoValue(value, context = "AccountId") {
   );
 }
 
+/** @internal Exact compact-length AccountId value decoding for typed policy codecs. */
+export function decodeAccountIdNoritoValue(payload, context = "AccountId") {
+  const bytes = Buffer.from(normalizeFlexibleBytes(payload, context));
+  return withNoritoCompactLengths(() => decodeAccountIdValue(bytes, context));
+}
+
 /** @internal Decode and re-encode one exact compact-length AccountId value. */
 export function _canonicalAccountIdNoritoValue(payload, context = "AccountId") {
-  return withNoritoCompactLengths(() =>
-    Uint8Array.from(
-      encodeAccountIdValue(decodeAccountIdValue(Buffer.from(payload), context), context),
-    ),
-  );
+  return encodeAccountIdNoritoValue(decodeAccountIdNoritoValue(payload, context), context);
 }
 
 function decodeAccountIdValue(payload, context) {

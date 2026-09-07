@@ -2461,11 +2461,11 @@ def privacy_validate_exact12_capability_manifest_v1(
 def privacy_exact12_capability_manifest_v1(
     archive: bytes | bytearray | memoryview,
 ) -> PrivacyExact12CapabilityManifestV1:
-    """Decode one exact Torii manifest without consulting the local catalog.
+    """Inspect one native-validated archive without granting transaction admission.
 
     The native object retains and re-exposes the byte-identical canonical
-    archive.  Its ``require_network_capability`` method additionally requires
-    an active row whose complete compiled profile matches this binary.
+    archive. Admission requires a fresh authenticated fetch through the
+    configured ``ToriiClient.privacy_capabilities_v1`` transport owner.
     """
 
     canonical = _privacy_exact12_capability_manifest_archive(archive)
@@ -2491,6 +2491,16 @@ def privacy_exact12_capability_manifest_v1(
     if bytes(returned) != canonical:
         raise RuntimeError("native Exact12 capability manifest changed the Torii archive bytes")
     return manifest
+
+
+def _fetch_privacy_exact12_capability_manifest_v1(
+    client: object, canonical_auth: object
+) -> PrivacyExact12CapabilityManifestV1:
+    """Enter the native fetch boundary; it accepts no caller-supplied archive."""
+    fetch = getattr(_crypto, "_privacy_fetch_exact12_capability_manifest_v1", None)
+    if not callable(fetch):
+        raise RuntimeError("native authenticated Exact12 capability fetch is unavailable")
+    return fetch(client, canonical_auth)
 
 
 def canonical_genesis_header_hash_v1(

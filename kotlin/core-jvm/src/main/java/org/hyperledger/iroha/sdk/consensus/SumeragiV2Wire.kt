@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.util.Collections
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
@@ -478,7 +479,7 @@ object SumeragiV2Wire {
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
-        @JvmField val signers: List<Long> = signers.toList()
+        @JvmField val signers: List<Long> = ownWireList(signers)
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
@@ -562,7 +563,7 @@ object SumeragiV2Wire {
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
-        @JvmField val signers: List<Long> = signers.toList()
+        @JvmField val signers: List<Long> = ownWireList(signers, "timeout group must contain a signer")
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
@@ -598,7 +599,8 @@ object SumeragiV2Wire {
         @JvmField val round: ConsensusRound,
         groups: List<TimeoutVoteGroup>,
     ) : WireValue() {
-        @JvmField val groups: List<TimeoutVoteGroup> = groups.toList()
+        @JvmField val groups: List<TimeoutVoteGroup> =
+            ownWireList(groups, "timeout certificate must contain a group")
 
         init {
             require(this.groups.isNotEmpty()) { "timeout certificate must contain a group" }
@@ -786,7 +788,8 @@ object SumeragiV2Wire {
         chunkHashes: List<Hash32>,
         @JvmField val chunkRoot: Hash32,
     ) : WireValue() {
-        @JvmField val chunkHashes: List<Hash32> = chunkHashes.toList()
+        @JvmField val chunkHashes: List<Hash32> =
+            ownWireList(chunkHashes, "payload manifest must contain a chunk hash")
 
         init {
             require(this.chunkHashes.isNotEmpty()) { "payload manifest must contain a chunk hash" }
@@ -1721,17 +1724,24 @@ object SumeragiV2Wire {
     /** Authoritative progress diagnostics for the active height. */
     class LivenessStatus(
         @JvmField val generation: Long,
-        @JvmField val prepareQuorums: List<VoteQuorumStatus>,
-        @JvmField val commitQuorums: List<VoteQuorumStatus>,
-        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus>,
-        @JvmField val outboundIntents: List<OutboundIntentStatus>,
+        prepareQuorums: List<VoteQuorumStatus>,
+        commitQuorums: List<VoteQuorumStatus>,
+        timeoutQuorums: List<TimeoutQuorumStatus>,
+        outboundIntents: List<OutboundIntentStatus>,
         @JvmField val work: WorkStatus,
-        @JvmField val queues: List<QueueStatus>,
+        queues: List<QueueStatus>,
         @JvmField val lastProgress: ProgressTransitionStatus?,
         @JvmField val noProgressAgeMs: Long,
         @JvmField val blocker: LivenessBlocker?,
-        @JvmField val ignoreCounts: List<IgnoreCount>,
+        ignoreCounts: List<IgnoreCount>,
     ) : WireValue() {
+        @JvmField val prepareQuorums: List<VoteQuorumStatus> = ownWireList(prepareQuorums)
+        @JvmField val commitQuorums: List<VoteQuorumStatus> = ownWireList(commitQuorums)
+        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus> = ownWireList(timeoutQuorums)
+        @JvmField val outboundIntents: List<OutboundIntentStatus> = ownWireList(outboundIntents)
+        @JvmField val queues: List<QueueStatus> = ownWireList(queues)
+        @JvmField val ignoreCounts: List<IgnoreCount> = ownWireList(ignoreCounts)
+
         override fun encode(): ByteArray = struct(
             u64(generation), vector(prepareQuorums) { it.encode() },
             vector(commitQuorums) { it.encode() }, vector(timeoutQuorums) { it.encode() },
@@ -1971,7 +1981,9 @@ object SumeragiV2Wire {
             return value == 1
         }
 
-        fun remainingBytes(): ByteArray = read(bytes.size - offset, "remaining payload")
+        fun remainingByteCount(): Int = bytes.size - offset
+
+        fun remainingBytes(): ByteArray = read(remainingByteCount(), "remaining payload")
 
         fun finish(label: String) {
             require(offset == bytes.size) { "$label contains trailing Norito bytes" }
@@ -2114,6 +2126,11 @@ object SumeragiV2Wire {
     private fun <T> vectorDecode(reader: Reader, label: String, decode: (Reader) -> T): List<T> {
         val count = reader.u64("$label count")
         require(count in 0..Int.MAX_VALUE.toLong()) { "$label count exceeds JVM range" }
+        // Every element needs at least its one-byte compact length prefix, even when
+        // its payload is empty. Bound allocation by the encoded input before copying.
+        require(count <= reader.remainingByteCount().toLong()) {
+            "$label count exceeds remaining encoded fields"
+        }
         val values = ArrayList<T>(count.toInt())
         repeat(count.toInt()) { index ->
             values.add(reader.field("$label[$index]", decode))
@@ -2127,6 +2144,16 @@ object SumeragiV2Wire {
         val value = decode(reader)
         reader.finish("struct")
         return value
+    }
+
+    /** Snapshot public wire collections before validation and prevent later mutation. */
+    private fun <T : Any> ownWireList(values: List<T?>, nonEmptyMessage: String? = null): List<T> {
+        if (nonEmptyMessage != null) {
+            require(values.isNotEmpty()) { nonEmptyMessage }
+        }
+        return Collections.unmodifiableList(values.map {
+            requireNotNull(it) { "Sumeragi wire collections must not contain null entries" }
+        })
     }
 
     private fun requireStrictlyIncreasing(values: List<Long>, label: String) {

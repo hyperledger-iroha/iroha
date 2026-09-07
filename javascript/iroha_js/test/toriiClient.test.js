@@ -13025,6 +13025,7 @@ test("getSumeragiDiagnosticsTyped rejects participant-finality tampering", async
         leg.participant_settlement.source_ids[0],
       );
     },
+    (leg) => { leg.participant_settlement.native_amx_receipts = []; },
     (leg) => { leg.participant_settlement.native_amx_receipts = [{}]; },
   ];
 

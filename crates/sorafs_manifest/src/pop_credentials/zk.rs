@@ -4,7 +4,8 @@
 //! active credential tree, and non-membership of that leaf's private 128-bit revocation nonce in
 //! the signed sparse revocation tree. The holder secret, credential identifier, holder commitment,
 //! nonce, and both authentication paths remain advice values and never enter the public-input or
-//! proof-envelope schemas.
+//! proof-envelope schemas. A separate public presentation binding commits the proof to its
+//! authenticated recipient without changing the shared challenge/context nullifier domain.
 use super::{
     POP_CREDENTIAL_TREE_DEPTH_V1, POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
     POP_MEMBERSHIP_PROOF_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCredentialV1,
@@ -79,7 +80,8 @@ const PI_EXPIRY: usize = 5;
 const PI_REVOCATION_ROOT: usize = 6;
 const PI_REVOCATION_LIST_VERSION: usize = 7;
 const PI_NULLIFIER: usize = 8;
-const PUBLIC_INPUT_COUNT: usize = 9;
+const PI_PRESENTATION_BINDING: usize = 9;
+const PUBLIC_INPUT_COUNT: usize = 10;
 #[derive(Debug)]
 struct PopPoseidonSpec;
 impl Spec<Fp, WIDTH, RATE> for PopPoseidonSpec {
@@ -210,7 +212,7 @@ fn eligibility_class_scalar(class: PopEligibilityClassV1) -> Fp {
 fn credential_private_binding(
     credential: &PopCredentialV1,
 ) -> Result<Fp, PopCredentialValidationError> {
-    let attributes = norito::to_bytes(&credential.attributes).map_err(|error| {
+    let attributes = norito::encode_canonical(&credential.attributes).map_err(|error| {
         PopCredentialValidationError::SignaturePayloadEncoding {
             reason: error.to_string(),
         }
@@ -445,6 +447,9 @@ fn challenge_scalar(challenge: [u8; 32]) -> Fp {
 fn context_scalar(context: &str) -> Fp {
     hash_to_scalar(b"sorafs.pop.context.scalar.v1", &[context.as_bytes()])
 }
+fn presentation_binding_scalar(binding: [u8; 32]) -> Fp {
+    hash_to_scalar(b"sorafs.pop.presentation-binding.scalar.v1", &[&binding])
+}
 fn nullifier_scalar(secret: Fp, challenge: Fp, context: Fp) -> Fp {
     let challenge_bound = poseidon_compress(DOMAIN_NULLIFIER_CHALLENGE, secret, challenge);
     poseidon_compress(DOMAIN_NULLIFIER_CONTEXT, challenge_bound, context)
@@ -492,6 +497,7 @@ struct PopMembershipCircuit {
     private_binding: Option<Fp>,
     challenge: Option<Fp>,
     context: Option<Fp>,
+    presentation_binding: Option<Fp>,
     current_list_version: Option<Fp>,
     credential_siblings: [Option<Fp>; POP_CREDENTIAL_TREE_DEPTH_V1 as usize],
     credential_directions: [Option<bool>; POP_CREDENTIAL_TREE_DEPTH_V1 as usize],
@@ -513,6 +519,7 @@ impl Default for PopMembershipCircuit {
             private_binding: None,
             challenge: None,
             context: None,
+            presentation_binding: None,
             current_list_version: None,
             credential_siblings: [None; POP_CREDENTIAL_TREE_DEPTH_V1 as usize],
             credential_directions: [None; POP_CREDENTIAL_TREE_DEPTH_V1 as usize],
@@ -533,6 +540,7 @@ impl PopMembershipCircuit {
         witness: &PopMembershipWitnessV1,
         challenge: [u8; 32],
         context: &str,
+        presentation_binding: [u8; 32],
         current_list_version: u64,
     ) -> Result<Self, PopCredentialValidationError> {
         let credential_siblings = witness
@@ -597,6 +605,7 @@ impl PopMembershipCircuit {
             private_binding: Some(credential_private_binding(credential)?),
             challenge: Some(challenge_scalar(challenge)),
             context: Some(context_scalar(context)),
+            presentation_binding: Some(presentation_binding_scalar(presentation_binding)),
             current_list_version: Some(Fp::from(current_list_version)),
             credential_siblings,
             credential_directions,
@@ -1046,6 +1055,12 @@ impl Circuit<Fp> for PopMembershipCircuit {
             &mut row_cursor,
             optional_value(self.context),
         )?;
+        let presentation_binding = self.assign_scalar(
+            &config,
+            &mut layouter,
+            &mut row_cursor,
+            optional_value(self.presentation_binding),
+        )?;
         let current_list_version = self.assign_scalar(
             &config,
             &mut layouter,
@@ -1060,6 +1075,11 @@ impl Circuit<Fp> for PopMembershipCircuit {
         );
         layouter.constrain_instance(challenge.cell, config.instance, PI_CHALLENGE);
         layouter.constrain_instance(context.cell, config.instance, PI_CONTEXT);
+        layouter.constrain_instance(
+            presentation_binding.cell,
+            config.instance,
+            PI_PRESENTATION_BINDING,
+        );
         layouter.constrain_instance(expires_at.cell, config.instance, PI_EXPIRY);
         layouter.constrain_instance(
             current_list_version.cell,
@@ -1286,6 +1306,7 @@ fn proof_public_inputs(
         canonical_scalar(proof.revocation_root)?,
         Fp::from(proof.revocation_list_version),
         canonical_scalar(proof.nullifier)?,
+        presentation_binding_scalar(proof.presentation_binding_digest),
     ])
 }
 struct ExactProofReader<'proof> {
@@ -1355,6 +1376,7 @@ pub(super) fn prove_v1(
     current_list_version: u64,
     challenge: [u8; 32],
     context: &str,
+    presentation_binding: [u8; 32],
 ) -> Result<PopMembershipProofV1, PopCredentialValidationError> {
     let secret = canonical_scalar(witness.holder_secret)?;
     let challenge_field = challenge_scalar(challenge);
@@ -1367,6 +1389,7 @@ pub(super) fn prove_v1(
         witness,
         challenge,
         context,
+        presentation_binding,
         current_list_version,
     )?;
     let mut proof = PopMembershipProofV1 {
@@ -1379,6 +1402,7 @@ pub(super) fn prove_v1(
         nullifier,
         challenge_digest: challenge,
         verifier_context: context.to_owned(),
+        presentation_binding_digest: presentation_binding,
         proof_system: PopMembershipProofSystemV1::Halo2IpaPastaV1,
         verifier_material: material.public.clone(),
         proof_bytes: vec![1],

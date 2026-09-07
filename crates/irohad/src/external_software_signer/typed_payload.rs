@@ -1,7 +1,7 @@
 //! Purpose-separated signing payloads for non-transaction runtime roles.
 use super::protocol::{
-    SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1, SoftwareSignerPublicBindingV1,
-    SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
+    SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1, SignerPurposeBindingV1,
+    SignerRoleV1, SoftwareSignerPublicBindingV1,
 };
 use norito::codec::{Decode, Encode};
 const TYPED_PAYLOAD_MAGIC_V1: [u8; 8] = *b"IRSGTP01";
@@ -46,23 +46,23 @@ impl SoftwareSignerPurposeV1 {
     pub(super) const fn wire_id(self) -> u8 {
         self as u8
     }
-    pub(super) const fn role(self) -> SoftwareSignerRoleV1 {
+    pub(super) const fn role(self) -> SignerRoleV1 {
         match self {
             Self::GovernanceLogNode
             | Self::GovernanceDagBlock
             | Self::GovernanceDagHead
             | Self::GovernanceKeyTransition
-            | Self::GovernanceQualificationArchive => SoftwareSignerRoleV1::GovernanceDag,
-            Self::PotrGatewayReceipt => SoftwareSignerRoleV1::PotrGateway,
-            Self::PotrProviderReceipt => SoftwareSignerRoleV1::PotrProvider,
-            Self::BillingStatement => SoftwareSignerRoleV1::BillingStatement,
+            | Self::GovernanceQualificationArchive => SignerRoleV1::GovernanceDag,
+            Self::PotrGatewayReceipt => SignerRoleV1::PotrGateway,
+            Self::PotrProviderReceipt => SignerRoleV1::PotrProvider,
+            Self::BillingStatement => SignerRoleV1::BillingStatement,
             Self::EvidenceReceipt
             | Self::EvidenceCheckpointStoreRecord
             | Self::EvidenceCheckpointAnchor
-            | Self::EvidenceCompactionArchive => SoftwareSignerRoleV1::EvidenceViewer,
-            Self::StreamToken => SoftwareSignerRoleV1::StreamToken,
+            | Self::EvidenceCompactionArchive => SignerRoleV1::EvidenceViewer,
+            Self::StreamToken => SignerRoleV1::StreamToken,
             Self::PopCredential | Self::PopCommitmentRoot | Self::PopRevocationList => {
-                SoftwareSignerRoleV1::PopCredentials
+                SignerRoleV1::PopCredentials
             }
         }
     }
@@ -81,7 +81,7 @@ impl Drop for SoftwareSignerTypedPayloadV1 {
     }
 }
 pub(super) fn encode_typed_signing_payload(
-    role: SoftwareSignerRoleV1,
+    role: SignerRoleV1,
     purpose: SoftwareSignerPurposeV1,
     message: &[u8],
 ) -> Result<Vec<u8>, ()> {
@@ -180,7 +180,7 @@ fn validate_message(
         }
         SoftwareSignerPurposeV1::PotrGatewayReceipt => validate_potr_payload(message, None),
         SoftwareSignerPurposeV1::PotrProviderReceipt => match &binding.purpose_binding {
-            SoftwareSignerPurposeBindingV1::PotrProvider { provider_id, .. } => {
+            SignerPurposeBindingV1::PotrProvider { provider_id, .. } => {
                 validate_potr_payload(message, Some(*provider_id))
             }
             _ => false,
@@ -240,9 +240,7 @@ fn validate_stream_token_payload(payload: &[u8]) -> bool {
 }
 fn governance_publisher(binding: &SoftwareSignerPublicBindingV1) -> Option<&[u8]> {
     match &binding.purpose_binding {
-        SoftwareSignerPurposeBindingV1::GovernanceDag { publisher_peer_id } => {
-            Some(publisher_peer_id)
-        }
+        SignerPurposeBindingV1::GovernanceDag { publisher_peer_id } => Some(publisher_peer_id),
         _ => None,
     }
 }

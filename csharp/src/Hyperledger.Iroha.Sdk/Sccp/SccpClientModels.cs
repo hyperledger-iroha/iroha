@@ -195,7 +195,7 @@ public sealed record SccpBridgeResponseExpectation(
             SccpSubmitValidation.ResponseHash(MessageIdHex, nameof(MessageIdHex));
         }
 
-        if (CounterpartyDomain is not null and not (1 or 2 or 3 or 4))
+        if (CounterpartyDomain is not null and not (1 or 2 or 4 or 5))
         {
             throw new ArgumentOutOfRangeException(nameof(CounterpartyDomain));
         }
@@ -301,8 +301,8 @@ public sealed record SccpBridgeSubmitResponse(
         var payloadKind = SccpPayloadKindV1Extensions.ParseWireKey(SccpJson.Text(root, "payload_kind"));
         var messageId = SccpSubmitValidation.ResponseHash(SccpJson.Text(root, "message_id_hex"), "message_id_hex");
         var backend = SccpJson.Text(root, "backend");
-        var domain = SccpJson.UInt32(root, "counterparty_domain", 1, 4);
-        if (domain is not (1 or 2 or 3 or 4))
+        var domain = SccpJson.UInt32(root, "counterparty_domain", 1, 5);
+        if (domain is not (1 or 2 or 4 or 5))
         {
             throw new ArgumentException("counterparty_domain is unsupported or retired.");
         }
@@ -522,7 +522,7 @@ internal static class SccpSubmitValidation
     private static bool BackendSupports(string backend, SccpNetworkV1 chain) => backend switch
     {
         "evm-groth16-bn254-v1" => chain.DomainId() is 1 or 2,
-        "tron-groth16-bn254-v1" => chain.DomainId() == 3,
+        "tron-groth16-bn254-v1" => chain == SccpNetworkV1.TronMainnet,
         "ton-groth16-bls12381-v1" => chain.DomainId() == 4,
         "bridge/sccp/native/ethereum-beacon-v1" => SccpNativeBackendV1.EthereumBeacon.Supports(chain),
         "bridge/sccp/native/bsc-parlia-v1" => SccpNativeBackendV1.BscParlia.Supports(chain),
@@ -1822,7 +1822,7 @@ internal static class SccpSubmitValidation
                 "Replay witness request must prove non-membership with an all-zero prior record digest.");
         }
         var validationKey = Enumerable.Repeat((byte)1, 32).ToArray();
-        _ = SccpReplayV1.RootFromWitness(validationKey, null, witness);
+        _ = SccpReplayV1.RootFromWitness(validationKey, new byte[32], witness);
     }
 
     private static void RequireCanonicalNativeBridgeProof(

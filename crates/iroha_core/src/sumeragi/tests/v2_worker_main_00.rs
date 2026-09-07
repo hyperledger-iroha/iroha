@@ -2,7 +2,10 @@ use super::*;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressPushDisposition, InboundBlockMessage,
     fair_v2_ingress_admit_with_roster_for_test,
-    v2::AdapterEffect,
+    v2::{
+        AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, SumeragiV2Adapter,
+        VerifiedHeightContext,
+    },
     v2_block_sync::tests::durable_history_fixture,
     v2_body_store::DurableBodyReceipt,
     v2_chunks::encode_payload,
@@ -20,10 +23,7 @@ use crate::sumeragi::{
 };
 #[cfg(feature = "bls")]
 use crate::sumeragi::{
-    v2::{
-        AdapterFingerprints, DeferredAdmissionOrdinalSource, SignRequest, SumeragiV2Adapter,
-        VerifiedHeightContext,
-    },
+    v2::SignRequest,
     v2_body_store::BlockSignaturePolicy,
     v2_effects::EffectExecutorStep,
     v2_runtime::{RuntimeQueueConfig, SerializedV2Runtime},
@@ -789,10 +789,8 @@ fn fixture_kagemusha_mint_finality_roster(
         .iter()
         .enumerate()
         .map(|(index, validator)| {
-            let seed = [
-                seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8"));
-                32
-            ];
+            let seed =
+                [seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8")); 32];
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &seed,
                 epoch,

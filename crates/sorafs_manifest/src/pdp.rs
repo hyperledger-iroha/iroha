@@ -1209,16 +1209,11 @@ fn decode_canonical_archive_challenge(
     if bytes.is_empty() || bytes.len() > PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1 {
         return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge);
     }
-    let challenge = norito::decode_from_bytes::<PdpChallengeV1>(bytes)
+    let challenge = norito::decode_canonical::<PdpChallengeV1>(bytes)
         .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge)?;
     challenge
         .validate()
         .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge)?;
-    let canonical = norito::to_bytes(&challenge)
-        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge)?;
-    if canonical != bytes {
-        return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge);
-    }
     Ok(challenge)
 }
 fn decode_canonical_archive_proof(
@@ -1227,16 +1222,11 @@ fn decode_canonical_archive_proof(
     if bytes.is_empty() || bytes.len() > PDP_PROOF_MAX_CANONICAL_BYTES_V1 {
         return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalProof);
     }
-    let proof = norito::decode_from_bytes::<PdpProofV1>(bytes)
+    let proof = norito::decode_canonical::<PdpProofV1>(bytes)
         .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalProof)?;
     proof
         .validate()
         .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalProof)?;
-    let canonical = norito::to_bytes(&proof)
-        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalProof)?;
-    if canonical != bytes {
-        return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalProof);
-    }
     Ok(proof)
 }
 /// Validation errors for [`PdpGovernanceArchiveV1`].
@@ -2019,7 +2009,7 @@ fn domain_separated_norito_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], norito::core::Error> {
-    let bytes = norito::to_bytes(value)?;
+    let bytes = norito::encode_canonical(value)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     hasher.update(&bytes);
@@ -2029,10 +2019,12 @@ fn ensure_canonical_size<T: norito::core::NoritoSerialize>(
     value: &T,
     maximum: usize,
 ) -> Result<(), norito::core::Error> {
-    let bytes = norito::to_bytes(value)?;
-    if bytes.len() > maximum {
+    let _canonical_layout =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let length = norito::core::encoded_frame_len(value)?;
+    if length > maximum {
         return Err(norito::core::Error::ArchiveLengthExceeded {
-            length: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            length: u64::try_from(length).unwrap_or(u64::MAX),
             limit: u64::try_from(maximum).unwrap_or(u64::MAX),
         });
     }
@@ -2550,9 +2542,85 @@ mod tests {
         ));
     }
     #[test]
+    fn pdp_signatures_ids_and_archives_ignore_enclosing_norito_layout() {
+        let fixture = fixture();
+        let archive = accepted_archive(&fixture);
+        let proof_digest = fixture
+            .proof
+            .proof_digest()
+            .expect("canonical proof digest");
+        let archive_digest = archive.digest().expect("canonical archive digest");
+        let length = norito::encode_canonical(&fixture.proof)
+            .expect("proof bytes")
+            .len();
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(fixture.proof.proof_digest().unwrap(), proof_digest);
+            assert_eq!(archive.digest().unwrap(), archive_digest);
+            let signed = sign_pdp_proof_ed25519_v1(fixture.proof.clone(), &fixture.signing_key)
+                .expect("canonical provider signature");
+            assert_eq!(signed.signature, fixture.proof.signature);
+            verify_pdp_bundle_v1(
+                &fixture.commitment,
+                &fixture.challenge,
+                &signed,
+                &fixture.admission,
+            )
+            .expect("same admitted proof under every layout");
+            archive
+                .validate()
+                .expect("same canonical embedded challenge and proof");
+            ensure_canonical_size(&fixture.proof, length).expect("exact canonical bound");
+            assert!(matches!(
+                ensure_canonical_size(&fixture.proof, length - 1),
+                Err(norito::Error::ArchiveLengthExceeded { .. })
+            ));
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+    }
+    #[test]
+    fn pdp_rejects_genuine_signatures_over_noncanonical_preimages() {
+        let mut fixture = fixture();
+        let alternate = {
+            let _layout = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&PdpProofSigningPayloadV1::from(&fixture.proof)).unwrap()
+        };
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PDP_PROOF_DIGEST_DOMAIN_V1);
+        hasher.update(&alternate);
+        let alternate_digest = hasher.finalize();
+        assert_ne!(
+            alternate_digest.as_bytes(),
+            &fixture.proof.proof_digest().unwrap()
+        );
+        let mut message = PDP_PROOF_SIGNATURE_DOMAIN_V1.to_vec();
+        message.extend_from_slice(alternate_digest.as_bytes());
+        fixture.proof.signature.signature = fixture.signing_key.sign(&message).to_bytes();
+        fixture
+            .proof
+            .validate()
+            .expect("structurally valid Ed25519 signature");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert!(matches!(
+                fixture.proof.verify_signature(),
+                Err(PdpSignatureVerificationError::Verification { .. })
+            ));
+        }
+    }
+    #[test]
     fn signature_is_typed_strict_domain_separated_and_admission_bound() {
         let mut tampered = fixture();
-        tampered.proof.signature.signature[0] ^= 1;
+        // A real signature over the wrong domain remains structurally valid,
+        // so this negative reaches verification rather than point decoding.
+        tampered.proof.signature.signature = tampered
+            .signing_key
+            .sign(b"sorafs-pdp-wrong-signing-domain")
+            .to_bytes();
+        tampered
+            .proof
+            .validate()
+            .expect("structurally valid signature");
         assert!(matches!(
             verify_pdp_bundle_v1(
                 &tampered.commitment,

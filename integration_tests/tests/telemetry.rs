@@ -98,10 +98,17 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         return Ok(());
     };
     // misc_measurements (genesis metrics) before submitting extra transactions
-    let metrics = reqwest::get(network.client().torii_url.join("/metrics").unwrap())
-        .await?
-        .text()
-        .await?;
+    let metrics = reqwest::get(
+        network
+            .client()
+            .client()
+            .torii_url
+            .join("/metrics")
+            .unwrap(),
+    )
+    .await?
+    .text()
+    .await?;
     println!("{metrics}");
     let metrics = MetricsReader::new(&metrics);
     let keys = metrics
@@ -135,13 +142,14 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .collect();
         let peer_client = peer.client();
         let operator_key_pair = peer_client
+            .client()
             .operator_key_pair
             .as_ref()
             .expect("test-network clients carry the peer operator key");
         let peers_uri: iroha_torii::Uri = "/v1/peers".parse().expect("static peers URI");
         let operator_headers = iroha_torii::operator_signed_request_headers(
             operator_key_pair,
-            &peer_client.network_id,
+            &peer_client.client().network_id,
             &iroha_torii::Method::GET,
             &peers_uri,
             &[],
@@ -151,7 +159,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         let response = http_client
-            .get(peer_client.torii_url.join("/v1/peers").unwrap())
+            .get(peer_client.client().torii_url.join("/v1/peers").unwrap())
             .headers(operator_headers)
             .header("Accept", "application/json")
             .send()
@@ -167,7 +175,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         assert_eq!(response, others);
     }
     // commit_time
-    network.client().submit_blocking(
+    network.client().submit(
         Log::new(Level::INFO, "mewo".to_owned()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -177,7 +185,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         .iter()
         .map(iroha_test_network::NetworkPeer::client)
     {
-        let status = client.get_status()?;
+        let status = client.client().get_status()?;
         assert!(
             status.commit_time_ms > 0,
             "No peer can commit block immediately, even the leader one"
@@ -196,7 +204,7 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-    let status = network.client().get_status()?;
+    let status = network.client().client().get_status()?;
     let sumeragi = status
         .sumeragi
         .expect("sumeragi status must be present when telemetry is enabled");

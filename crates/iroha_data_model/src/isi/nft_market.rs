@@ -34,6 +34,7 @@ macro_rules! native_isi {
 }
 native_isi! {
     /// Reserve an authenticated owner's NFT for immutable exact-price terms.
+    #[norito_schema(name = "iroha_data_model::isi::nft_market::OfferNftV1")]
     pub struct OfferNftV1 {
         /// One-shot offer identifier.
         pub offer_id: Hash,
@@ -51,6 +52,7 @@ native_isi! {
 }
 native_isi! {
     /// Pay the exact retained price and receive its NFT atomically.
+    #[norito_schema(name = "iroha_data_model::isi::nft_market::BuyNftV1")]
     pub struct BuyNftV1 {
         /// Complete expected terms, including network, seller, denomination, price and content.
         pub offer: NftSaleOfferV1,
@@ -58,6 +60,7 @@ native_isi! {
 }
 native_isi! {
     /// Cancel as the seller or expire after the consensus-height deadline.
+    #[norito_schema(name = "iroha_data_model::isi::nft_market::CancelNftOfferV1")]
     pub struct CancelNftOfferV1 {
         /// Exact permanent offer identifier.
         pub offer_id: Hash,

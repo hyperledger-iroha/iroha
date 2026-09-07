@@ -247,6 +247,60 @@ fun securityTairaToTonPayload(recipient: address, amount: uint128): CanonicalPay
     };
 }
 
+fun securityReplacePayloadCellByte(value: cell, offset: int, replacement: uint8): cell {
+    var input = value.beginParse();
+    val prefix = input.loadBits(offset * 8);
+    input.loadUint(8);
+    return beginCell().storeSlice(prefix).storeUint(replacement, 8).storeSlice(input).endCell();
+}
+
+@test.fail_with(50)
+get fun `test proven mint payload rejects the retired transfer discriminator`() {
+    val payload = securityTairaToTonPayload(address.fromWorkchainAndHash(0, 0x1234), 1);
+    expect(parseProvenTairaToTonPayloadCells(payload, 1).amount).toEqual(1);
+    parseProvenTairaToTonPayloadCells(
+        {
+            header: securityReplacePayloadCellByte(payload.header, 0, 0),
+            chunk1: payload.chunk1,
+            chunk2: payload.chunk2,
+            chunk3: payload.chunk3,
+        },
+        1,
+    );
+}
+
+@test.fail_with(50)
+get fun `test proven mint payload rejects the retired text codec`() {
+    val payload = securityTairaToTonPayload(address.fromWorkchainAndHash(0, 0x1234), 1);
+    expect(parseProvenTairaToTonPayloadCells(payload, 1).amount).toEqual(1);
+    parseProvenTairaToTonPayloadCells(
+        {
+            header: securityReplacePayloadCellByte(payload.header, 26, 0),
+            chunk1: payload.chunk1,
+            chunk2: payload.chunk2,
+            chunk3: payload.chunk3,
+        },
+        1,
+    );
+}
+
+@test.fail_with(50)
+get fun `test proven mint payload rejects the retired TON account codec`() {
+    val payload = securityTairaToTonPayload(address.fromWorkchainAndHash(0, 0x1234), 1);
+    expect(parseProvenTairaToTonPayloadCells(payload, 1).amount).toEqual(1);
+    val recipientCodecOffset = validateTairaRecipient(securityValidTairaRecipient()).size() + 5;
+    expect(recipientCodecOffset < ordinaryByteLength(payload.chunk1)).toEqual(true);
+    parseProvenTairaToTonPayloadCells(
+        {
+            header: payload.header,
+            chunk1: securityReplacePayloadCellByte(payload.chunk1, recipientCodecOffset, 3),
+            chunk2: payload.chunk2,
+            chunk3: payload.chunk3,
+        },
+        1,
+    );
+}
+
 fun securitySignals(
     messageId: uint256,
     payloadHash: uint256,
@@ -511,6 +565,46 @@ get fun `test funded bridge mint and direct wallet burn complete every replay bo
     expect(masterLeaves).toEqual(1);
 }
 
+get fun `test ordinary Jetton transfer carries only its funded inbound value`() {
+    val deployer = testing.treasury("sccp-transfer-deployer");
+    val owner = testing.treasury("sccp-transfer-owner");
+    val recipient = testing.treasury("sccp-transfer-recipient");
+    val config = securityBridgeConfig();
+    val bridge = TairaXorSccpBridge.fromStorage(canonicalBridgeInitialStorage(config));
+    val master = TairaXorJettonMaster.fromStorage(
+        canonicalMasterInitialStorage(config, bridge.address),
+    );
+    securityDeployBridge(bridge, deployer.address);
+    securityDeployMaster(master, deployer.address);
+    securityMint(bridge, deployer.address, owner.address, 100);
+    val sourceWallet = TairaXorJettonWallet.fromAddress(master.getWalletAddress(owner.address));
+    val recipientWallet = TairaXorJettonWallet.fromAddress(
+        master.getWalletAddress(recipient.address),
+    );
+    val before = testing.getAccountBalance(sourceWallet.address);
+    val transfer = sourceWallet.sendAskToTransfer(
+        owner.address,
+        31,
+        40,
+        recipient.address,
+        owner.address,
+        null,
+        0,
+        PayloadInline { value: beginCell().endCell().beginParse() },
+        { value: sccpWalletStorageReserve() + ton("2") },
+    );
+    expect(transfer).toHaveSuccessfulTx<AskToTransfer>({ to: sourceWallet.address });
+    expect(transfer).toHaveSuccessfulDeploy({ to: recipientWallet.address });
+    expect(transfer).toHaveSuccessfulTx<InternalTransferStep>({ to: recipientWallet.address });
+    expect(sourceWallet.getWalletData().jettonBalance).toEqual(60);
+    expect(recipientWallet.getWalletData().jettonBalance).toEqual(40);
+    expect(master.getJettonData().totalSupply).toEqual(100);
+    expect(testing.getAccountBalance(sourceWallet.address) >= before).toEqual(true);
+    expect(
+        testing.getAccountBalance(recipientWallet.address) >= sccpWalletStorageReserve(),
+    ).toEqual(true);
+}
+
 get fun `test bridge rejects the jetton master as recipient before reserving mint state`() {
     val deployer = testing.treasury("sccp-master-recipient");
     val config = securityBridgeConfig();
@@ -729,4 +823,62 @@ get fun `test guardian substitution order cannot enter canonical StateInit`() {
 @test.fail_with(51)
 get fun `test amount equal to two to the 120 is rejected`() {
     sccpCheckedScaleAmount(1 << 120, 1, SCCP_MAX_JETTON_AMOUNT);
+}
+
+get fun `test burn validation remains live with every replay shard occupied`() {
+    val owner = testing.treasury("sccp-full-forests-owner");
+    val bridge = testing.treasury("sccp-full-forests-bridge");
+    val master = testing.treasury("sccp-full-forests-master");
+    var forest = emptySccpReplayForestV1().load();
+    var shard = 0;
+    while (shard < 256) {
+        forest.nonemptyShardRoots.set(shard as uint8, (shard + 1) as uint256);
+        shard += 1;
+    }
+    forest.leafCount = 256;
+    forest.updateSequence = 256;
+    val state = calcDeployedJettonWallet(
+        owner.address,
+        master.address,
+        bridge.address,
+        build("TairaXorJettonWallet"),
+        1,
+        1,
+        100,
+    ).stateInit;
+    assert (state is ContractState) throw 1;
+    var storage = WalletStorage.fromCell(state.data);
+    storage.jettonBalance = 100;
+    storage.replay = WalletReplayState {
+        mintCredits: forest.toCell(),
+        burnAuthorizations: forest.toCell(),
+        burnLocks: forest.toCell(),
+        burnRefunds: forest.toCell(),
+    }.toCell();
+    val wallet = TairaXorJettonWallet.fromStorage(storage);
+    net.send(
+        owner.address,
+        createMessage({
+            bounce: BounceMode.NoBounce,
+            dest: { stateInit: wallet.stateInit! },
+            value: sccpWalletStorageReserve() + ton("1"),
+            body: TopUpTons {},
+        }),
+    );
+    val request = wallet.sendSccpWalletPrepareBurn(
+        owner.address,
+        1,
+        0,
+        10,
+        securityValidTairaRecipient(),
+        securityBurnWitnesses(securityEmptyReplayWitness()),
+        { value: sccpWalletBurnPrepareMinimum() },
+    );
+    expect(request).toHaveSuccessfulTx<SccpWalletPrepareBurn>({ to: wallet.address });
+    expect(request).toHaveSuccessfulTx<SccpWalletValidateBurnRecipient>({ to: wallet.address });
+    expect(request).toHaveSuccessfulTx<SccpWalletBurnHashStep>({ to: wallet.address });
+    expect(request).toHaveFailedTx<SccpWalletCommitValidatedBurn>({
+        to: wallet.address,
+        exitCode: SccpErrors.StaleReplayWitness,
+    });
 }

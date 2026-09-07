@@ -445,15 +445,17 @@ fn submit_prepare_registration_and_wait_v1(
     client: &Client,
     barrier: &iroha::data_model::nexus::PrivateSettlementPrepareBarrierV1,
 ) -> Result<()> {
-    client.register_private_settlement_prepare_and_wait_v1(
-        barrier,
-        u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-            .expect("V1 carrier ceiling fits u64"),
-        iroha::client::TransactionWaitOptions {
-            timeout: FINALITY_TIMEOUT,
-            poll_interval: POLL_INTERVAL,
-        },
-    )?;
+    client
+        .client()
+        .register_private_settlement_prepare_and_wait_v1(
+            barrier,
+            u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                .expect("V1 carrier ceiling fits u64"),
+            iroha::client::TransactionWaitOptions {
+                timeout: FINALITY_TIMEOUT,
+                poll_interval: POLL_INTERVAL,
+            },
+        )?;
     Ok(())
 }
 
@@ -2106,6 +2108,7 @@ fn leakage_carrier_block(
     entrypoint: HashOf<TransactionEntrypoint>,
 ) -> Result<iroha::data_model::block::SignedBlock> {
     let mut matching = client
+        .client()
         .query(FindBlocks)
         .execute_all()?
         .into_iter()
@@ -2129,16 +2132,18 @@ fn submit_leakage_carrier_with_event(
     runtime.block_on(async move {
         let mut events = tokio::time::timeout(
             FAULT_CONTROL_TIMEOUT,
-            client.listen_for_events_async([
-                TransactionEventFilter::default().for_hash(transaction_hash)
-            ]),
+            client
+                .client()
+                .listen_for_events([TransactionEventFilter::default().for_hash(transaction_hash)]),
         )
         .await
         .map_err(|_| eyre!("timed out opening leakage carrier event stream"))??;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let submitter = client.clone();
         let response = tokio::task::spawn_blocking(move || {
-            submitter.submit_private_settlement_bundle_v1(&submit)
+            submitter
+                .client()
+                .submit_private_settlement_bundle_v1(&submit)
         })
         .await
         .wrap_err("leakage carrier submit worker panicked")??;
@@ -2194,6 +2199,7 @@ fn leakage_query_records(
         .map(|(peer_index, peer)| {
             let response = peer
                 .client()
+                .client()
                 .private_settlement_bundle_receipt_v1(bundle_id)?;
             let PrivateSettlementBundleReceiptResponseV1::Finalized(receipt) = response else {
                 return Err(eyre!("leakage public receipt query is not finalized"));
@@ -2224,9 +2230,9 @@ fn leakage_telemetry_records(
     let sources = network
         .all_peers()
         .map(|peer| {
-            let status = peer.client().get_status()?;
+            let status = peer.client().client().get_status()?;
             let status = norito::encode_canonical(&status)?;
-            let metrics_url = peer.client().torii_url.join("metrics")?;
+            let metrics_url = peer.client().client().torii_url.join("metrics")?;
             let metrics = runtime.block_on(async {
                 let response = reqwest::get(metrics_url)
                     .await
@@ -2387,7 +2393,7 @@ fn collect_process_inventory(
             pid,
             executable_sha256: actual_sha,
             revision: revision.to_owned(),
-            health_observed: peer.is_running() && peer.client().get_status().is_ok(),
+            health_observed: peer.is_running() && peer.client().client().get_status().is_ok(),
         });
     }
     ensure!(
@@ -2550,7 +2556,7 @@ fn smoke_process_inventory(
         ensure!(
             pids.insert(pid)
                 && peers.insert(peer.id().clone())
-                && peer.client().get_status().is_ok()
+                && peer.client().client().get_status().is_ok()
                 && sha256_regular_file(&executable_for_pid(pid)?)? == expected_sha,
             "smoke process inventory has duplicate, unhealthy or substituted validators"
         );
@@ -2799,6 +2805,7 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
+    let client = client.client();
     let domain = iroha::data_model::domain::DomainId::try_new("default", "universal")?;
     let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair.private_key().clone());
     let mut root = Table::new();
@@ -3061,7 +3068,7 @@ fn run_coordinator_helper_process() -> Result<()> {
             .map_err(|error| {
                 eyre!("load stable explicit coordinator client configuration: {error:?}")
             })?;
-    let client = Client::new(config);
+    let client = Client::new(config)?;
     let endpoints = command
         .committee_endpoints
         .iter()
@@ -3087,12 +3094,14 @@ fn run_coordinator_helper_process() -> Result<()> {
                 .manifest
                 .as_ref()
                 .ok_or_else(|| eyre!("recover_prepare lacks manifest"))?;
-            let barrier = client.recover_or_prepare_private_settlement_bundle_v1(
-                &endpoints,
-                manifest,
-                &command.authority_catalog,
-                &command.deltas,
-            )?;
+            let barrier = client
+                .client()
+                .recover_or_prepare_private_settlement_bundle_v1(
+                    &endpoints,
+                    manifest,
+                    &command.authority_catalog,
+                    &command.deltas,
+                )?;
             submit_prepare_registration_and_wait_v1(&client, &barrier)?;
             (Some(barrier), Vec::new())
         }
@@ -3101,15 +3110,18 @@ fn run_coordinator_helper_process() -> Result<()> {
                 .manifest
                 .as_ref()
                 .ok_or_else(|| eyre!("recover_prepare_commit lacks manifest"))?;
-            let barrier = client.recover_or_prepare_private_settlement_bundle_v1(
-                &endpoints,
-                manifest,
-                &command.authority_catalog,
-                &command.deltas,
-            )?;
+            let barrier = client
+                .client()
+                .recover_or_prepare_private_settlement_bundle_v1(
+                    &endpoints,
+                    manifest,
+                    &command.authority_catalog,
+                    &command.deltas,
+                )?;
             submit_prepare_registration_and_wait_v1(&client, &barrier)?;
-            let commits =
-                client.recover_or_commit_private_settlement_bundle_v1(&endpoints, &barrier)?;
+            let commits = client
+                .client()
+                .recover_or_commit_private_settlement_bundle_v1(&endpoints, &barrier)?;
             (Some(barrier), commits)
         }
         "recover_commit" => {
@@ -3117,8 +3129,9 @@ fn run_coordinator_helper_process() -> Result<()> {
                 .barrier
                 .as_ref()
                 .ok_or_else(|| eyre!("recover_commit lacks barrier"))?;
-            let commits =
-                client.recover_or_commit_private_settlement_bundle_v1(&endpoints, barrier)?;
+            let commits = client
+                .client()
+                .recover_or_commit_private_settlement_bundle_v1(&endpoints, barrier)?;
             (Some(barrier.clone()), commits)
         }
         _ => return Err(eyre!("coordinator command operation or fields are invalid")),
@@ -3179,6 +3192,7 @@ fn capture_fault_state_observation(
     peer: &NetworkPeer,
 ) -> Result<FaultStateObservationV1> {
     let response = peer
+        .client()
         .client()
         .private_settlement_test_network_state_evidence_v1()
         .wrap_err_with(|| format!("query APS state evidence from validator #{peer_index}"))?;
@@ -4616,6 +4630,7 @@ fn collect_signed_rs16_finality(
     for (peer_index, peer) in network.all_peers().enumerate() {
         let (proof, block_hash) = peer
             .client()
+            .client()
             .get_bridge_finality_anchor(height, network.network_id())
             .wrap_err_with(|| format!("fetch signed finality proof from {}", peer.id()))?;
         let artifact = &proof.finality_artifact;
@@ -4723,7 +4738,10 @@ fn prepare_fault_bundle(
     routes: &[PrivateSettlementRouteV1],
     committees: &[CommitteeEndpoints],
 ) -> Result<FaultPreparedBundleV1> {
-    let current_height = sponsor.get_privacy_capabilities()?.committed_height;
+    let current_height = sponsor
+        .client()
+        .get_privacy_capabilities()?
+        .committed_height;
     let authority_context_height = current_height
         .checked_add(1)
         .ok_or_else(|| eyre!("fault authority height overflow"))?;
@@ -4760,13 +4778,26 @@ fn prepare_fault_bundle(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let activation =
-        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
+    let activation = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                activations,
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
     sponsor
-        .submit_transaction_blocking(&activation)
+        .submit_transaction_and_wait(&activation)
         .wrap_err("activate fault-campaign private pools")?;
     ensure!(
-        sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
+        sponsor
+            .client()
+            .get_privacy_capabilities()?
+            .committed_height
+            == authority_context_height,
         "fault pool activation did not land at the bound authority height"
     );
     let materials = provisional_materials(manifest.clone(), &prepared, committees)?;
@@ -4797,7 +4828,9 @@ fn certify_and_upload_fault_bundle(
         .iter()
         .zip(committees)
         .map(|(material, committee)| {
-            sponsor.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+            sponsor
+                .client()
+                .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
         })
         .collect::<Result<Vec<_>>>()?;
     let mut final_manifest = bundle.materials[0].manifest.clone();
@@ -4819,7 +4852,9 @@ fn certify_and_upload_fault_bundle(
             payload: material.payload_with_certificate(certificate.clone()),
         };
         for endpoint in &committee.endpoints {
-            let response = sponsor.upload_private_settlement_leg_to_v1(endpoint, &upload)?;
+            let response = sponsor
+                .client()
+                .upload_private_settlement_leg_to_v1(endpoint, &upload)?;
             ensure!(
                 usize::from(response.leg_ordinal) == ordinal,
                 "fault upload ordinal was substituted"
@@ -4841,13 +4876,15 @@ fn audit_fault_bundle(
         let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
             audit_policy: leg.governed.policy.clone(),
         };
-        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
-            &committee.endpoints,
-            &bundle.authorities[ordinal],
-            bundle.manifest.legs[ordinal].payload_digest,
-            &capsule_request,
-            &auditor_transport_signer,
-        )?;
+        let fetched = sponsor
+            .client()
+            .private_settlement_auditor_capsule_quorum_for_authority_v1(
+                &committee.endpoints,
+                &bundle.authorities[ordinal],
+                bundle.manifest.legs[ordinal].payload_digest,
+                &capsule_request,
+                &auditor_transport_signer,
+            )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected fault audit lifecycle"
@@ -4873,16 +4910,18 @@ fn audit_fault_bundle(
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
-            &committee.endpoints,
-            &bundle.authorities[ordinal],
-            bundle.manifest.legs[ordinal].payload_digest,
-            &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 {
-                audit_policy: capsule_request.audit_policy,
-                approval,
-            },
-        )?;
+        let response = sponsor
+            .client()
+            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
+                &committee.endpoints,
+                &bundle.authorities[ordinal],
+                bundle.manifest.legs[ordinal].payload_digest,
+                &auditor_transport_signer,
+                &PrivateSettlementAuditApprovalRequestV1 {
+                    audit_policy: capsule_request.audit_policy,
+                    approval,
+                },
+            )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
             "fault audit approval quorum was not durable"
@@ -4923,14 +4962,20 @@ fn finalize_fault_bundle(
         authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
-    let transaction = sponsor.build_transaction(
-        [InstructionBox::from(carrier)],
-        bundle.manifest.public_fee_intent.clone(),
-        Metadata::default(),
-    );
-    sponsor.submit_private_settlement_bundle_v1(&PrivateSettlementBundleSubmitRequestV1 {
-        transaction,
-    })?;
+    let transaction = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(carrier)],
+                bundle.manifest.public_fee_intent.clone(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
+    sponsor.client().submit_private_settlement_bundle_v1(
+        &PrivateSettlementBundleSubmitRequestV1 { transaction },
+    )?;
     wait_for_identical_receipt(network, bundle.manifest.bundle_id)
 }
 
@@ -5178,7 +5223,7 @@ fn restart_quorum_progress_peer(
         .block_on(stopped.peer.process_id())
         .ok_or_else(|| eyre!("quorum-progress restart has no live PID"))?;
     ensure!(
-        after_pid != stopped.before_pid && stopped.peer.client().get_status().is_ok(),
+        after_pid != stopped.before_pid && stopped.peer.client().client().get_status().is_ok(),
         "quorum-progress restart did not produce a healthy new process"
     );
     let acknowledgement = FaultRestartAckV1 {
@@ -5235,7 +5280,7 @@ fn restart_peer_with_evidence(
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("restarted target has no live PID"))?;
     ensure!(
-        after_pid != before_pid && peer.client().get_status().is_ok(),
+        after_pid != before_pid && peer.client().client().get_status().is_ok(),
         "validator restart did not produce a healthy new process"
     );
     let acknowledgement = FaultRestartAckV1 {
@@ -5310,6 +5355,7 @@ fn prepare_fault_bundle_with_normalization(
             .iter()
             .map(|endpoint| {
                 sponsor
+                    .client()
                     .request_private_settlement_prepare_vote_v1(
                         endpoint,
                         &bundle.manifest,
@@ -5328,18 +5374,20 @@ fn prepare_fault_bundle_with_normalization(
             alternate_first = Some(aggregate_fault_phase_votes(&votes, [0, 1, 3], 0)?);
         }
         for endpoint in &committee.endpoints {
-            sponsor.persist_private_settlement_phase_certificate_v1(
-                endpoint,
-                &bundle.manifest,
-                payload_digest,
-                &first,
-            )?;
+            sponsor
+                .client()
+                .persist_private_settlement_phase_certificate_v1(
+                    endpoint,
+                    &bundle.manifest,
+                    payload_digest,
+                    &first,
+                )?;
         }
         first_certificates.push(first);
     }
     let alternate_first =
         alternate_first.ok_or_else(|| eyre!("fault normalization lacks leg 0"))?;
-    let first_barrier = Client::build_private_settlement_prepare_barrier_v1(
+    let first_barrier = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
         bundle.authorities.clone(),
         bundle.deltas.clone(),
@@ -5347,7 +5395,7 @@ fn prepare_fault_bundle_with_normalization(
     )?;
     let mut second_certificates = first_certificates.clone();
     second_certificates[0] = alternate_first.clone();
-    let second_barrier = Client::build_private_settlement_prepare_barrier_v1(
+    let second_barrier = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
         bundle.authorities.clone(),
         bundle.deltas.clone(),
@@ -5363,7 +5411,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_body.body.bundle_id = Hash::prehashed([0xa5; Hash::LENGTH]);
     let mut changed_certificates = first_certificates.clone();
     changed_certificates[0] = changed_body;
-    let changed_body_rejected = Client::build_private_settlement_prepare_barrier_v1(
+    let changed_body_rejected = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
         bundle.authorities.clone(),
         bundle.deltas.clone(),
@@ -5374,7 +5422,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_index.authority_catalog_index = 1;
     let mut changed_index_certificates = first_certificates.clone();
     changed_index_certificates[0] = changed_index;
-    let authority_index_binding_verified = Client::build_private_settlement_prepare_barrier_v1(
+    let authority_index_binding_verified = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
         bundle.authorities.clone(),
         bundle.deltas.clone(),
@@ -5385,7 +5433,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_signed_body.body.delta_digest = Hash::prehashed([0x5a; Hash::LENGTH]);
     let mut changed_signed_certificates = first_certificates.clone();
     changed_signed_certificates[0] = changed_signed_body;
-    let signed_body_binding_verified = Client::build_private_settlement_prepare_barrier_v1(
+    let signed_body_binding_verified = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
         bundle.authorities.clone(),
         bundle.deltas.clone(),
@@ -5421,7 +5469,7 @@ fn build_fault_carrier_submit(
     bundle: &FaultPreparedBundleV1,
     barrier: &iroha::data_model::nexus::PrivateSettlementPrepareBarrierV1,
     commits: &[iroha::data_model::nexus::PrivateSettlementPhaseCertificateV1],
-) -> PrivateSettlementBundleSubmitRequestV1 {
+) -> Result<PrivateSettlementBundleSubmitRequestV1> {
     let legs = bundle
         .deltas
         .iter()
@@ -5440,13 +5488,16 @@ fn build_fault_carrier_submit(
         authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
-    PrivateSettlementBundleSubmitRequestV1 {
-        transaction: sponsor.build_transaction(
+    let account = sponsor.account_client();
+    let transaction = account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(carrier)],
             bundle.manifest.public_fee_intent.clone(),
             Metadata::default(),
-        ),
-    }
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+        .wrap_err("build integration-test transaction")?;
+    Ok(PrivateSettlementBundleSubmitRequestV1 { transaction })
 }
 
 fn verify_invalid_leg_carrier_is_state_byte_identical(
@@ -5481,15 +5532,19 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
         authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
-    let request = PrivateSettlementBundleSubmitRequestV1 {
-        transaction: sponsor.build_transaction(
+    let account = sponsor.account_client();
+    let transaction = account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(carrier)],
             bundle.manifest.public_fee_intent.clone(),
             Metadata::default(),
-        ),
-    };
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+        .wrap_err("build integration-test transaction")?;
+    let request = PrivateSettlementBundleSubmitRequestV1 { transaction };
     ensure!(
         sponsor
+            .client()
             .submit_private_settlement_bundle_v1(&request)
             .is_err(),
         "global carrier accepted an invalid private-settlement leg delta"
@@ -5558,6 +5613,7 @@ fn exercise_consensus_carrier_hold(
 ) -> Result<(Vec<FaultControlOccurrenceV1>, FaultStateSnapshotV1)> {
     observer.begin_phase("consensus_carrier_hold", &[], false)?;
     let height = sponsor
+        .client()
         .get_status()?
         .blocks
         .checked_add(1)
@@ -5582,6 +5638,7 @@ fn exercise_consensus_carrier_hold(
         .name("aps-fault-carrier-submit".to_owned())
         .spawn(move || {
             submitter
+                .client()
                 .submit_private_settlement_bundle_v1(&submit)
                 .map(|_| ())
         })?;
@@ -5748,7 +5805,7 @@ where
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("recovered crash target has no PID"))?;
     ensure!(
-        before_pid != after_pid && peer.client().get_status().is_ok(),
+        before_pid != after_pid && peer.client().client().get_status().is_ok(),
         "crash recovery did not produce a healthy new process"
     );
     let restart_type = if peer_index < VALIDATORS_PER_LANE {
@@ -5795,19 +5852,28 @@ fn advance_fault_bundle_past_expiry(
     bundle: &FaultPreparedBundleV1,
 ) -> Result<()> {
     loop {
-        let height = sponsor.get_privacy_capabilities()?.committed_height;
+        let height = sponsor
+            .client()
+            .get_privacy_capabilities()?
+            .committed_height;
         if height > bundle.manifest.expiry_height {
             return Ok(());
         }
-        let tick = sponsor.build_transaction(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                format!("APS fault expiry {} h{height}", bundle.manifest.bundle_id),
-            ))],
-            bounded_nexus_fee(),
-            Metadata::default(),
-        );
-        sponsor.submit_transaction_blocking(&tick)?;
+        let tick = {
+            let account = sponsor.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("APS fault expiry {} h{height}", bundle.manifest.bundle_id),
+                    ))],
+                    bounded_nexus_fee(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .wrap_err("build integration-test transaction")?;
+        sponsor.submit_transaction_and_wait(&tick)?;
     }
 }
 
@@ -5825,6 +5891,7 @@ fn phase_certificate_for_leg(
         .iter()
         .map(|endpoint| match (phase, barrier) {
             (iroha::data_model::nexus::PrivateSettlementPhaseV1::Prepare, None) => sponsor
+                .client()
                 .request_private_settlement_prepare_vote_v1(
                     endpoint,
                     &bundle.manifest,
@@ -5833,6 +5900,7 @@ fn phase_certificate_for_leg(
                 )
                 .map(|response| response.vote),
             (iroha::data_model::nexus::PrivateSettlementPhaseV1::Commit, Some(barrier)) => sponsor
+                .client()
                 .request_private_settlement_commit_vote_v1(
                     endpoint,
                     payload,
@@ -5918,6 +5986,7 @@ fn run_fresh_route_fault_trial(
                 percentage,
                 || {
                     sponsor
+                        .client()
                         .request_private_settlement_availability_share_v1(
                             &committees[0].endpoints[0],
                             &bundle.materials[0],
@@ -5945,6 +6014,7 @@ fn run_fresh_route_fault_trial(
                 request.seed,
                 move || {
                     client
+                        .client()
                         .request_private_settlement_availability_share_v1(&endpoint, &material)
                         .map(|_| ())
                 },
@@ -5974,6 +6044,7 @@ fn run_fresh_route_fault_trial(
                 percentage,
                 || {
                     sponsor
+                        .client()
                         .request_private_settlement_prepare_vote_v1(
                             &committees[0].endpoints[0],
                             &bundle.manifest,
@@ -6005,6 +6076,7 @@ fn run_fresh_route_fault_trial(
                 request.seed,
                 move || {
                     client
+                        .client()
                         .request_private_settlement_prepare_vote_v1(
                             &endpoint, &manifest, payload, &authority,
                         )
@@ -6023,7 +6095,7 @@ fn run_fresh_route_fault_trial(
         (barrier, Some(normalization))
     } else {
         (
-            sponsor.prepare_private_settlement_bundle_v1(
+            sponsor.client().prepare_private_settlement_bundle_v1(
                 &endpoint_matrix,
                 &bundle.manifest,
                 &bundle.authorities,
@@ -6058,6 +6130,7 @@ fn run_fresh_route_fault_trial(
                 percentage,
                 || {
                     sponsor
+                        .client()
                         .request_private_settlement_commit_vote_v1(
                             &committees[0].endpoints[0],
                             bundle.manifest.legs[0].payload_digest,
@@ -6089,6 +6162,7 @@ fn run_fresh_route_fault_trial(
                 request.seed,
                 move || {
                     client
+                        .client()
                         .request_private_settlement_commit_vote_v1(
                             &endpoint,
                             payload,
@@ -6132,18 +6206,22 @@ fn run_fresh_route_fault_trial(
         Vec::new()
     };
     if !unavailable.is_empty() {
-        let recovered_while_unavailable = sponsor.recover_or_prepare_private_settlement_bundle_v1(
-            &endpoint_matrix,
-            &bundle.manifest,
-            &bundle.authorities,
-            &bundle.deltas,
-        )?;
+        let recovered_while_unavailable = sponsor
+            .client()
+            .recover_or_prepare_private_settlement_bundle_v1(
+                &endpoint_matrix,
+                &bundle.manifest,
+                &bundle.authorities,
+                &bundle.deltas,
+            )?;
         ensure!(
             recovered_while_unavailable.prepared_bundle_digest == barrier.prepared_bundle_digest,
             "Prepare recovery changed the complete barrier with one validator unavailable per committee"
         );
     }
-    let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    let commits = sponsor
+        .client()
+        .commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     if !unavailable.is_empty() {
         ensure!(
             commits.len() == request.participants
@@ -6221,7 +6299,7 @@ fn run_fresh_route_fault_trial(
             &bundle,
             &recovered_barrier,
             &recovered.commit_certificates,
-        );
+        )?;
         let replay = submit.clone();
         let (carrier_controls, nonfinalized) =
             exercise_consensus_carrier_hold(network, runtime, &mut observer, sponsor, submit)?;
@@ -6229,6 +6307,7 @@ fn run_fresh_route_fault_trial(
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
         ensure!(
             sponsor
+                .client()
                 .submit_private_settlement_bundle_v1(&replay)
                 .is_err(),
             "fault campaign accepted an exact finalized carrier replay"
@@ -6355,7 +6434,7 @@ fn run_fresh_crash_trial(
     }
     if trial_index >= 3 {
         let endpoint_matrix = fault_endpoint_matrix(committees);
-        barrier = Some(sponsor.prepare_private_settlement_bundle_v1(
+        barrier = Some(sponsor.client().prepare_private_settlement_bundle_v1(
             &endpoint_matrix,
             &bundle.manifest,
             &bundle.authorities,
@@ -6380,7 +6459,7 @@ fn run_fresh_crash_trial(
     if finalization_cut {
         let endpoint_matrix = fault_endpoint_matrix(committees);
         commits = Some(
-            sponsor.commit_private_settlement_bundle_v1(
+            sponsor.client().commit_private_settlement_bundle_v1(
                 &endpoint_matrix,
                 barrier
                     .as_ref()
@@ -6390,13 +6469,15 @@ fn run_fresh_crash_trial(
     }
     let registration_request = if registration_cut {
         Some(
-            sponsor.build_private_settlement_prepare_registration_request_v1(
-                barrier
-                    .as_ref()
-                    .ok_or_else(|| eyre!("registration crash lacks Prepare barrier"))?,
-                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-                    .expect("V1 carrier ceiling fits u64"),
-            )?,
+            sponsor
+                .client()
+                .build_private_settlement_prepare_registration_request_v1(
+                    barrier
+                        .as_ref()
+                        .ok_or_else(|| eyre!("registration crash lacks Prepare barrier"))?,
+                    u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                        .expect("V1 carrier ceiling fits u64"),
+                )?,
         )
     } else {
         None
@@ -6434,6 +6515,7 @@ fn run_fresh_crash_trial(
             expected_finalized,
             || {
                 sponsor
+                    .client()
                     .request_private_settlement_availability_share_v1(
                         &committees[0].endpoints[0],
                         &bundle.materials[0],
@@ -6453,6 +6535,7 @@ fn run_fresh_crash_trial(
             expected_finalized,
             || {
                 sponsor
+                    .client()
                     .request_private_settlement_prepare_vote_v1(
                         &committees[0].endpoints[0],
                         &bundle.manifest,
@@ -6483,6 +6566,7 @@ fn run_fresh_crash_trial(
                 expected_finalized,
                 || {
                     sponsor
+                        .client()
                         .persist_private_settlement_phase_certificate_v1(
                             &committees[0].endpoints[0],
                             &bundle.manifest,
@@ -6510,6 +6594,7 @@ fn run_fresh_crash_trial(
                 expected_finalized,
                 || {
                     sponsor
+                        .client()
                         .submit_private_settlement_bundle_v1(&submit)
                         .map(|_| ())
                 },
@@ -6539,6 +6624,7 @@ fn run_fresh_crash_trial(
                 expected_finalized,
                 || {
                     sponsor
+                        .client()
                         .persist_private_settlement_phase_certificate_v1(
                             &committees[0].endpoints[0],
                             &bundle.manifest,
@@ -6559,7 +6645,7 @@ fn run_fresh_crash_trial(
                 commits
                     .as_ref()
                     .ok_or_else(|| eyre!("post-carrier crash lacks Commit QCs"))?,
-            );
+            )?;
             trigger_persistence_cut_and_restart(
                 network,
                 runtime,
@@ -6572,6 +6658,7 @@ fn run_fresh_crash_trial(
                 expected_finalized,
                 || {
                     sponsor
+                        .client()
                         .submit_private_settlement_bundle_v1(&submit)
                         .map(|_| ())
                 },
@@ -6617,8 +6704,9 @@ fn run_fresh_crash_trial(
             .take()
             .ok_or_else(|| eyre!("recovered registration lacks Prepare barrier"))?;
         let endpoint_matrix = fault_endpoint_matrix(committees);
-        let recovered_commits =
-            sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+        let recovered_commits = sponsor
+            .client()
+            .commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
         let fee_before_recovered_finalization = sponsor_nexus_fee_balance(sponsor)?;
         let receipt = finalize_fault_bundle(sponsor, network, &bundle, barrier, recovered_commits)?;
         let fee_after_recovered_finalization = sponsor_nexus_fee_balance(sponsor)?;
@@ -7122,7 +7210,7 @@ fn observe_transparent_control_atomicity(
     // One FindAssets response is a coherent snapshot from one validator's local WSV. Reading all
     // relevant buckets in that response avoids manufacturing a mixed vector by crossing block
     // boundaries between independent point queries.
-    let assets = client.query(FindAssets::new()).execute_all()?;
+    let assets = client.client().query(FindAssets::new()).execute_all()?;
     let mut observed = Vec::with_capacity(initial.len());
     for expectation in initial {
         let expected_id =
@@ -7390,7 +7478,10 @@ fn wait_for_transparent_control_balances(
             for peer_index in shape.committee_range(lane) {
                 let client = process_peer(network, peer_index)
                     .client_for(asset_id.account(), owner_key.private_key().clone());
-                match client.query_single(FindAssetById::new(asset_id.clone())) {
+                match client
+                    .client()
+                    .query_single(FindAssetById::new(asset_id.clone()))
+                {
                     Ok(asset) => {
                         let observed = asset.value().clone();
                         let expected = Quantity::from(expectation.amount);
@@ -7460,7 +7551,7 @@ fn wait_for_identical_native_amx_receipt(
         let mut receipts = Vec::with_capacity(process_count);
         last_observed.clear();
         for (peer_index, peer) in network.all_peers().enumerate() {
-            match peer.client().get_sumeragi_diagnostics() {
+            match peer.client().client().get_sumeragi_diagnostics() {
                 Ok(diagnostics) => match native_receipt_from_diagnostics(&diagnostics, source_id) {
                     Ok(Some(receipt)) => {
                         last_observed.push(format!(
@@ -7497,6 +7588,7 @@ fn canonical_carrier_header(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<Option<BlockHeader>> {
     let matching = client
+        .client()
         .query(FindBlocks)
         .execute_all()?
         .into_iter()
@@ -7634,16 +7726,22 @@ fn grant_transparent_control_consents(network: &Network, settlements: &[DvpIsi])
         let client = network.validators()[0]
             .client_for(&counterparty, counterparty_key.private_key().clone());
         let permission = transparent_control_permission(settlement, counterparty_ordinal);
-        let transaction = client.build_transaction(
-            [InstructionBox::from(Grant::account_permission(
-                permission,
-                authority.clone(),
-            ))],
-            bounded_nexus_fee(),
-            Metadata::default(),
-        );
+        let transaction = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Grant::account_permission(
+                        permission,
+                        authority.clone(),
+                    ))],
+                    bounded_nexus_fee(),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .wrap_err("build integration-test transaction")?;
         client
-            .submit_transaction_blocking(&transaction)
+            .submit_transaction_and_wait(&transaction)
             .wrap_err_with(|| {
                 format!(
                     "commit exact transparent-control consent for counterparty {counterparty_ordinal}"
@@ -7669,6 +7767,7 @@ fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIs
             for (peer_index, peer) in network.all_peers().enumerate() {
                 let client = peer.client_for(&counterparty, counterparty_key.private_key().clone());
                 match client
+                    .client()
                     .query(FindPermissionsByAccountId::new(counterparty.clone()))
                     .execute_all()
                 {
@@ -7698,12 +7797,120 @@ fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIs
     ))
 }
 
-fn build_transparent_control_carrier(client: &Client, settlements: &[DvpIsi]) -> SignedTransaction {
-    client.build_transaction(
-        settlements.iter().cloned().map(InstructionBox::from),
-        bounded_nexus_fee(),
-        Metadata::default(),
+fn build_transparent_control_carrier(
+    client: &Client,
+    settlements: &[DvpIsi],
+) -> Result<SignedTransaction> {
+    {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                settlements.iter().cloned().map(InstructionBox::from),
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")
+}
+
+#[test]
+fn release_client_context_preserves_carrier_authority_and_preparation_errors() -> Result<()> {
+    iroha_test_network::init_instruction_registry();
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xD7)),
+    );
+    let key_pair = transparent_control_keypair(0);
+    let table = Table::from_iter([
+        (
+            "chain".to_owned(),
+            TomlValue::String("aps-local-signing-test".to_owned()),
+        ),
+        (
+            "network_id".to_owned(),
+            TomlValue::String(network_id.to_string()),
+        ),
+        (
+            "torii_url".to_owned(),
+            TomlValue::String("http://127.0.0.1:18080/".to_owned()),
+        ),
+        (
+            "account".to_owned(),
+            TomlValue::Table(Table::from_iter([
+                (
+                    "domain".to_owned(),
+                    TomlValue::String("default.universal".to_owned()),
+                ),
+                (
+                    "public_key".to_owned(),
+                    TomlValue::String(key_pair.public_key().to_string()),
+                ),
+                (
+                    "private_key".to_owned(),
+                    TomlValue::String(
+                        iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+                    ),
+                ),
+            ])),
+        ),
+    ]);
+    let mut config: iroha::config::Config = iroha_config_base::read::ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("explicit local client configuration")
+        .parse()
+        .expect("valid local client configuration");
+    config.transaction_add_nonce = false;
+    let client = Client::new(config)?;
+    let authority = transparent_control_account_id(0);
+    let counterparty = transparent_control_account_id(1);
+    let settlement = DvpIsi::new(
+        "aps_local_signing_test".parse()?,
+        SettlementLeg::new(
+            transparent_control_asset_definition_id(0),
+            Quantity::from(11_u64),
+            authority.clone(),
+            counterparty.clone(),
+        ),
+        SettlementLeg::new(
+            transparent_control_asset_definition_id(1),
+            Quantity::from(22_u64),
+            counterparty,
+            authority.clone(),
+        ),
+        SettlementPlan::new(
+            SettlementExecutionOrder::DeliveryThenPayment,
+            SettlementAtomicity::AllOrNothing,
+        ),
+    );
+    let transaction =
+        build_transparent_control_carrier(&client, std::slice::from_ref(&settlement))?;
+    assert_eq!(transaction.network_id(), Some(&network_id));
+    assert_eq!(transaction.authority(), &authority);
+    assert_eq!(transaction.fee_payment_intent(), &bounded_nexus_fee());
+    assert_eq!(
+        transaction.admission_intent(),
+        iroha::data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    );
+    transaction
+        .signature()
+        .0
+        .verify(key_pair.public_key(), transaction.payload())?;
+
+    let exported = coordinator_client_config(&client)?;
+    let (mut restored, _) = iroha::config::Config::load_bytes_with_musubi_publication(
+        Path::new("aps-local-signing-test.toml"),
+        &exported,
     )
+    .map_err(|error| eyre!("reload explicit coordinator client context: {error:?}"))?;
+    assert_eq!(restored.network_id, network_id);
+    assert_eq!(restored.account, authority);
+    assert_eq!(restored.key_pair, key_pair);
+    assert_eq!(&restored.torii_api_url, client.account_client().endpoint());
+    restored.transaction_ttl = Duration::ZERO;
+    let invalid = Client::new(restored)?;
+    assert!(build_transparent_control_carrier(&invalid, &[settlement]).is_err());
+    Ok(())
 }
 
 fn fresh_transparent_control_replay(
@@ -7712,7 +7919,7 @@ fn fresh_transparent_control_replay(
     original_entrypoint: HashOf<TransactionEntrypoint>,
 ) -> Result<SignedTransaction> {
     for _ in 0..100 {
-        let candidate = build_transparent_control_carrier(client, settlements);
+        let candidate = build_transparent_control_carrier(client, settlements)?;
         if candidate.hash_as_entrypoint() != original_entrypoint {
             return Ok(candidate);
         }
@@ -7788,14 +7995,14 @@ fn run_real_process_transparent_control_benchmark(
     let storage_before = network_storage_bytes(&network)?;
     let end_to_end_started = Instant::now();
     atomicity_observer.begin()?;
-    let transaction = build_transparent_control_carrier(&authority, &settlements);
+    let transaction = build_transparent_control_carrier(&authority, &settlements)?;
     let transaction_hash = transaction.hash();
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let mut source_id = [0_u8; Hash::LENGTH];
     source_id.copy_from_slice(transaction_hash.as_ref());
     let finality_started = Instant::now();
     authority
-        .submit_transaction_blocking(&transaction)
+        .submit_transaction_and_wait(&transaction)
         .wrap_err("submit production transparent Native AMX carrier")?;
     let receipt = wait_for_identical_native_amx_receipt(&network, source_id)?;
     validate_transparent_native_receipt(&receipt, &transaction, request.participants)?;
@@ -7828,7 +8035,7 @@ fn run_real_process_transparent_control_benchmark(
     let replay = fresh_transparent_control_replay(&authority, &settlements, entrypoint_hash)?;
     let replay_entrypoint = replay.hash_as_entrypoint();
     let _replay_error = authority
-        .submit_transaction_blocking(&replay)
+        .submit_transaction_and_wait(&replay)
         .expect_err("a fresh carrier reusing committed settlement ids was accepted");
     wait_for_transparent_control_balances(
         &network,
@@ -7912,6 +8119,7 @@ fn run_real_process_transparent_control_benchmark(
 }
 
 fn verify_committee_proof_views(
+    network: &Network,
     sponsor: &Client,
     manifest: &AtomicPrivateSettlementV1,
     prepared: &[PreparedLeg],
@@ -7924,9 +8132,26 @@ fn verify_committee_proof_views(
             "committee proof matrix is incomplete"
         );
         for (endpoint, key) in committee.endpoints.iter().zip(&committee.validator_keys) {
-            let mut client = sponsor.clone();
-            client.torii_url = endpoint.clone();
-            let view = client.private_settlement_committee_proof_v1(
+            let peer = network
+                .all_peers()
+                .map(|peer| Ok((Url::parse(&peer.torii_url())?, peer)))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .find_map(|(url, peer)| (url == *endpoint).then_some(peer))
+                .ok_or_else(|| eyre!("committee proof endpoint is absent from the network"))?;
+            // Construct a fresh endpoint-bound context; cloned clients share transport and
+            // compatibility state and must not be retargeted by changing their public fields.
+            let client = peer.client_for(
+                sponsor.account_client().authority(),
+                sponsor.client().key_pair.private_key().clone(),
+            );
+            ensure!(
+                client.account_client().network_id() == sponsor.account_client().network_id()
+                    && client.account_client().authority() == sponsor.account_client().authority()
+                    && client.account_client().endpoint() == endpoint,
+                "committee proof client changed its network, account authority, or endpoint"
+            );
+            let view = client.client().private_settlement_committee_proof_v1(
                 manifest.legs[ordinal].payload_digest,
                 key,
             )?;
@@ -8076,13 +8301,26 @@ fn run_real_process_leakage_campaign(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction =
-        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
+    let activation_transaction = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                activations,
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
     sponsor
-        .submit_transaction_blocking(&activation_transaction)
+        .submit_transaction_and_wait(&activation_transaction)
         .wrap_err("activate governed leakage pools")?;
     ensure!(
-        sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
+        sponsor
+            .client()
+            .get_privacy_capabilities()?
+            .committed_height
+            == authority_context_height,
         "leakage pool activation did not land at the authority context"
     );
 
@@ -8099,7 +8337,9 @@ fn run_real_process_leakage_campaign(
         .iter()
         .zip(&committees)
         .map(|(material, committee)| {
-            sponsor.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+            sponsor
+                .client()
+                .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
         })
         .collect::<Result<Vec<_>>>()?;
     let mut final_manifest = materials[0].manifest.clone();
@@ -8120,7 +8360,9 @@ fn run_real_process_leakage_campaign(
             payload: material.payload_with_certificate(certificate.clone()),
         };
         for endpoint in &committee.endpoints {
-            let response = sponsor.upload_private_settlement_leg_to_v1(endpoint, &upload)?;
+            let response = sponsor
+                .client()
+                .upload_private_settlement_leg_to_v1(endpoint, &upload)?;
             ensure!(
                 usize::from(response.leg_ordinal) == ordinal,
                 "leakage upload ordinal substitution"
@@ -8135,13 +8377,15 @@ fn run_real_process_leakage_campaign(
         let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
             audit_policy: leg.governed.policy.clone(),
         };
-        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
-            &committee.endpoints,
-            &materials[ordinal].committee_authority,
-            final_manifest.legs[ordinal].payload_digest,
-            &capsule_request,
-            &auditor_transport_signer,
-        )?;
+        let fetched = sponsor
+            .client()
+            .private_settlement_auditor_capsule_quorum_for_authority_v1(
+                &committee.endpoints,
+                &materials[ordinal].committee_authority,
+                final_manifest.legs[ordinal].payload_digest,
+                &capsule_request,
+                &auditor_transport_signer,
+            )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected leakage audit lifecycle"
@@ -8167,23 +8411,25 @@ fn run_real_process_leakage_campaign(
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
-            &committee.endpoints,
-            &materials[ordinal].committee_authority,
-            final_manifest.legs[ordinal].payload_digest,
-            &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 {
-                audit_policy: capsule_request.audit_policy,
-                approval,
-            },
-        )?;
+        let response = sponsor
+            .client()
+            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
+                &committee.endpoints,
+                &materials[ordinal].committee_authority,
+                final_manifest.legs[ordinal].payload_digest,
+                &auditor_transport_signer,
+                &PrivateSettlementAuditApprovalRequestV1 {
+                    audit_policy: capsule_request.audit_policy,
+                    approval,
+                },
+            )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
             "leakage approval quorum was not durable"
         );
     }
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-audited")?;
-    verify_committee_proof_views(&sponsor, &final_manifest, &prepared, &committees)?;
+    verify_committee_proof_views(&network, &sponsor, &final_manifest, &prepared, &committees)?;
 
     let endpoint_matrix = committees
         .iter()
@@ -8197,7 +8443,7 @@ fn run_real_process_leakage_campaign(
         .iter()
         .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
-    let barrier = sponsor.prepare_private_settlement_bundle_v1(
+    let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
         &endpoint_matrix,
         &final_manifest,
         &authorities,
@@ -8214,7 +8460,9 @@ fn run_real_process_leakage_campaign(
     )?;
     let registered =
         wait_for_recovered_prepare_registration(&network, &before, request.participants)?;
-    let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    let commits = sponsor
+        .client()
+        .commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     assert_no_partial_visibility(
         &network,
         final_manifest.bundle_id,
@@ -8236,11 +8484,17 @@ fn run_real_process_leakage_campaign(
         authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
-    let transaction = sponsor.build_transaction(
-        [InstructionBox::from(carrier)],
-        final_manifest.public_fee_intent.clone(),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(carrier)],
+                final_manifest.public_fee_intent.clone(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let submit = PrivateSettlementBundleSubmitRequestV1 {
         transaction: transaction.clone(),
@@ -8278,6 +8532,7 @@ fn run_real_process_leakage_campaign(
     }
     ensure!(
         sponsor
+            .client()
             .submit_private_settlement_bundle_v1(&submit)
             .is_err(),
         "replaying the exact leakage carrier was accepted"
@@ -8676,13 +8931,26 @@ fn run_real_process_private_benchmark(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction =
-        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
+    let activation_transaction = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                activations,
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
     sponsor
-        .submit_transaction_blocking(&activation_transaction)
+        .submit_transaction_and_wait(&activation_transaction)
         .wrap_err("activate governed private pools")?;
     ensure!(
-        sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
+        sponsor
+            .client()
+            .get_privacy_capabilities()?
+            .committed_height
+            == authority_context_height,
         "pool activation did not land at the manifest authority context"
     );
     let atomicity_before = wait_for_converged_fault_state_snapshot(&network, "benchmark-before")?;
@@ -8700,7 +8968,9 @@ fn run_real_process_private_benchmark(
         .iter()
         .zip(&committees)
         .map(|(material, committee)| {
-            sponsor.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+            sponsor
+                .client()
+                .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
         })
         .collect::<Result<Vec<_>>>()?;
     let mut final_manifest = materials[0].manifest.clone();
@@ -8721,7 +8991,9 @@ fn run_real_process_private_benchmark(
             payload: material.payload_with_certificate(certificate.clone()),
         };
         for endpoint in &committee.endpoints {
-            let response = sponsor.upload_private_settlement_leg_to_v1(endpoint, &upload)?;
+            let response = sponsor
+                .client()
+                .upload_private_settlement_leg_to_v1(endpoint, &upload)?;
             ensure!(
                 usize::from(response.leg_ordinal) == ordinal,
                 "upload ordinal substitution"
@@ -8738,13 +9010,15 @@ fn run_real_process_private_benchmark(
         let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
             audit_policy: leg.governed.policy.clone(),
         };
-        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
-            &committee.endpoints,
-            &materials[ordinal].committee_authority,
-            final_manifest.legs[ordinal].payload_digest,
-            &capsule_request,
-            &auditor_transport_signer,
-        )?;
+        let fetched = sponsor
+            .client()
+            .private_settlement_auditor_capsule_quorum_for_authority_v1(
+                &committee.endpoints,
+                &materials[ordinal].committee_authority,
+                final_manifest.legs[ordinal].payload_digest,
+                &capsule_request,
+                &auditor_transport_signer,
+            )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected audit lifecycle"
@@ -8770,16 +9044,18 @@ fn run_real_process_private_benchmark(
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
-            &committee.endpoints,
-            &materials[ordinal].committee_authority,
-            final_manifest.legs[ordinal].payload_digest,
-            &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 {
-                audit_policy: capsule_request.audit_policy,
-                approval,
-            },
-        )?;
+        let response = sponsor
+            .client()
+            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
+                &committee.endpoints,
+                &materials[ordinal].committee_authority,
+                final_manifest.legs[ordinal].payload_digest,
+                &auditor_transport_signer,
+                &PrivateSettlementAuditApprovalRequestV1 {
+                    audit_policy: capsule_request.audit_policy,
+                    approval,
+                },
+            )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
             "approval quorum was not durable"
@@ -8789,7 +9065,7 @@ fn run_real_process_private_benchmark(
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
 
     let committee_started = Instant::now();
-    verify_committee_proof_views(&sponsor, &final_manifest, &prepared, &committees)?;
+    verify_committee_proof_views(&network, &sponsor, &final_manifest, &prepared, &committees)?;
     let committee_verification = elapsed_ms(committee_started);
 
     let endpoint_matrix = committees
@@ -8805,7 +9081,7 @@ fn run_real_process_private_benchmark(
         .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
     let prepare_started = Instant::now();
-    let barrier = sponsor.prepare_private_settlement_bundle_v1(
+    let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
         &endpoint_matrix,
         &final_manifest,
         &authorities,
@@ -8824,7 +9100,9 @@ fn run_real_process_private_benchmark(
     )?;
     let prepare_registration = elapsed_ms(prepare_registration_started);
     let commit_started = Instant::now();
-    let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    let commits = sponsor
+        .client()
+        .commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     let commit = elapsed_ms(commit_started);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
 
@@ -8844,17 +9122,25 @@ fn run_real_process_private_benchmark(
         authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
-    let transaction = sponsor.build_transaction(
-        [InstructionBox::from(carrier)],
-        final_manifest.public_fee_intent.clone(),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = sponsor.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(carrier)],
+                final_manifest.public_fee_intent.clone(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .wrap_err("build integration-test transaction")?;
     let submit = PrivateSettlementBundleSubmitRequestV1 {
         transaction: transaction.clone(),
     };
     let finality_started = Instant::now();
     let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
-    sponsor.submit_private_settlement_bundle_v1(&submit)?;
+    sponsor
+        .client()
+        .submit_private_settlement_bundle_v1(&submit)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
     let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     ensure_exact_private_settlement_carrier_fee(
@@ -8883,6 +9169,7 @@ fn run_real_process_private_benchmark(
     }
     ensure!(
         sponsor
+            .client()
             .submit_private_settlement_bundle_v1(&submit)
             .is_err(),
         "replaying the exact finalized carrier was accepted"

@@ -681,14 +681,14 @@ export interface IsoBridgeAmount {
 export const SCCP_DOMAIN_SORA: 0;
 export const SCCP_DOMAIN_ETH: 1;
 export const SCCP_DOMAIN_BSC: 2;
-export const SCCP_DOMAIN_TRON: 3;
+export const SCCP_DOMAIN_TRON: 5;
 export const SCCP_DOMAIN_TON: 4;
-export type SccpDomain = 0 | 1 | 2 | 3 | 4;
-export const SCCP_CODEC_CANONICAL_TEXT: 0;
-export const SCCP_CODEC_EVM_ADDRESS20: 1;
-export const SCCP_CODEC_TRON_ADDRESS21: 2;
-export const SCCP_CODEC_TON_ACCOUNT36: 3;
-export type SccpCodecTag = 0 | 1 | 2 | 3;
+export type SccpDomain = 0 | 1 | 2 | 4 | 5;
+export const SCCP_CODEC_CANONICAL_TEXT: 1;
+export const SCCP_CODEC_EVM_ADDRESS20: 2;
+export const SCCP_CODEC_TRON_ADDRESS21: 5;
+export const SCCP_CODEC_TON_ACCOUNT36: 7;
+export type SccpCodecTag = 1 | 2 | 5 | 7;
 export const SCCP_CODEC_KEYS: Readonly<Record<SccpCodecTag, string>>;
 export type SccpPayloadKind = "transfer";
 export const SCCP_PAYLOAD_KINDS: readonly SccpPayloadKind[];
@@ -705,9 +705,9 @@ export const SCCP_REPLAY_BOUNDARIES_V1: Readonly<{
   ton_master_mint: 0x32;
   ton_master_burn: 0x33;
   ton_wallet_mint_credit: 0x34;
-  ton_wallet_burn_debit: 0x35;
-  ton_wallet_refund_debit: 0x36;
-  ton_wallet_refund_credit: 0x37;
+  ton_wallet_burn_authorization: 0x35;
+  ton_wallet_burn_lock: 0x36;
+  ton_wallet_burn_refund: 0x37;
 }>;
 export type SccpReplayBoundaryV1 =
   (typeof SCCP_REPLAY_BOUNDARIES_V1)[keyof typeof SCCP_REPLAY_BOUNDARIES_V1];
@@ -747,9 +747,15 @@ export function sccpReplayRecordDigestV1(record: SccpReplayRecordV1): string;
 export function sccpReplayEmptyHashesV1(): readonly string[];
 export function sccpReplayRootFromWitnessV1(
   key: string | BinaryLike,
-  recordDigest: string | BinaryLike | null,
+  recordDigest: string | BinaryLike,
   witness: SccpSparseMerkleWitnessV1,
 ): Readonly<{ root: string; expectedRoot: string; matchesExpectedRoot: boolean; shard: number }>;
+export function sccpReplayVerifyAgainstCurrentRootV1(
+  key: string | BinaryLike,
+  recordDigest: string | BinaryLike,
+  witness: SccpSparseMerkleWitnessV1,
+  currentRoot: string | BinaryLike,
+): Readonly<{ root: string; expectedRoot: string; matchesExpectedRoot: true; shard: number }>;
 export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "bsc-mainnet" | "tron-mainnet" | "ton-mainnet";
 export type SccpNetworkTag = 0x40 | 0x41 | 0x42 | 0x43 | 0x44;
 export interface SccpNetworkDescriptor<Profile extends SccpNetworkProfile = SccpNetworkProfile, Tag extends SccpNetworkTag = SccpNetworkTag, Domain extends SccpDomain = SccpDomain, Sora extends boolean = boolean> { readonly profile: Profile; readonly tag: Tag; readonly domain: Domain; readonly sora: Sora; readonly globalId?: -239; }
@@ -757,7 +763,7 @@ export const SCCP_NETWORK_PROFILES: Readonly<{
   readonly "sora-taira": SccpNetworkDescriptor<"sora-taira", 0x40, 0, true>;
   readonly "ethereum-mainnet": SccpNetworkDescriptor<"ethereum-mainnet", 0x41, 1, false>;
   readonly "bsc-mainnet": SccpNetworkDescriptor<"bsc-mainnet", 0x42, 2, false>;
-  readonly "tron-mainnet": SccpNetworkDescriptor<"tron-mainnet", 0x43, 3, false>;
+  readonly "tron-mainnet": SccpNetworkDescriptor<"tron-mainnet", 0x43, 5, false>;
   readonly "ton-mainnet": SccpNetworkDescriptor<"ton-mainnet", 0x44, 4, false> & Readonly<{ globalId: -239 }>;
 }>;
 export function normalizeSccpCodecValue(codec: SccpCodecTag, value: string | BinaryLike): Uint8Array;
@@ -933,6 +939,9 @@ export interface SccpSoraFinalityAnchorV1 {
   readonly source_network: SccpNetworkV1;
   readonly protocol_version: 4;
   readonly chain_id_hash: string;
+  readonly epoch: number;
+  readonly epoch_end_height: number;
+  readonly roster_commitment: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
   readonly checkpoint_context_id: string;
@@ -1092,7 +1101,7 @@ export interface SccpTonAccountValueV1 { readonly TonAccount36: Readonly<{ workc
 export interface SccpTransferProjectionV1 {
   readonly version: 1;
   readonly source_domain: 0;
-  readonly dest_domain: 1 | 2 | 3 | 4;
+  readonly dest_domain: 1 | 2 | 4 | 5;
   readonly nonce: string;
   readonly route_revision: number;
   readonly asset_home_domain: 0;
@@ -1103,11 +1112,11 @@ export interface SccpTransferProjectionV1 {
   readonly route_id: SccpCanonicalTextValueV1;
 }
 export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
-export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 3 | 4; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 4 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
 export interface SccpRecentCursor { readonly from: number; readonly after_index: number; }
 export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; readonly next: SccpRecentCursor | null; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
-export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 3 | 4; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
+export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 4 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
 export type SccpDestinationProofBackendV1 =
   | Readonly<{ backend: "evm_groth16_bn254_v1"; family: null }>
   | Readonly<{ backend: "tron_groth16_bn254_v1"; family: null }>
@@ -2362,10 +2371,9 @@ export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Withdrawn";
 /** Exact verifier-registry labels admitted by the native Rust dispatcher. */
 export type ToriiVerifierBackendLabelV1 =
   | "halo2/ipa"
-  | "halo2/pasta/kaigi-roster-v1"
+  | "halo2/pasta/kaigi-authorization-v1"
   | "halo2/pasta/kaigi-usage-v1"
   | "halo2/pasta/ivm-execution-v1"
-  | "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -3910,6 +3918,7 @@ type NoritoRuntimeNamespaceExport =
   | "CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1"
   | "CONFIDENTIAL_MEMO_WIRE_MAGIC_V1"
   | "decodeCancelAssetLockV1"
+  | "decodeAccountIdNoritoValue"
   | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
   | "encodeCancelAssetLockV1"
@@ -3953,7 +3962,8 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PRIVATE_KEY_LENGTH"
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
-  | "buildKaigiRosterJoinProof"
+  | "buildKaigiAuthorizationProofV1"
+  | "buildKaigiUsageProofV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -4654,6 +4664,7 @@ export interface ToriiLaneSwapMetadata {
   epsilon_bps: number;
   twap_window_seconds: number;
   liquidity_profile: ToriiLaneLiquidityProfile;
+  /** Canonical signed Numeric string with a 512-bit mantissa and scale at most 28. */
   twap_local_per_xor: string;
   volatility_class: ToriiLaneVolatilityClass;
 }
@@ -6203,6 +6214,15 @@ export interface ToriiNetworkTimeStatus {
   note: string | null;
 }
 
+/** Public, account-free V1 bootstrap policy; the default is explicit and unrelated to list order. */
+export interface AccountCapabilitiesV1 {
+  readonly schema_version: 1;
+  readonly network_id: string;
+  readonly network_prefix: number;
+  readonly allowed_signing: readonly CryptoAlgorithm[];
+  readonly default_signing: "ed25519";
+}
+
 export interface ToriiNodeCapabilities {
   abiVersion: number;
   dataModelVersion: number;
@@ -7291,21 +7311,52 @@ export interface ConfidentialReceiveAddressV2 {
   diversifierHex: string;
 }
 
-export interface KaigiRosterJoinProof {
-  commitment: Buffer;
-  nullifier: Buffer;
-  rosterRoot: Buffer;
-  proof: Buffer;
-  commitmentHex: string;
-  nullifierHex: string;
-  rosterRootHex: string;
-  proofBase64: string;
+/** Public outputs of the exact final V1 Kaigi authorization relation. */
+export interface KaigiAuthorizationProofV1 {
+  readonly commitment: Buffer;
+  readonly nullifier: Buffer;
+  readonly authorization: Buffer;
+  readonly preRosterRoot: Buffer;
+  readonly proof: Buffer;
 }
 
-export interface KaigiRosterJoinProofOptions {
-  seed: ArrayBufferView | ArrayBuffer | Buffer;
-  rosterRootHex?: string | null;
-  roster_root_hex?: string | null;
+export interface KaigiAuthorizationProofOptionsV1 {
+  networkId: NetworkId;
+  callId: { domainId: string; callName: string };
+  hostId: string;
+  /** Retained original participant identity, or original host for host actions. */
+  subjectId: string;
+  participationSequence: bigint;
+  action: "hostCreate" | "join" | "leave" | "hostEnd";
+  preRosterRoot: Uint8Array;
+  /** Mutable canonical nonzero Pasta Fp bytes, consumed and cleared on every call. */
+  blinding: Uint8Array;
+}
+
+/** Public outputs of the exact final V1 host usage relation. */
+export interface KaigiUsageProofV1 {
+  readonly hostCommitment: Buffer;
+  readonly usageCommitment: Buffer;
+  readonly preRosterRoot: Buffer;
+  readonly proof: Buffer;
+}
+
+export interface KaigiUsageProofOptionsV1 {
+  networkId: NetworkId;
+  callId: { domainId: string; callName: string };
+  /** Retained original host account identity. */
+  hostId: string;
+  preRosterRoot: Uint8Array;
+  /** Exact integer from zero through 2^32 - 1. */
+  segmentIndex: number;
+  /** Exact positive u64 duration. */
+  durationMs: bigint;
+  /** Exact unsigned u64 gas charge. */
+  billedGas: bigint;
+  /** Stored raw canonical host C established by HostCreate. */
+  hostCommitment: Uint8Array;
+  /** Original host opening; mutable canonical nonzero Fp bytes, consumed and cleared. */
+  blinding: Uint8Array;
 }
 
 export interface RegisterDomainInput {
@@ -8066,15 +8117,13 @@ export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 export declare const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: 4096;
 
 export interface KaigiParticipantCommitmentInput {
-  commitment: ArrayBufferView | ArrayBuffer | Buffer | string;
-  /** Clear aliases are off-chain only; native ledger instructions require null/omission. */
-  aliasTag?: null;
+  /** Exact canonical Pasta Fp bytes, without a hash marker. */
+  commitment: Uint8Array | readonly number[];
 }
 
 export interface KaigiParticipantNullifierInput {
-  digest: ArrayBufferView | ArrayBuffer | Buffer | string;
-  /** Clear issuance time is off-chain only; native ledger instructions require zero. */
-  issuedAtMs: 0;
+  /** Exact canonical Pasta Fp bytes, without a hash marker. */
+  digest: Uint8Array | readonly number[];
 }
 
 export type KaigiRoomPolicyValue = {
@@ -8121,18 +8170,7 @@ export interface JoinKaigiInput {
   proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
-export interface LeaveKaigiInput {
-  callId: KaigiIdLike;
-  participant: string;
-  /** Privacy-mode departure is off-chain only in V1. */
-  commitment?: null;
-  /** Privacy-mode departure is off-chain only in V1. */
-  nullifier?: null;
-  /** Privacy-mode departure is off-chain only in V1. */
-  rosterRoot?: null;
-  /** Privacy-mode departure is off-chain only in V1. */
-  proof?: null;
-}
+export interface LeaveKaigiInput extends JoinKaigiInput {}
 
 export interface EndKaigiInput {
   callId: KaigiIdLike;
@@ -8147,7 +8185,7 @@ export interface RecordKaigiUsageInput {
   callId: KaigiIdLike;
   durationMs: NumericLike;
   billedGas?: NumericLike;
-  usageCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
+  usageCommitment?: Uint8Array | readonly number[] | null;
   proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
@@ -10666,6 +10704,7 @@ export declare class ToriiBrowserClient {
   getNodeCapabilities(
     options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiBrowserNodeCapabilities>;
+  getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
   getContractDeploymentState(
     request: ToriiBrowserContractDeploymentStateRequest,
     options?: ToriiBrowserContractDeploymentStateOptions,
@@ -11019,6 +11058,7 @@ export interface ValidationFeePolicyProofCatchUpV1
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
   getKagemushaReadiness(
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaReadinessV1>;
@@ -12307,9 +12347,13 @@ export function verifySm2(
   distid?: string,
 ): boolean;
 
-export function buildKaigiRosterJoinProof(
-  options: KaigiRosterJoinProofOptions,
-): never;
+export function buildKaigiAuthorizationProofV1(
+  options: KaigiAuthorizationProofOptionsV1,
+): KaigiAuthorizationProofV1;
+
+export function buildKaigiUsageProofV1(
+  options: KaigiUsageProofOptionsV1,
+): KaigiUsageProofV1;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
@@ -12433,6 +12477,11 @@ export function encodeAccountIdNoritoValue(
   value: string,
   context?: string,
 ): Uint8Array;
+/** Exact compact-length AccountId value decoding for typed policy codecs. */
+export function decodeAccountIdNoritoValue(
+  payload: BinaryLike,
+  context?: string,
+): string;
 /** Exact compact-length AssetDefinitionId value encoding for typed policy codecs. */
 export function encodeAssetDefinitionIdNoritoValue(
   value: string,
@@ -12487,7 +12536,7 @@ export function noritoEncodeContractManifestSignaturePayload(
 ): Buffer;
 /** Encode one exact compact-length `FeePaymentIntent` archive. */
 export function noritoEncodeFeePaymentIntentArchive(
-  intent: NoritoFeePaymentIntent,
+  intent: Readonly<NoritoFeePaymentIntent>,
 ): Uint8Array;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
@@ -12641,10 +12690,6 @@ export function noritoEncodeConfidentialMemoEnvelopeV1(
 export function noritoDecodeConfidentialMemoEnvelopeV1(
   bytes: BinaryLike,
 ): ConfidentialMemoEnvelopeV1;
-/** Encode one exact compact-length fee-payment intent archive. */
-export function noritoEncodeFeePaymentIntentArchive(
-  intent: NoritoFeePaymentIntent,
-): Uint8Array;
 export interface NoritoFrameValidationOptions {
   context?: string;
   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer;

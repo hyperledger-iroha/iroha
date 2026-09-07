@@ -2864,7 +2864,7 @@ mod tests {
         let successes = contenders
             .into_iter()
             .map(|contender| contender.join().expect("source writer thread"))
-            .filter(|&success| success)
+            .filter(|succeeded| *succeeded)
             .count();
         assert_eq!(successes, 1);
         let published = fs::read(&*path).expect("read immutable winner");

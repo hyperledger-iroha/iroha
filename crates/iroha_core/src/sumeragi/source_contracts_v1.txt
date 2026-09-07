@@ -485,7 +485,15 @@ region|outside_terminal|settlement|begin|-|end|-
 region|outside_terminal|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside_terminal|worker|begin|-|end|-
 region|outside_terminal|runner|begin|-|end|-
-region|terminal_signature|projection|after|fn settle_certified_serve_completed(|before|) -> Result<(), CertifiedServeTerminalSettlementErrorV1>
+region|terminal_next_sign_pair|registry|at|let mut paired_next_vote_addresses = std::collections::BTreeSet::new();|before|        live.into_iter().all(
+region|terminal_signature|projection|after|fn settle_certified_serve_worker_completed(|before|) -> Result<(), CertifiedServeTerminalSettlementErrorV1>
+region|worker_terminal|projection|at|fn settle_certified_serve_worker_completed(|before|pub(in crate::sumeragi) fn verify_certified_serve_terminal_replay(
+region|worker_persistence|certified_serve_store|at|fn persist_completed_with_worker_readback(|before|fn persist_completed_response(
+region|worker_body_validation|certified_serve_store|at|fn validate_worker_readback_response_body(|before|fn validate_completed_response(
+region|worker_readback|worker|at|fn serve_lifecycle_certified_body(|before|fn build_certified_body_response(
+region|body_readback_mint|body_store|at|fn read_durable_body_for_certified_serve(|before|pub(crate) fn latest_for_subject(
+region|body_canonical_read|body_store|at|fn load_canonical_wire(|before|fn read_durable_body_for_certified_serve(
+region|body_readback_fields|body_store|after|struct DurableCertifiedServeBodyReadbackV1 {|before|impl DurableCertifiedServeBodyReadbackV1 {
 region|terminal_signature|projection|after|fn settle_certified_serve_negative(|before|) -> Result<(), CertifiedServeTerminalSettlementErrorV1>
 region|fresh_signature|projection|after|fn admit_selected_certified_serve(|before|) -> CertifiedServeConcreteAdmissionV1
 region|opaque_result|projection|after|impl CertifiedServeConcreteAdmissionV1 {|before|impl CertifiedServeConcreteAdmissionContinuationV1 {
@@ -561,9 +569,9 @@ required|projection|&ordinal_reservation|fixed Certified-Serve admission omitted
 required|projection|fn certified_serve_terminal_replay_decision(|fixed Certified-Serve admission omitted fn certified_serve_terminal_replay_decision(
 required|projection|.exactly_matches_certified_serve_publication(authenticated, publication.receipt())|fixed Certified-Serve admission omitted .exactly_matches_certified_serve_publication(authenticated, publication.receipt())
 required|projection|fn into_safe_continuation(|fixed Certified-Serve admission omitted fn into_safe_continuation(
-required|projection|fn settle_certified_serve_completed(|fixed Certified-Serve admission omitted fn settle_certified_serve_completed(
+required|projection|fn settle_certified_serve_worker_completed(|fixed Certified-Serve admission omitted fn settle_certified_serve_worker_completed(
 required|projection|fn settle_certified_serve_negative(|fixed Certified-Serve admission omitted fn settle_certified_serve_negative(
-required|projection|.persist_completed_with_exact_body(|fixed Certified-Serve admission omitted .persist_completed_with_exact_body(
+required|projection|.persist_completed_with_worker_readback(|fixed Certified-Serve admission omitted .persist_completed_with_worker_readback(
 required|projection|.persist_negative_for_authenticated_request(authenticated, outcome)|fixed Certified-Serve admission omitted .persist_negative_for_authenticated_request(authenticated, outcome)
 required|projection|fn preflight_certified_serve_terminal(|fixed Certified-Serve admission omitted fn preflight_certified_serve_terminal(
 required|projection|fn publish_certified_serve_terminal(|fixed Certified-Serve admission omitted fn publish_certified_serve_terminal(
@@ -575,12 +583,33 @@ required|projection|#[cfg(test)]\n    pub(crate) fn persist_and_admit_certified_
 required|projection|#[cfg(test)]\npub(super) fn certified_serve_admission_request(|raw Certified-Serve surface escaped its fixture gate: #[cfg(test)]\npub(super) fn certified_serve_admission_request(
 required|settlement|#[cfg(test)]\n    pub(super) fn settle_turn_with_durable_serve_terminal(|raw terminal reducer wrapper escaped its test fixture gate
 count|settlement|fn settle_turn_with_durable_serve_terminal(|1|the raw terminal reducer wrapper must remain a single test fixture
-forbidden|outside_terminal|.persist_completed_with_exact_body(|Certified-Serve terminal ownership escaped the projection transaction: .persist_completed_with_exact_body(
+forbidden|outside_terminal|.persist_completed_with_worker_readback(|Certified-Serve terminal ownership escaped the projection transaction: .persist_completed_with_worker_readback(
 forbidden|outside_terminal|.publish_certified_serve_terminal_transition(|Certified-Serve terminal ownership escaped the projection transaction: .publish_certified_serve_terminal_transition(
 required|coordinator|#[cfg(test)]\n    pub(super) fn admit_certified_serve(|raw Certified-Serve coordinator admission escaped its test gate
 required|coordinator|CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,|Certified-Serve terminal settlement exports drifted
 forbidden|projection|CertifiedServeSettlementError|projection retained obsolete CertifiedServeSettlementError
-count|projection|fn settle_certified_serve_completed(|1|only the production owner may expose completed Serve settlement
+count|projection|fn settle_certified_serve_worker_completed(|1|only the production owner may expose completed Serve settlement
+required|worker_terminal|body_readback: DurableCertifiedServeBodyReadbackV1|terminal owner must consume the opaque worker readback by value
+required|worker_terminal|if self.body_store.is_some()|terminal owner must not retain the worker-owned body store
+required|worker_terminal|self.body_store_identity.as_ref()|terminal owner must retain its exact comparison-only store identity
+order|worker_terminal|5|self.preflight_certified_serve_terminal(&lease, authenticated)?|if self.body_store.is_some()|self.body_store_identity.as_ref()|self.payload_store.persist_completed_with_worker_readback(|self.publish_certified_serve_terminal(|worker terminal completion must preflight and authenticate its exact store before durable persistence and Ledger publication
+forbidden|projection|fn settle_certified_serve_completed(|projection retained the retired raw-receipt completion API
+forbidden|payload_store|fn persist_completed_with_exact_body(|payload store retained the retired raw-receipt completion API
+required|worker_persistence|body_readback: DurableCertifiedServeBodyReadbackV1|payload persistence must consume the opaque worker readback by value
+order|worker_persistence|4|authenticated_request.request_hash() != response.request_hash|self.validate_worker_readback_response_body(|self.validate_completed_response(|self.persist_completed_response(|worker payload completion must authenticate request, durable readback and response before publication
+required|worker_body_validation|durable_body.context_id() != self.context.id()|worker readback must bind the current authenticated context
+required|worker_body_validation|durable_body.round() != request.round|worker readback must bind the exact request round
+required|worker_body_validation|durable_body.subject() != request.subject|worker readback must bind the exact request subject
+required|worker_body_validation|durable_body.manifest_hash() != HashOf::new(&response.manifest)|worker readback must bind the exact response manifest
+required|worker_body_validation|Hash::new(canonical_body) != durable_body.subject().payload_hash|worker readback must authenticate exact canonical body bytes
+required|worker_body_validation|canonical_body != response.body.as_slice()|worker readback must reject substitution of the delivered body
+order|worker_readback|4|build_certified_body_response(|.read_durable_body_for_certified_serve(&durable_body)|body_readback.canonical_wire() != response.body.as_slice()|body_readback: Some(body_readback)|worker must revalidate the durable body and exact response bytes before returning its opaque readback
+order|body_readback_mint|3|self.load_canonical_wire(receipt)?|Ok(DurableCertifiedServeBodyReadbackV1 {|store_identity: self.instance_identity()|body-store readback authority must follow successful exact-frame validation and bind the live store instance
+required|body_canonical_read|self.load_envelope(receipt)?.canonical_wire|readback bytes must originate from the validated durable frame
+required|body_readback_fields|durable_body: DurableBodyReceipt|readback must retain the exact durable receipt
+required|body_readback_fields|canonical_wire: Vec<u8>|readback must retain owned canonical wire bytes
+required|body_readback_fields|store_identity: V2BodyStoreInstanceIdentity|readback must retain its exact store identity
+forbidden|body_readback_fields|pub|readback fields must remain private to the body-store owner
 count|projection|fn settle_certified_serve_negative(|1|only the production owner may expose negative Serve settlement
 forbidden|terminal_signature|receipt:|terminal owner transaction accepted raw receipt:
 forbidden|terminal_signature|payload_id|terminal owner transaction accepted raw payload_id
@@ -610,8 +639,8 @@ required|payload_store|fn exactly_matches_authenticated_request(|payload-first S
 required|payload_store|enum CertifiedServePayloadRetentionError|payload-first Serve ownership omitted enum CertifiedServePayloadRetentionError
 required|payload_store|PublicationAmbiguous(CertifiedServePayloadStoreError)|payload-first Serve ownership omitted PublicationAmbiguous(CertifiedServePayloadStoreError)
 required|payload_store|PublishedButUnsynchronized(CertifiedServePayloadStoreError)|payload-first Serve ownership omitted PublishedButUnsynchronized(CertifiedServePayloadStoreError)
-required|payload_store|fn persist_completed_with_exact_body(|payload-first Serve ownership omitted fn persist_completed_with_exact_body(
-required|payload_store|body_store.owns_receipt(durable_body)|payload-first Serve ownership omitted body_store.owns_receipt(durable_body)
+required|payload_store|fn persist_completed_with_worker_readback(|payload-first Serve ownership omitted fn persist_completed_with_worker_readback(
+required|worker_body_validation|!body_readback.matches_store_instance(expected_body_store)|worker Serve completion accepted a readback from another body-store instance
 required|payload_store|fn persist_negative_for_authenticated_request(|payload-first Serve ownership omitted fn persist_negative_for_authenticated_request(
 required|payload_store|#[cfg(test)]\n    pub(crate) fn persist_negative(|payload-first Serve ownership omitted #[cfg(test)]\n    pub(crate) fn persist_negative(
 required|fresh_staged_append|staged.records.get(&address.ordinal)|fresh Serve staged append omitted the exact staged record
@@ -666,6 +695,10 @@ required|registry|serve_ordinal_pair_is_exact(serve, producer)|fresh Serve whole
 required|registry|.same_persisted_family(&producer_metadata.replay_authority)|fresh Serve whole-census preflight omitted .same_persisted_family(&producer_metadata.replay_authority)
 required|registry|Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)|fresh Serve whole-census preflight omitted Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)
 required|registry|broadcast.pairs_exact_next_sign(next_address, next_digest)|fresh Serve whole-census preflight omitted broadcast.pairs_exact_next_sign(next_address, next_digest)
+required|terminal_next_sign_pair|!paired_next_vote_addresses.insert(next_address)|fresh Serve census must reject duplicate paired Sign ownership
+required|terminal_next_sign_pair|!broadcast.matches_current_parked_record(|a missing paired Sign requires the exact parked Broadcast record
+required|terminal_next_sign_pair|.paired_next_sign_matches_terminal_record(coordinator, &exact_ledger)|a missing paired Sign requires exact terminal ledger authentication
+order|terminal_next_sign_pair|3|self.entries.get(&next_address).map_or_else(|!broadcast.matches_current_parked_record(|.paired_next_sign_matches_terminal_record(coordinator, &exact_ledger)|missing paired Sign admission must verify parked ownership before the exact terminal ledger link
 required|registry|!paired_live_next_vote_addresses.is_subset(&exact_next_vote_addresses)|fresh Serve whole-census preflight stopped proving every live paired next-vote address belongs to the exact live next-vote census
 required|registry|replay_authority: LifecycleReplayAuthorityV1|fresh Serve whole-census preflight omitted replay_authority: LifecycleReplayAuthorityV1
 required|registry|ConcreteLifecycleWork::from_authorized_exact(effect, pending, authority)|fresh Serve whole-census preflight omitted ConcreteLifecycleWork::from_authorized_exact(effect, pending, authority)
@@ -1171,9 +1204,9 @@ region|view_pipeline_owner_retention|effects|at|let retained_apply_owners = self
 region|adapter_recovered_validation_high|adapter|at|pub(crate) fn recovered_validation_authority(|before|/// Reauthenticate one complete recovered WAL frame and seal its exact identity.
 region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the strongest complete body certificate retained by durable reducer state.
 region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
-region|leader_wire_actual_consumer|adapter|at|pub(super) fn from_adapter(adapter: &SumeragiV2Adapter)|before|pub(crate) fn matches_geometry(
-region|leader_wire_exact_entered_view|adapter|at|pub(crate) fn matches_entered_view(|before|fn protects_commit_vote(
-region|leader_wire_live_consumer|worker|at|fn finish_runtime_step_reconciliation(|before|fn complete_leader_wire_runtime_terminal(
+region|actual_consumer_factory|leader_wire_consumer|at|pub(super) fn from_adapter(|before|pub(crate) fn matches_geometry(
+region|actual_consumer_publication|worker|at|fn finish_runtime_step_reconciliation(|before|fn complete_leader_wire_runtime_terminal(
+region|leader_wire_exact_entered_view|leader_wire_consumer|at|pub(crate) fn matches_entered_view(|before|fn protects_commit_vote(
 region|runtime_high_accessor|runtime|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the exact Decision key reconstructed by safety-WAL replay.
 region|leader_wire_live_lock_authority|worker|at|fn entered_view(\n        &mut self,\n        tag: EventTag,\n        certificate: wire::TimeoutCertificate,\n        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,|before|    fn report_equivocation(
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1266,20 +1299,37 @@ required|adapter_high_accessor|.durable_state()|adapter highest-Prepare accessor
 required|adapter_high_accessor|.highest_prepare()|adapter highest-Prepare accessor stopped reading the exact WAL-replayed high-water mark
 required|adapter_high_accessor|wire::QuorumCertificateRef {|adapter highest-Prepare accessor stopped returning a cleanup-only reference
 forbidden|adapter_high_accessor|qc_to_wire|adapter highest-Prepare accessor must not widen the cleanup reference into a full certificate
-required|leader_wire_replay_lock_authority|LeaderWireRecoveryAuthority::from_adapter(self)|receiver frontier must be minted from the exact adapter
-required|leader_wire_actual_consumer|adapter.ensure_ingress()?|receiver frontier must reject an unopened or failed adapter
-required|leader_wire_actual_consumer|adapter.reducer.durable_state()|receiver frontier must derive from actual replayed WAL state
-required|leader_wire_actual_consumer|consumer_tag: tag|receiver frontier must carry the full reducer incarnation
-required|leader_wire_actual_consumer|wal_id: durable.last_id()|receiver frontier must bind the actual append sequence
-required|leader_wire_actual_consumer|durable.commit_intent_for_lock(locked).is_some()|historical Commit shares require a reconstructible durable intent
-required|leader_wire_actual_consumer|.execution_commitment(locked.round(), locked.subject())?|protected Commit eligibility must bind the exact execution statement
-order|leader_wire_live_consumer|4|authority.ok_or_else(|next.monotonically_extends(self.leader_wire_recovery_authority)|.advance_leader_wire_recovery_cut(next)?|self.leader_wire_recovery_authority = next;|only an actual monotone adapter capability may publish receiver ownership
+required|leader_wire_replay_lock_authority|LeaderWireRecoveryAuthority::from_adapter(self)|adapter must delegate to its sole actual WAL consumer factory
+forbidden|leader_wire_replay_lock_authority|from_replayed_adapter|adapter must not mint a synthetic view-based consumer
+required|actual_consumer_factory|adapter.ensure_ingress()?|actual consumer factory must reject a failed adapter
+required|actual_consumer_factory|let durable = adapter.reducer.durable_state();|actual consumer factory must read the replayed durable frontier
+required|actual_consumer_factory|let tag = adapter.reducer.current_tag();|actual consumer factory must retain the actual reducer generation and view
+required|actual_consumer_factory|adapter.registry.round_to_wire(certificate.proposal_round())|actual consumer must convert the exact replayed lock round
+required|actual_consumer_factory|adapter.registry.subject(certificate.subject())?|actual consumer must authenticate the exact replayed lock subject
+required|actual_consumer_factory|locked.round().view() == tag.view()|actual consumer must distinguish current-round Commit collection
+required|actual_consumer_factory|durable.commit_intent_for_lock(locked).is_some()|historical Commit collection requires the exact durable CommitIntent
+required|actual_consumer_factory|vote_statement_hash(|protected Commit authority must bind the complete vote statement
+required|actual_consumer_factory|.execution_commitment(locked.round(), locked.subject())?|protected Commit authority must bind the exact registry execution commitment
+required|actual_consumer_factory|consumer_tag: tag|actual consumer must retain the authenticated reducer tag
+required|actual_consumer_factory|wal_id: durable.last_id()|actual consumer must retain the exact WAL persistence frontier
+required|actual_consumer_factory|decision_durable: durable.decision().is_some()|actual consumer must retain the durable Decision frontier
+required|actual_consumer_factory|highest_prepare_view: durable.highest_prepare().map(\pqc\p qc.round().view())|actual consumer must retain the durable Prepare frontier
+required|actual_consumer_factory|installed_timeout_view: durable.last_timeout().map(\ptc\p tc.round().view())|actual consumer must retain the installed timeout frontier
+required|actual_consumer_factory|protected_lock,|actual consumer must retain the exact durable lock
+required|actual_consumer_factory|protected_commit_statement,|actual consumer must retain the exact protected Commit statement
+order|actual_consumer_factory|7|adapter.ensure_ingress()?|let durable = adapter.reducer.durable_state();|let protected_lock = durable|.transpose()?|let protected_commit_statement = durable|.transpose()?|Ok(Self {|actual consumer must authenticate both durable projections before minting authority
+forbidden|actual_consumer_factory|from_replayed_adapter|production actual consumer factory must not use a synthetic snapshot constructor
+forbidden|actual_consumer_factory|with_protected_lock|production actual consumer factory must not graft a caller-provided lock
 required|runtime_high_accessor|self.driver.replayed_highest_prepare_certificate_ref()|serialized runtime stopped forwarding the exact durable-high accessor
 count|runtime_high_accessor|replayed_highest_prepare_certificate_ref|2|runtime highest-Prepare wrapper must contain exactly its declaration and one driver delegation
 order|view_cleanup|6|protected.validate(&self.context)|let protected_body = protected_lock_body(protected_lock.as_ref());|self.reconcile_protected_lock(tag, protected_body, highest_prepare_body, services)?;|.reconcile_active_view_producer(tag, retain_local_producer)|.entered_view(tag, certificate, protected_body)|self.reconciled_tag = Some(tag);|validated lock reconciliation and live recovery-cut publication must precede installed-view exposure
 required|leader_wire_live_lock_authority|protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>|production EnterView lost its exact protected-lock input
+required|actual_consumer_publication|authority.ok_or_else(|production publication requires actual adapter authority
+required|actual_consumer_publication|if !next.monotonically_extends(self.leader_wire_recovery_authority)|production publication must reject a regressed WAL consumer
+order|actual_consumer_publication|5|authority.ok_or_else(|.acquire()|if !next.monotonically_extends(self.leader_wire_recovery_authority)|.advance_leader_wire_recovery_cut(next)?|self.leader_wire_recovery_authority = next;|guarded consumer publication must authenticate monotonicity and persist the ingress cut before exposing authority
 required|leader_wire_exact_entered_view|self.consumer_tag == tag && self.protected_lock == protected_lock|EnterView must match both the sealed consumer incarnation and exact protected body owner
-order|leader_wire_live_lock_authority|2|.matches_entered_view(tag, protected_lock)|self.active_tag = tag;|EnterView must consume the already-published actual WAL incarnation and protected lock before exposing the view
+order|leader_wire_live_lock_authority|3|.acquire()|.matches_entered_view(tag, protected_lock)|self.active_tag = tag;|EnterView must consume the already-published actual WAL incarnation and protected lock before exposing the view
+forbidden|leader_wire_live_lock_authority|.advance_view(|EnterView must not synthesize a consumer from a view and caller-provided lock
 forbidden|token|Decode|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn from_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn into_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
@@ -4539,6 +4589,7 @@ region|priority_enum|selector|at|pub(crate) enum SelectedCertifiedResponsePriori
 region|classifier|selector|at|pub(super) fn classify_selected_certified_response_priority(|before|/// Convert the selected response family's cut into Phase-A authority.
 region|widen|ingress_position|at|pub(super) fn into_ordinary_turn_cut(self) -> FairIngressTurnCut<'a> {|before|impl<'a> FairIngressTurnCut<'a> {
 region|driver|turn_driver|at|pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(|before|fn drive_recovered_ingress_selector<'cursor>(
+region|recovered_response_preparation|turn_driver|at|SelectedCertifiedResponsePriorityV1::RecoveredClaimed => {|before|self.drive_recovered_ingress_selector(selector, runner)
 required|priority_enum|DefinitelyNonPriority|selected certified-response priority omitted its nonpriority class
 required|priority_enum|OrdinaryClaimed|selected certified-response priority omitted its ordinary owner
 required|priority_enum|RecoveredClaimed|selected certified-response priority omitted its recovered owner
@@ -4574,6 +4625,9 @@ required|widen|selected_disposition|ordinary cut widening discarded its exact de
 required|widen|leader_wire_projection|ordinary cut widening discarded its leader-wire projection
 order|driver|9|classify_selected_certified_response_priority(&cut)|SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority|cut.into_ordinary_turn_cut()|SelectedCertifiedResponsePriorityV1::OrdinaryClaimed|capture_lifecycle_ingress_selector(cut)|self.drive_certified_fetch_ingress_selector(selector, runner)|SelectedCertifiedResponsePriorityV1::RecoveredClaimed|prepare_recovered_decision_fetch_from_selected_cut(cut)|self.drive_recovered_ingress_selector(selector, runner)|certified-response tri-state classification and exact handoffs must remain ordered
 count|driver|Err(LifecycleIngressSelectorError::QueueCutChanged)|3|certified-response transient queue-refresh retry inventory changed
+required|recovered_response_preparation|Err(LifecycleIngressSelectorError::QueueCutChanged) => {|recovered response preparation must classify a transient queue-cut change
+count|recovered_response_preparation|ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry|1|recovered response queue refresh must retain exactly one typed retry outcome
+order|recovered_response_preparation|4|Err(LifecycleIngressSelectorError::QueueCutChanged) => {|drop(runner);|return ProductionLifecycleIngressTurnV1::Selected(|ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry|recovered response preparation must release the runner and retry its lifecycle turn on queue refresh
 count|driver|ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry|3|ordinary certified-response queue-refresh paths no longer retry the same lifecycle turn
 count|driver|dequeue_prepared_ordinary_ingress(|4|certified-response tri-state routing changed the exact ordinary dequeue inventory
 forbidden|driver|selected_cut_is_recovered_decision_fetch|turn driver retained the retired boolean certified-response selector
@@ -4682,6 +4736,7 @@ region|queue_token|queue|at|pub(crate) struct DurableAutonomousNonQueueReplicaFi
 region|queue_auth|queue|at|pub(crate) fn authenticate_autonomous_nonqueue_replica_fifo_ownership|before|    #[cfg(test)]
 region|queue_terminal|queue|at|pub(crate) fn finalize_lane_reservation_release_barrier_with_replica_fifo_authorization|before|    /// Reauthenticate an already-forgotten release
 region|fifo_proof|queue|at|fn release_barrier_has_exact_fifo_ownership_locked(|before|    /// Remove a hash set from FIFO
+region|physical_fifo_proof|queue|at|fn replica_group_has_byte_exact_ordinary_fifo_ownership_locked(|before|    /// Prove that every released reservation is again owned by ordinary FIFO
 region|wrapper|apply|at|pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(|before|include!("v2_apply/autonomous_recovery_types.rs");
 region|direct_transition|refinement|at|== refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT)|before|IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY
 region|released_transition|refinement|at|== refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED)|before|IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE
@@ -4727,6 +4782,14 @@ required|queue_auth|authenticate_release_queue_fifo_ownership_locked|replica Que
 required|queue_auth|check_production_in_flight_first_release_transition(projection)|replica Queue proof omitted its checked direct-release transition
 required|queue_auth|begin_durability_transition_locked(|replica Queue proof omitted its exact-hash removal fence
 order|queue_auth|6|self.lane_reservation_transition_lock.lock()|self.push_remove_lock.lock()|authenticate_release_queue_fifo_ownership_locked|check_production_in_flight_first_release_transition(projection)|begin_durability_transition_locked(|Ok(DurableAutonomousNonQueueReplicaFifoAuthorization {|replica Queue proof lost lock-proof-fence ordering
+required|physical_fifo_proof|let fifo = self.fifo_snapshot_locked()|physical FIFO proof must snapshot the actual queue under its ownership lock
+required|physical_fifo_proof|let mut previous_global_fifo_ordinal = None|physical FIFO proof must retain the preceding global ordinal
+required|physical_fifo_proof|previous_global_fifo_ordinal.is_some_and(\pprevious\p previous >= order.ordinal)|physical FIFO proof must reject global ordinal inversion including unrelated entries
+required|physical_fifo_proof|previous_global_fifo_ordinal = Some(order.ordinal)|physical FIFO proof must advance its exact global ordinal witness
+required|physical_fifo_proof|positions.insert(hash, position).is_some()|physical FIFO proof must reject duplicate physical hashes
+required|physical_fifo_proof|previous_position.is_some_and(\pprevious\p previous >= position)|physical FIFO proof must retain the exact barrier relative order
+required|fifo_proof|self.replica_group_has_byte_exact_ordinary_fifo_ownership_locked(&barrier.ordered_keys)|release barrier must delegate to the physical FIFO proof
+required|fifo_proof|if !self.release_barrier_has_exact_fifo_ownership_locked(barrier)|release authorization must enforce the complete physical FIFO proof
 required|fifo_proof|let mut fifo_ordinal_owners = BTreeMap::<u64, EntrypointHash>::new()|replica FIFO proof stopped enumerating global physical ordinal ownership
 required|fifo_proof|fifo_ordinal_owners.insert(order.ordinal, hash)|replica FIFO proof stopped detecting duplicate global physical ordinals
 required|fifo_proof|existing != hash|replica FIFO proof stopped rejecting a globally substituted ordinal owner

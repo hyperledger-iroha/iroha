@@ -163,10 +163,7 @@ fn verify_transfer_with(
     verifier: SharedVerifier,
 ) -> Result<VerifiedPublicTransfer> {
     preflight_inputs(prepared, proof_bytes, limits)?;
-    require_profile(
-        prepared.semantics(),
-        ProofSemantics::TransferStateTransition,
-    )?;
+    require_profile(prepared.semantics(), ProofSemantics::StateTransition)?;
     let relation = PublicTransferAir::new(prepared, expected)?;
     let work = verifier.verify_frame(&relation, proof_bytes, limits)?;
     Ok(VerifiedPublicTransfer {
@@ -325,7 +322,7 @@ mod tests {
     #[test]
     fn proof_size_preflight_precedes_profile_context_and_raw_decoding() {
         let fixture = Fixture::new(false);
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let limits = VerifyLimits {
             max_proof_bytes: 0,
@@ -378,7 +375,7 @@ mod tests {
     #[test]
     fn entry_points_enforce_exact_profiles_before_decoding() {
         let fixture = Fixture::new(false);
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let limits = VerifyLimits::default();
         assert!(matches!(
@@ -398,11 +395,11 @@ mod tests {
         // The public preparation constructor already rejects opaque tables.
         // This gate remains explicit if that constructor gains other profiles.
         for required in [
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             ProofSemantics::AxtTransferClaim,
         ] {
             for actual in [
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 ProofSemantics::AxtTransferClaim,
                 ProofSemantics::AxtOpaqueEffect,
             ] {
@@ -432,7 +429,7 @@ mod tests {
     fn both_routes_check_every_expected_public_io_field_before_decoding() {
         let fixture = Fixture::new(false);
         for semantics in [
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             ProofSemantics::AxtTransferClaim,
         ] {
             let prepared = fixture.prepare(semantics);
@@ -448,7 +445,7 @@ mod tests {
                     6 => expected.ordering_hash[0] ^= 1,
                     _ => unreachable!(),
                 }
-                let result = if semantics == ProofSemantics::TransferStateTransition {
+                let result = if semantics == ProofSemantics::StateTransition {
                     verify_transfer(&prepared, &expected, BAD_PROOF, VerifyLimits::default())
                 } else {
                     verify_axt_transfer(
@@ -535,7 +532,7 @@ mod tests {
     #[test]
     fn decoder_resource_limits_are_retained_and_result_accessors_are_read_only() {
         let fixture = Fixture::new(false);
-        let prepared = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let prepared = fixture.prepare(ProofSemantics::StateTransition);
         let expected = fixture.expected(&prepared);
         for (limits, name) in [
             (
@@ -877,7 +874,7 @@ mod tests {
             verify_transfer(&prepared, &expected, &encoded, limits),
             Err(Error::InvalidProofSemantics { .. })
         ));
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let ordinary_io = fixture.expected(&ordinary);
         assert!(matches!(
             verify_axt_transfer(&ordinary, &ordinary_io, context(&fixture), &encoded, limits),
@@ -920,7 +917,7 @@ mod tests {
     #[test]
     fn candidate_facades_preserve_resource_and_semantic_preflights() {
         let fixture = Fixture::new(false);
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let zero = VerifyLimits {
             max_proof_bytes: 0,
@@ -962,7 +959,7 @@ mod tests {
             Err(Error::InvalidProofSemantics { .. })
         ));
         for semantics in [
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             ProofSemantics::AxtTransferClaim,
         ] {
             let prepared = fixture.prepare(semantics);
@@ -996,7 +993,7 @@ mod tests {
                     "max_queries",
                 ),
             ] {
-                let result = if semantics == ProofSemantics::TransferStateTransition {
+                let result = if semantics == ProofSemantics::StateTransition {
                     verify_shake_transfer(
                         &prepared,
                         &fixture.expected(&prepared),
@@ -1041,7 +1038,7 @@ mod tests {
     fn candidate_facades_check_all_expected_fields_before_raw_decoding() {
         let fixture = Fixture::new(false);
         for semantics in [
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             ProofSemantics::AxtTransferClaim,
         ] {
             let prepared = fixture.prepare(semantics);
@@ -1057,7 +1054,7 @@ mod tests {
                     6 => expected.ordering_hash[0] ^= 1,
                     _ => unreachable!(),
                 }
-                let result = if semantics == ProofSemantics::TransferStateTransition {
+                let result = if semantics == ProofSemantics::StateTransition {
                     verify_shake_transfer(
                         &prepared,
                         &expected,
@@ -1085,7 +1082,7 @@ mod tests {
                     "{semantics:?}/{field}"
                 );
             }
-            let result = if semantics == ProofSemantics::TransferStateTransition {
+            let result = if semantics == ProofSemantics::StateTransition {
                 verify_shake_transfer(
                     &prepared,
                     &fixture.expected(&prepared),

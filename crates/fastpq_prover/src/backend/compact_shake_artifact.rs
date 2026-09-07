@@ -152,7 +152,7 @@ pub(in crate::backend) fn verify_ordinary_artifact(
         let (bundle, digest) = super::with_prepared_statement(
             &artifact.statement,
             expected,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             limits.public_statement,
             |prepared| {
                 let digest = statement_digest(

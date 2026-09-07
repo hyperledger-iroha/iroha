@@ -470,7 +470,7 @@ fn complete_two_delta_axt_bundle_verifies_after_private_witnesses_are_dropped() 
     // Neither the ordinary entry point nor retagging only the outer carrier can
     // erase the child's distinct AXT identity and complete statement binding.
     assert!(verify_transfer_bundle(&prepared, &expected, &encoded, limits).is_err());
-    let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+    let ordinary = fixture.prepare(ProofSemantics::StateTransition);
     let ordinary_expected = fixture.expected(&ordinary);
     assert!(
         verify_axt_transfer_bundle(

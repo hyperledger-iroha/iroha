@@ -38,7 +38,7 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     let latency_key = Name::from_str("fraud_assessment_latency_ms").expect("static latency key");
     let message = "fraud-monitor integration".to_string();
     let missing_err = client
-        .submit_blocking_with_metadata(
+        .submit_with_metadata(
             Log::new(Level::INFO, message.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
@@ -62,7 +62,7 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     low_metadata.insert(tenant_key.clone(), Json::new("tenant-eu"));
     low_metadata.insert(latency_key.clone(), Json::new(85_u64));
     let low_err = client
-        .submit_blocking_with_metadata(
+        .submit_with_metadata(
             Log::new(Level::INFO, message.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             low_metadata,
@@ -85,7 +85,7 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     ok_metadata.insert(score_key, Json::new(8_500_u64));
     ok_metadata.insert(tenant_key, Json::new("tenant-eu"));
     ok_metadata.insert(latency_key, Json::new(92_u64));
-    if let Err(err) = client.submit_blocking_with_metadata(
+    if let Err(err) = client.submit_with_metadata(
         Log::new(Level::INFO, message),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ok_metadata,

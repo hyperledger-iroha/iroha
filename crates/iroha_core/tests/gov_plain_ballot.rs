@@ -37,7 +37,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    stx.world.put_governance_referendum_for_testing(
+    stx.world.governance_referenda_mut().insert(
         "ref-1".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
@@ -45,7 +45,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
             // remain active through this inclusive referendum boundary.
             h_end: 11,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
-            final_tally: None,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
     let perm: Permission = CanSubmitGovernanceBallot {
@@ -59,12 +59,10 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let duration_blocks = 10;
     let instr = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: amount.into(),
-            duration_blocks: core::num::NonZeroU64::new(duration_blocks)
-                .expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: amount.into(),
+        duration_blocks,
     };
     instr
         .clone()
@@ -81,7 +79,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
             event.as_data_event()
         {
             assert_eq!(ev.referendum_id, "ref-1");
-            assert_eq!(ev.weight, expected_weight);
+            assert_eq!(ev.weight, Some(expected_weight));
             saw_ok = true;
             break;
         }
@@ -90,11 +88,10 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     // Vote again with longer duration to trigger LockExtended
     let instr2 = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
-        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
-        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
-            amount: amount.into(),
-            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
-        },
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: amount.into(),
+        duration_blocks: 200,
     };
     instr2
         .execute(&ALICE_ID, &mut stx)

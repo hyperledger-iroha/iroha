@@ -25,10 +25,14 @@ code-adjacent specifications.
 - [`crates/`](./crates): core Rust crates (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito`, etc.).
 - [`integration_tests/`](./integration_tests): cross-component network/integration tests.
 - [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
-- [`java/iroha_android/`](./java/iroha_android): Android SDK package.
+- [`kotlin/`](./kotlin): Kotlin/JVM SDK for Kotlin and Java consumers, with separate Android client and wallet modules.
+- [`javascript/iroha_js/`](./javascript/iroha_js), [`python/`](./python), and [`csharp/`](./csharp): JavaScript, Python, and .NET SDKs.
 - [`docs/`](./docs): concise repository-local and code-adjacent documentation;
   public Iroha 3 documentation is maintained in
   [`iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs).
+
+Use the [dependency and ownership map](./docs/repository_map.md) to locate
+implementation boundaries, SDK modules, and validation owners.
 
 ## Quickstart
 

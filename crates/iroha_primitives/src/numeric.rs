@@ -58,7 +58,8 @@ pub const MAX_DECIMAL_PRODUCT_FACTORS: usize = 64;
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::Numeric")]
 pub struct Numeric {
     mantissa: BigInt,
     scale: u32,
@@ -78,7 +79,8 @@ pub struct Numeric {
     ffi_type(opaque)
 )]
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::Quantity")]
 pub struct Quantity(Numeric);
 /// Maximum number of fractional digits accepted for XOR-denominated values.
 ///
@@ -99,7 +101,8 @@ pub const XOR_QUANTITY_SCALE: u32 = 9;
     ffi_type(opaque)
 )]
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::XorQuantity")]
 pub struct XorQuantity(Quantity);
 /// Define maximum precision and scale for given number.
 ///
@@ -122,6 +125,8 @@ pub struct XorQuantity(Quantity);
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::numeric::NumericSpec")]
 pub struct NumericSpec {
     /// Count of decimal digits in the fractional part.
     /// Currently only positive scale up to 28 decimal points is supported.
@@ -1895,10 +1900,29 @@ impl JsonDeserialize for Quantity {
             .ok_or_else(|| invalid_quantity_json("expected quantity string"))?;
         Self::from_canonical_json_text(source)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
+}
+impl json::JsonObjectKey for Quantity {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self.to_string();
+        visitor(&canonical)
+    }
+
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::visit_json_display_text(self, visitor)
+    }
+}
+impl json::JsonObjectKeyOwned for Quantity {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         Self::from_canonical_json_text(key)
     }
 }
+
 impl XorQuantity {
     /// Validate and wrap a canonical non-negative XOR quantity.
     ///
@@ -2891,6 +2915,11 @@ impl core::fmt::Display for Numeric {
 }
 mod scale_ {
     /// Borrowed wire-compatible view of a numeric mantissa.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_primitives::numeric::scale_::BigIntView",
+        frame = "iroha_primitives::bigint::BigInt"
+    )]
     pub(super) struct BigIntView<'a>(
         /// Canonical bounded integer serialized by the view.
         pub(super) &'a crate::bigint::BigInt,
@@ -2916,6 +2945,8 @@ mod scale_ {
     #[derive(norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
     /// Internal helper used to encode/decode Numeric as `(mantissa, scale)`.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::numeric::scale_::NumericScaleHelper")]
     pub(super) struct NumericScaleHelper {
         /// Mantissa carried by the numeric helper.
         #[codec(compact)]
@@ -2927,6 +2958,8 @@ mod scale_ {
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode)]
     /// Borrowed wire-compatible view used to size a canonical numeric.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::numeric::scale_::NumericScaleHelperView")]
     pub(super) struct NumericScaleHelperView<'a> {
         /// Borrowed canonical mantissa.
         #[codec(compact)]
@@ -4344,9 +4377,21 @@ mod tests {
             value
         );
         assert_eq!(
-            <Quantity as JsonDeserialize>::json_from_map_key("123.45").expect("quantity map key"),
+            <Quantity as json::JsonObjectKeyOwned>::from_json_key_text("123.45")
+                .expect("quantity map key"),
             value
         );
+        let map = std::collections::BTreeMap::from([(value, 1_u8)]);
+        let expected_map = r#"{"123.45":1}"#;
+        assert_eq!(
+            json::to_json_bounded(&map, expected_map.len())
+                .expect("quantity-key map at exact bound"),
+            expected_map
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected_map.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
         for noncanonical in ["+1", "01", "-0", "1.0", "123.4500"] {
             let source = format!("\"{noncanonical}\"");
             assert!(
@@ -4888,3 +4933,7 @@ mod tests {
         assert!(case >= 200, "full-width corpus unexpectedly shrank");
     }
 }
+
+#[cfg(test)]
+#[path = "schema_identity/numeric.rs"]
+pub(crate) mod schema_identity;

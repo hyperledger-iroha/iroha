@@ -8,15 +8,15 @@ use crate::{
     },
 };
 use error_stack::{Report, ResultExt};
-use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
     ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     util::{DurationMs, Emitter, EmitterResultExt},
 };
+use iroha_service_model::soranet::AnonymityPolicy;
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::{network_profile, network_profile_names};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
-use sorafs_orchestrator::AnonymityPolicy;
 use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 use url::Url;
 /// Minimal allowed transaction time-to-live.
@@ -49,14 +49,8 @@ pub struct Root {
     /// Transaction defaults.
     pub transaction: Transaction,
     #[config(nested)]
-    /// Connect queue diagnostics and replay helpers.
-    pub connect: Connect,
-    #[config(nested)]
     /// SoraFS-specific configuration.
     pub sorafs: Sorafs,
-    #[config(nested)]
-    /// Soracloud-specific client behavior.
-    pub soracloud: Soracloud,
     #[config(nested)]
     /// Optional Musubi production-publication platform bindings.
     pub musubi: Musubi,
@@ -91,9 +85,6 @@ pub enum ParseError {
         /// The supplied label.
         value: String,
     },
-    /// Connect queue root path was empty after parsing.
-    #[error("`connect.queue_root` must not be empty")]
-    EmptyConnectQueueRoot,
     /// Invalid account domain literal.
     #[error("Account domain must use `dataspace` or `domain.dataspace` format: `{value}`")]
     InvalidAccountDomain {
@@ -424,9 +415,7 @@ impl Root {
                     status_timeout_ms: tx_timeout,
                     nonce: tx_add_nonce,
                 },
-            connect: Connect { queue_root },
             sorafs,
-            soracloud,
             musubi:
                 Musubi {
                     publication: musubi_publication,
@@ -537,38 +526,26 @@ impl Root {
                 .ok_or_emit(&mut emitter)
         });
         let account_id = AccountId::of(public_key);
-        let (queue_root_path, queue_root_origin) = queue_root.into_tuple();
-        if queue_root_path.as_os_str().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::EmptyConnectQueueRoot)
-                    .attach(ConfigValueAndOrigin::new(
-                        "[EMPTY]",
-                        queue_root_origin.clone(),
-                    ))
-                    .attach("connect.queue_root must point to the Connect queue root directory"),
-            );
-        }
         let Sorafs {
             alias_cache,
             rollout_phase,
             anonymity_policy,
         } = sorafs;
-        let Soracloud { http_witness_file } = soracloud;
         let alias_policy = alias_cache.into_policy();
         let rollout_phase_value =
-            SorafsRolloutPhase::parse(rollout_phase.as_str()).unwrap_or_else(|| {
+            RolloutPhase::parse(rollout_phase.as_str()).unwrap_or_else(|| {
                 emitter.emit(
                     Report::new(ParseError::InvalidSorafsRolloutPhase {
                         value: rollout_phase.clone(),
                     })
                     .attach("invalid `sorafs.rollout_phase`; expected exactly canary|ramp|default"),
                 );
-                SorafsRolloutPhase::default()
+                RolloutPhase::default()
             });
         let phase_default_policy = match rollout_phase_value {
-            SorafsRolloutPhase::Canary => AnonymityPolicy::GuardPq,
-            SorafsRolloutPhase::Ramp => AnonymityPolicy::MajorityPq,
-            SorafsRolloutPhase::Default => AnonymityPolicy::StrictPq,
+            RolloutPhase::Canary => AnonymityPolicy::GuardPq,
+            RolloutPhase::Ramp => AnonymityPolicy::MajorityPq,
+            RolloutPhase::Default => AnonymityPolicy::StrictPq,
         };
         let default_anonymity_policy = anonymity_policy
             .map_or(phase_default_policy, |label| {
@@ -600,8 +577,6 @@ impl Root {
                 transaction_ttl: tx_ttl.into_value().get(),
                 transaction_status_timeout: tx_timeout.into_value().get(),
                 transaction_add_nonce: tx_add_nonce,
-                connect_queue_root: queue_root_path,
-                soracloud_http_witness_file: http_witness_file,
                 sorafs_alias_cache: alias_policy,
                 sorafs_anonymity_policy: default_anonymity_policy,
                 sorafs_rollout_phase: rollout_phase_value,
@@ -632,7 +607,7 @@ pub struct Account {
     /// I105 chain discriminant used when parsing and rendering account literals.
     #[config(
         env = "ACCOUNT_CHAIN_DISCRIMINANT",
-        default = "defaults::common::chain_discriminant()"
+        default = "iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT"
     )]
     pub chain_discriminant: WithOrigin<u16>,
 }
@@ -648,26 +623,6 @@ pub struct Transaction {
     /// Whether to add a random nonce to transactions.
     #[config(default = "super::DEFAULT_TRANSACTION_NONCE")]
     pub nonce: bool,
-}
-/// Connect queue persistence and diagnostics.
-#[derive(Debug, Clone, ReadConfig)]
-pub struct Connect {
-    /// Root directory containing Connect queue state.
-    #[config(default = "super::default_connect_queue_root()")]
-    pub queue_root: WithOrigin<PathBuf>,
-}
-impl Default for Connect {
-    fn default() -> Self {
-        Self {
-            queue_root: WithOrigin::inline(super::default_connect_queue_root()),
-        }
-    }
-}
-/// Soracloud-specific client settings.
-#[derive(Debug, Clone, Default, ReadConfig)]
-pub struct Soracloud {
-    /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
-    pub http_witness_file: Option<PathBuf>,
 }
 /// Musubi-specific platform client configuration.
 #[derive(Clone, Debug, Default, ReadConfig)]
@@ -797,7 +752,7 @@ pub struct Sorafs {
     /// Alias cache policy applied to gateway responses.
     pub alias_cache: AliasCache,
     /// Rollout phase label controlling default anonymity policy.
-    #[config(default = "defaults::sorafs::gateway::rollout_phase()")]
+    #[config(default = "RolloutPhase::default().label().to_owned()")]
     pub rollout_phase: String,
     /// Default `SoraNet` anonymity policy stage for gateway fetches.
     pub anonymity_policy: Option<String>,
@@ -806,8 +761,8 @@ impl Default for Sorafs {
     fn default() -> Self {
         Self {
             alias_cache: AliasCache::default(),
-            rollout_phase: defaults::sorafs::gateway::rollout_phase(),
-            anonymity_policy: defaults::sorafs::gateway::anonymity_policy(),
+            rollout_phase: RolloutPhase::default().label().to_owned(),
+            anonymity_policy: Some(AnonymityPolicy::default().label().to_owned()),
         }
     }
 }
@@ -815,41 +770,41 @@ impl Default for Sorafs {
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct AliasCache {
     /// Positive TTL in seconds applied to cached alias proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS")]
     pub positive_ttl: u64,
     /// Refresh window in seconds before the positive TTL elapses.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS")]
     pub refresh_window: u64,
     /// Hard expiry in seconds after which stale proofs are rejected.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS")]
     pub hard_expiry: u64,
     /// Negative cache TTL in seconds for missing aliases.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS")]
     pub negative_ttl: u64,
     /// TTL in seconds for revoked aliases (`410 Gone` responses).
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS")]
     pub revocation_ttl: u64,
     /// Maximum age in seconds tolerated before alias proof bundles must rotate.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS")]
     pub rotation_max_age: u64,
     /// Grace period in seconds applied after an approved successor manifest.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS")]
     pub successor_grace: u64,
     /// Grace period in seconds applied to governance-driven alias rotations.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS")]
     pub governance_grace: u64,
 }
 impl Default for AliasCache {
     fn default() -> Self {
         Self {
-            positive_ttl: defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
-            refresh_window: defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
-            hard_expiry: defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
-            negative_ttl: defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
-            revocation_ttl: defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
-            rotation_max_age: defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-            successor_grace: defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-            governance_grace: defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            positive_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
+            refresh_window: iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+            hard_expiry: iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS,
+            negative_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
+            revocation_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
+            rotation_max_age: iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
+            successor_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
+            governance_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         }
     }
 }
@@ -871,7 +826,7 @@ impl AliasCache {
 mod tests {
     use super::*;
     use iroha_crypto::Algorithm;
-    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
+    use std::{fs, str::FromStr, time::Duration};
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
         let key_pair =
             KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)
@@ -898,7 +853,7 @@ mod tests {
                 private_key: Some(WithOrigin::inline(key_pair.private_key().clone())),
                 private_key_file: None,
                 chain_discriminant: WithOrigin::new(
-                    defaults::common::chain_discriminant(),
+                    iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
                     ParameterOrigin::default(iroha_config_base::ParameterId::from([
                         "account",
                         "chain_discriminant",
@@ -910,9 +865,7 @@ mod tests {
                 status_timeout_ms: WithOrigin::inline(DurationMs::from(timeout)),
                 nonce: false,
             },
-            connect: Connect::default(),
             sorafs: Sorafs::default(),
-            soracloud: Soracloud::default(),
             musubi: Musubi::default(),
         }
     }
@@ -1064,7 +1017,7 @@ mod tests {
         let config = root.parse().expect("configuration should be valid");
         assert_eq!(
             config.account_chain_discriminant,
-            defaults::common::chain_discriminant()
+            iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT
         );
     }
     #[test]
@@ -1097,14 +1050,6 @@ mod tests {
         assert_eq!(config.torii_request_timeout, timeout);
     }
     #[test]
-    fn parse_preserves_soracloud_http_witness_file() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        let witness_file = PathBuf::from("/tmp/soracloud-witness.json");
-        root.soracloud.http_witness_file = Some(witness_file.clone());
-        let config = root.parse().expect("configuration should be valid");
-        assert_eq!(config.soracloud_http_witness_file, Some(witness_file));
-    }
-    #[test]
     fn parse_rejects_timeout_exceeding_ttl() {
         let err = root_with_timeouts(Duration::from_secs(2), Duration::from_secs(3))
             .parse()
@@ -1120,24 +1065,6 @@ mod tests {
             "expected `ParseError::TxTimeoutVsTtl`, found {parse_errors:?}"
         );
         assert!(format!("{err:?}").contains("transaction status timeout must not exceed TTL"));
-    }
-    #[test]
-    fn parse_rejects_empty_connect_queue_root() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.connect.queue_root = WithOrigin::inline(PathBuf::new());
-        let err = root
-            .parse()
-            .expect_err("empty connect.queue_root should be rejected");
-        let parse_errors: Vec<_> = err
-            .frames()
-            .filter_map(|frame| frame.downcast_ref::<ParseError>())
-            .collect();
-        assert!(
-            parse_errors
-                .iter()
-                .any(|error| matches!(error, ParseError::EmptyConnectQueueRoot)),
-            "expected `ParseError::EmptyConnectQueueRoot`, found {parse_errors:?}"
-        );
     }
     #[test]
     fn parse_accepts_dataspace_account_domain_scope() {

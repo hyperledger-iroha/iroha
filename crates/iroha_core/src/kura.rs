@@ -114,9 +114,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
-            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
+            CertPhase, ExecWitness, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LanePayloadAvailabilityBodyV1, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
@@ -949,6 +948,8 @@ impl MergeLedgerLog {
             #[cfg(test)]
             indexed_lookups: 0,
             #[cfg(test)]
+            indexed_lookup_hashes: BTreeSet::new(),
+            #[cfg(test)]
             indexed_membership_checks: 0,
             #[cfg(test)]
             complete_execution_scans: 0,
@@ -975,6 +976,8 @@ impl MergeLedgerLog {
             full_history_scans: 0,
             #[cfg(test)]
             indexed_lookups: 0,
+            #[cfg(test)]
+            indexed_lookup_hashes: BTreeSet::new(),
             #[cfg(test)]
             indexed_membership_checks: 0,
             #[cfg(test)]
@@ -12338,6 +12341,7 @@ impl Kura {
         let mut merge_log = self.merge_log.lock();
         merge_log.full_history_scans = 0;
         merge_log.indexed_lookups = 0;
+        merge_log.indexed_lookup_hashes.clear();
         merge_log.complete_execution_scans = 0;
     }
     /// Return `(full_log_scans, complete_execution_scans, indexed_lookups)` for tests.
@@ -12349,6 +12353,11 @@ impl Kura {
             merge_log.complete_execution_scans,
             merge_log.indexed_lookups,
         )
+    }
+    /// Exact identities attempted through this instance's indexed lookup path.
+    #[cfg(test)]
+    pub(crate) fn merge_query_indexed_hashes_for_test(&self) -> BTreeSet<HashOf<MergeLedgerEntry>> {
+        self.merge_log.lock().indexed_lookup_hashes.clone()
     }
     /// Corrupt a sidecar payload while retaining its frame index for fail-closed tests.
     #[cfg(test)]

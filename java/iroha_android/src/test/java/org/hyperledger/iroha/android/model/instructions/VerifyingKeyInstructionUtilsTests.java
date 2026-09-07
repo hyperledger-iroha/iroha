@@ -14,7 +14,7 @@ public final class VerifyingKeyInstructionUtilsTests {
 
   private static final String[] EXACT_REGISTRY = {
     "halo2/ipa",
-    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -116,6 +116,8 @@ public final class VerifyingKeyInstructionUtilsTests {
   private static void verifierRegistryRejectsAliasesRetiredFamiliesAndConfusables() {
     final String[] rejected = {
       "",
+      "halo2/pasta/kaigi-roster-v1",
+      "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
       "halo2-ipa-pasta",
       "stark",
       " halo2/ipa",
@@ -290,7 +292,7 @@ public final class VerifyingKeyInstructionUtilsTests {
         "record engine must not change during serialization");
     assertThrows(
         IllegalArgumentException.class,
-        () -> record.toArguments("halo2/pasta/kaigi-roster-v1"),
+        () -> record.toArguments("halo2/pasta/kaigi-authorization-v1"),
         "inline verifier commitment must remain bound to the exact registry label");
 
     final VerifyingKeyRecordDescription mismatchedRecord =

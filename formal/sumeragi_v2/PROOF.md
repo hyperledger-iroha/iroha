@@ -1551,7 +1551,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 866 tests across 42 Rust
+The current pre-network release inventory names 881 tests across 43 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1684,10 +1684,16 @@ the CompleteTip payload-before-ledger-repair regression yielded the historical
 867-test, 44-module inventory. The Kagemusha clean-break retired the separate
 finality and offline compact-QC rows and their module legs, replacing them with
 one consensus-signature-envelope regression in the existing context-identity
-module and yielding the current 866-test,
-42-module inventory. The complete source-sealed
+module, yielding the historical 866-test, 42-module inventory. Registering the
+six Native participant-role regressions, the WAL-append crash regression, two
+Certified-Serve corruption regressions, and two existing worker regressions
+adds eleven exact names and one Native module; registering the two canonical
+Kagemusha share/QC boundary tests in the existing v2 module adds two more names.
+The two historical autonomous hydration capacity regressions add two names in
+the existing lane-work module, yielding the current 881-test,
+43-module inventory. The complete source-sealed
 pre-network corridor
-contains 83 legs. Six source-
+contains 84 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1756,11 +1762,23 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`.
-The separate source-sealed G-UNIT inventory contains 522 focused tests,
-including 316 core and 143 queue-journal `iroha_core` tests. Its 523-line
+`6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815`.
+
+This is the prospective source inventory: six Native participant-role tests,
+the Ready Validate WAL-append crash test, two Certified-Serve corruption tests,
+two existing worker tests, two canonical Kagemusha share/QC boundary tests,
+and two historical autonomous hydration capacity tests are registered for execution. Registration adds no passing execution evidence.
+The required-regression subset has 465 names: the reviewed 452-name baseline
+plus thirteen new names; the two worker names were already required. The
+452-name baseline follows the intentional first-release Kagemusha envelope
+migration in `9c17d8bd0`. Its framing test does not establish cryptographic
+provenance coverage. The new direct share/QC and production-ingress negative
+matrix is registered, but still requires compilation and execution.
+
+The separate source-sealed G-UNIT inventory contains 531 focused tests,
+including 325 core and 143 queue-journal `iroha_core` tests. Its 532-line
 canonical TSV has SHA-256
-`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`;
+`d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1798,7 +1816,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 83 legs, including the governance-unlock audit module, the autonomous
+now has 84 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1806,7 +1824,7 @@ geometry modules, and source-sealed command-success legs. Its finality and
 height-context proposal-origin modules each use a dedicated `iroha_data_model`
 leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the 42-module, 83-leg corridor. It
+tests are not claimed by the 43-module, 84-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

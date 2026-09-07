@@ -1,0 +1,886 @@
+[
+  {
+    "cases": [
+      {
+        "frame": "4e52543000002d418babbf4ffbe0f24297db73a72155000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e525430000045b4de94b6a85248124749558f531d02000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e525430000060ec19cc95a472cfaa15ec2a1110dac2000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000002d418babbf4ffbe0f24297db73a7215500050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Opened"
+        ],
+        "option_frame": "4e525430000045b4de94b6a85248124749558f531d02000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e525430000060ec19cc95a472cfaa15ec2a1110dac2000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000002d418babbf4ffbe0f24297db73a721550005000000000000000e56f5713298de080204ff010000",
+        "json": [
+          "Opened",
+          "Accepted",
+          "PaymentSent",
+          "Released",
+          "Cancelled",
+          "Expired",
+          "Attested",
+          "Disputed",
+          "Resolved"
+        ],
+        "option_frame": "4e525430000045b4de94b6a85248124749558f531d02000700000000000000d7174d52756c3f7502010504ff010000",
+        "vector_frame": "4e525430000060ec19cc95a472cfaa15ec2a1110dac2000e00000000000000b0d1cd310f942fee0201000000000000000504ff010000"
+      }
+    ],
+    "deserialize_hash": "2d418babbf4ffbe0f24297db73a72155",
+    "nominal": "iroha_data_model::events::data::escrow::EscrowEventSet",
+    "serialize_hash": "2d418babbf4ffbe0f24297db73a72155"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e525430000002a8f46c3be9483e7b54de03f37dcf88000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e525430000077b597816ba59518b74d0677948833cb000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000002dab364140bbc7ad6d363e656ce97e15000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e525430000002a8f46c3be9483e7b54de03f37dcf8800050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e525430000077b597816ba59518b74d0677948833cb000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000002dab364140bbc7ad6d363e656ce97e15000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e525430000002a8f46c3be9483e7b54de03f37dcf88000500000000000000b43a88168ddfe68a0204ff070000",
+        "json": [
+          "Created",
+          "Deleted",
+          "ControllerReplaced",
+          "PermissionAdded",
+          "PermissionRemoved",
+          "RoleGranted",
+          "RoleRevoked",
+          "MetadataInserted",
+          "MetadataRemoved",
+          "AnyRecovery",
+          "AnyRepo"
+        ],
+        "option_frame": "4e525430000077b597816ba59518b74d0677948833cb0007000000000000006d7b3035ca2b07f702010504ff070000",
+        "vector_frame": "4e52543000002dab364140bbc7ad6d363e656ce97e15000e000000000000000abdb056b0d3176c0201000000000000000504ff070000"
+      }
+    ],
+    "deserialize_hash": "02a8f46c3be9483e7b54de03f37dcf88",
+    "nominal": "iroha_data_model::events::data::events::account::AccountEventSet",
+    "serialize_hash": "02a8f46c3be9483e7b54de03f37dcf88"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e525430000047485a833e9a76507f9627049472e53e000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000b231633b3094066a813e3e53ff76469b000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000000196e75e997ccb3b3a8188fd08fd476f000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e525430000047485a833e9a76507f9627049472e53e00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "PolicySet"
+        ],
+        "option_frame": "4e5254300000b231633b3094066a813e3e53ff76469b000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000000196e75e997ccb3b3a8188fd08fd476f000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e525430000047485a833e9a76507f9627049472e53e000500000000000000f311b3e7455a244302043f000000",
+        "json": [
+          "PolicySet",
+          "PolicyCleared",
+          "Proposed",
+          "Approved",
+          "Cancelled",
+          "Finalized"
+        ],
+        "option_frame": "4e5254300000b231633b3094066a813e3e53ff76469b0007000000000000002a500bc402aec53e020105043f000000",
+        "vector_frame": "4e52543000000196e75e997ccb3b3a8188fd08fd476f000e000000000000004d968ba77856d5a502010000000000000005043f000000"
+      }
+    ],
+    "deserialize_hash": "47485a833e9a76507f9627049472e53e",
+    "nominal": "iroha_data_model::events::data::events::account::AccountRecoveryEventSet",
+    "serialize_hash": "47485a833e9a76507f9627049472e53e"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000992ffab10bbd80bb621171448f789526000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000d9f4a3a3376ab0ae9f3528063de0bb70000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000007f7d4db919897ee45d82c29eddab9c02000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000992ffab10bbd80bb621171448f78952600050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e5254300000d9f4a3a3376ab0ae9f3528063de0bb70000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000007f7d4db919897ee45d82c29eddab9c02000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000992ffab10bbd80bb621171448f789526000500000000000000c53b9fe07879d5370204ff000000",
+        "json": [
+          "Created",
+          "Deleted",
+          "MetadataInserted",
+          "MetadataRemoved",
+          "MintabilityChanged",
+          "MintabilityChangedDetailed",
+          "TotalQuantityChanged",
+          "OwnerChanged"
+        ],
+        "option_frame": "4e5254300000d9f4a3a3376ab0ae9f3528063de0bb700007000000000000001c7a27c33f8d344a02010504ff000000",
+        "vector_frame": "4e52543000007f7d4db919897ee45d82c29eddab9c02000e000000000000007bbca7a0457524d10201000000000000000504ff000000"
+      }
+    ],
+    "deserialize_hash": "992ffab10bbd80bb621171448f789526",
+    "nominal": "iroha_data_model::events::data::events::asset::AssetDefinitionEventSet",
+    "serialize_hash": "992ffab10bbd80bb621171448f789526"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000b85901ae1d4ef7d053dfd22f6d1e3cad000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000e4001da3ca6f1503158c06d6e42a40c4000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000cafd79303f289789b1b988569083f409000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000b85901ae1d4ef7d053dfd22f6d1e3cad00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e5254300000e4001da3ca6f1503158c06d6e42a40c4000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000cafd79303f289789b1b988569083f409000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000b85901ae1d4ef7d053dfd22f6d1e3cad000500000000000000c53b9fe07879d5370204ff000000",
+        "json": [
+          "Created",
+          "Deleted",
+          "Added",
+          "Removed",
+          "Transferred",
+          "MetadataInserted",
+          "MetadataRemoved",
+          "BatchTransferOutcome"
+        ],
+        "option_frame": "4e5254300000e4001da3ca6f1503158c06d6e42a40c40007000000000000001c7a27c33f8d344a02010504ff000000",
+        "vector_frame": "4e5254300000cafd79303f289789b1b988569083f409000e000000000000007bbca7a0457524d10201000000000000000504ff000000"
+      }
+    ],
+    "deserialize_hash": "b85901ae1d4ef7d053dfd22f6d1e3cad",
+    "nominal": "iroha_data_model::events::data::events::asset::AssetEventSet",
+    "serialize_hash": "b85901ae1d4ef7d053dfd22f6d1e3cad"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000008af2b51f7cea3f0efedef35380917bce000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e525430000065644596eb1c8f9a45ba8f8bcc8ba554000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000b7b30366c444194aed78221c42943d4c000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000008af2b51f7cea3f0efedef35380917bce00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Emitted"
+        ],
+        "option_frame": "4e525430000065644596eb1c8f9a45ba8f8bcc8ba554000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000b7b30366c444194aed78221c42943d4c000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000008af2b51f7cea3f0efedef35380917bce000500000000000000ac9d28e8963eba0f020403000000",
+        "json": [
+          "Emitted",
+          "ReplayDelta"
+        ],
+        "option_frame": "4e525430000065644596eb1c8f9a45ba8f8bcc8ba55400070000000000000075dc90cbd1ca5b720201050403000000",
+        "vector_frame": "4e5254300000b7b30366c444194aed78221c42943d4c000e00000000000000121a10a8ab324be9020100000000000000050403000000"
+      }
+    ],
+    "deserialize_hash": "8af2b51f7cea3f0efedef35380917bce",
+    "nominal": "iroha_data_model::events::data::events::bridge::BridgeEventSet",
+    "serialize_hash": "8af2b51f7cea3f0efedef35380917bce"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000007a57b85e513b058047ed3059dbd08c0d000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000af3e52ce2d4dfe79665f673dd595c1e5000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000a12265ccd114604f7428dcf939a1e678000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000007a57b85e513b058047ed3059dbd08c0d00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Changed"
+        ],
+        "option_frame": "4e5254300000af3e52ce2d4dfe79665f673dd595c1e5000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000a12265ccd114604f7428dcf939a1e678000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000007a57b85e513b058047ed3059dbd08c0d000500000000000000ac9d28e8963eba0f020403000000",
+        "json": [
+          "Changed",
+          "SccpRegistryChanged"
+        ],
+        "option_frame": "4e5254300000af3e52ce2d4dfe79665f673dd595c1e500070000000000000075dc90cbd1ca5b720201050403000000",
+        "vector_frame": "4e5254300000a12265ccd114604f7428dcf939a1e678000e00000000000000121a10a8ab324be9020100000000000000050403000000"
+      }
+    ],
+    "deserialize_hash": "7a57b85e513b058047ed3059dbd08c0d",
+    "nominal": "iroha_data_model::events::data::events::config::model::ConfigurationEventSet",
+    "serialize_hash": "7a57b85e513b058047ed3059dbd08c0d"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000e1aec6419005156014cc2e78d3c0ec83000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000004dd033b07f4e4df6d58a1edd477c2264000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000b2b88e6227c9e246a7bb87a6dc311f1f000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000e1aec6419005156014cc2e78d3c0ec8300050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e52543000004dd033b07f4e4df6d58a1edd477c2264000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000b2b88e6227c9e246a7bb87a6dc311f1f000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000e1aec6419005156014cc2e78d3c0ec830005000000000000008b8f8ec0cf111c930204ffff1f00",
+        "json": [
+          "Created",
+          "Deleted",
+          "AssetDefinition",
+          "Asset",
+          "AnyNft",
+          "AnyRwa",
+          "Account",
+          "AccountLinked",
+          "AccountUnlinked",
+          "MetadataInserted",
+          "MetadataRemoved",
+          "OwnerChanged",
+          "KaigiRosterSummary",
+          "KaigiRelayRegistered",
+          "KaigiRelayManifestUpdated",
+          "KaigiUsageSummary",
+          "KaigiRelayHealthUpdated",
+          "StreamingTicketReady",
+          "StreamingTicketRevoked",
+          "KaigiRelayUnregistered",
+          "KaigiStatusChanged"
+        ],
+        "option_frame": "4e52543000004dd033b07f4e4df6d58a1edd477c226400070000000000000052ce36e388e5fdee02010504ffff1f00",
+        "vector_frame": "4e5254300000b2b88e6227c9e246a7bb87a6dc311f1f000e000000000000003508b680f21ded750201000000000000000504ffff1f00"
+      }
+    ],
+    "deserialize_hash": "e1aec6419005156014cc2e78d3c0ec83",
+    "nominal": "iroha_data_model::events::data::events::domain::DomainEventSet",
+    "serialize_hash": "e1aec6419005156014cc2e78d3c0ec83"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e525430000026c5d567b46a8b1dc219ab13e70dbe2f000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000007a6f1ce9aa8427ba56eed5a4a7147bae000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000d897bdd0cde236a708897008992ef32e000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e525430000026c5d567b46a8b1dc219ab13e70dbe2f00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Upgraded"
+        ],
+        "option_frame": "4e52543000007a6f1ce9aa8427ba56eed5a4a7147bae000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000d897bdd0cde236a708897008992ef32e000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e525430000026c5d567b46a8b1dc219ab13e70dbe2f00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Upgraded"
+        ],
+        "option_frame": "4e52543000007a6f1ce9aa8427ba56eed5a4a7147bae000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000d897bdd0cde236a708897008992ef32e000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      }
+    ],
+    "deserialize_hash": "26c5d567b46a8b1dc219ab13e70dbe2f",
+    "nominal": "iroha_data_model::events::data::events::executor::model::ExecutorEventSet",
+    "serialize_hash": "26c5d567b46a8b1dc219ab13e70dbe2f"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000f09c1bff3b8c6888b81278458b771a53000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000000293241617696f42f6df0a28e65a3ede000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e525430000061e980f99a016ae3713b6ad3589a1d01000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000f09c1bff3b8c6888b81278458b771a5300050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e52543000000293241617696f42f6df0a28e65a3ede000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e525430000061e980f99a016ae3713b6ad3589a1d01000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000f09c1bff3b8c6888b81278458b771a5300050000000000000079173bfcd64f44db02041f000000",
+        "json": [
+          "Created",
+          "Deleted",
+          "MetadataInserted",
+          "MetadataRemoved",
+          "OwnerChanged"
+        ],
+        "option_frame": "4e52543000000293241617696f42f6df0a28e65a3ede000700000000000000a05683df91bba5a6020105041f000000",
+        "vector_frame": "4e525430000061e980f99a016ae3713b6ad3589a1d01000e00000000000000c79003bceb43b53d02010000000000000005041f000000"
+      }
+    ],
+    "deserialize_hash": "f09c1bff3b8c6888b81278458b771a53",
+    "nominal": "iroha_data_model::events::data::events::nft::NftEventSet",
+    "serialize_hash": "f09c1bff3b8c6888b81278458b771a53"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000aa62e84319ddb44796adf19c763739b3000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000d3238b1b23259df6b38e800413a77c6f000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000007a6f84270ea3e5f906591f68f17553b0000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000aa62e84319ddb44796adf19c763739b300050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Added"
+        ],
+        "option_frame": "4e5254300000d3238b1b23259df6b38e800413a77c6f000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000007a6f84270ea3e5f906591f68f17553b0000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000aa62e84319ddb44796adf19c763739b3000500000000000000ac9d28e8963eba0f020403000000",
+        "json": [
+          "Added",
+          "Removed"
+        ],
+        "option_frame": "4e5254300000d3238b1b23259df6b38e800413a77c6f00070000000000000075dc90cbd1ca5b720201050403000000",
+        "vector_frame": "4e52543000007a6f84270ea3e5f906591f68f17553b0000e00000000000000121a10a8ab324be9020100000000000000050403000000"
+      }
+    ],
+    "deserialize_hash": "aa62e84319ddb44796adf19c763739b3",
+    "nominal": "iroha_data_model::events::data::events::peer::PeerEventSet",
+    "serialize_hash": "aa62e84319ddb44796adf19c763739b3"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000aea28d61dde9c43ff82245890a878b36000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000ad038f37fa270b7e58a5f1ccb3725b16000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000006cdf87a90b97caca1697093579e256d9000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000aea28d61dde9c43ff82245890a878b3600050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Initiated"
+        ],
+        "option_frame": "4e5254300000ad038f37fa270b7e58a5f1ccb3725b16000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000006cdf87a90b97caca1697093579e256d9000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000aea28d61dde9c43ff82245890a878b36000500000000000000dc1a9a60ee170078020407000000",
+        "json": [
+          "Initiated",
+          "Settled",
+          "MarginCalled"
+        ],
+        "option_frame": "4e5254300000ad038f37fa270b7e58a5f1ccb3725b16000700000000000000055b2243a9e3e1050201050407000000",
+        "vector_frame": "4e52543000006cdf87a90b97caca1697093579e256d9000e00000000000000629da220d31bf19e020100000000000000050407000000"
+      }
+    ],
+    "deserialize_hash": "aea28d61dde9c43ff82245890a878b36",
+    "nominal": "iroha_data_model::events::data::events::repo_account::RepoAccountEventSet",
+    "serialize_hash": "aea28d61dde9c43ff82245890a878b36"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000119da539e5ca24797debce7658486bc4000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000004aa6c974098fc0de7db6fafa0c7f4c33000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000b06a3e609fe97c7d4ecb5277782e8ae0000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000119da539e5ca24797debce7658486bc400050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e52543000004aa6c974098fc0de7db6fafa0c7f4c33000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000b06a3e609fe97c7d4ecb5277782e8ae0000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000119da539e5ca24797debce7658486bc40005000000000000003c14ff711f45749702040f000000",
+        "json": [
+          "Created",
+          "Deleted",
+          "PermissionAdded",
+          "PermissionRemoved"
+        ],
+        "option_frame": "4e52543000004aa6c974098fc0de7db6fafa0c7f4c33000700000000000000e555475258b195ea020105040f000000",
+        "vector_frame": "4e5254300000b06a3e609fe97c7d4ecb5277782e8ae0000e000000000000008293c7312249857102010000000000000005040f000000"
+      }
+    ],
+    "deserialize_hash": "119da539e5ca24797debce7658486bc4",
+    "nominal": "iroha_data_model::events::data::events::role::RoleEventSet",
+    "serialize_hash": "119da539e5ca24797debce7658486bc4"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000ea2818009e8e3c30d82f9b0451f93a24000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000004272828d134a5c24d3c5a04ff42b60a0000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e525430000049dce7a595a7e76fa82e45fa35545664000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000ea2818009e8e3c30d82f9b0451f93a2400050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e52543000004272828d134a5c24d3c5a04ff42b60a0000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e525430000049dce7a595a7e76fa82e45fa35545664000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000ea2818009e8e3c30d82f9b0451f93a24000500000000000000d3ab6f7a0c306e350204ff1f0000",
+        "json": [
+          "Created",
+          "MetadataInserted",
+          "MetadataRemoved",
+          "OwnerChanged",
+          "Split",
+          "Merged",
+          "Redeemed",
+          "Frozen",
+          "Unfrozen",
+          "Held",
+          "Released",
+          "ForceTransferred",
+          "ControlsChanged"
+        ],
+        "option_frame": "4e52543000004272828d134a5c24d3c5a04ff42b60a00007000000000000000aead7594bc48f4802010504ff1f0000",
+        "vector_frame": "4e525430000049dce7a595a7e76fa82e45fa35545664000e000000000000006d2c573a313c9fd30201000000000000000504ff1f0000"
+      }
+    ],
+    "deserialize_hash": "ea2818009e8e3c30d82f9b0451f93a24",
+    "nominal": "iroha_data_model::events::data::events::rwa::RwaEventSet",
+    "serialize_hash": "ea2818009e8e3c30d82f9b0451f93a24"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000f00205879a21483c430f200205caec40000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000f79cc91c626ac272318936382c0df6e6000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000a0781f93981d8107836c33f8bda0312a000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000f00205879a21483c430f200205caec4000050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Created"
+        ],
+        "option_frame": "4e5254300000f79cc91c626ac272318936382c0df6e6000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000a0781f93981d8107836c33f8bda0312a000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000f00205879a21483c430f200205caec40000500000000000000f311b3e7455a244302043f000000",
+        "json": [
+          "Created",
+          "Deleted",
+          "Extended",
+          "Shortened",
+          "MetadataInserted",
+          "MetadataRemoved"
+        ],
+        "option_frame": "4e5254300000f79cc91c626ac272318936382c0df6e60007000000000000002a500bc402aec53e020105043f000000",
+        "vector_frame": "4e5254300000a0781f93981d8107836c33f8bda0312a000e000000000000004d968ba77856d5a502010000000000000005043f000000"
+      }
+    ],
+    "deserialize_hash": "f00205879a21483c430f200205caec40",
+    "nominal": "iroha_data_model::events::data::events::trigger::TriggerEventSet",
+    "serialize_hash": "f00205879a21483c430f200205caec40"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000002586c9553ff2be35eaac24e3fdf83952000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000000937ab15e18868981af228349e0e42a3000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000b1f3e179e00b4eea05faf3a18cf74cb4000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000002586c9553ff2be35eaac24e3fdf8395200050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "ProposalSubmitted"
+        ],
+        "option_frame": "4e52543000000937ab15e18868981af228349e0e42a3000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000b1f3e179e00b4eea05faf3a18cf74cb4000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000002586c9553ff2be35eaac24e3fdf8395200050000000000000013a97d249f1e07620204ffff0300",
+        "json": [
+          "ProposalSubmitted",
+          "ProposalRejected",
+          "LockCreated",
+          "LockExtended",
+          "ProposalEnacted",
+          "BallotAccepted",
+          "BallotRejected",
+          "ReferendumOpened",
+          "ReferendumClosed",
+          "LockUnlocked",
+          "ParliamentAttemptCreated",
+          "ParliamentLifecycleTransitionApplied",
+          "ThresholdKeyLifecycleApplied",
+          "LockSlashed",
+          "LockRestituted",
+          "CitizenRegistered",
+          "CitizenRevoked",
+          "ReferendumDecided"
+        ],
+        "option_frame": "4e52543000000937ab15e18868981af228349e0e42a3000700000000000000cae8c507d8eae61f02010504ffff0300",
+        "vector_frame": "4e5254300000b1f3e179e00b4eea05faf3a18cf74cb4000e00000000000000ad2e4564a212f6840201000000000000000504ffff0300"
+      }
+    ],
+    "deserialize_hash": "2586c9553ff2be35eaac24e3fdf83952",
+    "nominal": "iroha_data_model::events::data::governance::model::GovernanceEventSet",
+    "serialize_hash": "2586c9553ff2be35eaac24e3fdf83952"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000c1c74ff42061114579977c9eaa8f85e1000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000002408c6878b1da027f00ae70e2fd9f6a3000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000bcfabc61a85720337cd6a4996bc34de6000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000c1c74ff42061114579977c9eaa8f85e100050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "NamespaceBound"
+        ],
+        "option_frame": "4e52543000002408c6878b1da027f00ae70e2fd9f6a3000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000bcfabc61a85720337cd6a4996bc34de6000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000c1c74ff42061114579977c9eaa8f85e100050000000000000045d8a5ef136a58b30204ffff0f00",
+        "json": [
+          "NamespaceBound",
+          "PackageClaimed",
+          "ReleasePublished",
+          "ReleaseYankChanged",
+          "PackageMetadataChanged",
+          "MaintainerInvited",
+          "MaintainerAccepted",
+          "MaintainerInvitationExpired",
+          "MaintainerInvitationRevoked",
+          "MaintainerRoleChanged",
+          "MaintainerRemoved",
+          "PackageRecovered",
+          "AliasRegistered",
+          "AliasRetargeted",
+          "ArchiveRegistered",
+          "ProviderBundleAttestationRegistered",
+          "ArchiveLocationChanged",
+          "ArchiveAvailabilityChanged",
+          "ArtifactTakenDown",
+          "RegistryPolicyChanged"
+        ],
+        "option_frame": "4e52543000002408c6878b1da027f00ae70e2fd9f6a30007000000000000009c991dcc549eb9ce02010504ffff0f00",
+        "vector_frame": "4e5254300000bcfabc61a85720337cd6a4996bc34de6000e00000000000000fb5f9daf2e66a9550201000000000000000504ffff0f00"
+      }
+    ],
+    "deserialize_hash": "c1c74ff42061114579977c9eaa8f85e1",
+    "nominal": "iroha_data_model::events::data::musubi::model::MusubiEventSet",
+    "serialize_hash": "c1c74ff42061114579977c9eaa8f85e1"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000007bd025750cda29901cd371713789380f000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000f53d95c24d72beb579573c136a5297ca000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000005fc31f17fa1cd7d9f7f767cc8ae2dcba000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000007bd025750cda29901cd371713789380f00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "FeedProcessed"
+        ],
+        "option_frame": "4e5254300000f53d95c24d72beb579573c136a5297ca000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000005fc31f17fa1cd7d9f7f767cc8ae2dcba000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000007bd025750cda29901cd371713789380f000500000000000000988d2153a75ac9760204ff030000",
+        "json": [
+          "FeedProcessed",
+          "PenaltyApplied",
+          "RewardApplied",
+          "TwitterBindingRecorded",
+          "TwitterBindingRevoked",
+          "DisputeOpened",
+          "DisputeResolved",
+          "ChangeProposed",
+          "ChangeStageUpdated",
+          "DefiAttestationRecorded"
+        ],
+        "option_frame": "4e5254300000f53d95c24d72beb579573c136a5297ca00070000000000000041cc9970e0ae280b02010504ff030000",
+        "vector_frame": "4e52543000005fc31f17fa1cd7d9f7f767cc8ae2dcba000e00000000000000260a19139a5638900201000000000000000504ff030000"
+      }
+    ],
+    "deserialize_hash": "7bd025750cda29901cd371713789380f",
+    "nominal": "iroha_data_model::events::data::oracle::OracleEventSet",
+    "serialize_hash": "7bd025750cda29901cd371713789380f"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000000209641e8454d7836fe82af3220a431e000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e525430000083e1e595fbbbdeb7454bbe8df6d4bc82000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000a5e496e69bbe4c3911753c7fa9c3aa12000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000000209641e8454d7836fe82af3220a431e00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Verified"
+        ],
+        "option_frame": "4e525430000083e1e595fbbbdeb7454bbe8df6d4bc82000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000a5e496e69bbe4c3911753c7fa9c3aa12000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000000209641e8454d7836fe82af3220a431e000500000000000000dc1a9a60ee170078020407000000",
+        "json": [
+          "Verified",
+          "Rejected",
+          "Pruned"
+        ],
+        "option_frame": "4e525430000083e1e595fbbbdeb7454bbe8df6d4bc82000700000000000000055b2243a9e3e1050201050407000000",
+        "vector_frame": "4e5254300000a5e496e69bbe4c3911753c7fa9c3aa12000e00000000000000629da220d31bf19e020100000000000000050407000000"
+      }
+    ],
+    "deserialize_hash": "0209641e8454d7836fe82af3220a431e",
+    "nominal": "iroha_data_model::events::data::proof::model::ProofEventSet",
+    "serialize_hash": "0209641e8454d7836fe82af3220a431e"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000001d0fd8e511e4f68f4474990c9eb9ae69000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e525430000000da31a18c84382bac00fcf3c7d90d56000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000c48e5b30529f4c7dcb06a49ae4892fa5000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000001d0fd8e511e4f68f4474990c9eb9ae6900050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Proposed"
+        ],
+        "option_frame": "4e525430000000da31a18c84382bac00fcf3c7d90d56000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000c48e5b30529f4c7dcb06a49ae4892fa5000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000001d0fd8e511e4f68f4474990c9eb9ae69000500000000000000dc1a9a60ee170078020407000000",
+        "json": [
+          "Proposed",
+          "Activated",
+          "Canceled"
+        ],
+        "option_frame": "4e525430000000da31a18c84382bac00fcf3c7d90d56000700000000000000055b2243a9e3e1050201050407000000",
+        "vector_frame": "4e5254300000c48e5b30529f4c7dcb06a49ae4892fa5000e00000000000000629da220d31bf19e020100000000000000050407000000"
+      }
+    ],
+    "deserialize_hash": "1d0fd8e511e4f68f4474990c9eb9ae69",
+    "nominal": "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeEventSet",
+    "serialize_hash": "1d0fd8e511e4f68f4474990c9eb9ae69"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000fa177d0d4664b50974b1eb42cb0d631f000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000316000461cbf5c869b770230165c11ac000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000ae4d68280af9700d95105734f70fa421000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000fa177d0d4664b50974b1eb42cb0d631f00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "CodeRegistered"
+        ],
+        "option_frame": "4e5254300000316000461cbf5c869b770230165c11ac000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000ae4d68280af9700d95105734f70fa421000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000fa177d0d4664b50974b1eb42cb0d631f000500000000000000988d2153a75ac9760204ff030000",
+        "json": [
+          "CodeRegistered",
+          "CodeRemoved",
+          "InstanceActivated",
+          "InstanceDeactivated",
+          "ParliamentDelegationChanged",
+          "OwnershipTransferOffered",
+          "OwnershipTransferCancelled",
+          "OwnershipTransferred",
+          "EmergencyHoldPlaced",
+          "EmergencyHoldRetrospectiveCompleted"
+        ],
+        "option_frame": "4e5254300000316000461cbf5c869b770230165c11ac00070000000000000041cc9970e0ae280b02010504ff030000",
+        "vector_frame": "4e5254300000ae4d68280af9700d95105734f70fa421000e00000000000000260a19139a5638900201000000000000000504ff030000"
+      }
+    ],
+    "deserialize_hash": "fa177d0d4664b50974b1eb42cb0d631f",
+    "nominal": "iroha_data_model::events::data::smart_contract::model::SmartContractEventSet",
+    "serialize_hash": "fa177d0d4664b50974b1eb42cb0d631f"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e5254300000097d062b5527d900f9305b0f2c2ebf6a000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e5254300000f37ca89dd35b68840d77505ed7d40b74000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000f98f3bcbf9eac25a5a2fc079ae6af5c9000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e5254300000097d062b5527d900f9305b0f2c2ebf6a00050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "DraftSubmitted"
+        ],
+        "option_frame": "4e5254300000f37ca89dd35b68840d77505ed7d40b74000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000f98f3bcbf9eac25a5a2fc079ae6af5c9000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e5254300000097d062b5527d900f9305b0f2c2ebf6a0005000000000000006202ad7f48de3ce102047f000000",
+        "json": [
+          "DraftSubmitted",
+          "Published",
+          "Revoked",
+          "Unrevoked",
+          "ReleaseSignerAdded",
+          "ReleaseSignerRemoved",
+          "PolicyUpdated"
+        ],
+        "option_frame": "4e5254300000f37ca89dd35b68840d77505ed7d40b74000700000000000000bb43155c0f2add9c020105047f000000",
+        "vector_frame": "4e5254300000f98f3bcbf9eac25a5a2fc079ae6af5c9000e00000000000000dc85953f75d2cd0702010000000000000005047f000000"
+      }
+    ],
+    "deserialize_hash": "097d062b5527d900f9305b0f2c2ebf6a",
+    "nominal": "iroha_data_model::events::data::soradns::model::SoradnsDirectoryEventSet",
+    "serialize_hash": "097d062b5527d900f9305b0f2c2ebf6a"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000006b810ce40def9ae816a9587bd96ec156000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000007923b6b4769230d836d1d57b9b4bf79f000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e5254300000a79a94cc9d165196adba9c698060e303000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000006b810ce40def9ae816a9587bd96ec15600050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "GarViolation"
+        ],
+        "option_frame": "4e52543000007923b6b4769230d836d1d57b9b4bf79f000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e5254300000a79a94cc9d165196adba9c698060e303000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000006b810ce40def9ae816a9587bd96ec1560005000000000000006202ad7f48de3ce102047f000000",
+        "json": [
+          "GarViolation",
+          "ProofHealth",
+          "AnyRepairLedger",
+          "AnyModerationLedger",
+          "AnyOrderbookLedger",
+          "AnyReserveLedger",
+          "AnyReputationJournal"
+        ],
+        "option_frame": "4e52543000007923b6b4769230d836d1d57b9b4bf79f000700000000000000bb43155c0f2add9c020105047f000000",
+        "vector_frame": "4e5254300000a79a94cc9d165196adba9c698060e303000e00000000000000dc85953f75d2cd0702010000000000000005047f000000"
+      }
+    ],
+    "deserialize_hash": "6b810ce40def9ae816a9587bd96ec156",
+    "nominal": "iroha_data_model::events::data::sorafs::model::SorafsGatewayEventSet",
+    "serialize_hash": "6b810ce40def9ae816a9587bd96ec156"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e52543000001fff5e10ce0f713cc344a76fdbd902b8000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e52543000006677a70457e5cfb1a3835219b6d8bb3d000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000008a1dfddef7123dc6079e8de8cb24e410000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e52543000001fff5e10ce0f713cc344a76fdbd902b800050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "ManifestActivated"
+        ],
+        "option_frame": "4e52543000006677a70457e5cfb1a3835219b6d8bb3d000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000008a1dfddef7123dc6079e8de8cb24e410000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e52543000001fff5e10ce0f713cc344a76fdbd902b8000500000000000000dc1a9a60ee170078020407000000",
+        "json": [
+          "ManifestActivated",
+          "ManifestExpired",
+          "ManifestRevoked"
+        ],
+        "option_frame": "4e52543000006677a70457e5cfb1a3835219b6d8bb3d000700000000000000055b2243a9e3e1050201050407000000",
+        "vector_frame": "4e52543000008a1dfddef7123dc6079e8de8cb24e410000e00000000000000629da220d31bf19e020100000000000000050407000000"
+      }
+    ],
+    "deserialize_hash": "1fff5e10ce0f713cc344a76fdbd902b8",
+    "nominal": "iroha_data_model::events::data::space_directory::model::SpaceDirectoryEventSet",
+    "serialize_hash": "1fff5e10ce0f713cc344a76fdbd902b8"
+  },
+  {
+    "cases": [
+      {
+        "frame": "4e525430000065c5218547a09891166198df08bee0a8000500000000000000c87f5d8e74a08929020400000000",
+        "json": [],
+        "option_frame": "4e525430000009d7fe869ba2802b901740b625b284c3000700000000000000113ee5ad335468540201050400000000",
+        "vector_frame": "4e52543000003fcc141395fa386f72758ac774d4495d000e0000000000000076f865ce49ac78cf020100000000000000050400000000"
+      },
+      {
+        "frame": "4e525430000065c5218547a09891166198df08bee0a800050000000000000014de71ac2a2a6734020401000000",
+        "json": [
+          "Registered"
+        ],
+        "option_frame": "4e525430000009d7fe869ba2802b901740b625b284c3000700000000000000cd9fc98f6dde86490201050401000000",
+        "vector_frame": "4e52543000003fcc141395fa386f72758ac774d4495d000e00000000000000aa5949ec172696d2020100000000000000050401000000"
+      },
+      {
+        "frame": "4e525430000065c5218547a09891166198df08bee0a8000500000000000000ac9d28e8963eba0f020403000000",
+        "json": [
+          "Registered",
+          "Updated"
+        ],
+        "option_frame": "4e525430000009d7fe869ba2802b901740b625b284c300070000000000000075dc90cbd1ca5b720201050403000000",
+        "vector_frame": "4e52543000003fcc141395fa386f72758ac774d4495d000e00000000000000121a10a8ab324be9020100000000000000050403000000"
+      }
+    ],
+    "deserialize_hash": "65c5218547a09891166198df08bee0a8",
+    "nominal": "iroha_data_model::events::data::verifying_keys::model::VerifyingKeyEventSet",
+    "serialize_hash": "65c5218547a09891166198df08bee0a8"
+  }
+]

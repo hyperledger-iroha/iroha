@@ -52,6 +52,13 @@ cell. No trailing bits, references, default siblings, or alternate snake
 chunking are accepted. Payload and auxiliary commitments each add exactly one
 canonical SHA-256 layer.
 
+Runtime checks of contract-owned forests validate counters and emptiness in
+constant work and validate the selected shard root on access. Canonical empty
+initialization and append-only admission preserve all other roots. Scanning
+all 256 shard roots at each message would exceed the wallet gas limit as its
+four forests fill. The full forest validator remains available for supplied
+state validation; admission never writes zero or the canonical empty root.
+
 The bridge commits the exact immutable configuration cell and derives the one
 canonical master StateInit from its embedded code and known zero initial state.
 The master commits the exact bridge address. Operational messages authenticate

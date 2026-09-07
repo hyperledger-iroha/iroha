@@ -1651,7 +1651,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 522/522 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 531/531 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1855,7 +1855,6 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary "source-file-budget:before" || exit $?
   set +e
   "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py \
-    --require-objective \
     2>&1 | tee "$source_budget_log"
   source_budget_pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -1909,6 +1908,19 @@ readonly corridor_enabled
 # exercise worker cancellation, queued completion rebinding, or watchdog
 # classification, so these exact tests are source-bound release inputs.
 required_production_liveness_tests=(
+  sumeragi::v2::tests::kagemusha_finality_boundary::commit_vote_binds_round_statement_signer_and_both_signatures
+  sumeragi::v2::tests::kagemusha_finality_boundary::commit_qc_binds_round_statement_exact_quorum_and_both_signatures
+  native_amx::participant_application_role_tests::participant_application_role_classifies_exact_routes_and_incarnations
+  native_amx::participant_application_role_tests::participant_application_role_keeps_each_route_coordinate_distinct
+  native_amx::participant_application_role_tests::participant_application_role_rejects_independent_prepare_and_commit_identity_drift
+  native_amx::participant_application_role_tests::participant_application_role_rejects_coherent_same_route_coordinator_drift
+  native_amx::participant_application_role_tests::participant_application_role_rejects_settlement_identity_and_content_tampering
+  native_amx::participant_application_role_tests::participant_application_lookup_validates_later_legs_after_an_exact_match
+  sumeragi::v2::tests::ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::certified_serve_worker_rejects_corrupt_owned_body_after_receipt_mint
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::terminal_owner_faults_on_corrupt_payload_after_worker_readback
+  sumeragi::v2_worker::tests::production_exact_output_observes_finality_only_after_state_commit
+  sumeragi::v2_worker::tests::applied_height_finality_releases_only_ticketless_global_topology_target
   kura::tests::progress_witness_durability::absent_progress_namespace_requires_every_directory_barrier
   kura::tests::progress_witness_durability::bound_progress_recovery_handles_crash_phases_without_path_escape
   kura::tests::progress_witness_durability::certified_lane_block_strict_retry_reissues_every_barrier
@@ -2312,6 +2324,8 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::durable_lane_certificate_serves_rotated_validator_after_pressure
   sumeragi::v2_lane_work::tests::historical_certificate_survives_successor_lock_decision_persistence_and_restart
   sumeragi::v2_lane_work::tests::prior_height_hydration_stays_local_under_successor_backpressure
+  sumeragi::v2_lane_work::tests::historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity
+  sumeragi::v2_lane_work::tests::historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity
   sumeragi::v2_lane_work::tests::carrier_replacement_filters_persistence_and_output_sources_together
   sumeragi::v2_lane_work::tests::duplicate_reply_effect_preserves_exact_source_delivery
   sumeragi::v2_lane_work::tests::reply_effect_rejects_missing_or_retargeted_route_set
@@ -2776,7 +2790,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=866
+readonly expected_production_liveness_test_count=881
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2798,7 +2812,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# 42-module pre-network inventory.
+# 43-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -2866,7 +2880,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 866-test liveness inventory above. The later
+# not belong to the canonical 881-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3107,6 +3121,15 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_core::refinement::tests::in_flight_first_release_composed_four_stage_release_is_exact_and_terminal
   sumeragi::v2_core::refinement::tests::in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned
   lane_consensus::tests::autonomous_payload_requires_height_rotated_committee_author
+  lane_consensus::tests::recovered_proposal_batch_is_idempotent_and_replaces_uncertified_slot_at_capacity
+  lane_consensus::tests::recovered_proposal_batch_preserves_required_history_and_commit_evidence
+  lane_consensus::tests::recovered_proposal_batch_preflights_later_quorum_before_any_eviction
+  lane_consensus::tests::recovered_proposal_batch_rejects_required_union_over_capacity
+  lane_consensus::tests::applied_proposal_retirement_preserves_unselected_evidence_and_capacity
+  lane_consensus::tests::applied_proposal_retirement_preflights_all_selected_quorums
+  lane_consensus::tests::applied_proposal_retirement_revalidates_orphan_commit_lock_quorums
+  lane_consensus::tests::applied_proposal_retirement_rejects_invalid_or_conflicting_target_sets
+  lane_consensus::tests::retained_vote_body_inventory_covers_partial_owners_without_mutation
   block::valid::tests::autonomous_anchor_admission_uses_lane_slot_author_not_global_leader
   kura::tests::autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes
   sumeragi::v2_candidate::tests::autonomous_anchors_validate_without_ordinary_candidates
@@ -3410,7 +3433,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=522
+readonly expected_multilane_focus_test_count=531
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -3540,7 +3563,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 522-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 531-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3648,8 +3671,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 523 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 522 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 532 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 531 focused tests" >&2
     exit 1
   fi
 fi
@@ -3741,6 +3764,7 @@ production_liveness_modules=(
   nexus::lane_relay::tests
   sumeragi::authoritative_runtime_gate_tests
   merge_sidecar::tests
+  native_amx::participant_application_role_tests
   state::tests
   queue::tests
   sumeragi::v2_core::tests
@@ -3785,6 +3809,7 @@ production_liveness_leg_ids=(
   production-lane-relay-exact-ownership
   production-authoritative-ingress
   production-merge-sidecar
+  production-native-amx-participant-application
   production-state-governance-unlock-audit
   production-queue-replica-disposition
   production-v2-core
@@ -4045,10 +4070,10 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
+    67
     65
-    63
-    7
     9
+    11
     7
   )
   for native_amx_grouped_parity_index in \
@@ -4122,10 +4147,10 @@ if [[ "$profile" == "--release" ]]; then
   )
   sumeragi_v2_sdk_diagnostics_test_counts=(
     129
-    88
+    90
     34
-    44
-    43
+    50
+    59
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
@@ -4461,6 +4486,7 @@ record_corridor_log \
 
 formal_launcher_contract_files=(
   pytests/scripts/sumeragi_v2_formal_release_test.py
+  scripts/tests/sumeragi_v2_tlc_artifacts_test.py
 )
 formal_launcher_contract_log="$(corridor_contract_log_path preflight-formal-launcher)"
 release_gate_boundary "preflight-formal-launcher:before" || exit $?
@@ -4471,15 +4497,15 @@ formal_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-formal-launcher:after-natural-completion" || exit $?
 formal_launcher_pass_summary="$(
-  grep -Ec '^27 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
+  grep -Ec '^55 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
 )"
 if ((formal_launcher_pipeline_status[0] != 0 || formal_launcher_pipeline_status[1] != 0)) \
   || [[ "$formal_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 27 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 55 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-formal-launcher pytest 27 \
+  preflight-formal-launcher pytest 55 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${formal_launcher_contract_files[*]}" \
   "$formal_launcher_contract_log" \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"
@@ -4493,10 +4519,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 42 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 43 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped SDK +
-  # 6 diagnostics + 10 pytest legs = 83.
-  readonly expected_corridor_leg_count=83
+  # 6 diagnostics + 10 pytest legs = 84.
+  readonly expected_corridor_leg_count=84
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

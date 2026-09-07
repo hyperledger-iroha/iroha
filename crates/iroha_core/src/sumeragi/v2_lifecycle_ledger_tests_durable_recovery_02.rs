@@ -1529,8 +1529,12 @@ fn terminal_owner_publishes_completed_and_reopens_exact_producer_carrier() {
     let serve_ordinal = lease.ordinal();
     let producer_ordinal = serve_ordinal + 1;
 
+    let worker_body_store = move_body_store_to_test_worker(&mut owner);
+    let readback = worker_body_store
+        .read_durable_body_for_certified_serve(&durable_body)
+        .expect("worker reads the exact completed Serve body");
     owner
-        .settle_certified_serve_completed(lease, &request, &durable_body, &response)
+        .settle_certified_serve_worker_completed(lease, &request, readback, &response)
         .expect("owner publishes exact completed Serve terminal");
 
     let response_digest =
@@ -1567,6 +1571,7 @@ fn terminal_owner_publishes_completed_and_reopens_exact_producer_carrier() {
             .expect("project completed owner coordinator")
     );
     drop(owner);
+    drop(worker_body_store);
 
     let body_store = fixture.open_store(&body_directory);
     let (payload_store, recovered) =
@@ -1671,8 +1676,12 @@ fn parked_recovered_broadcast_allows_exact_producer_claim() {
         panic!("fresh Serve must acquire its exact lifecycle lease")
     };
     assert_eq!(serve_lease.work_class(), LifecycleWorkClass::CertifiedServe);
+    let worker_body_store = move_body_store_to_test_worker(&mut owner);
+    let readback = worker_body_store
+        .read_durable_body_for_certified_serve(&durable_body)
+        .expect("worker reads the exact completed Serve body");
     owner
-        .settle_certified_serve_completed(serve_lease, &request, &durable_body, &response)
+        .settle_certified_serve_worker_completed(serve_lease, &request, readback, &response)
         .expect("publish exact completed Serve beside parked Broadcast");
 
     let producer_ordinal = serve_ordinal
@@ -1899,6 +1908,12 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
     let ledger_directory = TempDir::new().expect("temporary input-owner ledger store");
     let (mut owner, request, durable_body, response) =
         fixture.open_completed_serve_owner(&body_directory, &payload_directory, &ledger_directory);
+    let worker_body_store = move_body_store_to_test_worker(&mut owner);
+    let readback = || {
+        worker_body_store
+            .read_durable_body_for_certified_serve(&durable_body)
+            .expect("worker reads the exact completed Serve body")
+    };
     let lease = admit_and_claim_serve(&fixture, &mut owner, &request);
     let records = owner.coordinator.records.clone();
     let durable_records = owner.coordinator.durable_records.clone();
@@ -1910,7 +1925,7 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
         .checked_add(2)
         .expect("small foreign lease ordinal");
     let error = owner
-        .settle_certified_serve_completed(foreign_lease, &request, &durable_body, &response)
+        .settle_certified_serve_worker_completed(foreign_lease, &request, readback(), &response)
         .expect_err("foreign lease is rejected before terminal persistence");
     assert!(!error.restart_required());
     assert_eq!(
@@ -1924,7 +1939,7 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
     assert_eq!(owner.coordinator.fault(), None);
     assert_eq!(snapshot_files(payload_directory.path()), payloads);
     let error = owner
-        .settle_certified_serve_completed(lease, &foreign, &durable_body, &response)
+        .settle_certified_serve_worker_completed(lease, &foreign, readback(), &response)
         .expect_err("foreign request is rejected before terminal persistence");
     assert!(!error.restart_required());
     assert_eq!(
@@ -1949,13 +1964,23 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
         response.manifest.subject,
         iroha_crypto::HashOf::new(&response.manifest),
     );
-    let error = owner
-        .settle_certified_serve_completed(lease, &request, &foreign_receipt, &response)
-        .expect_err("foreign durable receipt is rejected before terminal persistence");
-    assert!(!error.restart_required());
-    let lease = error
-        .into_lease()
-        .expect("foreign body receipt returns the exact active lease");
+    let error = worker_body_store
+        .read_durable_body_for_certified_serve(&foreign_receipt)
+        .expect_err("foreign durable receipt cannot mint a worker completion");
+    assert!(matches!(
+        error,
+        crate::sumeragi::v2_body_store::V2BodyStoreError::ReceiptMismatch
+    ));
+    // Readback rejection happens before the lease is consumed by settlement.
+    assert_eq!(
+        lease.ordinal(),
+        owner
+            .coordinator
+            .active_lease
+            .as_ref()
+            .expect("worker readback rejection retains the active lease")
+            .ordinal()
+    );
     assert_eq!(owner.coordinator.records, records);
     assert_eq!(owner.coordinator.durable_records, durable_records);
     assert_eq!(owner.coordinator.active_lease, Some(lease.clone()));
@@ -1968,7 +1993,7 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
     let mut foreign_body = response.clone();
     foreign_body.body.push(0);
     let error = owner
-        .settle_certified_serve_completed(lease, &request, &durable_body, &foreign_body)
+        .settle_certified_serve_worker_completed(lease, &request, readback(), &foreign_body)
         .expect_err("foreign response body is rejected before terminal persistence");
     assert!(!error.restart_required());
     assert_eq!(
@@ -1983,13 +2008,13 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
     assert_eq!(owner.coordinator.active_lease, Some(lease.clone()));
     assert_eq!(owner.coordinator.fault(), None);
     assert_eq!(snapshot_files(payload_directory.path()), payloads);
-    let retained_body_store = owner
-        .body_store
+    let retained_body_store_identity = owner
+        .body_store_identity
         .take()
-        .expect("unlaunched owner still retains its exact body store");
+        .expect("launched owner retains the exact worker store identity");
     let error = owner
-        .settle_certified_serve_completed(lease, &request, &durable_body, &response)
-        .expect_err("completion without the retained body store is prepublication-safe");
+        .settle_certified_serve_worker_completed(lease, &request, readback(), &response)
+        .expect_err("completion without the retained store identity is prepublication-safe");
     assert!(!error.restart_required());
     assert_eq!(
         error.failure(),
@@ -1997,24 +2022,24 @@ fn terminal_owner_returns_foreign_request_and_body_before_publication() {
     );
     let lease = error
         .into_lease()
-        .expect("unavailable body store returns the exact active lease");
+        .expect("unavailable store identity returns the exact active lease");
     assert_eq!(owner.coordinator.records, records);
     assert_eq!(owner.coordinator.durable_records, durable_records);
     assert_eq!(owner.coordinator.active_lease, Some(lease));
     assert_eq!(owner.coordinator.fault(), None);
     assert_eq!(snapshot_files(payload_directory.path()), payloads);
-    drop(retained_body_store);
+    owner.body_store_identity = Some(retained_body_store_identity);
 }
 #[test]
-fn terminal_owner_faults_on_corrupt_owned_body_after_receipt_mint() {
+fn certified_serve_worker_rejects_corrupt_owned_body_after_receipt_mint() {
     let fixture = RecoveryFixture::new("terminal-owner-owned-body-corruption", 0x9B);
     let body_directory = TempDir::new().expect("temporary corrupt-owner body store");
     let payload_directory = TempDir::new().expect("temporary corrupt-owner payload store");
     let ledger_directory = TempDir::new().expect("temporary corrupt-owner ledger store");
-    let (mut owner, request, durable_body, response) =
+    let (mut owner, request, durable_body, _response) =
         fixture.open_completed_serve_owner(&body_directory, &payload_directory, &ledger_directory);
     let lease = admit_and_claim_serve(&fixture, &mut owner, &request);
-    let active_lease = lease.clone();
+    let worker_body_store = move_body_store_to_test_worker(&mut owner);
     let records = owner.coordinator.records.clone();
     let durable_records = owner.coordinator.durable_records.clone();
     let pending_payloads = snapshot_files(payload_directory.path());
@@ -2025,15 +2050,86 @@ fn terminal_owner_faults_on_corrupt_owned_body_after_receipt_mint() {
         .expect("terminal owner retains LedgerV1 store")
         .load()
         .expect("load pre-corruption LedgerV1");
-    owner
-        .body_store
-        .as_ref()
-        .expect("unlaunched owner retains its exact body store")
+    worker_body_store
         .corrupt_owned_frame_for_test(&durable_body)
         .expect("replace the already-accepted body frame");
+    let error = worker_body_store
+        .read_durable_body_for_certified_serve(&durable_body)
+        .expect_err("corrupt accepted bytes cannot mint a worker completion");
+    assert!(matches!(
+        error,
+        crate::sumeragi::v2_body_store::V2BodyStoreError::CorruptFrame
+    ));
+    // The production worker fails closed on this read error. The lifecycle owner
+    // never receives completion authority and cannot publish or release its lease.
+    assert_eq!(owner.coordinator.records, records);
+    assert_eq!(owner.coordinator.durable_records, durable_records);
+    assert_eq!(owner.coordinator.active_lease, Some(lease));
+    assert_eq!(owner.coordinator.fault(), None);
+    assert_eq!(snapshot_files(payload_directory.path()), pending_payloads);
+    assert_eq!(
+        owner.certified_serve_and_producer_carrier_counts_for_test(),
+        (1, 1)
+    );
+    assert!(
+        owner
+            .registry
+            .registry_mut()
+            .one_certified_serve_pair_shares_replay_family()
+    );
+    assert_eq!(
+        owner
+            .coordinator
+            .ledger_store
+            .as_ref()
+            .expect("unsettled owner retains LedgerV1 store")
+            .load()
+            .expect("reload unchanged LedgerV1"),
+        ledger
+    );
+}
+#[test]
+fn terminal_owner_faults_on_corrupt_payload_after_worker_readback() {
+    let fixture = RecoveryFixture::new("terminal-owner-owned-payload-corruption", 0x9B);
+    let body_directory = TempDir::new().expect("temporary corrupt-owner body store");
+    let payload_directory = TempDir::new().expect("temporary corrupt-owner payload store");
+    let ledger_directory = TempDir::new().expect("temporary corrupt-owner ledger store");
+    let (mut owner, request, durable_body, response) =
+        fixture.open_completed_serve_owner(&body_directory, &payload_directory, &ledger_directory);
+    let lease = admit_and_claim_serve(&fixture, &mut owner, &request);
+    let worker_body_store = move_body_store_to_test_worker(&mut owner);
+    let readback = worker_body_store
+        .read_durable_body_for_certified_serve(&durable_body)
+        .expect("worker reads exact body before payload corruption");
+    let active_lease = lease.clone();
+    let records = owner.coordinator.records.clone();
+    let durable_records = owner.coordinator.durable_records.clone();
+    let pending_payloads = snapshot_files(payload_directory.path());
+    assert_eq!(
+        pending_payloads.len(),
+        1,
+        "fixture retains one accepted Pending row"
+    );
+    let pending_path = pending_payloads
+        .keys()
+        .next()
+        .expect("accepted Pending row exists");
+    fs::write(
+        payload_directory.path().join(pending_path),
+        b"corrupt accepted payload frame",
+    )
+    .expect("replace the already-accepted payload frame");
+    let corrupt_payloads = snapshot_files(payload_directory.path());
+    let ledger = owner
+        .coordinator
+        .ledger_store
+        .as_ref()
+        .expect("terminal owner retains LedgerV1 store")
+        .load()
+        .expect("load pre-corruption LedgerV1");
     let error = owner
-        .settle_certified_serve_completed(lease, &request, &durable_body, &response)
-        .expect_err("reload corruption after receipt ownership requires restart");
+        .settle_certified_serve_worker_completed(lease, &request, readback, &response)
+        .expect_err("accepted payload corruption after worker readback requires restart");
     assert!(error.restart_required());
     assert_eq!(
         error.failure(),
@@ -2050,7 +2146,7 @@ fn terminal_owner_faults_on_corrupt_owned_body_after_receipt_mint() {
         owner.coordinator.fault(),
         Some(super::super::super::CoordinatorFault::DurabilityFailure)
     );
-    assert_eq!(snapshot_files(payload_directory.path()), pending_payloads);
+    assert_eq!(snapshot_files(payload_directory.path()), corrupt_payloads);
     assert_eq!(
         owner.certified_serve_and_producer_carrier_counts_for_test(),
         (1, 1)
@@ -2099,15 +2195,16 @@ fn terminal_registry_rejects_every_arbitrary_staged_drift_before_callback() {
         let lease = admit_and_claim_serve(&fixture, &mut owner, &request);
         let serve_ordinal = lease.ordinal();
         let producer_ordinal = owner.coordinator.producer_debts[&serve_ordinal];
+        let worker_body_store = move_body_store_to_test_worker(&mut owner);
+        let readback = worker_body_store
+            .read_durable_body_for_certified_serve(&durable_body)
+            .expect("worker reads exact body before terminal preflight");
         let receipt = owner
             .payload_store
-            .persist_completed_with_exact_body(
+            .persist_completed_with_worker_readback(
                 &request,
-                &durable_body,
-                owner
-                    .body_store
-                    .as_ref()
-                    .expect("unlaunched owner retains body store"),
+                readback,
+                &worker_body_store.instance_identity(),
                 &response,
             )
             .expect("persist terminal receipt for staged-drift preflight");
@@ -2693,8 +2790,12 @@ fn completed_certified_serve_replay_requires_exact_worker_readback() {
     let (mut owner, request, durable_body, response) =
         fixture.open_completed_serve_owner(&body_directory, &payload_directory, &ledger_directory);
     let lease = admit_and_claim_serve(&fixture, &mut owner, &request);
+    let worker_body_store = move_body_store_to_test_worker(&mut owner);
+    let readback = worker_body_store
+        .read_durable_body_for_certified_serve(&durable_body)
+        .expect("worker reads the exact completed Serve body");
     owner
-        .settle_certified_serve_completed(lease, &request, &durable_body, &response)
+        .settle_certified_serve_worker_completed(lease, &request, readback, &response)
         .expect("publish exact completed Serve tombstone");
     let target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
         fixture.verified.context(),
@@ -2711,8 +2812,7 @@ fn completed_certified_serve_replay_requires_exact_worker_readback() {
         .unwrap_or_else(|_| panic!("completed tombstone retains a safe worker replay"));
     let (_target, authorization) = continuation.into_target_and_terminal_replay();
     let authorization = authorization.expect("completed tombstone seals response replay");
-    let body_store = move_body_store_to_test_worker(&mut owner);
-    let readback = body_store
+    let readback = worker_body_store
         .read_durable_body_for_certified_serve(&durable_body)
         .expect("worker rereads exact durable Serve body");
     owner

@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.client.transport.OkHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -93,10 +95,14 @@ import org.hyperledger.iroha.sdk.alias.AccountAliasName
  * Network execution is delegated to [HttpTransportExecutor] so tests can run without making
  * outbound calls.
  */
-class HttpClientTransport(
-    private val executor: HttpTransportExecutor,
+class HttpClientTransport private constructor(
+    private val executor: HttpTransportScope,
     private val config: ClientConfig
-) : IrohaClient {
+) : IrohaClient, AutoCloseable {
+    /** Borrows an executor; closing this client cancels only calls admitted by this client. */
+    constructor(executor: HttpTransportExecutor, config: ClientConfig) :
+        this(HttpTransportScope.create(executor), config)
+
 
     private val sorafsGatewayClient: SorafsGatewayClient by lazy {
         SorafsGatewayClient(
@@ -108,6 +114,9 @@ class HttpClientTransport(
         )
     }
     private val deviceProfileEmitted = AtomicBoolean(false)
+    private val lifecycleLock = Any()
+    private var closed = false
+    private val pendingPolls = LinkedHashSet<CompletableFuture<Map<String, Any>>>()
     private val lazyScheduler = lazy {
         Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "iroha-http-pipeline-poll").apply { isDaemon = true }
@@ -195,14 +204,28 @@ class HttpClientTransport(
             if (timeoutMillis > Long.MAX_VALUE - now) Long.MAX_VALUE else now + timeoutMillis
         }
         val future = CompletableFuture<Map<String, Any>>()
+        synchronized(lifecycleLock) {
+            if (closed) {
+                future.completeExceptionally(IllegalStateException("HTTP client is closed"))
+                return future
+            }
+            pendingPolls.add(future)
+        }
+        future.whenComplete { _, _ -> synchronized(lifecycleLock) { pendingPolls.remove(future) } }
         pollPipelineStatus(hashHex, resolved, deadline, 0, null, future)
         return future
     }
 
     fun config(): ClientConfig = config
-    fun invalidateAndCancel() {
-        executor.invalidateAndCancel()
-        if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
+    override fun close() {
+        val polls = synchronized(lifecycleLock) {
+            if (closed) return
+            closed = true
+            if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
+            pendingPolls.toList().also { pendingPolls.clear() }
+        }
+        polls.forEach { it.cancel(false) }
+        executor.close()
     }
     fun newNoritoRpcClient(): NoritoRpcClient = config.toNoritoRpcClient(executor)
     /** Creates an event-stream client without a canonical account identity. */
@@ -290,15 +313,25 @@ class HttpClientTransport(
     /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<PrivacyExact12CapabilityManifestV1> =
-        fetchExactNoritoBytes(
+    ): CompletableFuture<PrivacyExact12CapabilityManifestV1> {
+        require(config.baseUri().scheme == "https") {
+            "Exact12 privacy capabilities require an HTTPS Torii endpoint"
+        }
+        val expectedNetworkId = config.requireLocalSigningContext().networkId()
+        return fetchExactNoritoBytes(
             buildExactNoritoGetRequest(
                 "/v1/privacy/capabilities",
                 PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES.toLong(),
                 canonicalAuth,
+                requestNoStore = true,
             ),
             "privacy capabilities",
-        ).thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1)
+            requireIdentityEncoding = true,
+            requireExactResponseProvenance = true,
+        ).thenApply { archive ->
+            PrivacyExact12CapabilityManifestV1.fromAuthenticatedTorii(archive, expectedNetworkId)
+        }
+    }
 
     /**
      * Obtain the token required immediately before constructing a retained privacy action.
@@ -1790,7 +1823,10 @@ class HttpClientTransport(
         val interval = options.intervalMillis
         val task = Runnable { pollPipelineStatus(hashHex, options, deadline, attemptsSoFar, lastPayload, future) }
         if (interval <= 0L) { task.run(); return }
-        scheduler.schedule({ task.run() }, minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)
+        synchronized(lifecycleLock) {
+            if (closed || future.isDone) return
+            scheduler.schedule({ task.run() }, minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)
+        }
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -1894,9 +1930,16 @@ class HttpClientTransport(
         path: String,
         maximumResponseBytes: Long,
         canonicalAuth: ToriiCanonicalRequestAuth? = null,
+        requestNoStore: Boolean = false,
     ): TransportRequest {
         require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
             "Accept must not be overridden for exact Norito requests"
+        }
+        if (requestNoStore) {
+            require(config.defaultHeaders().keys.none {
+                it.equals("Cache-Control", ignoreCase = true) ||
+                    it.equals("Accept-Encoding", ignoreCase = true)
+            }) { "Exact Norito cache and encoding headers are owned by the transport" }
         }
         if (canonicalAuth != null) requireCanonicalHeadersUnset()
         val target = resolvePath(path)
@@ -1906,6 +1949,10 @@ class HttpClientTransport(
             .addHeader("Accept", APPLICATION_NORITO)
             .setMaximumResponseBytes(maximumResponseBytes)
             .setTimeout(config.requestTimeout())
+        if (requestNoStore) {
+            builder.addHeader("Cache-Control", "no-store")
+            builder.addHeader("Accept-Encoding", "identity")
+        }
         for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
         if (canonicalAuth != null) {
             val canonicalHeaders = buildCanonicalHeaders("GET", target, null, canonicalAuth)
@@ -2031,9 +2078,9 @@ class HttpClientTransport(
         val nonce = canonicalAuth.nonce
         require((timestampMs == null) == (nonce == null)) { "timestampMs and nonce must be provided together" }
         return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.privateKey)
+            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.signer)
         } else {
-            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.privateKey, timestampMs, nonce!!)
+            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.signer, timestampMs, nonce!!)
         }
     }
 
@@ -2665,25 +2712,15 @@ class HttpClientTransport(
             CanonicalRequestSigner.HEADER_NONCE,
         )
 
-        @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
-        @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)
-        @JvmStatic fun withDefaultExecutor(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         /**
-         * Builds a transport whose underlying [UrlConnectionTransportExecutor] runs the synchronous
-         * HTTP work on [asyncExecutor]; pass `null` for behavior equivalent to [withDefaultExecutor].
-         * The injected executor changes scheduling only and leaves URLConnection timeout defaults
-         * unchanged for requests that do not specify their own timeout.
-         * See [UrlConnectionTransportExecutor] for the full rationale (Android `StrictMode` /
-         * `TrafficStats` interaction).
+         * Creates an owned transport. A supplied scheduling executor stays application-owned;
+         * closing this transport cancels its calls and releases its own connection resources.
          */
-        @JvmStatic fun withDefaultExecutor(config: ClientConfig, asyncExecutor: Executor?): HttpClientTransport =
-            if (asyncExecutor == null) withDefaultExecutor(config) else HttpClientTransport(
-                org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutor(
-                    connectTimeout = null,
-                    readTimeout = null,
-                    asyncExecutor = asyncExecutor,
-                ),
-                config,
+        @JvmStatic
+        @JvmOverloads
+        fun createDefault(config: ClientConfig, asyncExecutor: Executor? = null): HttpClientTransport =
+            HttpClientTransport(
+                HttpTransportScope.own(OkHttpTransportExecutor.create(asyncExecutor = asyncExecutor)), config,
             )
         /** Adds explicit local staging; transaction submission never drains or fills this queue. */
         @JvmStatic fun withDirectoryPendingQueue(config: ClientConfig, queueDir: Path): ClientConfig = config.toBuilder().enableDirectoryPendingQueue(queueDir).build()

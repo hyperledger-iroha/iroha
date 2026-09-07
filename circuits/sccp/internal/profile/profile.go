@@ -54,22 +54,22 @@ const (
 	SoraDomain     uint32 = 0
 	EthereumDomain uint32 = 1
 	BSCDomain      uint32 = 2
-	TRONDomain     uint32 = 3
+	TRONDomain     uint32 = 5
 	TONDomain      uint32 = 4
 )
 
 // Final-V1 canonical payload codec identifiers.
 const (
-	CanonicalTextCodec byte = 0
-	EVMAddress20Codec  byte = 1
-	TRONAddress21Codec byte = 2
-	TONAccount36Codec  byte = 3
+	CanonicalTextCodec byte = 1
+	EVMAddress20Codec  byte = 2
+	TRONAddress21Codec byte = 5
+	TONAccount36Codec  byte = 7
 )
 
 // Final-V1 closed union tags used by the canonical payload and hub commitment.
 const (
-	TransferPayloadDiscriminant byte = 0
-	TransferHubMessageKind      byte = 0
+	TransferPayloadDiscriminant byte = 2
+	TransferHubMessageKind      byte = 5
 )
 
 // Final-V1 destination-proof backend tags. These values mirror the closed

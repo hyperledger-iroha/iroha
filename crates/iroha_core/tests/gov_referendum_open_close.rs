@@ -18,7 +18,6 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     events::data::governance::GovernanceEvent,
-    isi::governance::GovernancePlainBallotDirectionV1,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -33,20 +32,20 @@ fn referendum_open_and_close_by_height() {
     let account: Account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], []);
-    let mut state = State::new_for_testing(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
     // Block H=1: create a proposed referendum with explicit [2,3] window.
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let rid = "standalone-window".to_owned();
     {
         let mut sblock1 = state.block(header1);
         let mut stx1 = sblock1.transaction();
-        stx1.world.put_governance_referendum_for_testing(
+        stx1.world.governance_referenda_mut().insert(
             rid.clone(),
             GovernanceReferendumRecord {
                 h_start: 2,
                 h_end: 3,
                 status: GovernanceReferendumStatus::Proposed,
-                final_tally: None,
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
         );
         stx1.apply();
@@ -108,7 +107,7 @@ fn referendum_open_and_close_by_height() {
                 amount: 0_u64.into(),
                 slashed: 0_u64.into(),
                 expiry_height: 100,
-                direction: GovernancePlainBallotDirectionV1::Aye,
+                direction: 0,
                 duration_blocks: 98,
                 custody,
             },
@@ -212,10 +211,23 @@ fn referendum_open_and_close_by_height() {
         .expect("the outstanding lock must retain the closed referendum");
     assert_eq!(closed.status, GovernanceReferendumStatus::Closed);
     assert_eq!(
-        closed
-            .final_tally
-            .expect("PLAIN closure must persist its immutable tally")
-            .counters(),
-        [0, 0, 0]
+        closed.mode,
+        iroha_core::state::GovernanceReferendumMode::Plain
+    );
+    drop(view);
+    // The canonical decision is emitted at closure. Its retained Closed state must prevent
+    // subsequent heights from recalculating or emitting another decision for this referendum.
+    let mut next = state.block(BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0));
+    assert!(
+        !next
+            .world
+            .take_external_events()
+            .iter()
+            .any(|event| matches!(
+                event.as_data_event(),
+                Some(iroha_data_model::events::data::DataEvent::Governance(
+                    GovernanceEvent::ReferendumDecided(decision)
+                )) if decision.referendum_id == rid
+            ))
     );
 }

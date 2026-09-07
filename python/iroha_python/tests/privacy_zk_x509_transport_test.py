@@ -54,6 +54,15 @@ class _FakeCrypto:
             raise ValueError("wrong manifest bytes")
         return _FakeManifest()
 
+    def _fetch_privacy_exact12_capability_manifest_v1(
+        self, client: ToriiClient, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> "_FakeManifest":
+        # Transport control-flow test double; cryptographic acceptance is covered by Rust tests.
+        archive = client_module._fetch_authenticated_privacy_capabilities_archive_v1(
+            client, canonical_auth
+        )
+        return self.privacy_exact12_capability_manifest_v1(archive)
+
     def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         self,
         wire: object,
@@ -115,7 +124,7 @@ def _client_with_crypto(
     )
     return (
         ToriiClient(
-            "http://torii.invalid",
+            "https://torii.invalid",
             sorafs_alias_policy=alias_policy,
             local_signing_context=LocalSigningContext(NETWORK_ID),
         ),
@@ -133,6 +142,10 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
         headers={"Content-Type": "application/x-norito"},
         content=b"canonical-exact12-manifest",
         text="",
+        url="https://torii.invalid/v1/privacy/capabilities",
+        history=[],
+        close=lambda: None,
+        iter_content=lambda **_kwargs: [b"canonical-exact12-manifest"],
     )
     requests: list[tuple[str, str, object, object, object]] = []
 
@@ -155,6 +168,8 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
     assert requests[0][:2] == ("GET", "/v1/privacy/capabilities")
     header_plan = requests[0][2]
     assert header_plan["Accept"] == "application/x-norito"
+    assert header_plan["Accept-Encoding"] == "identity"
+    assert header_plan["Cache-Control"] == "no-store"
     assert header_plan.canonical_auth is CANONICAL_AUTH
     assert "X-Iroha-Account" not in header_plan
     assert requests[0][3:] == (False, False)
@@ -170,12 +185,78 @@ def test_privacy_capabilities_rejects_json_and_never_invokes_native_decoder(
         headers={"Content-Type": "application/json"},
         content=b"{}",
         text="",
+        url="https://torii.invalid/v1/privacy/capabilities",
+        history=[],
+        close=lambda: None,
     )
     monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ValueError, match="application/x-norito"):
         client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
     assert events == []
+
+
+@pytest.mark.parametrize("change", ["origin", "redirect", "encoding", "empty", "oversized", "length", "media-parameters"])
+def test_capability_fetch_rejects_response_provenance_and_body_drift(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    client, _, events = _client_with_crypto(monkeypatch)
+    body = b"canonical-exact12-manifest"
+    headers = {"Content-Type": "application/x-norito"}
+    url = "https://torii.invalid/v1/privacy/capabilities"
+    history: list[object] = []
+    if change == "origin":
+        url = "https://other.invalid/v1/privacy/capabilities"
+    elif change == "redirect":
+        history = [object()]
+    elif change == "encoding":
+        headers["Content-Encoding"] = "gzip"
+    elif change == "empty":
+        body = b""
+    elif change == "oversized":
+        body = b"x" * (256 * 1024 + 1)
+    elif change == "length":
+        headers["Content-Length"] = str(len(body) + 1)
+    elif change == "media-parameters":
+        headers["Content-Type"] = "application/x-norito; charset=utf-8"
+    closed: list[bool] = []
+    response = SimpleNamespace(
+        status_code=200, headers=headers, url=url, history=history,
+        close=lambda: closed.append(True),
+        iter_content=lambda **_kwargs: [body],
+    )
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: response)
+    with pytest.raises(ValueError):
+        client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
+    assert closed
+    assert events == []
+
+
+def test_capability_fetch_rejects_wrong_network_and_http_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, events = _client_with_crypto(monkeypatch)
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: pytest.fail("must not dispatch"))
+    auth = ToriiCanonicalRequestAuth(
+        network_id=FOREIGN_NETWORK_ID.literal,
+        account_id=CANONICAL_AUTH.account_id,
+        signer=CANONICAL_AUTH.signer,
+        timestamp_ms=CANONICAL_AUTH.timestamp_ms,
+        nonce=CANONICAL_AUTH.nonce,
+    )
+    with pytest.raises(ValueError, match="different network"):
+        client.privacy_capabilities_v1(canonical_auth=auth)
+    client._base_url = "http://torii.invalid"
+    with pytest.raises(ValueError, match="HTTPS"):
+        client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
+    assert events == []
+
+
+def test_capability_fetch_rejects_duck_typed_archive_owners() -> None:
+    with pytest.raises(TypeError, match="configured SDK ToriiClient"):
+        client_module._fetch_authenticated_privacy_capabilities_archive_v1(
+            SimpleNamespace(canonical_archive=b"replayed"), CANONICAL_AUTH
+        )
 
 
 def test_crypto_x509_inspector_is_public_and_forwards_exact_network_id(

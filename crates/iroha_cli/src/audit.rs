@@ -256,10 +256,7 @@ impl WitnessArgs {
         ])
     }
     fn operation_json(operation: &OperationKind) -> Result<norito::json::Value> {
-        match operation {
-            OperationKind::Transfer => json_object(vec![("kind", json_value("Transfer")?)]),
-            OperationKind::MetaSet => json_object(vec![("kind", json_value("MetaSet")?)]),
-        }
+        json_value(operation)
     }
     fn hex(bytes: &[u8]) -> String {
         format!("0x{}", hex::encode(bytes))
@@ -485,11 +482,74 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn operation_json_preserves_unit_selectors() {
+        for (operation, kind) in [
+            (OperationKind::Transfer, "Transfer"),
+            (OperationKind::Mint, "Mint"),
+            (OperationKind::Burn, "Burn"),
+            (OperationKind::MetaSet, "MetaSet"),
+        ] {
+            let value = WitnessArgs::operation_json(&operation).expect("serialize unit selector");
+            assert_eq!(
+                norito::json::from_value::<OperationKind>(value.clone())
+                    .expect("decode unit selector"),
+                operation,
+            );
+            assert_eq!(value, norito::json!({ "kind": kind, "payload": null }),);
+        }
+    }
+
+    #[test]
+    fn operation_json_preserves_permission_payloads() {
+        let role_id = [0x11; 32];
+        let permission_id = [0x22; 32];
+        let epoch = u64::MAX;
+        for (operation, kind) in [
+            (
+                OperationKind::RoleGrant {
+                    role_id,
+                    permission_id,
+                    epoch,
+                },
+                "RoleGrant",
+            ),
+            (
+                OperationKind::RoleRevoke {
+                    role_id,
+                    permission_id,
+                    epoch,
+                },
+                "RoleRevoke",
+            ),
+        ] {
+            let value =
+                WitnessArgs::operation_json(&operation).expect("serialize permission selector");
+            assert_eq!(
+                norito::json::from_value::<OperationKind>(value.clone())
+                    .expect("decode permission selector"),
+                operation,
+            );
+            assert_eq!(
+                value,
+                norito::json!({
+                    "kind": kind,
+                    "payload": {
+                        "role_id": role_id,
+                        "permission_id": permission_id,
+                        "epoch": epoch,
+                    },
+                }),
+            );
+        }
+    }
+
+    #[test]
     fn row_usage_json_preserves_the_exact_v1_ratio() {
         let value = row_usage_json(RowUsage {
             total_rows: 3,
             transfer_rows: 1,
             meta_set_rows: 2,
+            ..RowUsage::default()
         })
         .expect("serialize row usage");
         assert_eq!(
@@ -498,6 +558,7 @@ mod tests {
             "release evidence must not round away the count-derived ratio"
         );
     }
+
     #[derive(Parser, Debug)]
     #[command(no_binary_name = true)]
     struct Wrapper {

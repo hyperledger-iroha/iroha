@@ -5,6 +5,8 @@
 //! targets fail closed before reading. Callers remain responsible for ancestor confinement: these
 //! pathname-based opens do not claim to close a deliberately timed ancestor-directory ABA.
 #[cfg(unix)]
+use iroha_primitives::fs::secure_no_follow_nonblocking_flags;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 #[cfg(unix)]
 use std::{
@@ -51,7 +53,7 @@ where
     before_open(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
-    set_no_follow_nonblocking(&mut options);
+    options.custom_flags(secure_no_follow_nonblocking_flags());
     let mut file = options.open(path)?;
     let opened_before = file.metadata()?;
     if !metadata_is_single_link_regular(&opened_before)
@@ -136,10 +138,6 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.nlink() == 1
         && right.nlink() == 1
 }
-#[cfg(unix)]
-fn set_no_follow_nonblocking(options: &mut OpenOptions) {
-    options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
-}
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -165,116 +163,6 @@ compile_error!("Musubi bounded local-file reads are not qualified for this Andro
     ))
 ))]
 compile_error!("Musubi bounded local-file reads are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "mips",
-        target_arch = "mips32r6",
-        target_arch = "mips64",
-        target_arch = "mips64r6"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x80
-}
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "sparc", target_arch = "sparc64")
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4000
-}
-#[cfg(any(
-    target_os = "android",
-    all(
-        target_os = "linux",
-        not(any(
-            target_arch = "mips",
-            target_arch = "mips32r6",
-            target_arch = "mips64",
-            target_arch = "mips64r6",
-            target_arch = "sparc",
-            target_arch = "sparc64"
-        ))
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x800
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4
-}
 #[cfg(test)]
 mod tests {
     use super::*;

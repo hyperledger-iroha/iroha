@@ -466,11 +466,6 @@ leader_wire_recovery_authority,
     )
     .map_err(V2RunnerError::Service)?;
 """,
-"historical_body_guard": """
-let served = serve_block_sync_while_guarded(
-    services_output_guard.as_ref(),
-    || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
-""",
     "lane_durable_predecessor_source": """
 let durable = self.kura.read_certified_lane_block_artifact(
     descriptor.lane_id,

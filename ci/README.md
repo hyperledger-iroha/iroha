@@ -14,6 +14,30 @@ workspace reverse-dependency graph. The PR workflow runs locked Clippy, build,
 test, and documentation commands for the resulting package sets, then exposes
 one required aggregate result.
 
+Package-level `package_binaries` requirements split each selected lane into
+binary-free and network package sets. The first set starts immediately after
+classification; only the second waits for release artifacts. The network
+packages are `iroha_test_network`, `izanami`, and `integration_tests`, which
+receive `iroha3d` and `iroha`. Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries
+for other package tests. Authenticated message-control and Parliament signer
+test daemons retain their separate feature-isolated build and provenance flow.
+
+The same manifest routes the consistency checks (`iroha`, `kagami`), Kotodama
+documentation checks (`koto`), and Python network suites (`iroha3d`, `iroha`,
+`kagami`) by their affected packages or explicit paths. One release build
+produces only the union required by selected consumers. Prose-only changes
+under `docs/` and `specs/` request no release binaries. The Kotodama consumer
+uses the canonical `specs/kotodama_v1_docs.json` inventory and the checker's exact fence/heredoc
+parser: it compares source bytes and `zk` modes against the PR merge base
+(`HEAD` for explicit local paths). Added, changed, deleted, or malformed
+executable examples request `koto`; prose edits around unchanged examples do
+not. Inventory changes and missing Git/read evidence select the check
+conservatively. `docs/history` is excluded from executable qualification and
+cannot supply required or normative examples.
+The required result checks both Rust matrices, binary production,
+and every selected consumer, accepting a skipped job only when classification
+explicitly did not select it. Classifier failure never becomes a passing skip.
+
 The router fails closed to all lanes for unknown paths, deleted packages,
 ambiguous mappings, and shared build inputs. Adding or removing a workspace
 member therefore requires an explicit lane-manifest update. The release
@@ -29,6 +53,16 @@ scripts/dev_workflow.sh --base origin/main
 scripts/dev_workflow.sh --full
 python3 scripts/rust_ci.py validate
 ```
+
+## Current documentation and historical evidence
+
+The PR classification job verifies the dated project archive before any node
+binary build. It reconstructs the exact captured dirty roots, checks page and
+occurrence hashes, and enforces the current 300-line status/roadmap limits and
+structured roadmap coverage. The archive integrity tests also exercise link
+rewriting, concurrent-edit protection and corruption rejection. Historical
+paragraphs never serve as current release assertions; executable component
+contracts and current outcome ownership remain authoritative.
 
 ## Compile-unit ratchet
 
@@ -59,9 +93,13 @@ therefore runs the guard with Rust 1.93.1.
 `python3 -I -S scripts/check_build_efficiency_provenance.py` verifies the five
 pinned implementation, donor, source-budget, protected-integration, and lock
 anchor commits from local full-history Git objects. It checks their exact
-trees, ordered parents, ancestry, historical Rust counts, the 17 selected path
-states, the anchor and current `HEAD` `Cargo.lock`, and the current 4,540,000
-line ceiling before dependency, source-budget, or release Cargo work.
+trees, ordered parents, ancestry, historical Rust counts, and 14 selected path
+states before dependency, source-budget, or release Cargo work. The historical
+anchor lock remains byte-pinned. The current `HEAD` lock is independently
+verified and reported by blob identity and SHA-256, so approved dependency
+boundaries can refresh it. Release source seals bind each candidate's lock to
+its own artifacts. The current source policy retains the 5,000-line production
+and 3,000-line test limits; historical aggregate targets are evidence only.
 
 The anchor's OpenPGP issuer fingerprint is structural metadata bound by the
 pinned commit object. No trusted public key is part of this contract, so the
@@ -75,7 +113,7 @@ read-only.
 
 `python3 scripts/check_dependency_budget.py` enforces the exact no-growth
 limits in `ci/dependency_budget.json`. The checked-in scopes cover source
-graphs rooted at the shipping crates `iroha_data_model`, `irohad`, and
+graphs rooted at the shipping crates `iroha`, `iroha_data_model`, `irohad`, and
 `iroha_cli`, plus a whole-workspace/all-targets scope whose roots include
 development dependencies. CI runs this source-only check before classifying
 affected Rust lanes, so it does not fetch crates, invoke Cargo, depend on the
@@ -108,6 +146,23 @@ stacks listed in `denied_required_packages` cannot be blessed by a refresh.
 Any manifest-fingerprint drift fails closed until that dependency change and
 the refreshed exact limits are reviewed together.
 
+`python3 scripts/check_dependency_budget.py --check-boundaries` additionally
+enforces the `architecture` layer ownership and shipping configurations in
+the same policy file. Each configuration resolves its own Cargo package and
+feature selection with `--locked`, includes normal and build dependencies,
+and excludes development dependencies. The `all` target selection covers
+platform-specific dependencies. The check reports a concrete transitive path
+for every forbidden layer or proof-execution feature; a resolution error is
+a failure. Use `--offline` after dependencies have been fetched and
+`--json-out <path>` to retain evidence. Boundary failures cannot be accepted
+with `--write-baseline`. Extend the owned package and configuration inventory
+when introducing a new SDK, model, or runtime compilation unit.
+
+`python3 scripts/sdk_operation_inventory.py` checks the complete Torii route
+inventory before lane classification. It compiles only the `std`-based route
+descriptors and requires no node binaries. The [SDK inventory guide](../docs/sdk_inventory.md)
+describes the authentication, transport, and feature metadata used for migration.
+
 For diagnostic comparison with a Cargo-resolved graph, opt in explicitly. The
 command remains locked unless `--allow-lock-update` is provided:
 
@@ -123,26 +178,17 @@ Six fast, read-only checks keep structural and provisioning debt from returning:
 
 - `python3 scripts/check_source_file_budget.py` caps production and test source
   files across the complete non-ignored candidate tree, including files not
-  yet staged, and applies an exact no-growth ratchet to legacy files that are
+  yet staged, and applies an exact no-growth ratchet to existing files that are
   still above the limit. Intentional splits should lower
   `ci/source_file_budget.json`; unexplained growth must not refresh it. The
-  checked-in `aggregate_rust` section pins the reviewed first-party Rust
-  baseline, a ceiling requiring at least a 10% reduction, and a lower working
-  target. The default invocation enforces `ratchet_ceiling` as an exact
-  no-growth cap, while CI and release gates pass `--require-objective` to make
-  the hard ceiling mandatory. JSON reports say whether the objective is met
-  and expose the remaining gap. The ratchet may only move downward during the
-  transition, and must converge to the hard ceiling. `--write-baseline`
-  preserves all reviewed aggregate targets rather than redefining them from
-  the current tree.
-
-The aggregate baseline is the task-start tree at
-`cd05eebfc07c9742734b9d684394c4fe89cdb7c5`: 5,067,263 logical Rust lines.
-The checker counts tracked and non-ignored untracked regular `*.rs` files with
-UTF-8 `splitlines()`, excluding only the checked-in `excluded_prefixes`. The
-hard ceiling is 4,540,000 lines, and the 4,500,000
-working target leaves review headroom below it. These values are provenance,
-not a baseline that may be regenerated from a later candidate.
+  production and test limits remain 5,000 and 3,000 lines. CI and release use
+  the same command. Schema 2 has no aggregate target: total Rust lines in JSON
+  reports are descriptive. `--write-baseline` only reduces or removes existing
+  exceptions and refuses new oversized files or exception growth. Source is
+  counted with UTF-8 `splitlines()` and the reviewed exclusions; moving or
+  leaving a file unstaged does not hide it from measurement. Historical Rust
+  line counts remain recorded on the pinned lineage commits, without carrying
+  the retired global objective into active provenance policy.
 - `python3 scripts/check_compile_time_table_assets.py` verifies the exact size
   and SHA-256 of the versioned binary tables decoded into Rust constants,
   reconstructs every removed declaration from its pinned Git preimage, rejects
@@ -227,8 +273,17 @@ The external target and report bundle are intentional mutable outputs. Input
 reads may update filesystem access times. The profiler provides path isolation,
 not an OS sandbox: transitive helpers selected from the recorded PATH and
 hostile processes already able to address unrelated absolute paths are outside
-the guarantee. Authoritative evidence is schema-v3 output from
+the guarantee. Authoritative evidence is schema-v4 output from
 `scripts/profile_cargo_build.py`.
+
+The read-only `scripts/check_compile_memory_budget.py` compares that evidence
+against `ci/compile_memory_budgets.json`. It preserves retained-unit byte limits,
+requires 25% lower peaks across the model crates, and enforces the 13-GiB release
+ceiling. Complete `--suite` qualification requires every configured surface from
+one candidate source/lock revision; pending baselines and failed or cached builds
+cannot pass. Four real baselines are pinned; repaired Core/Torii test and daemon
+baselines, pinned-runner scheduling and real candidate measurements remain open.
+See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.

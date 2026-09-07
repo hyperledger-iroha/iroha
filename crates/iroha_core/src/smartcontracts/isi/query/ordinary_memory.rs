@@ -1055,7 +1055,10 @@ pub(super) fn preflight_server_singular_source_materialization(
             }
         }
         SingularQueryBox::FindExecutionProofVerificationById(query) => {
-            if let Some(receipt) = world.execution_proof_verifications().get(&query.verification_id) {
+            if let Some(receipt) = world
+                .execution_proof_verifications()
+                .get(&query.verification_id)
+            {
                 charge(receipt, &mut remaining)?;
             }
         }

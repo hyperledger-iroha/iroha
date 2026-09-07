@@ -34,17 +34,19 @@ across Rust, Python, and Java.
 - Zstandard support is part of the release codec, so the published artifact depends directly on
   `com.github.luben:zstd-jni:1.5.7-7` and fails at linkage time if that dependency is broken.
 
-## Build & Test
-Run the Gradle-backed assert harness, which supplies the same pinned runtime dependency as the
-published artifact:
+## Runtime qualification
+
+The canonical JVM codec and its Java-source runtime consumers live in
+[`kotlin/core-jvm`](../../kotlin/core-jvm). Run from the repository root:
 
 ```bash
-cd java/norito_java
-./run_tests.sh
+cd kotlin
+./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-The script targets `javac --release 21` (JDK 21+) to keep the artifact Android
-friendly. Enable assertions (`-ea`) to ensure test checks run.
+The JDK 21 toolchain enforces JDK 8 APIs for both Java and Kotlin sources.
+Gradle enables test assertions. The duplicate implementation and publication in
+this directory remain pending the complete JVM consumer migration.
 
 ## Usage Example
 ```java

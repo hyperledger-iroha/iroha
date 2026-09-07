@@ -3091,17 +3091,6 @@ pub(crate) fn constrain_enabled_hardware_profile_membership_v1<F: KagemushaPosei
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn constrain_digest_limbs_equal_v1<F: KagemushaPoseidonFieldV1>(
-    ctx: &mut Context<F>,
-    actual: &[PastaSha256ByteV1<F>; 32],
-    expected: [AssignedValue<F>; 2],
-) {
-    for (actual, expected) in digest_limbs_assigned(ctx, actual).into_iter().zip(expected) {
-        ctx.constrain_equal(&actual, &expected);
-    }
-}
-
-#[cfg(feature = "zk-halo2-ipa")]
 fn constrain_less_than_if_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,

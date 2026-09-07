@@ -4,6 +4,9 @@ public enum CurveId : byte
 {
     Ed25519 = 1,
     MlDsa = 2,
+    BlsNormal = 3,
+    Secp256k1 = 4,
+    BlsSmall = 5,
     Gost256A = 10,
     Gost256B = 11,
     Gost256C = 12,

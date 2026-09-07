@@ -99,7 +99,7 @@ pub fn has_origin_derive(input: TokenStream) -> TokenStream {
 }
 #[doc = include_str!("lib_docs/event_set.md")]
 #[manyhow]
-#[proc_macro_derive(EventSet)]
+#[proc_macro_derive(EventSet, attributes(event_set))]
 pub fn event_set_derive(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
     let Some(input) = emitter.handle(syn::parse2(input)) else {
@@ -109,6 +109,11 @@ pub fn event_set_derive(input: TokenStream) -> TokenStream {
     emitter.finish_token_stream_with(result)
 }
 /// Derive macro generating registration builders for data model structs.
+///
+/// Each parent must declare its generated child's captured nominal identity with
+/// `#[registrable_builder(schema_name = "captured child identity")]`. The identity
+/// belongs only to the generated `New*` type; it is never inferred from the parent.
+/// Field-level `default`, `skip` and `init` options retain their builder semantics.
 #[manyhow]
 #[proc_macro_derive(RegistrableBuilder, attributes(registrable_builder))]
 pub fn registrable_builder(input: TokenStream) -> Result<TokenStream> {

@@ -10,8 +10,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 export NORITO_BINDINGS_CHECK_ALL="1"
-export NORITO_JAVA_STRICT="1"
-export NORITO_KOTLIN_STRICT="1"
+export NORITO_JVM_STRICT="1"
 
 cd "${repo_root}"
 exec python3 scripts/check_norito_bindings_sync.py

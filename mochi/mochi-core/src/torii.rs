@@ -36,8 +36,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_telemetry::metrics::Status as TelemetryStatus;
-pub use iroha_telemetry::metrics::{GovernanceStatus, Uptime};
+use iroha_torii_shared::status::Status as TelemetryStatus;
 use iroha_torii_shared::{
     NORITO_V1_WEBSOCKET_SUBPROTOCOL, mcp as torii_mcp, route_catalog as torii_routes,
     uri as torii_uri,

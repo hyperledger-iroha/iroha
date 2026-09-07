@@ -142,7 +142,7 @@ impl DealTermsV1 {
     pub fn derive_deal_id(&self) -> Result<[u8; 32], DealTermsValidationError> {
         let mut canonical = self.clone();
         canonical.deal_id = [0; 32];
-        let bytes = norito::to_bytes(&canonical)
+        let bytes = norito::encode_canonical(&canonical)
             .map_err(|error| DealTermsValidationError::Serialization(error.to_string()))?;
         let encoded_len = u64::try_from(bytes.len())
             .map_err(|_| DealTermsValidationError::EncodedLengthOverflow)?;
@@ -365,7 +365,7 @@ pub fn derive_micropayment_hint(
     amount: &XorQuantity,
     issued_at: u64,
 ) -> Result<[u8; 32], DealMicropaymentValidationError> {
-    let canonical_amount = norito::to_bytes(amount)
+    let canonical_amount = norito::encode_canonical(amount)
         .map_err(|error| DealMicropaymentValidationError::Serialization(error.to_string()))?;
     let encoded_len = u64::try_from(canonical_amount.len())
         .map_err(|_| DealMicropaymentValidationError::EncodedLengthOverflow)?;
@@ -449,7 +449,7 @@ impl DealLedgerSnapshotV1 {
     pub fn derive_snapshot_id(&self) -> Result<[u8; 32], DealLedgerValidationError> {
         let mut canonical = self.clone();
         canonical.snapshot_id = [0; 32];
-        let bytes = norito::to_bytes(&canonical)
+        let bytes = norito::encode_canonical(&canonical)
             .map_err(|error| DealLedgerValidationError::Serialization(error.to_string()))?;
         let encoded_len = u64::try_from(bytes.len())
             .map_err(|_| DealLedgerValidationError::EncodedLengthOverflow)?;
@@ -725,7 +725,7 @@ impl DealSettlementV1 {
     pub fn derive_settlement_id(&self) -> Result<[u8; 32], DealSettlementValidationError> {
         let mut canonical = self.clone();
         canonical.settlement_id = [0; 32];
-        let bytes = norito::to_bytes(&canonical)
+        let bytes = norito::encode_canonical(&canonical)
             .map_err(|error| DealSettlementValidationError::Serialization(error.to_string()))?;
         let encoded_len = u64::try_from(bytes.len())
             .map_err(|_| DealSettlementValidationError::EncodedLengthOverflow)?;
@@ -1610,6 +1610,51 @@ mod tests {
             skipped_window.validate(),
             Err(DealLedgerValidationError::InvalidWindow)
         );
+    }
+    #[test]
+    fn deal_identities_ignore_ambient_norito_layout() {
+        let terms = sample_terms();
+        let ledger = first_ledger();
+        let settlement = seal_settlement(
+            completed_ledger(&ledger),
+            DealSettlementStatusV1::Completed,
+            Some("completed"),
+        );
+        let amount = xor_nanos(123_456_789);
+        let hint = derive_micropayment_hint(terms.deal_id, 7, &amount, 1_700_000_100)
+            .expect("canonical micropayment hint");
+        let canonical = norito::encode_canonical(&terms).expect("canonical terms");
+        let mut distinct_layout = false;
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let before = norito::to_bytes(&terms).expect("ambient terms");
+            distinct_layout |= before != canonical;
+            assert_eq!(
+                terms.derive_deal_id().expect("deal identity"),
+                terms.deal_id
+            );
+            assert_eq!(
+                ledger.derive_snapshot_id().expect("snapshot identity"),
+                ledger.snapshot_id
+            );
+            assert_eq!(
+                settlement
+                    .derive_settlement_id()
+                    .expect("settlement identity"),
+                settlement.settlement_id
+            );
+            assert_eq!(
+                derive_micropayment_hint(terms.deal_id, 7, &amount, 1_700_000_100).expect("hint"),
+                hint
+            );
+            assert_ne!(
+                derive_micropayment_hint(terms.deal_id, 8, &amount, 1_700_000_100)
+                    .expect("changed window"),
+                hint
+            );
+            assert_eq!(norito::to_bytes(&terms).expect("restored layout"), before);
+        }
+        assert!(distinct_layout);
     }
     #[test]
     fn ledger_transition_binds_predecessor_sequence_parties_terms_and_window() {

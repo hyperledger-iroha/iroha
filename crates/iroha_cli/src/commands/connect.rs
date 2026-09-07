@@ -22,7 +22,7 @@ pub enum Command {
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let connect_root = context.config().connect_queue_root.clone();
+        let connect_root = context.connect_queue_root();
         run(self, &connect_root, context)
     }
 }
@@ -40,7 +40,7 @@ pub mod queue {
     }
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let connect_root = context.config().connect_queue_root.clone();
+            let connect_root = context.connect_queue_root();
             run(self, &connect_root, context)
         }
     }
@@ -70,7 +70,7 @@ pub mod queue {
         /// Path to an explicit snapshot JSON file (defaults to `<root>/<sid>/state.json`).
         #[arg(long)]
         pub snapshot: Option<PathBuf>,
-        /// Root directory containing Connect queue state (defaults to `connect.queue.root` or `~/.iroha/connect`).
+        /// Root directory containing Connect queue state (defaults to `connect.queue_root` or `~/.iroha/connect`).
         #[arg(long)]
         pub root: Option<PathBuf>,
         /// Include metrics summary derived from `metrics.ndjson`.

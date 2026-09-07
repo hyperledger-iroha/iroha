@@ -3,7 +3,7 @@
 #![allow(clippy::too_many_lines)]
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     Level,
@@ -132,13 +132,13 @@ fn submit_peer_indices_for_network(
     let status = network
         .peers()
         .iter()
-        .find_map(|peer| peer.client().get_status().ok())
-        .or_else(|| probe.get_status().ok());
+        .find_map(|peer| peer.client().client().get_status().ok())
+        .or_else(|| probe.client().get_status().ok());
     let sumeragi = network
         .peers()
         .iter()
-        .find_map(|peer| peer.client().get_sumeragi_status().ok())
-        .or_else(|| probe.get_sumeragi_status().ok());
+        .find_map(|peer| peer.client().client().get_sumeragi_status().ok())
+        .or_else(|| probe.client().get_sumeragi_status().ok());
     let leader_index = sumeragi
         .as_ref()
         .map(|status| status.leader)
@@ -490,6 +490,7 @@ fn client_observing_height(
             if storage_reached
                 || peer
                     .client()
+                    .client()
                     .get_status()
                     .is_ok_and(|status| status.blocks >= target_height)
             {
@@ -511,7 +512,13 @@ async fn wait_for_submit_connectivity(
         let peer_counts = network
             .peers()
             .iter()
-            .filter_map(|peer| peer.client().get_status().ok().map(|status| status.peers))
+            .filter_map(|peer| {
+                peer.client()
+                    .client()
+                    .get_status()
+                    .ok()
+                    .map(|status| status.peers)
+            })
             .collect::<Vec<_>>();
         if !peer_counts.is_empty() {
             last_snapshot.clone_from(&peer_counts);
@@ -534,11 +541,17 @@ async fn submit_progress_log(
     message: String,
 ) -> eyre::Result<()> {
     let candidate_indices = submit_peer_indices_for_network(network, probe);
-    let transaction = probe.build_transaction_from_items(
-        [Log::new(Level::INFO, message)],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = probe.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [Log::new(Level::INFO, message)],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let mut accepted = false;
     let mut errors = Vec::new();
     for idx in candidate_indices {
@@ -640,6 +653,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     )
     .await?;
     let collectors_url = client
+        .client()
         .torii_url
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
@@ -652,6 +666,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     advance_to_height(&network, &client, WAIT_HEIGHT, "stake activation tick").await?;
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
+        .client()
         .torii_url
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
@@ -800,6 +815,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     .await?;
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
+        .client()
         .torii_url
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;

@@ -101,8 +101,8 @@ fn build_da_request(network: &Network, retention_policy: RetentionPolicy) -> DaI
     let payload = b"da retention regression vector payload".to_vec();
     let client_blob_id = BlobDigest::from_hash(blake3::hash(&payload));
     DaIngestRequestIntentV1 {
-        network_id: network.client().network_id,
-        owner: network.client().account.clone(),
+        network_id: network.client().client().network_id,
+        owner: network.client().client().account.clone(),
         client_blob_id,
         lane_id: LaneId::SINGLE,
         epoch: 7,
@@ -146,6 +146,7 @@ async fn ingest_and_fetch_manifest(
 
     let ingest_request = build_da_request(network, caller_policy);
     let ingest_url = network
+        .client()
         .client()
         .torii_url
         .join("/v1/da/ingest")
@@ -203,6 +204,7 @@ async fn ingest_and_fetch_manifest(
     );
     let manifest_ticket_hex = hex_encode(receipt.storage_ticket.as_bytes());
     let manifest_url = network
+        .client()
         .client()
         .torii_url
         .join(&format!("/v1/da/manifests/{manifest_ticket_hex}"))

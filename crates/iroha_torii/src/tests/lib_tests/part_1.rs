@@ -286,7 +286,7 @@ fn prebuilt_sorafs_node_rejects_mismatched_quarantine_key_provider_binding() {
         .build();
     assert_eq!(
         validate_prebuilt_sorafs_quarantine_key_provider_binding(&node, &substituted_config),
-        Err("injected SoraFS node quarantine-key provider binding does not match configuration")
+        Err("injected SoraFS node quarantine-key provider binding does not match configuration"),
     );
 }
 const PREBUILT_PRIVACY_PRF_HANDLE: &str = "threshold-prf:transparency:primary";
@@ -842,7 +842,7 @@ fn prebuilt_sorafs_node_accepts_exact_privacy_provider_bindings() {
     validate_prebuilt_sorafs_privacy_provider_bindings(
         &node, &config, false, false, false, false, false,
     )
-    .expect("exact prebuilt privacy provider bindings");
+    .expect("exact privacy provider bindings are accepted");
 }
 #[test]
 fn fused_privacy_preflight_rejects_substituted_signed_governance_root() {
@@ -1141,7 +1141,7 @@ fn prebuilt_sorafs_node_rejects_mismatched_privacy_provider_binding() {
             false,
             false,
         ),
-        Err("injected SoraFS node threshold-PRF provider binding does not match configuration")
+        Err("injected SoraFS node threshold-PRF provider binding does not match configuration"),
     );
 }
 #[test]
@@ -1168,7 +1168,7 @@ fn prebuilt_sorafs_node_rejects_substituted_fenced_privacy_binding() {
             false,
             false,
         ),
-        Err("injected SoraFS node fused privacy publisher binding does not match configuration")
+        Err("injected SoraFS node fused privacy publisher binding does not match configuration"),
     );
 }
 #[test]
@@ -1190,7 +1190,7 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_privacy_provider() {
         ),
         Err(
             "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
-        )
+        ),
     );
 }
 #[test]
@@ -1212,7 +1212,7 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_publisher() {
         ),
         Err(
             "a prebuilt SoraFS node must not also receive a raw fused privacy publisher through Torii"
-        )
+        ),
     );
 }
 #[test]
@@ -1234,7 +1234,7 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_head_reader() {
         ),
         Err(
             "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii"
-        )
+        ),
     );
 }
 #[test]
@@ -1555,7 +1555,9 @@ use crate::{
 use iroha_core::smartcontracts::Execute;
 #[test]
 fn stark_fri_backend_label_is_singular_and_exact() {
-    assert!(is_stark_fri_v1_backend("stark/fri/poseidon-x7-goldilocks-6x64-v1"));
+    assert!(is_stark_fri_v1_backend(
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+    ));
     assert!(!is_stark_fri_v1_backend("stark/fri"));
     assert!(!is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
     assert!(!is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
@@ -1734,15 +1736,14 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
             .public_key()
             .clone(),
     );
-    let (status, JsonBody(body)) =
-        handler_iso_audit_messages(
-            State(app),
-            Extension(operator),
-            HeaderMap::new(),
-            local_connect_info(),
-        )
-            .await
-            .expect("audit endpoint");
+    let (status, JsonBody(body)) = handler_iso_audit_messages(
+        State(app),
+        Extension(operator),
+        HeaderMap::new(),
+        local_connect_info(),
+    )
+    .await
+    .expect("audit endpoint");
     assert_eq!(status, StatusCode::OK);
     let body = body.as_object().expect("audit manifest object");
     assert_eq!(

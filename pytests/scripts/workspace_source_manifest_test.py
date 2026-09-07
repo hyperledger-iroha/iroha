@@ -1696,6 +1696,92 @@ def test_release_identity_rejects_untracked_ignore_policy(tmp_path: Path) -> Non
         module.release_source_identity(tmp_path)
 
 
+@pytest.fixture
+def ignore_policy_repo(tmp_path: Path) -> Path:
+    """Stage source-policy fixtures without creating or signing a commit."""
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("target/\n", encoding="utf-8")
+    (tmp_path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", ".gitignore", "Cargo.lock"], cwd=tmp_path, check=True
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize("cache", ["target", "target/nested"])
+def test_manifest_ignores_policy_below_tracked_directory_exclusion(
+    ignore_policy_repo: Path, cache: str
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    before = module.workspace_source_manifest(root)
+    directory = root / cache
+    directory.mkdir(parents=True)
+    (directory / ".gitignore").write_text("*\n", encoding="utf-8")
+    (directory / "generated.rs").write_text("generated\n", encoding="utf-8")
+
+    assert module.workspace_source_manifest(root) == before
+
+
+def test_manifest_ignored_policy_cannot_hide_tracked_input(
+    ignore_policy_repo: Path,
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / "target").mkdir()
+    tracked = root / "target/input.rs"
+    tracked.write_text("first\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-f", "target/input.rs"], cwd=root, check=True)
+    before = module.workspace_source_manifest(root)
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+
+    assert module.workspace_source_manifest(root) == before
+    tracked.write_text("changed\n", encoding="utf-8")
+    assert module.workspace_source_manifest(root) != before
+
+
+@pytest.mark.parametrize("rules", ["", "*.gitignore\n", "nested/\n!nested/\n"])
+def test_manifest_rejects_effective_self_hiding_ignore_policy(
+    ignore_policy_repo: Path, rules: str
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / ".gitignore").write_text(rules, encoding="utf-8")
+    (root / "nested").mkdir()
+    (root / "nested/.gitignore").write_text("*\n", encoding="utf-8")
+    (root / "nested/hidden.rs").write_text("hidden\n", encoding="utf-8")
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="nested/.gitignore"):
+        module.workspace_source_manifest(root)
+
+
+def test_manifest_local_exclude_cannot_authorize_untracked_policy(
+    ignore_policy_repo: Path,
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / ".git/info/exclude").write_text("nested/\n", encoding="utf-8")
+    (root / "nested").mkdir()
+    (root / "nested/.gitignore").write_text("*\n", encoding="utf-8")
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="nested/.gitignore"):
+        module.workspace_source_manifest(root)
+
+
+def test_manifest_untracked_policy_cannot_authorize_nested_policy(
+    ignore_policy_repo: Path,
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / "nested/cache").mkdir(parents=True)
+    (root / "nested/.gitignore").write_text("cache/\n", encoding="utf-8")
+    (root / "nested/cache/.gitignore").write_text("*\n", encoding="utf-8")
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="nested/.gitignore"):
+        module.workspace_source_manifest(root)
+
+
 def test_release_identity_rejects_populated_gitlink(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)

@@ -18,3 +18,6 @@ mod vecdeque_align;
 mod yaml_basic;
 #[path = "../zero_sized_collections.rs"]
 mod zero_sized_collections;
+
+#[path = "../schema_identity.rs"]
+mod schema_identity;

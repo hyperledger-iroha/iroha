@@ -14,9 +14,9 @@ public enum SccpReplayBoundaryV1: UInt8, CaseIterable, Sendable {
     case tonMasterMint = 0x32
     case tonMasterBurn = 0x33
     case tonWalletMintCredit = 0x34
-    case tonWalletBurnDebit = 0x35
-    case tonWalletRefundDebit = 0x36
-    case tonWalletRefundCredit = 0x37
+    case tonWalletBurnAuthorization = 0x35
+    case tonWalletBurnLock = 0x36
+    case tonWalletBurnRefund = 0x37
 }
 
 /// Canonical contract identity committed by a replay domain.
@@ -89,13 +89,14 @@ public struct SccpSparseMerkleWitnessV1: Sendable {
         siblings: [Data]
     ) throws {
         self.expectedShardRoot = try SccpReplayV1.exact(
-            expectedShardRoot, count: 32, label: "expected shard root")
+            expectedShardRoot, count: 32, label: "expected shard root", nonzero: false)
         self.priorRecordDigest = try SccpReplayV1.exact(
             priorRecordDigest, count: 32, label: "prior record digest", nonzero: false)
         self.siblingBitmap = try SccpReplayV1.exact(
             siblingBitmap, count: 32, label: "sibling bitmap", nonzero: false)
         self.siblings = try siblings.enumerated().map { index, value in
-            try SccpReplayV1.exact(value, count: 32, label: "sibling[\(index)]")
+            try SccpReplayV1.exact(
+                value, count: 32, label: "sibling[\(index)]", nonzero: false)
         }
     }
 }
@@ -164,6 +165,9 @@ public enum SccpReplayV1 {
     ) throws -> Data {
         let amount = try exact(amountScale9BE, count: 16, label: "scale-9 amount")
         let principalValue = try principalParts(principal)
+        guard principalValue.kind == principalKind(for: operation) else {
+            throw SccpV1Error.invalid("replay operation and principal kind are inconsistent")
+        }
         let principalDigest = hash([
             magic,
             Data([3, principalValue.kind]),
@@ -175,7 +179,7 @@ public enum SccpReplayV1 {
             Data([4, operation.rawValue]),
             try exact(auxiliaryIdentitySHA256, count: 32, label: "auxiliary identity SHA-256"),
         ])
-        return hash([
+        let digest = hash([
             magic,
             Data([2, operation.rawValue]),
             try exact(replayId, count: 32, label: "replay id"),
@@ -184,6 +188,10 @@ public enum SccpReplayV1 {
             principalDigest,
             auxiliary,
         ])
+        guard digest.contains(where: { $0 != 0 }) else {
+            throw SccpV1Error.invalid("occupied replay record digest must be nonzero")
+        }
+        return digest
     }
 
     /// Return all 249 canonical empty hashes in leaf-up order.
@@ -199,10 +207,10 @@ public enum SccpReplayV1 {
     /// Strictly reconstruct one compressed membership or non-membership witness.
     public static func rootFromWitness(
         key keyValue: Data,
-        recordDigest: Data?,
+        recordDigest: Data,
         witness: SccpSparseMerkleWitnessV1
     ) throws -> SccpReplayWitnessRootV1 {
-        let key = try exact(keyValue, count: 32, label: "replay key")
+        let key = try exact(keyValue, count: 32, label: "replay key", nonzero: false)
         let bitmap = [UInt8](witness.siblingBitmap)
         guard bitmap[0] == 0 else {
             throw SccpV1Error.invalid("witness bitmap has reserved high bits")
@@ -212,19 +220,18 @@ public enum SccpReplayV1 {
             throw SccpV1Error.invalid("witness sibling count does not match bitmap")
         }
         let empty = emptyHashes()
-        var current: Data
-        if let recordDigest {
-            let digest = try exact(recordDigest, count: 32, label: "record digest")
-            guard digest == witness.priorRecordDigest else {
-                throw SccpV1Error.invalid("membership witness record digest mismatch")
-            }
-            current = hash([magic, Data([0x11]), key, digest])
-        } else {
-            guard witness.priorRecordDigest.allSatisfy({ $0 == 0 }) else {
-                throw SccpV1Error.invalid("non-membership witness has an occupied digest")
-            }
-            current = empty[0]
+        let digest = try exact(
+            recordDigest,
+            count: 32,
+            label: "record digest",
+            nonzero: false
+        )
+        guard digest == witness.priorRecordDigest else {
+            throw SccpV1Error.invalid("witness record digest mismatch")
         }
+        var current = digest.allSatisfy({ $0 == 0 })
+            ? empty[0]
+            : hash([magic, Data([0x11]), key, digest])
         let keyBytes = [UInt8](key)
         var supplied = 0
         for level in 0..<depth {
@@ -245,6 +252,26 @@ public enum SccpReplayV1 {
             expectedRoot: witness.expectedShardRoot,
             shard: key.first!
         )
+    }
+
+    /// Verify a replay witness against the caller's exact current shard root.
+    public static func verifyAgainstCurrentRoot(
+        key: Data,
+        recordDigest: Data,
+        witness: SccpSparseMerkleWitnessV1,
+        currentRoot: Data
+    ) throws -> SccpReplayWitnessRootV1 {
+        let expected = try exact(
+            currentRoot, count: 32, label: "current shard root", nonzero: false)
+        let reconstructed = try rootFromWitness(
+            key: key,
+            recordDigest: recordDigest,
+            witness: witness
+        )
+        guard reconstructed.expectedRoot == expected, reconstructed.root == expected else {
+            throw SccpV1Error.invalid("replay witness does not match the current shard root")
+        }
+        return reconstructed
     }
 
     static func exact(
@@ -281,6 +308,21 @@ public enum SccpReplayV1 {
         return (principal.kind, Data(principal.bytes))
     }
 
+    private static func principalKind(for boundary: SccpReplayBoundaryV1) -> UInt8 {
+        switch boundary {
+        case .soraOutboundLock, .soraInboundRelease:
+            0
+        case .evmSourceBurn, .evmDestinationMint:
+            1
+        case .tronSourceBurn, .tronDestinationMint:
+            2
+        case .tonBridgeInboundMint, .tonBridgeOutboundBurn, .tonMasterMint, .tonMasterBurn,
+             .tonWalletMintCredit, .tonWalletBurnAuthorization, .tonWalletBurnLock,
+             .tonWalletBurnRefund:
+            3
+        }
+    }
+
     private static func validDirection(
         source: SccpNetworkV1,
         target: SccpNetworkV1,
@@ -300,10 +342,10 @@ public enum SccpReplayV1 {
             source == .tronMainnet && target == .soraTaira && actorKind == 2
         case .tronDestinationMint:
             source == .soraTaira && target == .tronMainnet && actorKind == 2
-        case .tonBridgeInboundMint, .tonMasterMint, .tonWalletMintCredit,
-             .tonWalletRefundDebit, .tonWalletRefundCredit:
+        case .tonBridgeInboundMint, .tonMasterMint, .tonWalletMintCredit:
             source == .soraTaira && target == .tonMainnet && actorKind == 3
-        case .tonBridgeOutboundBurn, .tonMasterBurn, .tonWalletBurnDebit:
+        case .tonBridgeOutboundBurn, .tonMasterBurn, .tonWalletBurnAuthorization,
+             .tonWalletBurnLock, .tonWalletBurnRefund:
             source == .tonMainnet && target == .soraTaira && actorKind == 3
         }
     }

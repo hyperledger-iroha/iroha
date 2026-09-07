@@ -1557,6 +1557,7 @@ phase_evidence_scripts() {
     "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     pytests/scripts/check_sccp_production_corridor_test.py \
     pytests/scripts/sccp_release_tooling_test.py \
+    pytests/scripts/sccp_wire_inventory_test.py \
     scripts/tests/sccp_validator_builder_test.py \
     scripts/tests/ton_sccp_builder_test.py
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py reject

@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -98,9 +100,12 @@ class BootleLanternIssuanceCredentialV1 private constructor(
  * This client deliberately has no observer or generic-header surface: bearer material cannot enter
  * SDK telemetry, and callers cannot weaken the canonical media type or identity-only encoding.
  */
-class BootleLanternIssuanceClientV1 private constructor(builder: Builder) {
+class BootleLanternIssuanceClientV1 private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
+
     private val executor: HttpTransportExecutor =
-        builder.executor ?: PlatformHttpTransportExecutor.createDefault()
+        HttpTransportScope.create(builder.executor)
     private val baseUri: URI = validateBaseUri(builder.baseUri)
     private val timeout: Duration? = builder.timeout
 

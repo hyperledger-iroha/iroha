@@ -34,16 +34,24 @@ async fn test_with_instruction_and_status(
     // Given
     let client = network.client();
     // When
-    let transaction = client.build_transaction(
-        exec,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                exec,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let hash = transaction.hash();
     let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
         event_timeout,
-        client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        client
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .wrap_err_with(|| format!("{context}: timed out opening pipeline event stream"))??;
@@ -85,17 +93,25 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let client = network.client();
     // When: submit a simple transaction to ensure a new non-genesis block is committed
     let kura_domain: DomainId = DomainId::try_new("kura-test", "universal")?;
-    let register = domain_setup_instruction(&kura_domain, &client.account)?;
-    let tx = client.build_transaction(
-        [register],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let register = domain_setup_instruction(&kura_domain, &client.client().account)?;
+    let tx = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [register],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let hash = tx.hash();
     let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
         event_timeout,
-        client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        client
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .wrap_err(
@@ -234,7 +250,7 @@ async fn pipeline_event_scenarios() -> Result<()> {
         return Ok(());
     };
     let domain = DomainId::try_new("looking-glass", "universal")?;
-    let register = domain_setup_instruction(&domain, &network.client().account)?;
+    let register = domain_setup_instruction(&domain, &network.client().client().account)?;
     test_with_instruction_and_status(
         stringify!(transaction_with_ok_instruction_should_be_committed),
         &network,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -11,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from scripts import release_manifest_signing as signing
-
 
 TEST_PUBLIC_KEY = bytes.fromhex(
     "2152f8d19b791d24453242e15f2eab6c"
@@ -53,6 +53,78 @@ def _noncanonical_signature(kind: str) -> bytes:
     else:  # pragma: no cover - test helper contract
         raise AssertionError(f"unsupported noncanonical component: {kind}")
     return bytes(signature)
+
+
+@pytest.mark.parametrize("size", (4, 5))
+def test_executable_snapshot_has_an_exact_streaming_byte_ceiling(tmp_path, monkeypatch, size):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"x" * size)
+    source.chmod(0o700)
+    destination = tmp_path / "snapshot"
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setattr(signing, "MAX_EXECUTABLE_SIZE", 4)
+    if size == 5:
+        with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+            signing._snapshot_executable(source, destination, digest, label="verifier", mismatch_message="digest mismatch")
+        assert not destination.exists()
+    else:
+        actual, _ = signing._snapshot_executable(source, destination, digest, label="verifier", mismatch_message="digest mismatch")
+        assert actual == digest
+        assert destination.read_bytes() == source.read_bytes()
+
+
+def test_executable_snapshot_bounds_growth_during_streaming(tmp_path, monkeypatch):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"xxxx")
+    source.chmod(0o700)
+    destination = tmp_path / "snapshot"
+    monkeypatch.setattr(signing, "MAX_EXECUTABLE_SIZE", 4)
+    original_read = os.read
+    read_sizes = []
+    def grow_then_read(descriptor, size):
+        read_sizes.append(size)
+        with source.open("ab") as stream:
+            stream.write(b"x")
+        return original_read(descriptor, size)
+    monkeypatch.setattr(signing.os, "read", grow_then_read)
+    with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+        signing._snapshot_executable(source, destination, hashlib.sha256(b"xxxxx").hexdigest(), label="verifier", mismatch_message="digest mismatch")
+    assert read_sizes == [5]
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("size", (4, 5))
+def test_executable_digest_rechecks_enforce_the_same_byte_ceiling(tmp_path, monkeypatch, size):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"x" * size)
+    source.chmod(0o700)
+    monkeypatch.setattr(signing, "MAX_EXECUTABLE_SIZE", 4)
+    if size == 5:
+        with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+            signing._stable_digest(source, "verifier", executable=True)
+    else:
+        digest, identity = signing._stable_digest(source, "verifier", executable=True)
+        assert digest == hashlib.sha256(b"xxxx").hexdigest()
+        source.write_bytes(b"xxxxx")
+        with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+            signing._assert_digest_unchanged(source, "verifier", digest, identity, executable=True)
+
+
+def test_executable_digest_bounds_growth_while_hashing(tmp_path, monkeypatch):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"xxxx")
+    source.chmod(0o700)
+    original_read = os.read
+    read_sizes = []
+    def grow_then_read(descriptor, size):
+        read_sizes.append(size)
+        with source.open("ab") as stream:
+            stream.write(b"x")
+        return original_read(descriptor, size)
+    monkeypatch.setattr(signing.os, "read", grow_then_read)
+    with pytest.raises(signing.ReleaseManifestSignatureError, match="inspected byte bound"):
+        signing._stable_digest(source, "verifier", executable=True)
+    assert read_sizes == [5]
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -244,6 +316,7 @@ def _sign(
     fingerprint: str = TEST_FINGERPRINT,
     verifier: Path | None = None,
     verifier_digest: str | None = None,
+    verification_summary_output: Path | None = None,
 ) -> dict[str, object]:
     signer = signer or _external_signer(tmp_path)
     raw_public_key = raw_public_key or _raw_public_key(tmp_path)
@@ -260,6 +333,7 @@ def _sign(
         public_key_output,
         verifier,
         verifier_digest,
+        verification_summary_output,
     )
 
 
@@ -315,6 +389,207 @@ def test_sign_verify_and_deterministic_signature_bytes(tmp_path: Path) -> None:
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
         "release-manifest"
     ] * 5
+
+
+@pytest.mark.parametrize("replacement_kind", ["directory", "symlink"])
+@pytest.mark.parametrize("output_kind", ["signature", "public-key", "summary"])
+def test_signing_rejects_output_parent_replacement_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+    output_kind: str,
+) -> None:
+    manifest = _manifest(tmp_path)
+    output_parent = tmp_path / "outputs"
+    output_parent.mkdir()
+    original_parent = tmp_path / "original-outputs"
+    redirected_parent = tmp_path / "redirected-outputs"
+    redirected_parent.mkdir()
+    signer = tmp_path / "parent-replacing-signer"
+    _write_executable(
+        signer,
+        "import sys\nfrom pathlib import Path\n"
+        f"parent = Path({str(output_parent)!r})\n"
+        f"parent.rename(Path({str(original_parent)!r}))\n"
+        + (
+            "parent.mkdir()\n"
+            if replacement_kind == "directory"
+            else f"parent.symlink_to(Path({str(redirected_parent)!r}), target_is_directory=True)\n"
+        )
+        + f"Path(sys.argv[2]).write_bytes(bytes.fromhex({TEST_SIGNATURE.hex()!r}))\n",
+    )
+    opened_outputs: list[str] = []
+    original_open = signing.os.open
+
+    def observe_open(path, flags, *args, **kwargs):
+        if flags & os.O_CREAT and Path(path).name in {
+            "release.sig", "release.pub", "release.verify.json"
+        }:
+            opened_outputs.append(str(path))
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(signing.os, "open", observe_open)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="output.*(directory|parent).*(changed|replaced|symlink|open)",
+    ):
+        _sign(
+            tmp_path,
+            manifest,
+            (output_parent if output_kind == "signature" else tmp_path) / "release.sig",
+            (output_parent if output_kind == "public-key" else tmp_path) / "release.pub",
+            signer=signer,
+            verification_summary_output=(
+                (output_parent if output_kind == "summary" else tmp_path)
+                / "release.verify.json"
+            ),
+        )
+    assert opened_outputs == []
+    assert list(original_parent.iterdir()) == []
+    assert list(redirected_parent.iterdir()) == []
+    assert list(output_parent.iterdir()) == []
+
+
+@pytest.mark.parametrize("missing_capability", ["O_DIRECTORY", "O_NOFOLLOW", "dir_fd"])
+def test_signing_without_anchored_output_support_fails_before_external_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_capability: str,
+) -> None:
+    manifest = _manifest(tmp_path)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("external operation preceded output-directory qualification")
+
+    if missing_capability == "dir_fd":
+        monkeypatch.setattr(signing, "RELEASE_OUTPUT_DIR_FD_SUPPORTED", False)
+    else:
+        monkeypatch.delattr(signing.os, missing_capability)
+    monkeypatch.setattr(signing, "_invoke_external_signer", forbidden)
+    monkeypatch.setattr(signing, "_verify_bytes_with_pinned_native", forbidden)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError, match="publication is unavailable"
+    ):
+        _sign(tmp_path, manifest, tmp_path / "release.sig", tmp_path / "release.pub")
+    assert not list(tmp_path.glob("iroha-release-manifest-sign-*"))
+    assert not (tmp_path / "release.sig").exists()
+    assert not (tmp_path / "release.pub").exists()
+
+
+def test_output_transaction_rejects_ancestor_replacement_during_leaf_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ancestor = tmp_path / "ancestor"
+    parent = ancestor / "outputs"
+    parent.mkdir(parents=True)
+    moved_ancestor = tmp_path / "moved-ancestor"
+    output = parent / "release.sig"
+    original_parent_inode = parent.stat().st_ino
+    original_open = signing.os.open
+    replaced = False
+
+    def replace_before_leaf_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if flags & os.O_CREAT and Path(path).name == output.name:
+            assert kwargs.get("dir_fd") is not None
+            ancestor.rename(moved_ancestor)
+            ancestor.mkdir()
+            (moved_ancestor / "outputs").rename(parent)
+            replaced = True
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(signing.os, "open", replace_before_leaf_open)
+    with (
+        pytest.raises(
+            signing.ReleaseManifestSignatureError, match="parent directory was replaced"
+        ),
+        signing._ReleaseOutputTransaction([(output, "signature output")]) as transaction,
+    ):
+        transaction.install(output, TEST_SIGNATURE, "signature output")
+    assert replaced
+    assert parent.stat().st_ino == original_parent_inode
+    assert list(parent.iterdir()) == []
+
+
+def test_output_transaction_rolls_back_through_pinned_parent_without_deleting_substitutions(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "outputs"
+    parent.mkdir()
+    original_parent = tmp_path / "original-outputs"
+    redirected = tmp_path / "redirected"
+    redirected.mkdir()
+    sentinel = b"must remain intact"
+    (redirected / "release.pub").write_bytes(sentinel)
+    public_key = parent / "release.pub"
+    signature = parent / "release.sig"
+    with (
+        pytest.raises(
+            signing.ReleaseManifestSignatureError, match="output parent directory"
+        ),
+        signing._ReleaseOutputTransaction(
+            [(public_key, "public-key output"), (signature, "signature output")]
+        ) as transaction,
+    ):
+        transaction.install(public_key, TEST_PUBLIC_KEY, "public-key output")
+        parent.rename(original_parent)
+        parent.symlink_to(redirected, target_is_directory=True)
+        transaction.install(signature, TEST_SIGNATURE, "signature output")
+    assert list(original_parent.iterdir()) == []
+    assert (redirected / "release.pub").read_bytes() == sentinel
+    assert not (redirected / "release.sig").exists()
+
+
+def test_output_transaction_erases_failed_inode_and_preserves_replaced_leaf(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "release.sig"
+    leaked = tmp_path / "linked-signature"
+    sentinel = b"unrelated replacement"
+    with (
+        pytest.raises(signing.ReleaseManifestSignatureError, match="output changed"),
+        signing._ReleaseOutputTransaction([(output, "signature output")]) as transaction,
+    ):
+        transaction.install(output, TEST_SIGNATURE, "signature output")
+        os.link(output, leaked)
+        output.unlink()
+        output.write_bytes(sentinel)
+    assert output.read_bytes() == sentinel
+    assert leaked.read_bytes() == b""
+
+
+def test_output_transaction_removes_partial_write_and_closes_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "release.sig"
+    original_write = signing.os.write
+    writes = 0
+
+    def fail_after_partial_write(descriptor, payload):
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            return original_write(descriptor, payload[:1])
+        raise OSError(errno.ENOSPC, "injected full output filesystem")
+
+    monkeypatch.setattr(signing.os, "write", fail_after_partial_write)
+    transaction = signing._ReleaseOutputTransaction([(output, "signature output")])
+    with (
+        pytest.raises(signing.ReleaseManifestSignatureError, match="cannot publish"),
+        transaction,
+    ):
+        transaction.install(output, TEST_SIGNATURE, "signature output")
+    assert writes == 2
+    assert not output.exists()
+    for _, descriptor, _ in transaction.created:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+    for _, _, descriptors in transaction.parents.values():
+        for descriptor in descriptors:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
 
 
 def test_timed_ovn_release_audit_runs_before_external_signing(tmp_path: Path) -> None:

@@ -251,6 +251,10 @@ public static class PrivacyNative
                     out _)
                 && NativeLibrary.TryGetExport(
                     handle,
+                    "iroha_privacy_validate_exact12_capability_manifest_v1",
+                    out _)
+                && NativeLibrary.TryGetExport(
+                    handle,
                     "iroha_privacy_exact12_fixture_bundle_v1",
                     out _)
                 && NativeLibrary.TryGetExport(
@@ -476,11 +480,11 @@ public static class PrivacyNative
     }
 
     /// <summary>
-    /// Strictly validate canonical committed Exact12 manifest bytes and compare every complete
-    /// compiled-profile result with this ABI-23 binary's native-validated local catalog.
+    /// Require Rust's canonical validation of all release, audit and deployment evidence, then
+    /// compare every complete compiled-profile result with this binary's local catalog.
     /// </summary>
     /// <remarks>
-    /// A valid result is a structural and local-tuple prerequisite only. This method cannot mint
+    /// A valid result establishes canonical evidence and local-tuple consistency. It cannot mint
     /// network authority; only the authenticated Torii fetch can issue a manifest model usable by
     /// <see cref="PrivacyExact12CapabilityAdmissionV1.RequireExact12CapabilityTupleV1"/>.
     /// </remarks>
@@ -503,8 +507,10 @@ public static class PrivacyNative
 
         try
         {
+            var snapshot = (byte[])archive.Clone();
+            RequireValidCapabilityArchive(snapshot);
             var catalog = CompiledProfileCatalogV1().NoritoBytes;
-            PrivacyExact12CapabilityManifestCodecV1.Validate(archive, catalog);
+            PrivacyExact12CapabilityManifestCodecV1.Validate(snapshot, catalog);
             return PrivacyExact12CapabilityManifestValidationStatusV1.Valid;
         }
         catch (PrivacyExact12CapabilityManifestCodecV1.LocalTupleMismatchException)
@@ -514,6 +520,31 @@ public static class PrivacyNative
         catch (PrivacyExact12CapabilityManifestException)
         {
             return PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest;
+        }
+    }
+
+    /// <summary>Require Rust's complete release, audit and deployment evidence verification.</summary>
+    internal static void RequireValidCapabilityArchive(byte[] archive)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        if (archive.Length == 0 || archive.Length > PrivacyExact12CapabilityManifestV1.MaxArchiveBytes)
+        {
+            throw new PrivacyExact12CapabilityManifestException(
+                "Exact12 capability archive is empty or exceeds its byte ceiling.");
+        }
+        if (!IsAvailable())
+        {
+            throw new PrivacyExact12CapabilityManifestException(
+                "The mandatory native Exact12 capability validator is unavailable.");
+        }
+        var snapshot = (byte[])archive.Clone();
+        var status = RunWithNativeStack(() => NativeValidateExact12CapabilityManifest(
+            snapshot,
+            new UIntPtr(checked((uint)snapshot.Length))));
+        if (status != 0)
+        {
+            throw new PrivacyExact12CapabilityManifestException(
+                $"Native Exact12 evidence validation rejected status {status}.");
         }
     }
 
@@ -564,6 +595,14 @@ public static class PrivacyNative
         EntryPoint = "iroha_privacy_validate_compiled_profile_catalog_v1",
         CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeValidateCompiledProfileCatalog(
+        [In] byte[] archive,
+        UIntPtr archiveLength);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "iroha_privacy_validate_exact12_capability_manifest_v1",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeValidateExact12CapabilityManifest(
         [In] byte[] archive,
         UIntPtr archiveLength);
 

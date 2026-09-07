@@ -600,12 +600,24 @@ impl ZkAmsMkheProofEnvelopeWireV1 {
     }
 }
 /// Compact collective ciphertext containing exactly two RNS polynomials.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveCiphertextWireV1 {
     binding: ZkAmsMkheWireBindingV1,
     sample_index: u64,
     constant: ZkAmsMkheRnsPolynomialWireV1,
     linear: ZkAmsMkheRnsPolynomialWireV1,
+}
+impl core::fmt::Debug for ZkAmsMkheCollectiveCiphertextWireV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Keep diagnostics independent of both full-size polynomial data and
+        // the complete roster/transcript binding carried on the wire.
+        formatter
+            .debug_struct("ZkAmsMkheCollectiveCiphertextWireV1")
+            .field("sample_index", &self.sample_index)
+            .field("constant_residue_count", &self.constant.residues.len())
+            .field("linear_residue_count", &self.linear.residues.len())
+            .finish_non_exhaustive()
+    }
 }
 impl ZkAmsMkheCollectiveCiphertextWireV1 {
     /// Construct one exact two-polynomial collective ciphertext.
@@ -1467,6 +1479,10 @@ mod tests {
         assert!(rendered.len() < 256);
         assert!(!rendered.contains("[1, 2, 3"));
         assert!(rendered.contains("residue_count: 8"));
+        assert_eq!(
+            rendered,
+            "ZkAmsMkheCollectiveCiphertextWireV1 { sample_index: 0, constant_residue_count: 8, linear_residue_count: 8, .. }"
+        );
     }
     #[test]
     fn polynomial_wire_source_forbids_full_residue_debug() {

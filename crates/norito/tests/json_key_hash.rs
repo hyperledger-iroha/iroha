@@ -3,16 +3,17 @@
 
 use norito::json::{Parser, TapeWalker, key_hash_const};
 
-// Deliberately independent bitwise CRC32C reference. Each public update starts
-// and ends complemented; the intrinsic operates on the raw internal register.
+// Deliberately independent bitwise CRC32C reference. The canonical key hash
+// starts with an all-ones raw register and avalanches it without an xor-out;
+// this is an internal dispatch hash, not a serialized CRC checksum.
 fn software_reference(key: &str) -> u64 {
     let mut state = !0_u32;
     for byte in key.bytes() {
-        let mut register = !state ^ u32::from(byte);
+        let mut register = state ^ u32::from(byte);
         for _ in 0..8 {
             register = (register >> 1) ^ (0x82f6_3b78 & 0_u32.wrapping_sub(register & 1));
         }
-        state = !register;
+        state = register;
     }
     let mut mixed = u64::from(state) ^ 0x9e37_79b9_7f4a_7c15;
     mixed ^= mixed >> 33;
@@ -44,6 +45,16 @@ fn check_key(encoded_key: &str, decoded: &str, leading_spaces: usize) {
         "tape {decoded:?}"
     );
     walker.expect_colon().unwrap();
+}
+
+#[test]
+fn key_hash_crc32c_register_convention_has_fixed_known_answer() {
+    // CRC-32C/ISCSI("123456789") is 0xe3069283; the uncomplemented
+    // register consumed by dispatch mixing is therefore 0x1cf96d7c.
+    let expected = 0x3c2d7b9e96f89893_u64;
+    assert_eq!(software_reference("123456789"), expected);
+    assert_eq!(key_hash_const("123456789"), expected);
+    check_key("\"123456789\"", "123456789", 0);
 }
 
 #[test]

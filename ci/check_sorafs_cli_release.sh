@@ -9,7 +9,7 @@ echo "[sorafs-release] build-efficiency provenance check"
 python3 -I -S scripts/check_build_efficiency_provenance.py
 
 echo "[sorafs-release] source-file budget check"
-python3 scripts/check_source_file_budget.py --require-objective
+python3 scripts/check_source_file_budget.py
 
 echo "[sorafs-release] reviewed shipping feature graph check"
 python3 -I -S scripts/check_release_feature_graph.py
@@ -81,11 +81,14 @@ python3 scripts/check_workflow_action_pins.py
 python3 -m pytest -q \
   scripts/tests/check_workflow_action_pins_test.py \
   scripts/tests/check_sorafs_release_automation_test.py \
+  scripts/tests/check_sorafs_mobile_parity_reports_test.py \
   scripts/tests/check_build_efficiency_provenance_test.py \
   scripts/tests/check_sorafs_release_version_map_test.py \
   scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py \
   scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py \
   scripts/tests/sorafs_reference_sdk_supply_chain_test.py \
+  scripts/tests/sorafs_reference_sdk_signed_manifest_test.py \
+  scripts/tests/sorafs_reference_sdk_receipt_verifier_test.py \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
   scripts/tests/build_sorafs_foundational_prerequisite_test.py \

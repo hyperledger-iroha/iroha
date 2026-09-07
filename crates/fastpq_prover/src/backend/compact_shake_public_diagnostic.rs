@@ -243,7 +243,7 @@ fn complete_candidate_axt_facade_drops_private_data_before_verification() {
         .is_err()
     );
     assert!(verify_axt_transfer(&prepared, &expected, context(&fixture), &bytes, limits).is_err());
-    let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+    let ordinary = fixture.prepare(ProofSemantics::StateTransition);
     assert!(
         verify_shake_transfer(
             &ordinary,
@@ -296,7 +296,7 @@ fn complete_candidate_bundle(axt: bool) {
     let semantics = if axt {
         ProofSemantics::AxtTransferClaim
     } else {
-        ProofSemantics::TransferStateTransition
+        ProofSemantics::StateTransition
     };
     let limits = policy(2);
     let mut proving_seconds = Vec::new();
@@ -511,7 +511,7 @@ fn complete_candidate_bundle(axt: bool) {
             )
             .is_err()
         );
-        let ordinary = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let retagged = bundle::encode_shake_wire(
             &ShakeBundleWire {
                 version: 1,

@@ -34,7 +34,8 @@ fn public_musubi_query_signs_the_exact_fixed_route_and_body() {
     let query = norito::json!({"package": "apps.sora/demo"});
     let client = client_with_base_url(base_url());
     let result: PublicMusubiQueryResultV1<Value> =
-        with_mock_http(respond_with(&snapshots, response), || {
+        with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client.clone().with_test_http_transport(mock_transport);
             post_public_musubi_query_v1(
                 &client,
                 PublicMusubiQueryPathV1::ExactPackage,
@@ -66,7 +67,8 @@ fn public_musubi_query_rejects_legacy_witness_injection_before_dispatch() {
             stored.lock().expect("snapshot lock").push(snapshot);
             Ok(empty_response(StatusCode::OK))
         },
-        || {
+        |mock_transport| {
+            let client = client.clone().with_test_http_transport(mock_transport);
             post_public_musubi_query_v1::<_, Value>(
                 &client,
                 PublicMusubiQueryPathV1::ExactPackage,
@@ -425,7 +427,8 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
             &Arc::new(Mutex::new(Vec::new())),
             empty_response(StatusCode::NOT_FOUND),
         ),
-        || {
+        |mock_transport| {
+            let client = client.clone().with_test_http_transport(mock_transport);
             post_public_musubi_query_v1(
                 &client,
                 PublicMusubiQueryPathV1::Versions,
@@ -441,7 +444,8 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
             &Arc::new(Mutex::new(Vec::new())),
             empty_response(StatusCode::GONE),
         ),
-        || {
+        |mock_transport| {
+            let client = client.clone().with_test_http_transport(mock_transport);
             post_public_musubi_query_v1(
                 &client,
                 PublicMusubiQueryPathV1::OrderedPrefix,

@@ -425,7 +425,6 @@ def _sdk_dependency_fixture_material() -> tuple[
             "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
             f"{gradle_key}/gradle-9.3.0-bin.zip.ok"
         ): b"",
-        "gradle/java-gradle-wrapper.properties": wrapper,
         "gradle/kotlin-gradle-wrapper.properties": wrapper,
         "node/node_modules/.package-lock.json": installed_lock,
         "node/package-lock.json": package_lock,
@@ -502,7 +501,6 @@ def _sdk_dependency_fixture_material() -> tuple[
             "wrapper_cache_key": gradle_key,
             "version": "9.3.0",
             "wrapper_properties_sha256": {
-                "java": hashlib.sha256(wrapper).hexdigest(),
                 "kotlin": hashlib.sha256(wrapper).hexdigest(),
             },
         },
@@ -569,9 +567,6 @@ def _sdk_source_manifest_fixture(git: Path) -> bytes:
             "distribution_url": bindings["gradle"]["distribution_url"],
             "gradle_user_home": "/operator/gradle-home",
             "gradle_user_home_inventory": inventory("gradle/gradle-user-home"),
-            "java_wrapper_properties_sha256": bindings["gradle"][
-                "wrapper_properties_sha256"
-            ]["java"],
             "kotlin_wrapper_properties_sha256": bindings["gradle"][
                 "wrapper_properties_sha256"
             ]["kotlin"],

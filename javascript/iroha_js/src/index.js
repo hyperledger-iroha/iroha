@@ -221,7 +221,8 @@ export {
   signSm2,
   verifySm2,
   sm2PublicKeyMultihash,
-  buildKaigiRosterJoinProof,
+  buildKaigiAuthorizationProofV1,
+  buildKaigiUsageProofV1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
@@ -277,6 +278,7 @@ export {
 } from "./axt.js";
 export {
   encodeAccountIdNoritoValue,
+  decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,
   encodeCancelAssetLockV1,
   encodeQuantityNoritoValue,
@@ -566,6 +568,7 @@ export {
   sccpReplayRecordDigestV1,
   sccpReplayEmptyHashesV1,
   sccpReplayRootFromWitnessV1,
+  sccpReplayVerifyAgainstCurrentRootV1,
   normalizeSccpCapabilities,
   normalizeSccpSoraOutboundMaterial,
   normalizeSccpRegistry,

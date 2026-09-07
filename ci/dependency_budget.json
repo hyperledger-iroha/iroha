@@ -1,6 +1,353 @@
 {
+  "architecture": {
+    "configurations": {
+      "aggregate-model": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha_data_model",
+        "target": "all"
+      },
+      "incentives": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "soranet_incentives",
+        "target": "all"
+      },
+      "musubi-service-default": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution"
+        ],
+        "package": "iroha_musubi_service",
+        "target": "all"
+      },
+      "sdk-default": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha",
+        "target": "all"
+      },
+      "sdk-tls-native": {
+        "default_features": false,
+        "features": [
+          "tls-native",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha",
+        "target": "all"
+      },
+      "sdk-tls-native-vendored": {
+        "default_features": false,
+        "features": [
+          "tls-native-vendored",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha",
+        "target": "all"
+      },
+      "sdk-tls-rustls-native-roots": {
+        "default_features": false,
+        "features": [
+          "tls-rustls-native-roots",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha",
+        "target": "all"
+      },
+      "sdk-tls-rustls-webpki-roots": {
+        "default_features": false,
+        "features": [
+          "tls-rustls-webpki-roots",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha",
+        "target": "all"
+      },
+      "service-model": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {},
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime",
+          "protocol",
+          "sdk"
+        ],
+        "package": "iroha_service_model",
+        "target": "all"
+      },
+      "storage-client-default": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-native": {
+        "default_features": false,
+        "features": [
+          "tls-native",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-native-vendored": {
+        "default_features": false,
+        "features": [
+          "tls-native-vendored",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-rustls-native-roots": {
+        "default_features": false,
+        "features": [
+          "tls-rustls-native-roots",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "storage-client-tls-rustls-webpki-roots": {
+        "default_features": false,
+        "features": [
+          "tls-rustls-webpki-roots",
+          "gost",
+          "sm"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "service_runtime"
+        ],
+        "package": "iroha_storage_client",
+        "target": "all"
+      },
+      "torii-wire": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "package": "iroha_torii_shared",
+        "target": "all"
+      }
+    },
+    "layers": {
+      "incentives": [
+        "soranet_incentives"
+      ],
+      "node_configuration": [
+        "iroha_config"
+      ],
+      "node_execution": [
+        "iroha_core",
+        "iroha_torii",
+        "irohad",
+        "ivm",
+        "fastpq_prover",
+        "zk_ace_prover"
+      ],
+      "proof_primitives": [
+        "iroha_zkp_halo2"
+      ],
+      "protocol": [
+        "iroha_data_model",
+        "iroha_torii_shared"
+      ],
+      "sdk": [
+        "iroha"
+      ],
+      "service_model": [
+        "iroha_service_model"
+      ],
+      "service_runtime": [
+        "iroha_musubi_service"
+      ],
+      "storage_client": [
+        "iroha_storage_client"
+      ],
+      "storage_runtime": [
+        "sorafs_car",
+        "sorafs_orchestrator"
+      ],
+      "telemetry_runtime": [
+        "iroha_telemetry"
+      ]
+    },
+    "schema_version": 1
+  },
   "baseline": {
-    "manifest_fingerprint": "sha256:6f13492bcfd74b03ed05d3d7db61327e680ec33f1cd8a4c14e440a8aae8444df",
+    "manifest_fingerprint": "sha256:c43516bd28b067e5fd9cdb339dacf011a5d65e6a26f2c73f2495f909d04d5470",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -27,18 +374,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 765,
-        "declared_external_dependency_edges": 535,
-        "declared_external_packages": 183,
-        "declared_local_packages": 56,
+        "declared_dependency_edges": 782,
+        "declared_external_dependency_edges": 542,
+        "declared_external_packages": 181,
+        "declared_local_packages": 59,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 53,
-        "required_dependency_edges": 635,
-        "required_external_dependency_edges": 435,
-        "required_external_packages": 143,
-        "required_local_packages": 49,
+        "declared_workspace_packages": 56,
+        "required_dependency_edges": 647,
+        "required_external_dependency_edges": 437,
+        "required_external_packages": 145,
+        "required_local_packages": 52,
         "required_path_packages": 3,
-        "required_workspace_packages": 46
+        "required_workspace_packages": 49
       },
       "roots": [
         "iroha_cli"
@@ -49,13 +396,13 @@
       "limits": {
         "declared_dependency_edges": 285,
         "declared_external_dependency_edges": 229,
-        "declared_external_packages": 106,
+        "declared_external_packages": 107,
         "declared_local_packages": 28,
         "declared_path_packages": 2,
         "declared_workspace_packages": 26,
-        "required_dependency_edges": 204,
-        "required_external_dependency_edges": 164,
-        "required_external_packages": 79,
+        "required_dependency_edges": 195,
+        "required_external_dependency_edges": 156,
+        "required_external_packages": 77,
         "required_local_packages": 21,
         "required_path_packages": 2,
         "required_workspace_packages": 19
@@ -64,21 +411,41 @@
         "iroha_data_model"
       ]
     },
+    "iroha-sdk-shipping": {
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 359,
+        "declared_external_dependency_edges": 278,
+        "declared_external_packages": 116,
+        "declared_local_packages": 35,
+        "declared_path_packages": 2,
+        "declared_workspace_packages": 33,
+        "required_dependency_edges": 268,
+        "required_external_dependency_edges": 204,
+        "required_external_packages": 87,
+        "required_local_packages": 28,
+        "required_path_packages": 2,
+        "required_workspace_packages": 26
+      },
+      "roots": [
+        "iroha"
+      ]
+    },
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 819,
-        "declared_external_dependency_edges": 561,
-        "declared_external_packages": 188,
-        "declared_local_packages": 58,
+        "declared_dependency_edges": 818,
+        "declared_external_dependency_edges": 558,
+        "declared_external_packages": 185,
+        "declared_local_packages": 60,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 55,
-        "required_dependency_edges": 673,
-        "required_external_dependency_edges": 457,
+        "declared_workspace_packages": 57,
+        "required_dependency_edges": 668,
+        "required_external_dependency_edges": 450,
         "required_external_packages": 148,
-        "required_local_packages": 50,
+        "required_local_packages": 52,
         "required_path_packages": 3,
-        "required_workspace_packages": 47
+        "required_workspace_packages": 49
       },
       "roots": [
         "irohad"
@@ -87,18 +454,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1611,
-        "declared_external_dependency_edges": 1020,
-        "declared_external_packages": 233,
-        "declared_local_packages": 100,
+        "declared_dependency_edges": 1669,
+        "declared_external_dependency_edges": 1041,
+        "declared_external_packages": 230,
+        "declared_local_packages": 104,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 97,
-        "required_dependency_edges": 1483,
-        "required_external_dependency_edges": 925,
-        "required_external_packages": 195,
-        "required_local_packages": 100,
+        "declared_workspace_packages": 101,
+        "required_dependency_edges": 1537,
+        "required_external_dependency_edges": 942,
+        "required_external_packages": 194,
+        "required_local_packages": 104,
         "required_path_packages": 3,
-        "required_workspace_packages": 97
+        "required_workspace_packages": 101
       },
       "roots": [
         "*"

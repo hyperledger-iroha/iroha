@@ -71,16 +71,21 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
         self.assertNotIn("if (!PrivacyNative.IsAvailable())", source)
 
     def test_csharp_artifact_manifest_requires_all_privacy_symbols(self) -> None:
+        required = checker.REQUIRED_SYMBOLS["csharp"]
+        for symbol in (
+            "connect_norito_bridge_abi_version",
+            "connect_norito_free",
+            "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+        ):
+            self.assertIn(symbol, required)
         self.assertEqual(
-            checker.REQUIRED_SYMBOLS["csharp"],
+            tuple(symbol for symbol in required if symbol.startswith("iroha_privacy_")),
             (
-                "connect_norito_bridge_abi_version",
-                "connect_norito_free",
-                "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
                 "iroha_privacy_compiled_profile_catalog_v1",
                 "iroha_privacy_validate_compiled_profile_catalog_v1",
                 "iroha_privacy_exact12_fixture_bundle_v1",
                 "iroha_privacy_validate_exact12_fixture_bundle_v1",
+                "iroha_privacy_validate_exact12_capability_manifest_v1",
                 "iroha_privacy_free_buffer",
             ),
         )

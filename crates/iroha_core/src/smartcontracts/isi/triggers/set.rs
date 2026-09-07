@@ -297,7 +297,12 @@ fn data_trigger_filter_index_keys(filter: &DataEventFilter) -> Vec<DataTriggerIn
         DataEventFilter::Any => vec![DataTriggerIndexKey::Any],
         DataEventFilter::GameSession(id) => id.as_ref().map_or_else(
             || family(DataTriggerFamily::GameSession),
-            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::GameSession, id)],
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::GameSession,
+                    id,
+                )]
+            },
         ),
         DataEventFilter::Peer(_) => family(DataTriggerFamily::Peer),
         DataEventFilter::Domain(filter) => filter.id_matcher().as_ref().map_or_else(
@@ -413,7 +418,10 @@ fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
     match event {
         DataEvent::GameSession(event) => {
             keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::GameSession));
-            keys.insert(data_trigger_subject_key(DataTriggerSubjectKind::GameSession, &event.session_id));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::GameSession,
+                &event.session_id,
+            ));
         }
         DataEvent::Peer(_) => {
             keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Peer));

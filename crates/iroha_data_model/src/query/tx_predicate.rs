@@ -1853,7 +1853,8 @@ mod wire {
             Ok(Self(values))
         }
     }
-    #[derive(Clone, NoritoSerialize, NoritoDeserialize)]
+    #[derive(Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::tx_predicate::wire::Node")]
     pub(super) enum Node {
         And { child_count: u32 },
         Or { child_count: u32 },
@@ -2000,7 +2001,7 @@ mod wire {
             if field.encoded_len_exact().is_none() {
                 return Err(Error::LengthMismatch);
             }
-            norito::core::write_len_prefixed_exact(writer, *field, &mut field_buffer)?;
+            norito::core::write_len_prefixed(writer, *field, &mut field_buffer)?;
         }
         Ok(())
     }
@@ -2246,6 +2247,9 @@ mod wire {
         let (nodes, _) = norito::core::decode_vec_from_slice_serial::<Node>(bytes)?;
         Ok(nodes)
     }
+
+    #[cfg(test)]
+    mod captured_tx_predicate_schema_tests;
 }
 impl norito::core::NoritoSerialize for CommittedTxPredicate {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {

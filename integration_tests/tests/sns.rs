@@ -2,7 +2,7 @@
 //! SNS registrar integration coverage.
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{self, start_network_async_or_skip};
-use iroha::{client::Client as IrohaClient, sns::SnsNamespacePath};
+use iroha::{blocking::Client as IrohaClient, sns::SnsNamespacePath};
 use iroha_data_model::{
     account::AccountId,
     alias_setup::{ALIAS_LEASE_YEAR_MS, AliasQuoteGuardV1, AliasTargetV1, ResolvedDomainV1},
@@ -44,7 +44,7 @@ async fn sns_registrar_round_trip() -> Result<()> {
     assert_eq!(response.selector.normalized_label(), literal);
     assert_same_owner_controller(
         &response.owner,
-        &client.account,
+        &client.client().account,
         "register response owner should match request owner controller",
     );
     assert!(
@@ -55,7 +55,7 @@ async fn sns_registrar_round_trip() -> Result<()> {
     assert_eq!(fetched.name_hash, response.name_hash);
     assert_same_owner_controller(
         &fetched.owner,
-        &client.account,
+        &client.client().account,
         "fetched owner should preserve request owner controller",
     );
     let policy = get_sns_policy(&client, response.selector.suffix_id).await?;
@@ -74,7 +74,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let metrics_endpoint = client.torii_url.join("metrics")?;
+    let metrics_endpoint = client.client().torii_url.join("metrics")?;
     let http = HttpClient::new();
     let metric_labels = [("result", "ok"), ("suffix", "domain")];
     let baseline = read_metric_sample(
@@ -179,11 +179,11 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
 }
 async fn setup_domain(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
     let domain = DomainId::parse_fully_qualified(&domain_literal(label))?;
-    let instruction = domain_setup_instruction(&domain, &client.account)?;
+    let instruction = domain_setup_instruction(&domain, &client.client().account)?;
     let client = client.clone();
     let submit_client = client.clone();
     run_sns_client_call("ensure SNS domain", move || {
-        submit_client.submit_blocking(
+        submit_client.submit(
             instruction,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -198,7 +198,7 @@ async fn submit_alias_instruction(
 ) -> Result<()> {
     let client = client.clone();
     run_sns_client_call("submit alias lifecycle instruction", move || {
-        client.submit_blocking(
+        client.submit(
             instruction,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -210,7 +210,10 @@ async fn get_sns_name(client: &IrohaClient, literal: &str) -> Result<NameRecordV
     let client = client.clone();
     let literal = literal.to_owned();
     run_sns_client_call("get SNS name", move || {
-        client.sns().get_name(SnsNamespacePath::Domain, &literal)
+        client
+            .client()
+            .sns()
+            .get_name(SnsNamespacePath::Domain, &literal)
     })
     .await
 }
@@ -219,7 +222,10 @@ async fn get_sns_policy(
     suffix_id: u16,
 ) -> Result<iroha_data_model::sns::SuffixPolicyV1> {
     let client = client.clone();
-    run_sns_client_call("get SNS policy", move || client.sns().get_policy(suffix_id)).await
+    run_sns_client_call("get SNS policy", move || {
+        client.client().sns().get_policy(suffix_id)
+    })
+    .await
 }
 async fn run_sns_client_call<T, F>(operation: &'static str, call: F) -> Result<T>
 where

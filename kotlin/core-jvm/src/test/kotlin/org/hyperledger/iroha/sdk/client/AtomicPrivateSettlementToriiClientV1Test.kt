@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.math.BigDecimal
@@ -71,7 +73,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_000L,
             "settlement-leg-status-1",
         )
@@ -97,7 +99,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_000L,
             "settlement-phase-certificate-recovery-1",
         )
@@ -598,7 +600,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
             """{"transaction":{}}""".toByteArray(StandardCharsets.UTF_8),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val auth = ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private))
         assertFailsWith<IllegalArgumentException> { client.uploadLeg(wrong, auth) }
 
         val approval = auditApprovalRequest()
@@ -731,7 +733,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
     private fun sponsorAuth(): ToriiCanonicalRequestAuth =
         ToriiCanonicalRequestAuth(
             "alice@universal",
-            KeyPairGenerator.getInstance("Ed25519").generateKeyPair().private,
+            RequestSigner.ed25519(KeyPairGenerator.getInstance("Ed25519").generateKeyPair().private),
         )
 
     private fun renderThrowable(error: Throwable): String {

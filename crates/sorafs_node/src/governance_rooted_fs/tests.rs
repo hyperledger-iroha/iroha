@@ -3,12 +3,12 @@
 mod tests {
     use super::{
         ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
-        TWO_SLOT_ZERO_DIGEST, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
-        TwoSlotInitializationWaitV1, TwoSlotSnapshotV1, TwoSlotStageV1, TwoSlotStoreConfigV1,
-        TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value, encode_two_slot_value,
-        initialize_two_slot_stage, open_existing_two_slot_store, read_exact_file_region,
-        two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
-        write_exact_file_region, write_two_slot_record_unlocked,
+        TWO_SLOT_ZERO_DIGEST, TwoSlotBindingMaterialV1, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
+        TwoSlotInitializationWaitV1, TwoSlotRecordHeaderV1, TwoSlotSnapshotV1, TwoSlotStageV1,
+        TwoSlotStoreConfigV1, TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value,
+        encode_two_slot_value, initialize_two_slot_stage, open_existing_two_slot_store,
+        read_exact_file_region, two_slot_init_lock_name, two_slot_lost_found_name,
+        two_slot_stage_prefix, write_exact_file_region, write_two_slot_record_unlocked,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::cell::Cell;
@@ -59,6 +59,215 @@ mod tests {
     fn two_slot_config(name: &str) -> TwoSlotStoreConfigV1 {
         TwoSlotStoreConfigV1::try_new(name, [0x51; 32], [0xa7; 32], 512)
             .expect("valid bounded two-slot test config")
+    }
+    fn two_slot_caller_layouts() -> [u8; 10] {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+        [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ]
+    }
+    #[test]
+    fn two_slot_binding_and_record_frames_ignore_caller_layout() {
+        let mut material = super::zero_two_slot_binding_material();
+        material.store_name_digest = [0x35; 32];
+        material.store_nonce = [0x73; 32];
+        material.max_payload_bytes = 512;
+        let material_bytes = norito::encode_canonical(&material).unwrap();
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"sorafs.governance.two-slot.binding.v1\0");
+        hash.update(&material_bytes);
+        let expected_binding_digest = *hash.finalize().as_bytes();
+        let payload = b"exact two-slot payload";
+        let header = TwoSlotRecordHeaderV1 {
+            format_version: super::TWO_SLOT_FORMAT_VERSION_V1,
+            binding_digest: expected_binding_digest,
+            slot_id: 1,
+            generation: 2,
+            predecessor_digest: [0x41; 32],
+            payload_len: payload.len() as u64,
+            payload_digest: *blake3::hash(payload).as_bytes(),
+        };
+        let header_bytes = norito::encode_canonical(&header).unwrap();
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"sorafs.governance.two-slot.record.v1\0");
+        hash.update(&header_bytes);
+        hash.update(payload);
+        let expected_record_digest = *hash.finalize().as_bytes();
+        let mut alternate_frames = 0;
+        for flags in two_slot_caller_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                super::two_slot_binding_digest(&material).unwrap(),
+                expected_binding_digest
+            );
+            assert_eq!(
+                super::two_slot_record_digest(&header, payload).unwrap(),
+                expected_record_digest
+            );
+            assert_eq!(
+                encode_two_slot_value(&material, "binding").unwrap(),
+                material_bytes
+            );
+            assert_eq!(
+                encode_two_slot_value(&header, "record").unwrap(),
+                header_bytes
+            );
+            assert_eq!(
+                decode_two_slot_value::<TwoSlotBindingMaterialV1>(&material_bytes, "binding")
+                    .unwrap(),
+                material
+            );
+            assert_eq!(
+                decode_two_slot_value::<TwoSlotRecordHeaderV1>(&header_bytes, "record").unwrap(),
+                header
+            );
+            let alternate = norito::core::to_bytes(&material).unwrap();
+            if alternate != material_bytes {
+                alternate_frames += 1;
+                assert_eq!(
+                    norito::decode_from_bytes::<TwoSlotBindingMaterialV1>(&alternate).unwrap(),
+                    material
+                );
+                let error =
+                    decode_two_slot_value::<TwoSlotBindingMaterialV1>(&alternate, "binding")
+                        .expect_err(
+                            "matching caller flags cannot authorize alternate binding bytes",
+                        );
+                assert!(error.to_string().contains("noncanonical"));
+            }
+            let alternate = norito::core::to_bytes(&header).unwrap();
+            if alternate != header_bytes {
+                assert_eq!(
+                    norito::decode_from_bytes::<TwoSlotRecordHeaderV1>(&alternate).unwrap(),
+                    header
+                );
+                assert!(
+                    decode_two_slot_value::<TwoSlotRecordHeaderV1>(&alternate, "record").is_err()
+                );
+            }
+            let mut substituted = header.clone();
+            substituted.predecessor_digest[0] ^= 1;
+            assert_ne!(
+                super::two_slot_record_digest(&substituted, payload).unwrap(),
+                expected_record_digest
+            );
+            assert_ne!(
+                super::two_slot_record_digest(&header, b"substituted payload").unwrap(),
+                expected_record_digest
+            );
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        assert!(alternate_frames > 0);
+    }
+    #[test]
+    fn two_slot_initialization_reopen_and_cas_ignore_caller_layout() {
+        let expected_layout = super::two_slot_layout(512).unwrap();
+        for flags in two_slot_caller_layouts() {
+            let temp = tempdir().unwrap();
+            let root = test_root(temp.path());
+            let config = two_slot_config("canonical-layout");
+            let (store, initial) = {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                let store = root
+                    .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+                    .unwrap();
+                assert_eq!(
+                    store.layout.header_region_bytes,
+                    expected_layout.header_region_bytes
+                );
+                assert_eq!(
+                    store.layout.record_header_region_bytes,
+                    expected_layout.record_header_region_bytes
+                );
+                assert_eq!(
+                    store.layout.commit_trailer_region_bytes,
+                    expected_layout.commit_trailer_region_bytes
+                );
+                assert_eq!(
+                    store.layout.slot_file_bytes,
+                    expected_layout.slot_file_bytes
+                );
+                let initial = store
+                    .load()
+                    .expect("load store created under alternate caller flags");
+                assert_eq!(norito::core::get_decode_flags(), flags);
+                (store, initial)
+            };
+            // The canonical caller must reopen a store initialized under each alternate layout.
+            let reader = read_only_test_root(temp.path());
+            assert_eq!(
+                reader
+                    .load_existing_two_slot_store_v1(config.clone())
+                    .unwrap(),
+                initial.clone()
+            );
+            let material = super::two_slot_binding_material(
+                &config,
+                expected_layout,
+                store.init_lock_identity,
+                [store.slots[0].identity, store.slots[1].identity],
+            )
+            .unwrap();
+            let mut hash = blake3::Hasher::new();
+            hash.update(b"sorafs.governance.two-slot.binding.v1\0");
+            hash.update(&norito::encode_canonical(&material).unwrap());
+            assert_eq!(store.binding_digest, *hash.finalize().as_bytes());
+            let updated = {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                let reopened = root
+                    .open_or_create_two_slot_store_v1(config.clone(), b"ignored initializer")
+                    .unwrap();
+                assert_eq!(reopened.load().unwrap(), initial);
+                let updated = reopened.compare_and_swap(&initial, b"updated").unwrap();
+                assert_eq!(updated.generation(), initial.generation() + 1);
+                assert!(reopened.compare_and_swap(&initial, b"stale write").is_err());
+                assert_eq!(reopened.load().unwrap(), updated);
+                updated
+            };
+            assert_eq!(store.load().unwrap(), updated);
+            for slot in &store.slots {
+                let bytes =
+                    read_exact_file_region(&slot.handle, 0, expected_layout.header_region_bytes)
+                        .unwrap();
+                let _: super::TwoSlotHeaderRegionV1 = norito::decode_canonical(&bytes)
+                    .expect("immutable slot header must use canonical bytes");
+                let bytes = read_exact_file_region(
+                    &slot.handle,
+                    expected_layout.header_region_bytes as u64,
+                    expected_layout.record_header_region_bytes,
+                )
+                .unwrap();
+                let region: super::TwoSlotRecordHeaderRegionV1 = norito::decode_canonical(&bytes)
+                    .expect("persisted record header must use canonical bytes");
+                let payload: &[u8] = if region.header.generation == initial.generation() {
+                    b"initial"
+                } else {
+                    b"updated"
+                };
+                let mut hash = blake3::Hasher::new();
+                hash.update(b"sorafs.governance.two-slot.record.v1\0");
+                hash.update(&norito::encode_canonical(&region.header).unwrap());
+                hash.update(payload);
+                let bytes = read_exact_file_region(
+                    &slot.handle,
+                    expected_layout.trailer_offset,
+                    expected_layout.commit_trailer_region_bytes,
+                )
+                .unwrap();
+                let trailer: super::TwoSlotCommitTrailerRegionV1 = norito::decode_canonical(&bytes)
+                    .expect("persisted commit trailer must use canonical bytes");
+                assert_eq!(trailer.trailer.record_digest, *hash.finalize().as_bytes());
+            }
+        }
     }
     fn two_slot_fault(label: &'static str) -> io::Error {
         io::Error::other(format!("injected two-slot fault after {label}"))

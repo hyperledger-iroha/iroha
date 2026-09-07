@@ -1583,8 +1583,16 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             workflow,
-            "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX",
-            "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos-weakened.XXXXXX",
+            'mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos.XXXXXX"',
+            'mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos-weakened.XXXXXX"',
+            "lacks one fresh private target/artifact/cancel layout",
+        ),
+        (
+            workflow,
+            'invocation_base="$(cd -- /tmp && pwd -P)"\n'
+            '          invocation_root="$(mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos.XXXXXX")"',
+            'invocation_base="/private/tmp"\n'
+            '          invocation_root="$(mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos.XXXXXX")"',
             "lacks one fresh private target/artifact/cancel layout",
         ),
         (

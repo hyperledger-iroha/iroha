@@ -20,6 +20,8 @@ use norito::{
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntent")]
 pub struct DaPinIntent {
     /// Lane associated with the blob.
     pub lane_id: LaneId,
@@ -66,6 +68,8 @@ impl DaPinIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntentBundle")]
 pub struct DaPinIntentBundle {
     /// Bundle layout version.
     pub version: u16,
@@ -160,6 +164,8 @@ impl Ord for DaPinIntentBundle {
 /// Pin intent annotated with its position inside a block payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntentWithLocation")]
 pub struct DaPinIntentWithLocation {
     /// Pin intent contents.
     pub intent: DaPinIntent,
@@ -169,6 +175,8 @@ pub struct DaPinIntentWithLocation {
 /// Merkle membership proof for a DA pin intent inside a committed block bundle.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntentProof")]
 pub struct DaPinIntentProof {
     /// Pin intent covered by the proof.
     pub intent: DaPinIntent,
@@ -434,3 +442,6 @@ mod tests {
         assert!(DaPinIntentBundle::default().merkle_commitment().is_none());
     }
 }
+
+#[cfg(test)]
+mod captured_pin_intent_schema_tests;

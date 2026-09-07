@@ -90,9 +90,21 @@ pub(super) fn with_prepared_statement<T>(
             key: row.key.clone(),
             pre_value: row.pre_value.clone(),
             post_value: row.post_value.clone(),
-            operation: match row.operation {
+            operation: match &row.operation {
                 FastpqOperationKind::Transfer => OperationKind::Transfer,
                 FastpqOperationKind::MetaSet => OperationKind::MetaSet,
+                FastpqOperationKind::Mint => OperationKind::Mint,
+                FastpqOperationKind::Burn => OperationKind::Burn,
+                FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
+                    role_id: delta.role_id,
+                    permission_id: delta.permission_id,
+                    epoch: delta.epoch,
+                },
+                FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
+                    role_id: delta.role_id,
+                    permission_id: delta.permission_id,
+                    epoch: delta.epoch,
+                },
             },
         })
         .collect();
@@ -144,9 +156,33 @@ mod tests {
                     key: row.key.clone(),
                     pre_value: row.pre_value.clone(),
                     post_value: row.post_value.clone(),
-                    operation: match row.operation {
+                    operation: match &row.operation {
                         OperationKind::Transfer => FastpqOperationKind::Transfer,
                         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
+                        OperationKind::Mint => FastpqOperationKind::Mint,
+                        OperationKind::Burn => FastpqOperationKind::Burn,
+                        OperationKind::RoleGrant {
+                            role_id,
+                            permission_id,
+                            epoch,
+                        } => FastpqOperationKind::RoleGrant(
+                            iroha_data_model::fastpq::FastpqRolePermissionDelta {
+                                role_id: *role_id,
+                                permission_id: *permission_id,
+                                epoch: *epoch,
+                            },
+                        ),
+                        OperationKind::RoleRevoke {
+                            role_id,
+                            permission_id,
+                            epoch,
+                        } => FastpqOperationKind::RoleRevoke(
+                            iroha_data_model::fastpq::FastpqRolePermissionDelta {
+                                role_id: *role_id,
+                                permission_id: *permission_id,
+                                epoch: *epoch,
+                            },
+                        ),
                     },
                 })
                 .collect(),
@@ -158,7 +194,7 @@ mod tests {
     fn complete_model_roundtrip_preserves_preparation_and_owned_batch_context() {
         for count in [1, 2, 3] {
             let fixture = Fixture::multiple(count, false);
-            let original = fixture.prepare(ProofSemantics::TransferStateTransition);
+            let original = fixture.prepare(ProofSemantics::StateTransition);
             let expected = fixture.expected(&original);
             let statement = model(&original);
             let encoded = norito::encode_canonical(&statement).unwrap();
@@ -176,7 +212,7 @@ mod tests {
             let converted = with_prepared_statement(
                 &statement,
                 &expected,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 PublicTransferLimits::default(),
                 |prepared| {
                     assert_eq!(prepared.rows(), original.rows());
@@ -205,7 +241,7 @@ mod tests {
     #[test]
     fn every_model_input_is_compared_before_the_callback() {
         let fixture = Fixture::new(false);
-        let original = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let original = fixture.prepare(ProofSemantics::StateTransition);
         let expected = fixture.expected(&original);
         for index in 0..7 {
             let mut statement = model(&original);
@@ -222,7 +258,7 @@ mod tests {
             let result = with_prepared_statement(
                 &statement,
                 &expected,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 PublicTransferLimits::default(),
                 |_| panic!("mismatched inputs reached callback"),
             );
@@ -238,7 +274,7 @@ mod tests {
     #[test]
     fn equal_advertised_ordering_is_recomputed_and_false_facts_never_reach_callback() {
         let fixture = Fixture::multiple(2, false);
-        let original = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let original = fixture.prepare(ProofSemantics::StateTransition);
         for mutation in 0..5 {
             let mut statement = model(&original);
             let mut expected = fixture.expected(&original);
@@ -259,7 +295,7 @@ mod tests {
             let result = with_prepared_statement(
                 &statement,
                 &expected,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 PublicTransferLimits::default(),
                 |_| {
                     called.set(true);
@@ -277,7 +313,7 @@ mod tests {
     #[test]
     fn model_row_and_byte_caps_precede_conversion_and_preserve_exact_preparation_limit() {
         let fixture = Fixture::new(false);
-        let original = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let original = fixture.prepare(ProofSemantics::StateTransition);
         let statement = model(&original);
         let expected = fixture.expected(&original);
         for limit in [
@@ -301,7 +337,7 @@ mod tests {
             let result = with_prepared_statement(
                 &statement,
                 &expected,
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 limit,
                 |_| panic!("over-budget statement reached callback"),
             );
@@ -317,7 +353,7 @@ mod tests {
         with_prepared_statement(
             &statement,
             &expected,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             limits,
             |_| Ok(()),
         )
@@ -327,14 +363,14 @@ mod tests {
     #[test]
     fn route_selects_semantics_and_ambient_layout_cannot_change_model_preparation() {
         let fixture = Fixture::new(false);
-        let original = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let original = fixture.prepare(ProofSemantics::StateTransition);
         let statement = model(&original);
         let expected = fixture.expected(&original);
         for flags in (u8::MIN..=u8::MAX).filter(|&f| norito::core::validate_header_flags(f).is_ok())
         {
             let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             for semantics in [
-                ProofSemantics::TransferStateTransition,
+                ProofSemantics::StateTransition,
                 ProofSemantics::AxtTransferClaim,
             ] {
                 with_prepared_statement(

@@ -2118,7 +2118,7 @@ Root {
         merkle_chunk_size_bytes: 1048576,
         max_payload_bytes: 1073741824,
         resources: SnapshotResourcePolicy {
-            max_decode_depth: 128,
+            max_decode_depth: 32,
             max_decode_items: 10000000,
             max_string_bytes: 1048576,
             max_blob_bytes: 67108864,
@@ -2486,8 +2486,8 @@ Root {
         bridge_proof_max_future_drift_blocks: 0,
         poseidon_params_id: None,
         pedersen_params_id: None,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
+        kaigi_authorization_vk: None,
+
         kaigi_usage_vk: None,
         max_proof_size_bytes: 1048576,
         max_nullifiers_per_tx: 8,

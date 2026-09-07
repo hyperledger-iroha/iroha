@@ -1128,6 +1128,8 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, SignedHedgingError> {
+    let _canonical_layout =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let exact = norito::core::encoded_frame_len(value)
         .map_err(|error| SignedHedgingError::Encoding(error.to_string()))?;
     if exact > max_bytes {
@@ -1137,8 +1139,8 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
             max: max_bytes,
         });
     }
-    let bytes =
-        norito::to_bytes(value).map_err(|error| SignedHedgingError::Encoding(error.to_string()))?;
+    let bytes = norito::encode_canonical(value)
+        .map_err(|error| SignedHedgingError::Encoding(error.to_string()))?;
     if bytes.len() > max_bytes {
         return Err(SignedHedgingError::EncodedPayloadTooLarge {
             payload,
@@ -1164,17 +1166,16 @@ where
             max: max_bytes,
         });
     }
-    let decoded = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
-        SignedHedgingError::Decoding {
-            payload,
-            reason: error.to_string(),
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            SignedHedgingError::NonCanonicalEncoding { payload }
+        } else {
+            SignedHedgingError::Decoding {
+                payload,
+                reason: error.to_string(),
+            }
         }
-    })?;
-    let canonical = encode_canonical_bounded(payload, &decoded, max_bytes)?;
-    if canonical != bytes {
-        return Err(SignedHedgingError::NonCanonicalEncoding { payload });
-    }
-    Ok(decoded)
+    })
 }
 /// Externally governed feed and billing validation failures.
 #[derive(Debug, Error)]
@@ -1514,6 +1515,42 @@ mod tests {
         .expect("governed decision");
         (policy, decision)
     }
+    #[test]
+    fn signed_canonical_boundaries_ignore_enclosing_norito_layout() {
+        let (policy, envelope) = governed_decision();
+        let policy_bytes = policy.canonical_bytes().expect("policy bytes");
+        let envelope_bytes = envelope.canonical_bytes().expect("signed envelope bytes");
+        let policy_digest = policy.canonical_digest().expect("policy digest");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                policy.canonical_bytes().expect("policy bytes"),
+                policy_bytes
+            );
+            assert_eq!(
+                policy.canonical_digest().expect("policy digest"),
+                policy_digest
+            );
+            assert_eq!(
+                envelope.canonical_bytes().expect("envelope bytes"),
+                envelope_bytes
+            );
+            assert_eq!(
+                decode_hedging_feed_trust_policy(&policy_bytes).expect("canonical policy"),
+                policy
+            );
+            assert_eq!(
+                decode_governed_reference_price_decision(&envelope_bytes)
+                    .expect("canonical envelope"),
+                envelope
+            );
+            envelope
+                .verify(&policy, EFFECTIVE_AT)
+                .expect("unchanged signed authorization");
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+    }
+
     #[test]
     fn signed_feed_verifies_external_identity_binding_and_freshness() {
         let policy = policy();
@@ -1878,7 +1915,7 @@ mod tests {
         ));
     }
     #[test]
-    fn canonical_decoders_reject_trailing_compressed_and_oversized_payloads() {
+    fn canonical_decoders_reject_trailing_compression_tag_and_oversized_payloads() {
         let (policy, governed) = governed_decision();
         let policy_bytes = policy.canonical_bytes().expect("policy bytes");
         assert_eq!(
@@ -1904,9 +1941,7 @@ mod tests {
             decode_hedging_feed_trust_policy(&trailing),
             Err(SignedHedgingError::Decoding { .. })
         ));
-        let compressed =
-            norito::to_compressed_bytes(&policy, Some(norito::CompressionConfig::default()))
-                .expect("compress policy");
+        let compressed = crate::canonical_test_support::with_compression_tag(&policy);
         assert!(matches!(
             decode_hedging_feed_trust_policy(&compressed),
             Err(SignedHedgingError::NonCanonicalEncoding { .. })

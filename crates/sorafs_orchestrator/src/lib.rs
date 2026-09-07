@@ -1,12 +1,11 @@
 //! High-level orchestrator facade wiring SoraFS scoreboards to the async
 //! multi-source fetch loop implemented in `sorafs_car`.
 use futures::future::join_all;
-use iroha_core::prelude::Hash;
+use iroha_crypto::Hash;
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventKindV1, SoranetPrivacyEventV1, SoranetPrivacyHandshakeFailureV1,
     SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
 };
-use iroha_logger::{debug, info, warn};
 use iroha_telemetry::{
     metrics::global_or_default,
     privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator},
@@ -49,6 +48,7 @@ use tokio::{
     task::JoinHandle,
     time::sleep,
 };
+use tracing::{debug, info, warn};
 use url::Host;
 pub mod appeals;
 pub mod compliance;
@@ -306,10 +306,9 @@ use soranet::{
 /// Convenient re-exports for downstream callers.
 pub mod prelude {
     pub use crate::{
-        AnonymityPolicy, CircuitRefreshReport, FetchSession, GatewayCarVerification,
-        GatewayOrchestratorError, ManifestVerificationContext, ManifestVerificationError,
-        Orchestrator, OrchestratorConfig, PolicyFallback, PolicyReport, PolicyStatus,
-        TransportPolicy, WriteModeHint,
+        CircuitRefreshReport, FetchSession, GatewayCarVerification, GatewayOrchestratorError,
+        ManifestVerificationContext, ManifestVerificationError, Orchestrator, OrchestratorConfig,
+        PolicyFallback, PolicyReport, PolicyStatus,
         appeals::{
             AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
             AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig,
@@ -566,161 +565,7 @@ pub enum OrchestratorError {
     #[error("unsafe SoraFS fetch resource configuration: {0}")]
     UnsafeResourceConfig(&'static str),
 }
-/// Transport policy applied when selecting providers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TransportPolicy {
-    /// Prefer relays that advertise SoraNet support while keeping direct transports as a fallback.
-    /// Multi-source adopters now use this policy by default.
-    #[default]
-    SoranetPreferred,
-    /// Require SoraNet transport and fail instead of falling back to direct providers.
-    SoranetStrict,
-    /// Enforce direct mode by restricting selection to providers that expose Torii/QUIC transports.
-    /// Use this explicit downgrade when relays are unhealthy or compliance mandates single-source
-    /// fetches (see `roadmap.md`, “SoraNet Anonymity Overlay Program” for the rollback checklist).
-    DirectOnly,
-}
-impl TransportPolicy {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::SoranetPreferred => "soranet-first",
-            Self::SoranetStrict => "soranet-strict",
-            Self::DirectOnly => "direct-only",
-        }
-    }
-    /// Parse a [`TransportPolicy`] from its exact canonical V1 label.
-    pub fn parse(label: &str) -> Option<Self> {
-        match label {
-            "soranet-first" => Some(Self::SoranetPreferred),
-            "soranet-strict" => Some(Self::SoranetStrict),
-            "direct-only" => Some(Self::DirectOnly),
-            _ => None,
-        }
-    }
-}
-/// Staged anonymity policy enforced while selecting SoraNet-capable providers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(clippy::enum_variant_names)]
-pub enum AnonymityPolicy {
-    /// Stage A (default): require that at least one SoraNet hop (guard) advertises PQ capability.
-    #[default]
-    GuardPq,
-    /// Stage B: prefer PQ-capable relays for a majority of SoraNet hops (≥ two thirds).
-    MajorityPq,
-    /// Stage C: enforce PQ-only SoraNet paths, falling back to direct transports otherwise.
-    StrictPq,
-}
-impl AnonymityPolicy {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::GuardPq => "anon-guard-pq",
-            Self::MajorityPq => "anon-majority-pq",
-            Self::StrictPq => "anon-strict-pq",
-        }
-    }
-    /// Parse an [`AnonymityPolicy`] from its exact canonical V1 label.
-    pub fn parse(label: &str) -> Option<Self> {
-        match label {
-            "anon-guard-pq" => Some(Self::GuardPq),
-            "anon-majority-pq" => Some(Self::MajorityPq),
-            "anon-strict-pq" => Some(Self::StrictPq),
-            _ => None,
-        }
-    }
-    /// Returns the next less strict policy, if any.
-    #[must_use]
-    pub const fn fallback(self) -> Option<Self> {
-        match self {
-            Self::StrictPq => Some(Self::MajorityPq),
-            Self::MajorityPq => Some(Self::GuardPq),
-            Self::GuardPq => None,
-        }
-    }
-}
-/// Rollout phase controlling the default anonymity stage applied to SoraNet paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RolloutPhase {
-    /// Canary wave — require at least one PQ-capable guard (Stage A).
-    #[default]
-    Canary,
-    /// Ramp wave — prefer PQ-capable relays for ≥ two thirds of hops (Stage B).
-    Ramp,
-    /// Default GA posture — enforce PQ-only SoraNet paths (Stage C).
-    Default,
-}
-impl RolloutPhase {
-    /// Stable string label used in config/CLI bindings.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Canary => "canary",
-            Self::Ramp => "ramp",
-            Self::Default => "default",
-        }
-    }
-    /// Parse a rollout phase from its exact canonical V1 label.
-    pub fn parse(label: &str) -> Option<Self> {
-        match label {
-            "canary" => Some(Self::Canary),
-            "ramp" => Some(Self::Ramp),
-            "default" => Some(Self::Default),
-            _ => None,
-        }
-    }
-    /// Map the rollout phase to the default anonymity policy.
-    #[must_use]
-    pub const fn default_anonymity_policy(self) -> AnonymityPolicy {
-        match self {
-            Self::Canary => AnonymityPolicy::GuardPq,
-            Self::Ramp => AnonymityPolicy::MajorityPq,
-            Self::Default => AnonymityPolicy::StrictPq,
-        }
-    }
-}
-/// Write-mode hint forwarded by SDKs to tighten PQ expectations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WriteModeHint {
-    /// Default behaviour for read/replication workloads.
-    #[default]
-    ReadOnly,
-    /// Upload workloads that require PQ-only paths end-to-end.
-    UploadPqOnly,
-}
-impl WriteModeHint {
-    /// Stable canonical V1 label used in JSON, logs, and metrics.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read-only",
-            Self::UploadPqOnly => "upload-pq-only",
-        }
-    }
-    /// Parse a [`WriteModeHint`] from its exact canonical V1 label.
-    pub fn parse(label: &str) -> Option<Self> {
-        match label {
-            "read-only" => Some(Self::ReadOnly),
-            "upload-pq-only" => Some(Self::UploadPqOnly),
-            _ => None,
-        }
-    }
-    /// Returns `true` when the hint mandates PQ-only transport.
-    #[must_use]
-    pub const fn enforces_pq_only(self) -> bool {
-        matches!(self, Self::UploadPqOnly)
-    }
-    /// Apply the hint to derive effective transport/anonymity policies.
-    #[must_use]
-    pub const fn apply(
-        self,
-        transport_policy: TransportPolicy,
-        anonymity_policy: AnonymityPolicy,
-    ) -> (TransportPolicy, AnonymityPolicy) {
-        match self {
-            Self::ReadOnly => (transport_policy, anonymity_policy),
-            Self::UploadPqOnly => (TransportPolicy::SoranetStrict, AnonymityPolicy::StrictPq),
-        }
-    }
-}
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
 /// Configuration for polling relay admin privacy feeds.
 #[derive(Clone)]
 pub struct PrivacyEventsConfig {
@@ -5761,18 +5606,20 @@ mod tests {
     #[test]
     fn reconcile_circuits_reports_and_teardown() {
         test_logger();
+        let entry = directory_descriptor(0xAA, RelayRoles::new(true, false, false), true);
         let guard = GuardRecord {
-            relay_id: [0xAA; 32],
-            pinned_at_unix: 100,
-            endpoint: Endpoint::new("soranet://guard-AA", 0),
-            guard_weight: 50,
-            bandwidth_bytes_per_sec: 0,
-            reputation_weight: 0,
-            certificate: Some(pq_test_bundle([0xAA; 32])),
-            path_metadata: PathMetadata::default(),
+            relay_id: entry.relay_id,
+            pinned_at_unix: 1,
+            endpoint: entry.endpoints[0].clone(),
+            guard_weight: entry.guard_weight,
+            bandwidth_bytes_per_sec: entry.bandwidth_bytes_per_sec,
+            reputation_weight: entry.reputation_weight,
+            certificate: entry.certificate.clone(),
+            path_metadata: entry.path_metadata.clone(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
         let directory = RelayDirectory::new(vec![
+            entry,
             directory_descriptor(0x11, RelayRoles::new(false, true, false), true),
             directory_descriptor(0x22, RelayRoles::new(false, false, true), true),
         ]);
@@ -6273,7 +6120,8 @@ mod tests {
     fn retired_taikai_cache_config_is_rejected() {
         let value = norito::json!({"taikai_cache": {}});
         let error = bindings::config_from_json(&value)
-            .expect_err("retired Taikai cache config must fail closed");
+            .err()
+            .expect("retired Taikai cache config must fail closed");
         assert_eq!(
             error.to_string(),
             "taikai_cache was removed from the V1 orchestrator configuration"

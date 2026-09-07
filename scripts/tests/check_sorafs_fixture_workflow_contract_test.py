@@ -698,8 +698,14 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert parity.count(
         'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"'
     ) == 2
-    assert 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"' in parity
-    assert 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"' in parity
+    assert 'java-version: "21"' in parity
+    assert 'echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"' in parity
+    assert 'test ! -e "$native_root"' in parity
+    assert '--target "$target" --target-dir "$native_root/cargo-target"' in parity
+    assert "./gradlew --no-daemon --no-build-cache --rerun-tasks" in parity
+    assert ":core-jvm:test :tools:test" in parity
+    assert ":client-android:testDebugHostNative" in parity
+    assert "Reauthenticate the consumed Kotlin bridge" in parity
     assert 'sdkmanager_status="${PIPESTATUS[1]}"' in parity
     assert 'exit "$sdkmanager_status"' in parity
     assert (

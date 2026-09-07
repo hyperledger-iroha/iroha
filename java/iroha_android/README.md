@@ -114,38 +114,11 @@ and buffered responses at 8 MiB.
 
 ## Authoritative Sumeragi status and operational diagnostics
 
-`HttpClientTransport.getSumeragiStatus()` reads only
-`GET /v1/sumeragi/status` into the closed protocol-v4
-`SumeragiStatusModels.SumeragiV2Status` model.
-`getSumeragiDiagnostics()` separately reads
-`GET /v1/sumeragi/diagnostics` into
-`SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus`; diagnostics are durable
-operational evidence and must not be treated as consensus authority.
-
-```java
-final SumeragiStatusModels.SumeragiV2Status status =
-    transport.getSumeragiStatus().join();
-assert status.protocolVersion() == 4;
-System.out.printf(
-    "height=%s view=%s leader=%s%n",
-    status.height(), status.view(), status.leader());
-
-final SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus diagnostics =
-    transport.getSumeragiDiagnostics().join();
-for (SumeragiDiagnosticsModels.NativeAmxParticipantApplication row
-    : diagnostics.nativeAmxParticipantApplications()) {
-  System.out.printf(
-      "lane=%d height=%s state=%s%n",
-      row.laneId(), row.participantHeight(), row.state());
-}
-```
-
-Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
-at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
-type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
-fields and tags, and current Native AMX V2 evidence. The parsers reject
-status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
-participant rows, and inconsistent carrier identities.
+Kotlin `core-jvm` owns Sumeragi status, diagnostics, wire decoding and Native AMX
+validation for Kotlin and Java consumers. Use the `org.hyperledger.iroha.sdk`
+models and transport described in the [Kotlin SDK README](../../kotlin/README.md#authoritative-sumeragi-status-and-operational-diagnostics).
+Java consumer tests live in `kotlin/core-jvm/src/test/java`; the separate Java
+release leg executes those tests against the same canonical production SDK.
 
 ## KAGEMUSHA V1 (Java)
 
@@ -553,7 +526,6 @@ java/iroha_android
 │   │       │       ├── KeystoreKeyProvider.java
 │   │       │       └── KeyGenParameters.java
 │   │       ├── gpu
-│   │       │   └── CudaAccelerators.java
 │   │       ├── model
 │   │       │   ├── Executable.java
 │   │       │   └── TransactionPayload.java
@@ -575,7 +547,6 @@ java/iroha_android
 │           ├── IrohaKeyManagerTests.java
 │           ├── client/HttpClientTransportTests.java
 │           ├── crypto/keystore/KeystoreKeyProviderTests.java
-│           ├── gpu/CudaAcceleratorsTests.java
 │           ├── norito/NoritoCodecAdapterTests.java
 │           └── tx/TransactionBuilderTests.java
 ├── src/test/resources
@@ -1444,17 +1415,10 @@ separately trusted expected value. StrongBox preferences are propagated to key
 generation (`STRONGBOX_REQUIRED` forces StrongBox and
 `STRONGBOX_PREFERRED` requests it), and backend errors are surfaced directly.
 
-To exercise CUDA acceleration on capable devices, launch the JVM with
-`-Diroha.cuda.enableNative=true` and ensure `libconnect_norito_bridge` is
-available on `java.library.path`. Without the flag the deterministic Java path remains
-active and no native library is loaded (avoiding security warnings in CI).
-
-Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
-`Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
-operator guide for native setup and the hardware-qualified smoke harness
-(`specs/sdk/android/gpu_operator_guide.md`). The ordinary JVM suite excludes
-that GPU-only class; the nightly CUDA lane selects it explicitly and any
-missing driver, JNI bridge, or CUDA result fails the lane.
+CUDA computation belongs to `org.hyperledger.iroha.sdk.gpu.CudaAccelerators`
+in `kotlin/core-jvm`. Both JVM languages use its explicit backend construction
+and five bounded batch operations. See the [CUDA bridge contract](../../specs/sdk/android/gpu_operator_guide.md)
+for native loading and the hardware qualification task.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
 wrapped export bundle (v4) using per-export salt/nonce. The bundle records the

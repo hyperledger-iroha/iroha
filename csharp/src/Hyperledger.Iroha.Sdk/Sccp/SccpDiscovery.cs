@@ -221,6 +221,9 @@ public sealed class SccpTonMintBreakerGuardianKeysV1
 public sealed record SccpSoraFinalityAnchorV1(
     ushort ProtocolVersion,
     byte[] ChainIdHash,
+    ulong Epoch,
+    ulong EpochEndHeight,
+    byte[] RosterCommitment,
     ulong CheckpointHeight,
     byte[] CheckpointBlockHash,
     byte[] CheckpointContextId,
@@ -992,7 +995,7 @@ internal static class SccpExactParser
             ["version", "message_id", "payload_hash", "target_domain", "commitment_root", "finality_height", "finality_block_hash"],
             "SCCP proof public inputs");
         RequireVersion(inputs, "SCCP proof public inputs");
-        var targetDomain = SccpJson.UInt32(inputs, "target_domain", 1, 4);
+        var targetDomain = SccpJson.UInt32(inputs, "target_domain", 1, 5);
         if (targetDomain != target.DomainId())
         {
             throw new ArgumentException("SCCP target profile/domain mismatch.");
@@ -1192,7 +1195,7 @@ internal static class SccpExactParser
             var source = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(item, "source_profile"));
             var target = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(item, "target_profile"));
             var lane = new SccpLaneIdV1(source, target);
-            var targetDomain = SccpJson.UInt32(item, "target_domain", 1, 4);
+            var targetDomain = SccpJson.UInt32(item, "target_domain", 1, 5);
             if (!lane.IsOutbound || source != SccpNetworkV1.SoraTaira
                 || targetDomain != target.DomainId())
             {
@@ -1241,7 +1244,7 @@ internal static class SccpExactParser
                 1 => "taira_eth_xor",
                 2 => "taira_bsc_xor",
                 4 => "taira_ton_xor",
-                3 => "taira_tron_xor",
+                5 => "taira_tron_xor",
                 _ => throw new ArgumentException("Recent SCCP target domain is unsupported."),
             };
             if (assetId is not null && assetId != "xor"
@@ -1796,6 +1799,9 @@ internal static class SccpExactParser
             "source_network",
             "protocol_version",
             "chain_id_hash",
+            "epoch",
+            "epoch_end_height",
+            "roster_commitment",
             "checkpoint_height",
             "checkpoint_block_hash",
             "checkpoint_context_id",
@@ -1814,23 +1820,34 @@ internal static class SccpExactParser
             throw new ArgumentException($"{label}.chain_id_hash is not Taira.");
         }
 
+        var epoch = SccpJson.UInt64(item, "epoch", 1);
+        var epochEndHeight = SccpJson.UInt64(item, "epoch_end_height", 0);
+        var rosterCommitment = UpperHex(item, "roster_commitment", 32);
         var checkpointHeight = SccpJson.UInt64(item, "checkpoint_height", 1);
+        if (checkpointHeight > epochEndHeight)
+        {
+            throw new ArgumentException($"{label}.checkpoint_height exceeds its epoch end height.");
+        }
         var checkpointHash = UpperHex(item, "checkpoint_block_hash", 32);
         var contextId = UpperHex(item, "checkpoint_context_id", 32);
         var artifactHash = UpperHex(item, "checkpoint_finality_artifact_hash", 32);
-        RequireDistinctBytes([chainHash, checkpointHash, contextId, artifactHash], $"{label} finality hashes");
+        RequireDistinctBytes([chainHash, rosterCommitment, checkpointHash, contextId, artifactHash], $"{label} finality hashes");
         using var canonical = new MemoryStream();
         canonical.WriteByte(1);
         canonical.WriteByte((byte)SccpNetworkV1.SoraTaira);
         WriteUInt16LittleEndian(canonical, protocolVersion);
         canonical.Write(chainHash);
+        WriteUInt64LittleEndian(canonical, epoch);
+        WriteUInt64LittleEndian(canonical, epochEndHeight);
+        canonical.Write(rosterCommitment);
         WriteUInt64LittleEndian(canonical, checkpointHeight);
         canonical.Write(checkpointHash);
         canonical.Write(contextId);
         canonical.Write(artifactHash);
         var hash = SccpV1.Keccak256(Concat("sccp:sora-finality-anchor:v1"u8.ToArray(), canonical.ToArray()));
         return new SccpSoraFinalityAnchorV1(
-            protocolVersion, chainHash, checkpointHeight, checkpointHash, contextId, artifactHash, hash);
+            protocolVersion, chainHash, epoch, epochEndHeight, rosterCommitment,
+            checkpointHeight, checkpointHash, contextId, artifactHash, hash);
     }
 
     private static byte[] ParseVerifyingKey(JsonElement item, string label)
@@ -2176,16 +2193,16 @@ internal static class SccpExactParser
             "route_id",
         ], "SCCP transfer payload");
         RequireVersion(item, "SCCP transfer payload");
-        if (SccpJson.UInt32(item, "source_domain", 0, 4) != lane.Source.DomainId()
-            || SccpJson.UInt32(item, "dest_domain", 0, 4) != lane.Target.DomainId())
+        if (SccpJson.UInt32(item, "source_domain", 0, 5) != lane.Source.DomainId()
+            || SccpJson.UInt32(item, "dest_domain", 0, 5) != lane.Target.DomainId())
         {
             throw new ArgumentException("SCCP transfer payload does not match its exact lane.");
         }
 
         var nonce = DecimalUInt64(item, "nonce", 0);
         var routeRevision = SccpJson.UInt32(item, "route_revision", 1, uint.MaxValue);
-        var assetHomeDomain = SccpJson.UInt32(item, "asset_home_domain", 0, 4);
-        if (assetHomeDomain is not (0 or 1 or 2 or 3 or 4))
+        var assetHomeDomain = SccpJson.UInt32(item, "asset_home_domain", 0, 5);
+        if (assetHomeDomain is not (0 or 1 or 2 or 4 or 5))
         {
             throw new ArgumentException("SCCP transfer asset_home_domain is unsupported or retired.");
         }
@@ -2204,12 +2221,12 @@ internal static class SccpExactParser
             throw new ArgumentException("SCCP transfer amount must fit UInt128.");
         }
 
-        var senderCodec = SccpJson.UInt32(item, "sender_codec", 0, 3);
-        var recipientCodec = SccpJson.UInt32(item, "recipient_codec", 0, 3);
+        var senderCodec = SccpJson.UInt32(item, "sender_codec", 1, 7);
+        var recipientCodec = SccpJson.UInt32(item, "recipient_codec", 1, 7);
         var expectedRecipientCodec = lane.Target.DomainId() switch
         {
             4 => (uint)SccpCodecV1.TonAccount36,
-            3 => (uint)SccpCodecV1.TronAddress21,
+            5 => (uint)SccpCodecV1.TronAddress21,
             _ => (uint)SccpCodecV1.EvmAddress20,
         };
         if (senderCodec != (uint)SccpCodecV1.CanonicalText || recipientCodec != expectedRecipientCodec)
@@ -2224,7 +2241,7 @@ internal static class SccpExactParser
             ("recipient_codec", "recipient"), ("route_id_codec", "route_id"),
         })
         {
-            var tag = SccpJson.UInt32(item, codecField, 0, 3);
+            var tag = SccpJson.UInt32(item, codecField, 1, 7);
             if (!Enum.IsDefined((SccpCodecV1)tag))
             {
                 throw new ArgumentException("SCCP transfer uses a retired codec.");
@@ -2284,7 +2301,7 @@ internal static class SccpExactParser
             $"{label}.Transfer");
         if (SccpJson.UInt64(transfer, "version", 1) != 1
             || SccpJson.UInt32(transfer, "source_domain", 0, 0) != 0
-            || SccpJson.UInt32(transfer, "dest_domain", 1, 4) != expectedDestinationDomain
+            || SccpJson.UInt32(transfer, "dest_domain", 1, 5) != expectedDestinationDomain
             || SccpJson.UInt32(transfer, "asset_home_domain", 0, 0) != 0)
         {
             throw new ArgumentException($"{label}.Transfer domains or version do not match the recent message.");
@@ -2312,7 +2329,7 @@ internal static class SccpExactParser
             1 => "taira_eth_xor",
             2 => "taira_bsc_xor",
             4 => "taira_ton_xor",
-            3 => "taira_tron_xor",
+            5 => "taira_tron_xor",
             _ => throw new ArgumentException($"{label}.Transfer destination domain is unsupported."),
         };
         ExactCanonicalText(transfer, "route_id", expectedRoute, label);
@@ -2356,7 +2373,7 @@ internal static class SccpExactParser
         var tag = destinationDomain switch
         {
             4 => "TonAccount36",
-            3 => "TronAddress21",
+            5 => "TronAddress21",
             _ => "EvmAddress20",
         };
         SccpJson.ExactFields(tagged, [tag], $"{label}.Transfer.{field}");
@@ -2381,10 +2398,10 @@ internal static class SccpExactParser
 
         SccpJson.ExactFields(content, ["bytes"], $"{label}.Transfer.{field}.{tag}");
         var encoded = SccpJson.Text(content, "bytes");
-        var expectedLength = destinationDomain == 3 ? 44 : 42;
-        var bodyOffset = destinationDomain == 3 ? 4 : 2;
+        var expectedLength = destinationDomain == 5 ? 44 : 42;
+        var bodyOffset = destinationDomain == 5 ? 4 : 2;
         if (encoded.Length != expectedLength
-            || !encoded.StartsWith(destinationDomain == 3 ? "0x41" : "0x", StringComparison.Ordinal)
+            || !encoded.StartsWith(destinationDomain == 5 ? "0x41" : "0x", StringComparison.Ordinal)
             || encoded.Skip(2).Any(static character =>
                 !(character is >= '0' and <= '9') && !(character is >= 'a' and <= 'f'))
             || !encoded.Skip(bodyOffset).Any(static character => character != '0'))
@@ -2895,6 +2912,9 @@ internal static class SccpExactParser
         output.WriteByte((byte)SccpNetworkV1.SoraTaira);
         WriteUInt16LittleEndian(output, anchor.ProtocolVersion);
         output.Write(anchor.ChainIdHash);
+        WriteUInt64LittleEndian(output, anchor.Epoch);
+        WriteUInt64LittleEndian(output, anchor.EpochEndHeight);
+        output.Write(anchor.RosterCommitment);
         WriteUInt64LittleEndian(output, anchor.CheckpointHeight);
         output.Write(anchor.CheckpointBlockHash);
         output.Write(anchor.CheckpointContextId);

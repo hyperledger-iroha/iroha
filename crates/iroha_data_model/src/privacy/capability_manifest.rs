@@ -23,6 +23,8 @@ pub const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1: u32 = 1;
     feature = "json",
     norito(tag = "operation_schema", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyOperationSchemaV1")]
 pub enum PrivacyOperationSchemaV1 {
     /// ZK-ACE authorization action.
     #[cfg_attr(feature = "json", norito(rename = "zk_ace_authorization_action_v1"))]
@@ -96,6 +98,8 @@ impl PrivacyOperationSchemaV1 {
     feature = "json",
     norito(tag = "execution_mode", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyExecutionModeV1")]
 pub enum PrivacyExecutionModeV1 {
     /// Authorization action.
     #[cfg_attr(feature = "json", norito(rename = "authorization_action"))]
@@ -135,6 +139,8 @@ impl PrivacyExecutionModeV1 {
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyFeatureMaskV1")]
 pub struct PrivacyFeatureMaskV1(
     /// Exact first-release feature bits.
     pub u8,
@@ -168,6 +174,10 @@ impl PrivacyFeatureMaskV1 {
     feature = "json",
     norito(tag = "readiness", content = "detail", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityReadinessV1"
+)]
 pub enum PrivacyCapabilityReadinessV1 {
     /// All compiled, security, audit, release, and deployment evidence matches
     /// the active committed record.
@@ -183,6 +193,10 @@ pub enum PrivacyCapabilityReadinessV1 {
 #[cfg_attr(
     feature = "json",
     norito(tag = "reason", content = "detail", deny_unknown_fields)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityUnavailableReasonV1"
 )]
 pub enum PrivacyCapabilityUnavailableReasonV1 {
     /// The current binary has no complete executable profile.
@@ -286,6 +300,10 @@ impl PrivacyProtocolIdV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityRowV1"
+)]
 pub struct PrivacyExact12CapabilityRowV1 {
     /// Closed protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -501,6 +519,11 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
 #[norito(schema_name = "iroha.privacy.exact12-capability-manifest.v1")]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityManifestV1",
+    frame = "iroha.privacy.exact12-capability-manifest.v1"
+)]
 pub struct PrivacyExact12CapabilityManifestV1 {
     /// Exact manifest schema version.
     pub version: u32,
@@ -732,3 +755,6 @@ pub enum PrivacyExact12CapabilityManifestValidationErrorV1 {
         actual: PrivacyExact12CapabilityManifestDigestV1,
     },
 }
+
+#[cfg(test)]
+mod captured_capability_manifest_schema_tests;

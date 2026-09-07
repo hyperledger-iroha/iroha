@@ -720,7 +720,7 @@ fn fanout_decode_limits_use_the_reserved_allocation_phase() {
     );
     assert_eq!(
         limits.max_nesting_depth(),
-        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH
+        norito::core::MAX_VALUE_NESTING_DEPTH
     );
     assert_eq!(
         envelope

@@ -166,3 +166,7 @@ path = "tests/query_serialization_allocations.rs"
 [[test]]
 name = "block_signature_serialization_allocations"
 path = "tests/block_signature_serialization_allocations.rs"
+
+[[test]]
+name = "metadata_serialization_allocations"
+path = "tests/metadata_serialization_allocations.rs"

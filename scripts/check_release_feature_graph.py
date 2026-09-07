@@ -2826,11 +2826,13 @@ def declared_shipping_targets(repo: Path) -> tuple[ShippingTarget, ...]:
 def shipping_profiles(repo: Path) -> tuple[ShippingProfile, ...]:
     """Return distinct baseline and declaration-derived shipping profiles."""
 
+    # Validate the reviewed source surface before Cargo reads repository-owned
+    # manifests or configuration, including during baseline package discovery.
+    targets = declared_shipping_targets(repo)
     catalog = workspace_catalog(repo)
     missing = set(BASELINE_PACKAGES).difference(catalog.package_features)
     if missing:
         raise RuntimeError(f"missing baseline shipping packages: {sorted(missing)}")
-    targets = declared_shipping_targets(repo)
     profiles = {
         ShippingProfile(package=package) for package in BASELINE_PACKAGES
     }

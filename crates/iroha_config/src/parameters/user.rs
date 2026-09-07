@@ -4625,10 +4625,9 @@ pub struct Zk {
     /// Pedersen parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_PEDERSEN_PARAMS_ID")]
     pub pedersen_params_id: Option<u32>,
-    /// Optional verifying key reference used for Kaigi roster join proofs.
-    pub kaigi_roster_join_vk: Option<VerifyingKeyRef>,
-    /// Optional verifying key reference used for Kaigi roster leave proofs.
-    pub kaigi_roster_leave_vk: Option<VerifyingKeyRef>,
+    /// Governed verifying key for every final Kaigi authorization action.
+    pub kaigi_authorization_vk: Option<VerifyingKeyRef>,
+
     /// Optional verifying key reference used for Kaigi usage commitment proofs.
     pub kaigi_usage_vk: Option<VerifyingKeyRef>,
 }
@@ -4650,8 +4649,8 @@ impl Zk {
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
-            kaigi_roster_join_vk: self.kaigi_roster_join_vk.map(VerifyingKeyRef::parse),
-            kaigi_roster_leave_vk: self.kaigi_roster_leave_vk.map(VerifyingKeyRef::parse),
+            kaigi_authorization_vk: self.kaigi_authorization_vk.map(VerifyingKeyRef::parse),
+
             kaigi_usage_vk: self.kaigi_usage_vk.map(VerifyingKeyRef::parse),
             max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
             max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
@@ -13343,10 +13342,10 @@ impl SnapshotResourcePolicy {
     /// Relationships stay fail-closed so values cannot exceed the authenticated
     /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
-        if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
+        if self.max_decode_depth.get() > norito::core::MAX_VALUE_NESTING_DEPTH {
             return Err(format!(
                 "snapshot.resources.max_decode_depth must not exceed Norito's structural limit of {}",
-                norito::json::MAX_JSON_VALUE_NESTING_DEPTH
+                norito::core::MAX_VALUE_NESTING_DEPTH
             ));
         }
         if self.max_string_bytes > self.max_blob_bytes {
@@ -15686,7 +15685,7 @@ mod torii_push_tests {
         for config in [partial_fcm, partial_apns, padded, empty_path] {
             let mut emitter = Emitter::new();
             let _ = config.parse(&mut emitter);
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("invalid provider binding must fail closed");
         }
@@ -16641,7 +16640,7 @@ mod torii_recipient_lookup_tests {
             };
             let mut emitter = Emitter::new();
             assert!(route.parse(0, &mut emitter).is_none(), "{base_url}");
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("unsafe recipient lookup URL must fail closed");
         }
@@ -16664,7 +16663,7 @@ mod torii_recipient_lookup_tests {
             };
             let mut emitter = Emitter::new();
             assert!(route.parse(0, &mut emitter).is_none());
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("noncanonical recipient lookup token must fail closed");
         }
@@ -32189,41 +32188,41 @@ impl SorafsQuota {
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsAliasCache {
     /// Positive TTL in seconds applied to cached alias proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS")]
     pub positive_ttl: u64,
     /// Refresh window in seconds before the positive TTL elapses.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS")]
     pub refresh_window: u64,
     /// Hard expiry in seconds after which stale proofs are rejected.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS")]
     pub hard_expiry: u64,
     /// Negative cache TTL in seconds for missing aliases.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS")]
     pub negative_ttl: u64,
     /// TTL in seconds for revoked aliases (`410 Gone` responses).
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS")]
     pub revocation_ttl: u64,
     /// Maximum age in seconds tolerated before alias proof bundles must rotate.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS")]
     pub rotation_max_age: u64,
     /// Grace period in seconds applied after an approved successor before refusing predecessor proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS")]
     pub successor_grace: u64,
     /// Grace period in seconds applied to governance rotation events.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS")]
     pub governance_grace: u64,
 }
 impl Default for SorafsAliasCache {
     fn default() -> Self {
         Self {
-            positive_ttl: defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
-            refresh_window: defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
-            hard_expiry: defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
-            negative_ttl: defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
-            revocation_ttl: defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
-            rotation_max_age: defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-            successor_grace: defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-            governance_grace: defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            positive_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
+            refresh_window: iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+            hard_expiry: iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS,
+            negative_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
+            revocation_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
+            rotation_max_age: iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
+            successor_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
+            governance_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         }
     }
 }
@@ -32312,17 +32311,18 @@ impl SorafsGateway {
             untrusted_hosting,
             direct_mode,
         } = self;
-        let rollout_phase = match actual::SorafsRolloutPhase::parse(&rollout_phase) {
+        let rollout_phase = match iroha_service_model::soranet::RolloutPhase::parse(&rollout_phase)
+        {
             Some(phase) => phase,
             None => {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                     "invalid `sorafs.gateway.rollout_phase` value `{rollout_phase}`; expected exactly canary|ramp|default"
                 )));
-                actual::SorafsRolloutPhase::default()
+                iroha_service_model::soranet::RolloutPhase::default()
             }
         };
         let anonymity_policy = match anonymity_policy {
-            Some(label) => match actual::SorafsAnonymityStage::parse(&label) {
+            Some(label) => match iroha_service_model::soranet::AnonymityPolicy::parse(&label) {
                 Some(stage) => stage,
                 None => {
                     emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
@@ -32358,21 +32358,21 @@ mod sorafs_gateway_label_config_tests {
         for (rollout_label, expected_rollout, anonymity_label, expected_anonymity) in [
             (
                 "canary",
-                actual::SorafsRolloutPhase::Canary,
+                iroha_service_model::soranet::RolloutPhase::Canary,
                 "anon-guard-pq",
-                actual::SorafsAnonymityStage::GuardPq,
+                iroha_service_model::soranet::AnonymityPolicy::GuardPq,
             ),
             (
                 "ramp",
-                actual::SorafsRolloutPhase::Ramp,
+                iroha_service_model::soranet::RolloutPhase::Ramp,
                 "anon-majority-pq",
-                actual::SorafsAnonymityStage::MajorityPq,
+                iroha_service_model::soranet::AnonymityPolicy::MajorityPq,
             ),
             (
                 "default",
-                actual::SorafsRolloutPhase::Default,
+                iroha_service_model::soranet::RolloutPhase::Default,
                 "anon-strict-pq",
-                actual::SorafsAnonymityStage::StrictPq,
+                iroha_service_model::soranet::AnonymityPolicy::StrictPq,
             ),
         ] {
             let mut emitter = Emitter::new();
@@ -32410,10 +32410,13 @@ mod sorafs_gateway_label_config_tests {
 
         let (parsed, diagnostic) =
             result.expect("ordinary SoraFS gateway configuration errors must not unwind");
-        assert_eq!(parsed.rollout_phase, actual::SorafsRolloutPhase::Canary);
+        assert_eq!(
+            parsed.rollout_phase,
+            iroha_service_model::soranet::RolloutPhase::Canary
+        );
         assert_eq!(
             parsed.anonymity_policy,
-            Some(actual::SorafsAnonymityStage::GuardPq)
+            Some(iroha_service_model::soranet::AnonymityPolicy::GuardPq)
         );
         assert!(
             diagnostic.contains("sorafs.gateway.rollout_phase"),
@@ -35614,7 +35617,7 @@ policy_digest_hex = "{policy_digest_hex}"
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
-                format!("{error:?}").contains(key),
+                format!("{error:?}").contains("`settlement.offline`"),
                 "unexpected error: {error:?}"
             );
         }
@@ -38117,7 +38120,16 @@ publish_delay_seconds = 17
             Value::Integer(101),
         );
         queues.insert("bodies".into(), Value::Integer(310));
-        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            101,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("height-local lifecycle capacity must fit its physical-slot space");
         let report = format!("{error:?}");
@@ -38169,7 +38181,16 @@ publish_delay_seconds = 17
             Value::Integer(33),
         );
         queues.insert("bodies".into(), Value::Integer(106));
-        queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            33,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("home profile admits at most 32 independent authenticated sources");
         let report = format!("{error:?}");
@@ -38249,11 +38270,26 @@ publish_delay_seconds = 17
     }
     include!("user/kura_and_snapshot_tests.rs");
     #[test]
+    fn snapshot_resource_defaults_fit_decoder_limits() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.snapshot.resources.max_decode_depth.get(),
+            norito::core::MAX_VALUE_NESTING_DEPTH
+        );
+        assert!(
+            actual
+                .snapshot
+                .resources
+                .validate(actual.snapshot.max_payload_bytes)
+                .is_ok()
+        );
+    }
+    #[test]
     fn snapshot_resource_policy_rejects_incoherent_budgets() {
         let invalid_resources = [
             (
                 "max_decode_depth",
-                i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1)
+                i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH + 1)
                     .expect("Norito depth limit fits i64"),
             ),
             ("max_string_bytes", 65),
@@ -38269,7 +38305,13 @@ publish_delay_seconds = 17
                 .expect("snapshot table");
             snapshot.insert("max_payload_bytes".into(), Value::Integer(128));
             let mut resources = Table::new();
-            resources.insert("max_decode_depth".into(), Value::Integer(64));
+            resources.insert(
+                "max_decode_depth".into(),
+                Value::Integer(
+                    i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH)
+                        .expect("Norito depth limit fits i64"),
+                ),
+            );
             resources.insert("max_decode_items".into(), Value::Integer(1_024));
             resources.insert("max_string_bytes".into(), Value::Integer(32));
             resources.insert("max_blob_bytes".into(), Value::Integer(64));

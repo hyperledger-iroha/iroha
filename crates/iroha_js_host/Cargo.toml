@@ -16,6 +16,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
+iroha_service_model = { workspace = true }
 napi = { version = "3.5.1", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-derive = { version = "3.3.2", default-features = false, features = ["type-def"] }
 iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost", "pqc"], default-features = false }
@@ -37,6 +38,7 @@ sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
+iroha_storage_client = { workspace = true }
 kotodama_lang = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }
 zk_ace_prover = { path = "../zk_ace_prover" }

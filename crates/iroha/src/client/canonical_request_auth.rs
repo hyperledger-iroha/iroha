@@ -642,9 +642,7 @@ fn validate_canonical_request_witness_for_encoding(
 ///
 /// # Errors
 /// Returns an error for an invalid witness envelope or a failed bounded encoding.
-pub fn canonical_request_witness_message(
-    witness: &CanonicalRequestWitnessV1,
-) -> Result<Vec<u8>> {
+pub fn canonical_request_witness_message(witness: &CanonicalRequestWitnessV1) -> Result<Vec<u8>> {
     #[derive(norito::derive::Encode)]
     struct CanonicalRequestWitnessPayloadV1 {
         schema_version: u16,
@@ -663,11 +661,8 @@ pub fn canonical_request_witness_message(
         canonical_request_hash: witness.canonical_request_hash,
     };
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::to_bytes_bounded(
-        &payload,
-        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
-    )
-    .wrap_err("failed to encode bounded canonical request witness message")
+    norito::core::to_bytes_bounded(&payload, CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1)
+        .wrap_err("failed to encode bounded canonical request witness message")
 }
 
 /// Encode one bounded canonical V1 multisignature witness header.

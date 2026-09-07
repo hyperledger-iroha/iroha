@@ -1573,6 +1573,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
+    establish_configured_lane_markers_for_test(&kura, &lane_config);
     let latest_path =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
     drop(kura);

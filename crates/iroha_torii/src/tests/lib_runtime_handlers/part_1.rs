@@ -10,12 +10,9 @@ use axum::{
 };
 use base64::Engine as _;
 use futures::executor;
-use iroha_config::{
-    client_api::ConfigGetDTO,
-    parameters::{
-        actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
-        defaults,
-    },
+use iroha_config::parameters::{
+    actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
+    defaults,
 };
 use iroha_core::{
     kiso::KisoHandle,
@@ -34,8 +31,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION,
             QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
@@ -75,6 +72,7 @@ use iroha_executor_data_model::permission::account::{
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
+use iroha_torii_shared::configuration::Configuration;
 use norito::codec::Encode;
 use std::{
     collections::HashSet,

@@ -10,7 +10,10 @@ import {
   requirePrivacyExact12CapabilityAdmissionV1,
   requirePrivacyExact12CapabilityTupleV1,
 } from "./privacyCapabilityAdmission.js";
-import { privacyExact12CapabilityManifestTransportV1 } from "./privacyCapabilityTransport.js";
+import {
+  fetchPrivacyExact12CapabilityManifestTransportV1,
+  consumePrivacyExact12CapabilityManifestTransportV1,
+} from "./privacyCapabilityTransport.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 export {
@@ -472,10 +475,6 @@ export class PrivacyExact12CapabilityManifestV1 {
     privacyExact12ManifestState.set(this, {
       canonicalArchive: Uint8Array.from(canonicalArchive),
     });
-    bindPrivacyExact12CapabilityAdmissionV1(
-      this,
-      (protocolId) => admitPrivacyExact12CapabilityTupleV1(this, protocolId),
-    );
     Object.freeze(this);
   }
 
@@ -524,7 +523,7 @@ function compiledProfileCatalogFromNativeV1(native) {
   return bytes;
 }
 
-/** Decode the sole canonical Exact12 manifest archive through native ABI23/N-API. */
+/** Decode canonical Exact12 bytes for inspection. An archive never grants admission. */
 export function decodePrivacyExact12CapabilityManifestV1(canonicalArchive) {
   const bytes = copyPrivacyExact12ArchiveV1(canonicalArchive, "canonical archive");
   const native = requirePrivacyExact12NativeV1();
@@ -588,14 +587,23 @@ export async function getPrivacyExact12CapabilityManifestV1(client, options) {
       "getPrivacyExact12CapabilityManifestV1 requires the N-API Torii client",
     );
   }
-  const transport = client[privacyExact12CapabilityManifestTransportV1];
-  if (typeof transport !== "function") {
-    throw new TypeError(
-      "getPrivacyExact12CapabilityManifestV1 requires the N-API Torii client; browser and mock transports cannot authorize privacy",
-    );
+  const receipt = await fetchPrivacyExact12CapabilityManifestTransportV1(client, options);
+  const transport = consumePrivacyExact12CapabilityManifestTransportV1(receipt);
+  const manifest = decodePrivacyExact12CapabilityManifestV1(transport.archive);
+  const state = privacyExact12ManifestState.get(manifest);
+  state.expectedNetworkId = Uint8Array.from(transport.expectedNetworkId);
+  state.origin = transport.origin;
+  const qualification = manifest.qualification?.deployment_qualification;
+  if (qualification && !state.expectedNetworkId.every(
+    (byte, index) => byte === qualification.genesis_hash[index],
+  )) {
+    manifestFailV1("deployment qualification belongs to a different network", "transport");
   }
-  const archive = await Reflect.apply(transport, client, [options]);
-  return decodePrivacyExact12CapabilityManifestV1(archive);
+  bindPrivacyExact12CapabilityAdmissionV1(
+    manifest,
+    (protocolId) => admitPrivacyExact12CapabilityTupleV1(manifest, protocolId),
+  );
+  return manifest;
 }
 
 /**
@@ -629,7 +637,7 @@ function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
   const admitted = callPrivacyExact12NativeV1(
     native,
     "privacyRequireExact12CapabilityTupleV1",
-    [Uint8Array.from(state.canonicalArchive), protocolId],
+    [Uint8Array.from(state.canonicalArchive), protocolId, Uint8Array.from(state.expectedNetworkId)],
   );
   if (admitted !== true) {
     manifestFailV1(
@@ -639,6 +647,8 @@ function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
   }
   return deepFreeze({
     manifest_digest: Array.from(manifest.manifest_digest),
+    network_id: Array.from(state.expectedNetworkId),
+    torii_origin: state.origin,
     committed_height: manifest.committed_height,
     protocol_id: protocolId,
     operation_schema: row.operation_schema.operation_schema,

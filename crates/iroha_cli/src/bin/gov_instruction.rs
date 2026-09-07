@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    client::Client,
+    blocking::Client,
+    client::FeeQuoteRequest,
     config::{Config, LoadPath},
     data_model::{
         isi::{
@@ -166,7 +167,7 @@ fn ivm_execution_vk_id(name: &str) -> VerifyingKeyId {
     VerifyingKeyId::new(iroha_core::zk::ZK_BACKEND_HALO2_IPA, name)
 }
 fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<VerifyingKeyId>> {
-    let list = client.get_zk_vk_list_json()?;
+    let list = client.client().get_zk_vk_list_json()?;
     let Some(items) = list.as_array() else {
         return Ok(None);
     };
@@ -219,10 +220,15 @@ fn quote_and_sign_governance_transaction(
 ) -> Result<SignedTransaction> {
     let executable = Executable::Instructions(instructions.into());
     let mut payload = client
-        .try_build_transaction_payload(executable, fee_payment.clone(), metadata)
+        .account_client()
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            executable,
+            fee_payment.clone(),
+            metadata,
+        ))
         .wrap_err("failed to build exact unsigned governance payload")?;
     let quote = client
-        .quote_fees(&payload)
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact governance transaction fees")?;
     if !fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
@@ -235,7 +241,8 @@ fn quote_and_sign_governance_transaction(
         .wrap_err("fee quote returned an invalid payment intent")?;
     payload.fee_payment = quote.intent;
     client
-        .try_sign_transaction_payload(payload)
+        .account_client()
+        .sign_transaction(payload)
         .wrap_err(context)
 }
 fn ensure_ivm_execution_vk(
@@ -244,7 +251,10 @@ fn ensure_ivm_execution_vk(
     fee_payment: &FeePaymentIntent,
 ) -> Result<VerifyingKeyId> {
     let id = ivm_execution_vk_id(vk_name);
-    match client.get_zk_vk_json(id.backend.as_str(), &id.name) {
+    match client
+        .client()
+        .get_zk_vk_json(id.backend.as_str(), &id.name)
+    {
         Ok(_) => return Ok(id),
         Err(err) if err.to_string().contains("HTTP status: 404") => {}
         Err(err) => return Err(err).wrap_err("failed to query existing IVM execution VK"),
@@ -267,7 +277,7 @@ fn ensure_ivm_execution_vk(
         fee_payment,
         "failed to sign IVM execution VK registration transaction",
     )?;
-    let hash = match client.submit_transaction_blocking(&tx) {
+    let hash = match client.submit_transaction_and_wait(&tx) {
         Ok(hash) => hash,
         Err(err) => {
             let message = err.to_string();
@@ -294,7 +304,7 @@ fn submit_sccp_route_governance_transaction(
     client: &Client,
     tx: &SignedTransaction,
 ) -> Result<String> {
-    submit_sccp_route_governance_once(|| client.submit_transaction_blocking(tx))
+    submit_sccp_route_governance_once(|| client.submit_transaction_and_wait(tx))
         .map(|hash| hash.to_string())
 }
 fn submit_sccp_route_governance_once<T>(submit: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -330,7 +340,7 @@ fn propose_sccp_route_governance(
     fee_payment: &FeePaymentIntent,
 ) -> Result<()> {
     let config = load_config(config_path)?;
-    let client = Client::new(config.clone());
+    let client = Client::new(config.clone())?;
     let action = read_sccp_route_governance_action(action_path)?;
     let mut metadata = Metadata::default();
     insert_string_metadata(&mut metadata, "action", "propose_sccp_route_governance")?;
@@ -343,7 +353,7 @@ fn propose_sccp_route_governance(
         &client,
         vec![InstructionBox::from(ProposeSccpRouteGovernance {
             anchor: SccpRouteGovernanceAnchorV1 {
-                network_id: client.network_id,
+                network_id: client.account_client().network_id().clone(),
                 action: action.clone(),
             },
         })],
@@ -636,7 +646,7 @@ fn main() -> Result<()> {
             fee_payment_json,
         } => {
             let config = load_config(&config)?;
-            let client = Client::new(config.clone());
+            let client = Client::new(config.clone())?;
             let fee_payment = read_fee_payment(&fee_payment_json)?;
             let id = ensure_ivm_execution_vk(&client, &vk_name, &fee_payment)?;
             let mut output = norito::json::Map::new();
@@ -659,35 +669,32 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use iroha::data_model::{ChainId, account::AccountId};
-    use iroha_config::parameters::{
-        actual::SorafsRolloutPhase,
-        defaults::{
-            sorafs::gateway::{DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE},
-            torii,
-        },
+    use iroha_config::parameters::defaults::sorafs::gateway::{
+        DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_service_model::soranet::AnonymityPolicy;
+    use iroha_service_model::soranet::RolloutPhase;
     use sorafs_manifest::alias_cache::AliasCachePolicy;
-    use sorafs_orchestrator::AnonymityPolicy;
     use std::{cell::Cell, time::Duration};
     use url::Url;
     fn default_alias_cache_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(
-            Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
         )
     }
     fn default_anonymity_policy() -> AnonymityPolicy {
         AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
     }
-    fn default_rollout_phase() -> SorafsRolloutPhase {
-        SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
+    fn default_rollout_phase() -> RolloutPhase {
+        RolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
     }
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -711,8 +718,6 @@ mod tests {
             transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
             transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
             transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-            connect_queue_root: iroha::config::default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: default_alias_cache_policy(),
             sorafs_anonymity_policy: default_anonymity_policy(),
             sorafs_rollout_phase: default_rollout_phase(),
@@ -768,13 +773,15 @@ mod tests {
     #[test]
     fn exact_governance_payload_checked_signing_verifies() -> Result<()> {
         let config = test_config_with_chain_discriminant(369);
-        let client = Client::new(config.clone());
-        let payload = client.try_build_transaction_payload(
-            Executable::Instructions(Vec::<InstructionBox>::new().into()),
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
+        let client = Client::new(config.clone())?;
+        let payload = client.account_client().prepare_transaction(
+            iroha::client::AccountTransactionDraft::new(
+                Executable::Instructions(Vec::<InstructionBox>::new().into()),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ),
         )?;
-        let tx = client.try_sign_transaction_payload(payload)?;
+        let tx = client.account_client().sign_transaction(payload)?;
         tx.verify_signature()
             .wrap_err("verify governance helper signature")?;
         assert_eq!(tx.authority(), &config.account);

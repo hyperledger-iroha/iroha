@@ -259,7 +259,7 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         iroha_core::telemetry::LaneTeuGaugeUpdate {
             capacity: 4_096,
             committed: 512,
-            buckets: iroha_telemetry::metrics::NexusLaneTeuBuckets {
+            buckets: iroha_torii_shared::status::NexusLaneTeuBuckets {
                 floor: 256,
                 headroom: 512,
                 must_serve: 0,

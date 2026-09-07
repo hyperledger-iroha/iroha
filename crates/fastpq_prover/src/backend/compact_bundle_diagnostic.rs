@@ -60,7 +60,7 @@ fn complete_two_delta_bundle_verifies_after_private_witnesses_are_dropped() {
             let after = [before[0] - 25, before[1] + 25];
             for (account, index) in [(&*ALICE_ID, 0), (&*BOB_ID, 1)] {
                 rows.push(StateTransition::new(
-                    format!("asset/{asset}/{account}").into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(&asset, account).unwrap(),
                     before[index].to_le_bytes().to_vec(),
                     after[index].to_le_bytes().to_vec(),
                     OperationKind::Transfer,
@@ -112,7 +112,7 @@ fn complete_two_delta_bundle_verifies_after_private_witnesses_are_dropped() {
             &rows,
             &claims,
             inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
             PublicTransferLimits::default(),
         )
         .unwrap();
@@ -198,7 +198,7 @@ fn complete_two_delta_bundle_verifies_after_private_witnesses_are_dropped() {
         &rows,
         &claims,
         inputs,
-        ProofSemantics::TransferStateTransition,
+        ProofSemantics::StateTransition,
         PublicTransferLimits::default(),
     )
     .unwrap();
@@ -287,7 +287,7 @@ fn complete_two_delta_bundle_verifies_after_private_witnesses_are_dropped() {
         &rows,
         &claims,
         changed_inputs,
-        ProofSemantics::TransferStateTransition,
+        ProofSemantics::StateTransition,
         PublicTransferLimits::default(),
     )
     .unwrap();

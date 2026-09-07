@@ -1,10 +1,13 @@
 """Static guards for fail-closed OpenAPI release generation."""
 
+import base64
+import copy
 import json
 import re
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 try:
     import tomllib
@@ -143,6 +146,155 @@ def test_openapi_authority_parser_rejects_duplicate_members() -> None:
 
     with pytest.raises(ValueError, match=r"duplicate JSON member 'paths'"):
         parse_json_rejecting_duplicate_members(payload, "fixture authority")
+
+
+POP_REQUEST_CONTRACTS = (
+    ("/v1/sorafs/pop/wallet/prove", "SorafsPopMembershipRequestV1", "credential_commitment_hex"),
+    ("/v1/sorafs/pop/verify", "SorafsPopVerifyMembershipRequestV1", "canonical_proof_base64url"),
+)
+
+
+@pytest.fixture(scope="module")
+def pop_openapi_authority() -> dict:
+    # Authored authority and runtime source are checked here. The strict existing
+    # three-way mirror test separately requires a supported release-alias replay.
+    authority = OPENAPI_AUTHORITIES[0].read_bytes()
+    assert authority == OPENAPI_AUTHORITIES[2].read_bytes()
+    return parse_json_rejecting_duplicate_members(authority, "PoP authored authority")
+
+
+def _assert_pop_request_contract(document: dict) -> None:
+    schemas = document["components"]["schemas"]
+    for route, name, first_field in POP_REQUEST_CONTRACTS:
+        operation = document["paths"][route]["post"]
+        assert operation["requestBody"]["required"] is True
+        assert operation["requestBody"]["content"] == {
+            "application/json": {"schema": {"$ref": f"#/components/schemas/{name}"}}
+        }
+        assert "presentation_binding_digest_hex" in operation["description"]
+        assert "nullifier" in operation["description"]
+        assert any(
+            header["name"] == "Sora-PoP-Authorization" and header["required"] is True
+            for header in operation["parameters"]
+        )
+        fields = {first_field, "challenge_digest_hex", "verifier_context", "presentation_binding_digest_hex"}
+        schema = schemas[name]
+        assert set(schema) == {"type", "description", "additionalProperties", "properties", "required"}
+        assert schema["type"] == "object" and schema["additionalProperties"] is False
+        assert set(schema["required"]) == fields and len(schema["required"]) == len(fields)
+        assert set(schema["properties"]) == fields
+        for field in fields:
+            target = (
+                "SorafsPopVerifierContextV1" if field == "verifier_context"
+                else "SorafsPopMembershipProofBase64urlV1" if field == "canonical_proof_base64url"
+                else "SorafsPopNonzeroHex32V1"
+            )
+            assert schema["properties"][field] == {"$ref": f"#/components/schemas/{target}"}
+            assert "default" not in schemas[target] and "nullable" not in schemas[target]
+            assert schemas[target]["type"] == "string"
+
+
+def _pop_schema_validator(document: dict, name: str) -> Draft202012Validator:
+    schema = {"$ref": f"#/components/schemas/{name}", "components": document["components"]}
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
+
+
+def _pop_request(first_field: str) -> dict:
+    return {
+        first_field: "AQ" if first_field == "canonical_proof_base64url" else "11" * 32,
+        "challenge_digest_hex": "22" * 32,
+        "verifier_context": "moderation:appeal:7",
+        "presentation_binding_digest_hex": "33" * 32,
+    }
+
+
+def test_pop_openapi_exposes_exact_current_recipient_bound_requests(pop_openapi_authority: dict) -> None:
+    _assert_pop_request_contract(pop_openapi_authority)
+    for _, name, first_field in POP_REQUEST_CONTRACTS:
+        _pop_schema_validator(pop_openapi_authority, name).validate(_pop_request(first_field))
+
+
+@pytest.mark.parametrize("contract", POP_REQUEST_CONTRACTS)
+@pytest.mark.parametrize("field", ("challenge_digest_hex", "verifier_context", "presentation_binding_digest_hex", "first"))
+def test_pop_openapi_rejects_each_missing_request_field(pop_openapi_authority: dict, contract: tuple, field: str) -> None:
+    _, name, first_field = contract
+    request = _pop_request(first_field)
+    del request[first_field if field == "first" else field]
+    assert not _pop_schema_validator(pop_openapi_authority, name).is_valid(request)
+
+
+@pytest.mark.parametrize("contract", POP_REQUEST_CONTRACTS)
+@pytest.mark.parametrize("value", (None, [], [1] * 32, {}, 1, "00" * 32, "AA" * 32, "0x" + "33" * 32, "3" * 63, "3" * 65, "33" * 32 + "\n"))
+def test_pop_openapi_rejects_noncanonical_presentation_bindings(pop_openapi_authority: dict, contract: tuple, value: object) -> None:
+    _, name, first_field = contract
+    request = _pop_request(first_field)
+    request["presentation_binding_digest_hex"] = value
+    assert not _pop_schema_validator(pop_openapi_authority, name).is_valid(request)
+
+
+@pytest.mark.parametrize("contract", POP_REQUEST_CONTRACTS)
+@pytest.mark.parametrize("alternate_field", ("presentation_binding_digest", "recipient", "unknown"))
+def test_pop_openapi_rejects_old_or_unknown_request_fields(pop_openapi_authority: dict, contract: tuple, alternate_field: str) -> None:
+    _, name, first_field = contract
+    request = _pop_request(first_field)
+    request[alternate_field] = request["presentation_binding_digest_hex"]
+    assert not _pop_schema_validator(pop_openapi_authority, name).is_valid(request)
+    del request["presentation_binding_digest_hex"]
+    assert not _pop_schema_validator(pop_openapi_authority, name).is_valid(request)
+
+
+@pytest.mark.parametrize("value", ("", " ", " leading", "trailing ", "\u00a0leading", "trailing\u3000", "a\nb", "a\u0085b", "x" * 257))
+def test_pop_openapi_rejects_noncanonical_verifier_contexts(pop_openapi_authority: dict, value: str) -> None:
+    validator = _pop_schema_validator(pop_openapi_authority, "SorafsPopVerifierContextV1")
+    assert not validator.is_valid(value)
+
+
+def test_pop_openapi_context_utf8_bound_and_canonical_base64_bounds_are_explicit(pop_openapi_authority: dict) -> None:
+    schemas = pop_openapi_authority["components"]["schemas"]
+    context = schemas["SorafsPopVerifierContextV1"]
+    assert context["x-iroha-max-bytes"] == context["maxLength"] == 256
+    assert "UTF-8 bytes" in context["description"]
+    validator = _pop_schema_validator(pop_openapi_authority, "SorafsPopVerifierContextV1")
+    for value in ("x", "x" * 256, "valid internal space", "\ufeffvalid", "証明"):
+        validator.validate(value)
+    proof = schemas["SorafsPopMembershipProofBase64urlV1"]
+    assert proof["x-iroha-max-decoded-bytes"] == 131_072
+    assert proof["maxLength"] == 174_763
+    validator = _pop_schema_validator(pop_openapi_authority, "SorafsPopMembershipProofBase64urlV1")
+    # These are encoding-boundary inputs, not cryptographic or Norito proof fixtures.
+    for size in (1, 2, 3, 131_072):
+        validator.validate(base64.urlsafe_b64encode(bytes(size)).rstrip(b"=").decode("ascii"))
+    assert not validator.is_valid(base64.urlsafe_b64encode(bytes(131_073)).rstrip(b"=").decode("ascii"))
+    for value in ("", "A", "AAAAA", "YQ==", "YR", "YWF", "YQ\n", " YQ", "YQ+/"):
+        assert not validator.is_valid(value), value
+
+
+@pytest.mark.parametrize("contract", POP_REQUEST_CONTRACTS)
+@pytest.mark.parametrize("mutation", ("generic_body", "optional_body", "missing_binding", "optional_binding", "nullable_binding", "default_binding", "unknown_fields", "alternate_body", "missing_auth"))
+def test_pop_openapi_contract_guard_rejects_downgrades(pop_openapi_authority: dict, contract: tuple, mutation: str) -> None:
+    document = copy.deepcopy(pop_openapi_authority)
+    route, name, _ = contract
+    operation = document["paths"][route]["post"]
+    schema = document["components"]["schemas"][name]
+    if mutation == "generic_body":
+        operation["requestBody"]["content"]["application/json"]["schema"] = {"$ref": "#/components/schemas/JsonValue"}
+    elif mutation == "optional_body":
+        operation["requestBody"]["required"] = False
+    elif mutation == "missing_binding":
+        del schema["properties"]["presentation_binding_digest_hex"]
+    elif mutation == "optional_binding":
+        schema["required"].remove("presentation_binding_digest_hex")
+    elif mutation in {"nullable_binding", "default_binding"}:
+        schema["properties"]["presentation_binding_digest_hex"]["nullable" if mutation == "nullable_binding" else "default"] = True
+    elif mutation == "unknown_fields":
+        schema["additionalProperties"] = True
+    elif mutation == "alternate_body":
+        operation["requestBody"]["content"]["application/json"]["schema"] = {"anyOf": [{"$ref": f"#/components/schemas/{name}"}, {"$ref": "#/components/schemas/JsonValue"}]}
+    else:
+        operation["parameters"][0]["required"] = False
+    with pytest.raises(AssertionError):
+        _assert_pop_request_contract(document)
 
 
 def test_explorer_openapi_matches_dataspace_auth_and_history_cursor_contract() -> None:
@@ -544,7 +696,7 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "authenticated OpenAPI Node control metadata changed" in harness
     assert 'record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")' in harness
     assert "metadata.st_uid != os.geteuid()" in harness
-    assert harness.count("observed_test_count=7") == 1
+    assert harness.count("  openapi)\n    observed_test_count=7\n") == 1
     assert "assert_openapi_replay_marker" in harness
     assert (
         "openapi-two-mirror-replay status=success "

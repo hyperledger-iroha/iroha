@@ -49,7 +49,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 51] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
     "connect_norito_kagemusha_v1_payment_request_validate",
@@ -94,9 +94,6 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 51] = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1",
-    "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
-    "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
-    "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",

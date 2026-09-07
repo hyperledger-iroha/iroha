@@ -1,5 +1,5 @@
 error[E0616]: field `signatory` of struct `AccountId` is private
-  --> tests/ui_fail/transparent_api_private_field.rs:20:35
+  --> tests/ui_fail/transparent_api_private_field.rs:19:35
    |
-20 |     println!("ID: {}", account_id.signatory);
+19 |     println!("ID: {}", account_id.signatory);
    |                                   ^^^^^^^^^ private field

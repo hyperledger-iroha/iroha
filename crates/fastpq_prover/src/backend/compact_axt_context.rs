@@ -226,7 +226,11 @@ pub(super) mod tests {
             .into_iter()
             .map(|(account, before, after)| {
                 StateTransition::new(
-                    format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        account,
+                    )
+                    .unwrap(),
                     before.to_le_bytes().to_vec(),
                     after.to_le_bytes().to_vec(),
                     OperationKind::Transfer,
@@ -343,7 +347,11 @@ pub(super) mod tests {
                     (&delta.to_account, to_before, to_before + 5),
                 ] {
                     fixture.rows.push(StateTransition::new(
-                        format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+                        iroha_data_model::fastpq::transfer_balance_key(
+                            &delta.asset_definition,
+                            account,
+                        )
+                        .unwrap(),
                         before.to_le_bytes().to_vec(),
                         after.to_le_bytes().to_vec(),
                         OperationKind::Transfer,
@@ -666,7 +674,7 @@ pub(super) mod tests {
                 Err(Error::PublicIoMismatch { .. })
             ));
         }
-        let generic = fixture.prepare(ProofSemantics::TransferStateTransition);
+        let generic = fixture.prepare(ProofSemantics::StateTransition);
         assert!(matches!(
             encode_context(
                 &generic,

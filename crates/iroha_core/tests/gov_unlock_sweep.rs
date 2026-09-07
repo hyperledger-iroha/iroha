@@ -5,13 +5,13 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{
         GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
-        GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceReferendumTallyV1, State,
-        World, WorldReadOnly,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{block::BlockHeader, events::data::governance::GovernanceEvent};
 use iroha_test_samples::ALICE_ID;
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 fn checked_random_governance_unlock_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance unlock keypair")
@@ -31,13 +31,13 @@ fn unlocks_after_expiry_height() {
     {
         let mut sblock1 = state.block(header1);
         let mut stx = sblock1.transaction();
-        stx.world.put_governance_referendum_for_testing(
+        stx.world.governance_referenda_mut().insert(
             "rid-unlock".to_owned(),
             GovernanceReferendumRecord {
                 h_start: 0,
                 h_end: 0,
                 status: GovernanceReferendumStatus::Closed,
-                final_tally: Some(GovernanceReferendumTallyV1::new(0, 0, 0)),
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
         );
         let mut map = GovernanceLocksForReferendum::default();
@@ -48,7 +48,7 @@ fn unlocks_after_expiry_height() {
                 amount: 0_u64.into(),
                 slashed: 0_u64.into(),
                 expiry_height: 2,
-                direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+                direction: 0,
                 duration_blocks: 2,
                 custody: GovernanceLockCustody {
                     escrowed: false,
@@ -111,5 +111,12 @@ fn unlocks_after_expiry_height() {
     let view = state.view();
     let world = view.world();
     assert!(world.governance_locks().get("rid-unlock").is_none());
-    assert!(world.governance_referenda().get("rid-unlock").is_none());
+    assert_eq!(
+        world
+            .governance_referenda()
+            .get("rid-unlock")
+            .expect("unlock preserves the referendum history")
+            .status,
+        GovernanceReferendumStatus::Closed
+    );
 }

@@ -39,7 +39,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         [0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0];
 
     [Fact]
-    public void CanonicalManifestValidationPreservesTheCommittedProjection()
+    public void ManagedProjectionPreservesFieldsWithoutGrantingNativeQualification()
     {
         var fixture = BuildFixture();
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
@@ -78,6 +78,72 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         activationCopy[0] ^= 0xff;
         Assert.False(activationCopy.SequenceEqual(decoded.Protocols[0].ActivationCanonicalBytes));
         Assert.Equal(fixture.Manifest, decoded.CanonicalArchive);
+    }
+
+    [Fact]
+    public void DeploymentProjectionRetainsExactNetworkAndRejectsOtherNetworkAdmission()
+    {
+        var fixture = BuildFixture();
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            fixture.Manifest, fixture.Catalog);
+        var expected = NetworkId.FromBytes(Enumerable.Repeat((byte)0xd1, 32).ToArray());
+        var qualification = Assert.IsType<PrivacyExact12QualificationRecordV1>(decoded.Qualification);
+        Assert.Equal(expected, qualification.DeploymentQualification.NetworkId);
+        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
+            qualification, expected, requireQualification: true);
+        var other = NetworkId.FromBytes(Enumerable.Repeat((byte)0xd3, 32).ToArray());
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
+                qualification, other, requireQualification: true));
+        var copy = qualification.DeploymentQualification.NetworkId.ToBytes();
+        copy[0] ^= 1;
+        Assert.Equal(expected, qualification.DeploymentQualification.NetworkId);
+    }
+
+    [Fact]
+    public void MissingDeploymentCanBeInspectedButCannotAuthorizeConstruction()
+    {
+        var expected = NetworkId.FromBytes(Enumerable.Repeat((byte)0xd1, 32).ToArray());
+        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(null, expected);
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
+                null, expected, requireQualification: true));
+    }
+
+    [Fact]
+    public void RecomputedManifestDigestCannotHideMalformedOrMismatchedNetworkBytes()
+    {
+        var valid = Enumerable.Repeat((byte)0xd1, 32).ToArray();
+        var invalid = new[]
+        {
+            Array.Empty<byte>(), valid[..31], valid.Concat(new byte[] { 0 }).ToArray(),
+            Struct(valid), Enumerable.Repeat((byte)0xd0, 32).ToArray(),
+        };
+        foreach (var network in invalid)
+        {
+            var fixture = BuildFixture(deploymentNetwork: network);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+        }
+        foreach (var genesis in invalid.Append(Enumerable.Repeat((byte)0xd3, 32).ToArray()))
+        {
+            var fixture = BuildFixture(deploymentGenesis: genesis);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+        }
+    }
+
+    [Fact]
+    public void PublicValidatorRejectsEmptyReleaseAndDeploymentEvidence()
+    {
+        // The managed projection fixture omits all audits, release signatures,
+        // validator canaries and signatures. Only Rust can qualify these bytes.
+        var fixture = BuildFixture();
+        Assert.Equal(
+            PrivacyNative.IsAvailable()
+                ? PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest
+                : PrivacyExact12CapabilityManifestValidationStatusV1.NativeUnavailable,
+            PrivacyNative.ValidateExact12CapabilityManifestV1(fixture.Manifest));
     }
 
     [Fact]
@@ -301,7 +367,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         bool useLegacyAssurance = false,
         bool corruptSecurityClaimDigest = false,
         ulong qualificationActivationHeight = 2,
-        ulong qualificationConvergenceHeight = 3)
+        ulong qualificationConvergenceHeight = 3,
+        byte[]? deploymentNetwork = null,
+        byte[]? deploymentGenesis = null)
     {
         var profiles = new byte[12][];
         profiles[0] = AvailableProfile(
@@ -382,7 +450,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             ? Exact12Qualification(
                 corruptSecurityClaimDigest,
                 qualificationActivationHeight,
-                qualificationConvergenceHeight)
+                qualificationConvergenceHeight,
+                deploymentNetwork,
+                deploymentGenesis)
             : Array.Empty<byte>();
         var manifestWithZeroDigest = BuildManifestArchive(
             rows,
@@ -481,7 +551,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     private static byte[] Exact12Qualification(
         bool corruptSecurityClaimDigest,
         ulong firstActivationHeight,
-        ulong convergenceHeight)
+        ulong convergenceHeight,
+        byte[]? deploymentNetwork,
+        byte[]? deploymentGenesis)
     {
         var releaseDigest = Enumerable.Repeat((byte)0xe3, 32).ToArray();
         var bindings = Enumerable.Range(0, 12)
@@ -523,8 +595,8 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         var deployment = Struct(
             U16(1),
             CompactString("csharp-test-chain"),
-            Digest(0xd0),
-            Digest(0xd0),
+            deploymentNetwork ?? Enumerable.Repeat((byte)0xd1, 32).ToArray(),
+            deploymentGenesis ?? Enumerable.Repeat((byte)0xd1, 32).ToArray(),
             Struct(releaseDigest),
             Digest(0xd1),
             Sequence(activations),

@@ -1,39 +1,20 @@
-# Reference-SDK validation outcome goldens
+# Shared reference-validator fixtures
 
-These files are byte-exact `ValidationOutcomeV1` goldens shared by every SDK.
-The two appeal-finance profiles use `generated_at=123`; heterogeneous
-fixture-bundle outcomes use `generated_at=1700001234`.
+The three `pop_membership_*` payloads exercise the native PoP **structural
+validator** used by Kotlin, Java-source consumers, Swift, JNI, FFI and
+`sorafs-validate pop`. The current V1 wire includes a nonzero
+`presentation_binding_digest`; the negatives omit that field under the actual
+current schema or set it to zero. Each payload has an exact
+`ValidationOutcomeV1` JSON result in the signed fixture inventory.
 
-The test-only signed, closed inventory covers 82 payload artifacts, 32 exact
-`ValidationOutcomeV1` files, and 38 negative payload vectors. All eight
-appeal-finance `CancelAssetLock` JSON/Norito files are mandatory; a missing file
-fails validation rather than skipping a capability. These checked-in fixtures
-do not qualify the current native packages: clean ABI-23 builds and unskipped
-replay remain required for all five release targets.
+The transcript bytes and verifier fingerprints are deliberate structural test
+data. A successful result does not verify Halo2, authorize a recipient, bind an
+account, or consume a nullifier. Those guarantees require the authenticated
+native prover/verifier and ledger tests.
 
-- `appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json`
-  accepts the canonical 85-byte `CancelAssetLock` V1 payload.
-- `appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json`
-  rejects the canonical zero-quantity negative with `SFS-VAL-001`.
-- `bundle_heterogeneous_positive_validation_outcome_v1.json` validates the
-  replication order, all five orderbook payloads, the PDP triplet, the PoR
-  challenge/proof pair, the PoTR receipt, and the repair task at
-  `now=1700000001`.
-- `bundle_routing_admission_positive_validation_outcome_v1.json` validates the
-  provider advert and admission envelope at `now=300`.
-- Five payload-negative outcomes add routing or proof context before the
-  bad-signature, trailing-byte, duplicate-hot-leaf, missing-signature, or
-  wrong-provider payload. They use `now=1700000001`, return the bundle-level
-  `SFS-BND-001` code, and retain the exact underlying failure as the
-  `payload_code` context value.
-- Two link-negative outcomes use a replication order plus a structurally valid
-  repair task to produce exact manifest-mismatch (`SFS-BND-002`) and
-  unassigned-provider (`SFS-BND-003`) results.
-
-The signed, SHA-256/length-bound closed inventory is
-`../reference_sdk_validation_inventory_v1.json`. Verify it without network
-access:
-
-```sh
-python3 scripts/check_sorafs_reference_sdk_fixtures.py
-```
+Regenerate with
+`cargo run -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write`;
+use `--check` to compare the complete managed fixture set without publishing.
+The generator owns all six files and the signed test-only inventory. Native
+generation asserts that the missing-field payload fails inside the current
+schema rather than at schema identity checking.

@@ -170,44 +170,25 @@ class KaigiInstructionValidationTest {
 
     @Test
     fun `parsers reject unknown fields and rebuild immutable canonical maps`() {
-        val rawHash = hash(1)
+        val rawScalar = "01".repeat(32)
         val shuffled = linkedMapOf(
-            "metadata.z" to "last",
-            "commitment.commitment" to rawHash,
-            "host" to "host",
-            "call.call_name" to "sync",
-            "call.domain_id" to "wonderland",
-            "action" to "CreateKaigi",
-            "metadata.a" to "first",
+            "metadata.z" to "\"last\"", "commitment.commitment" to rawScalar,
+            "host" to "host", "call.call_name" to "sync", "call.domain_id" to "wonderland",
+            "action" to "CreateKaigi", "metadata.a" to "\"first\"",
+            "privacy.mode" to "ZkRosterV1", "nullifier.digest" to "02".repeat(32),
+            "roster_root" to hash(3), "proof" to key(1),
         )
         val parsedCreate = CreateKaigiInstruction.fromArguments(shuffled)
-        assertEquals(
-            listOf(
-                "action",
-                "call.domain_id",
-                "call.call_name",
-                "host",
-                "gas_rate_per_minute",
-                "metadata.a",
-                "metadata.z",
-                "privacy.mode",
-                "room_policy.policy",
-                "commitment.commitment",
-            ),
-            parsedCreate.arguments.keys.toList(),
-        )
-        assertEquals(
-            KaigiInstructionUtils.canonicalizeHash(rawHash),
-            parsedCreate.arguments["commitment.commitment"],
-        )
+        assertEquals(listOf(
+            "action", "call.domain_id", "call.call_name", "host", "gas_rate_per_minute",
+            "metadata.a", "metadata.z", "privacy.mode", "room_policy.policy",
+            "commitment.commitment", "nullifier.digest", "roster_root", "proof",
+        ), parsedCreate.arguments.keys.toList())
+        assertEquals(rawScalar, parsedCreate.arguments["commitment.commitment"])
         val lowercaseLiteral = KaigiInstructionUtils.canonicalizeHash(hash(0xAB)).lowercase()
-        val parsedLowercaseLiteral = CreateKaigiInstruction.fromArguments(
-            shuffled + ("commitment.commitment" to lowercaseLiteral),
-        )
-        assertEquals(
-            KaigiInstructionUtils.canonicalizeHash(hash(0xAB)),
-            parsedLowercaseLiteral.arguments["commitment.commitment"],
-        )
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(shuffled + ("commitment.commitment" to lowercaseLiteral))
+        }
         assertFailsWith<UnsupportedOperationException> {
             @Suppress("UNCHECKED_CAST")
             (parsedCreate.arguments as MutableMap<String, String>)["host"] = "changed"
@@ -283,7 +264,8 @@ class KaigiInstructionValidationTest {
         val unregistration = UnregisterKaigiRelayInstruction("relay")
         assertEquals(unregistration, UnregisterKaigiRelayInstruction.fromArguments(unregistration.arguments))
         assertFailsWith<IllegalArgumentException> { UnregisterKaigiRelayInstruction(" ") }
-        assertTrue(parsedCreate.arguments["commitment.commitment"]!!.startsWith("hash:"))
+        assertEquals(rawScalar, parsedCreate.arguments["commitment.commitment"])
+        assertTrue(parsedCreate.arguments["roster_root"]!!.startsWith("hash:"))
     }
 
     @Test
@@ -621,246 +603,75 @@ class KaigiInstructionValidationTest {
     }
 
     @Test
-    fun `kaigi privacy artifacts preserve only ledger safe fields`() {
+    fun `kaigi private actions require complete scalar authorization and contain no clear hints`() {
         val callId = KaigiInstructionUtils.CallId("wonderland", "sync")
-        val proof = key(9)
-        val commitment = hash(1)
-        val nullifier = hash(2)
-        val rosterRoot = hash(3)
+        val commitment = KaigiAuthorizationScalarV1.fromLeBytes(ByteArray(32) { 1 })
+        val nullifier = KaigiAuthorizationScalarV1.fromLeBytes(ByteArray(32) { 2 })
         val create = CreateKaigiInstruction.create(
-            callId = callId,
-            host = "host",
+            callId, "host", privacyMode = KaigiInstructionUtils.PrivacyMode("ZkRosterV1", null),
             roomPolicy = KaigiInstructionUtils.RoomPolicy("Public", null),
-            commitment = commitment,
-            nullifierDigest = nullifier,
-            nullifierIssuedAtMs = 0,
-            rosterRoot = rosterRoot,
-            proofBase64 = proof,
+            commitment = commitment, nullifierDigest = nullifier, rosterRoot = hash(3), proofBase64 = key(9),
         )
-        val join = JoinKaigiInstruction(
-            callId = callId,
-            participant = "participant",
-            commitment = commitment,
-            nullifierDigest = nullifier,
-            nullifierIssuedAtMs = 0,
-            rosterRoot = rosterRoot,
-            proofBase64 = proof,
-        )
-        val leave = LeaveKaigiInstruction(
-            callId = callId,
-            participant = "participant",
-        )
-        val end = EndKaigiInstruction(
-            callId = callId,
-            endedAtMs = 84,
-            commitment = commitment,
-            nullifierDigest = nullifier,
-            nullifierIssuedAtMs = 0,
-            rosterRoot = rosterRoot,
-            proofBase64 = proof,
-        )
-
-        for (instruction in listOf(create, join, end)) {
+        val join = JoinKaigiInstruction(callId, "participant", commitment, nullifier, hash(3), key(9))
+        val leave = LeaveKaigiInstruction(callId, "participant", commitment, nullifier, hash(3), key(9))
+        val end = EndKaigiInstruction(callId, 84, commitment, nullifier, hash(3), key(9))
+        for (instruction in listOf(create, join, leave, end)) {
             assertEquals(null, instruction.arguments["commitment.alias_tag"])
-            assertEquals("0", instruction.arguments["nullifier.issued_at_ms"])
-        }
-        for (key in listOf(
-            "commitment.commitment",
-            "commitment.alias_tag",
-            "nullifier.digest",
-            "nullifier.issued_at_ms",
-            "roster_root",
-            "proof",
-        )) {
-            assertEquals(null, leave.arguments[key])
+            assertEquals(null, instruction.arguments["nullifier.issued_at_ms"])
+            assertEquals(commitment.toHex(), instruction.arguments["commitment.commitment"])
+            assertEquals(nullifier.toHex(), instruction.arguments["nullifier.digest"])
         }
         assertEquals("Public", create.arguments["room_policy.policy"])
-        assertEquals(KaigiInstructionUtils.canonicalizeHash(rosterRoot), create.arguments["roster_root"])
-        assertEquals(proof, create.arguments["proof"])
+        assertEquals(KaigiInstructionUtils.canonicalizeHash(hash(3)), create.arguments["roster_root"])
+        assertEquals(key(9), create.arguments["proof"])
         assertEquals(create, CreateKaigiInstruction.fromArguments(create.arguments))
         assertEquals(join, JoinKaigiInstruction.fromArguments(join.arguments))
         assertEquals(leave, LeaveKaigiInstruction.fromArguments(leave.arguments))
         assertEquals(end, EndKaigiInstruction.fromArguments(end.arguments))
-
-        val createWithoutIssuedAt = CreateKaigiInstruction.create(
-            callId = callId,
-            host = "host",
-            nullifierDigest = nullifier,
-        )
-        val joinWithoutIssuedAt = JoinKaigiInstruction(
-            callId = callId,
-            participant = "participant",
-            nullifierDigest = nullifier,
-        )
-        val leaveWithoutIssuedAt = LeaveKaigiInstruction(
-            callId = callId,
-            participant = "participant",
-        )
-        val endWithoutIssuedAt = EndKaigiInstruction(
-            callId = callId,
-            nullifierDigest = nullifier,
-        )
-        for (instruction in listOf(
-            createWithoutIssuedAt,
-            joinWithoutIssuedAt,
-            leaveWithoutIssuedAt,
-            endWithoutIssuedAt,
-        )) {
-            assertEquals(null, instruction.arguments["nullifier.issued_at_ms"])
+        for (mask in 0..15) {
+            val c = commitment.takeIf { mask and 1 != 0 }
+            val n = nullifier.takeIf { mask and 2 != 0 }
+            val root = hash(3).takeIf { mask and 4 != 0 }
+            val proof = key(9).takeIf { mask and 8 != 0 }
+            val operations = listOf<() -> KaigiWireInstructionV1>(
+                { JoinKaigiInstruction(callId, "participant", c, n, root, proof) },
+                { LeaveKaigiInstruction(callId, "participant", c, n, root, proof) },
+                { EndKaigiInstruction(callId, null, c, n, root, proof) },
+            )
+            for (operation in operations) {
+                if (mask == 0 || mask == 15) operation() else assertFailsWith<IllegalArgumentException> { operation() }
+            }
+            if (mask != 15) assertFailsWith<IllegalArgumentException> {
+                CreateKaigiInstruction.create(callId, "host", privacyMode = KaigiInstructionUtils.PrivacyMode("ZkRosterV1", null),
+                    commitment = c, nullifierDigest = n, rosterRoot = root, proofBase64 = proof)
+            }
+            if (mask != 0) assertFailsWith<IllegalArgumentException> {
+                CreateKaigiInstruction.create(callId, "host", commitment = c, nullifierDigest = n, rosterRoot = root, proofBase64 = proof)
+            }
         }
-        assertEquals(
-            createWithoutIssuedAt,
-            CreateKaigiInstruction.fromArguments(createWithoutIssuedAt.arguments),
-        )
-        assertEquals(
-            joinWithoutIssuedAt,
-            JoinKaigiInstruction.fromArguments(joinWithoutIssuedAt.arguments),
-        )
-        assertEquals(
-            leaveWithoutIssuedAt,
-            LeaveKaigiInstruction.fromArguments(leaveWithoutIssuedAt.arguments),
-        )
-        assertEquals(
-            endWithoutIssuedAt,
-            EndKaigiInstruction.fromArguments(endWithoutIssuedAt.arguments),
-        )
     }
 
     @Test
-    fun `kaigi builders and parsers reject clear privacy identity hints`() {
+    fun `kaigi parsers reject all retired clear hint keys and malformed partial artifacts`() {
         val callId = KaigiInstructionUtils.CallId("wonderland", "sync")
-        val create = CreateKaigiInstruction.create(callId = callId, host = "host")
-        val join = JoinKaigiInstruction(callId = callId, participant = "participant")
-        val leave = LeaveKaigiInstruction(callId = callId, participant = "participant")
-        val end = EndKaigiInstruction(callId = callId)
-
-        assertFailsWith<IllegalArgumentException> {
-            CreateKaigiInstruction.create(
-                callId = callId,
-                host = "host",
-                commitmentAliasTag = "host-alias",
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            JoinKaigiInstruction(callId, "participant", commitmentAliasTag = "participant-alias")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", commitmentAliasTag = "participant-alias")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", commitment = "commitment")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", nullifierDigest = "nullifier")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", nullifierIssuedAtMs = 0)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", rosterRoot = "root")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", proofBase64 = key(1))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EndKaigiInstruction(callId, commitmentAliasTag = "host-alias")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            CreateKaigiInstruction.create(callId, "host", nullifierIssuedAtMs = 1)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            JoinKaigiInstruction(callId, "participant", nullifierIssuedAtMs = 1)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction(callId, "participant", nullifierIssuedAtMs = 1)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EndKaigiInstruction(callId, nullifierIssuedAtMs = 1)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            CreateKaigiInstruction.create(callId, "host", nullifierIssuedAtMs = 0)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            JoinKaigiInstruction(callId, "participant", nullifierIssuedAtMs = 0)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EndKaigiInstruction(callId, nullifierIssuedAtMs = 0)
-        }
-
-        assertFailsWith<IllegalArgumentException> {
-            CreateKaigiInstruction.fromArguments(
-                create.arguments + ("commitment.alias_tag" to "host-alias"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            JoinKaigiInstruction.fromArguments(
-                join.arguments + ("commitment.alias_tag" to "participant-alias"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction.fromArguments(
-                leave.arguments + ("commitment.alias_tag" to "participant-alias"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction.fromArguments(
-                leave.arguments + ("commitment.commitment" to "commitment"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction.fromArguments(
-                leave.arguments + ("nullifier.issued_at_ms" to "0"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction.fromArguments(
-                leave.arguments + ("roster_root" to "root"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction.fromArguments(
-                leave.arguments + ("proof" to key(1)),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EndKaigiInstruction.fromArguments(
-                end.arguments + ("commitment.alias_tag" to "host-alias"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            CreateKaigiInstruction.fromArguments(
-                create.arguments + ("nullifier.issued_at_ms" to "1"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            JoinKaigiInstruction.fromArguments(
-                join.arguments + ("nullifier.issued_at_ms" to "1"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            LeaveKaigiInstruction.fromArguments(
-                leave.arguments + ("nullifier.issued_at_ms" to "1"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EndKaigiInstruction.fromArguments(
-                end.arguments + ("nullifier.issued_at_ms" to "1"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            CreateKaigiInstruction.fromArguments(
-                create.arguments + ("nullifier.issued_at_ms" to "0"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            JoinKaigiInstruction.fromArguments(
-                join.arguments + ("nullifier.issued_at_ms" to "0"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EndKaigiInstruction.fromArguments(
-                end.arguments + ("nullifier.issued_at_ms" to "0"),
-            )
+        val instructions = listOf(
+            CreateKaigiInstruction.create(callId, "host"), JoinKaigiInstruction(callId, "participant"),
+            LeaveKaigiInstruction(callId, "participant"), EndKaigiInstruction(callId),
+        )
+        val parsers = listOf<(Map<String, String>) -> KaigiWireInstructionV1>(
+            CreateKaigiInstruction::fromArguments, JoinKaigiInstruction::fromArguments,
+            LeaveKaigiInstruction::fromArguments, EndKaigiInstruction::fromArguments,
+        )
+        for ((instruction, parser) in instructions.zip(parsers)) {
+            for ((key, value) in listOf(
+                "commitment.alias_tag" to "host-alias", "commitment.alias_tag" to "",
+                "nullifier.issued_at_ms" to "0", "nullifier.issued_at_ms" to "1",
+                "commitment.commitment" to "commitment", "nullifier.digest" to "nullifier",
+                "roster_root" to "root", "proof" to key(1),
+                "nullifier.digest" to "02".repeat(32),
+            )) {
+                assertFailsWith<IllegalArgumentException> { parser(instruction.arguments + (key to value)) }
+            }
         }
     }
 

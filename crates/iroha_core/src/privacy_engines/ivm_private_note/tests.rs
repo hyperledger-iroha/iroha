@@ -185,7 +185,7 @@ pub(super) struct ThreeOutputFixture {
 pub(super) fn three_output_fixture() -> ThreeOutputFixture {
     let value = fixture();
     let memo_digests = [bytes(0x54), bytes(0x64), bytes(0x74)];
-    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(memo_digests);
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(memo_digests, [1; 32]);
     let mut statement = value.statement;
     let mut first_input = value.witness.inputs[0].clone();
     let first_input_commitment =
@@ -316,6 +316,14 @@ pub(super) fn three_output_fixture() -> ThreeOutputFixture {
         .expect("second input nullifier"),
     ];
     redigest(&mut statement);
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+        memo_digests,
+        super::derive_private_note_input_openings_commitment_v1(&[
+            first_input.note.clone(),
+            second_input.note.clone(),
+        ])
+        .expect("exact audited input openings"),
+    );
     let witness = IvmPrivateNoteWitnessV1::new_with_profile_v1(
         value.witness.program,
         vec![first_input, second_input],
@@ -334,6 +342,64 @@ fn redigest(statement: &mut IrohaIvmPrivateNoteStarkStatementV1) {
     statement.action_digest = statement
         .computed_action_digest()
         .expect("canonical action digest");
+}
+
+#[test]
+fn audit_input_openings_bind_each_ordered_private_field_and_value_distribution() {
+    let value = three_output_fixture();
+    let notes = value
+        .witness
+        .inputs
+        .iter()
+        .map(|input| input.note.clone())
+        .collect::<Vec<_>>();
+    let derive = super::derive_private_note_input_openings_commitment_v1;
+    let expected = derive(&notes).expect("two openings");
+    assert!(derive(&notes[..1]).is_err());
+    for input in 0..2 {
+        for field in 0..5 {
+            let mut changed = notes.clone();
+            match field {
+                0 => changed[input].value ^= 1,
+                1 => changed[input].spending_authority[0] ^= 1,
+                2 => changed[input].rho[0] ^= 1,
+                3 => changed[input].blinding[0] ^= 1,
+                _ => changed[input].memo_digest[0] ^= 1,
+            }
+            assert_ne!(derive(&changed).expect("changed opening"), expected);
+        }
+    }
+    let mut changed = notes.clone();
+    changed.swap(0, 1);
+    assert_ne!(derive(&changed).expect("reordered openings"), expected);
+    changed = notes;
+    changed[0].value -= 1;
+    changed[1].value += 1;
+    assert_ne!(
+        derive(&changed).expect("same total, different provenance"),
+        expected
+    );
+}
+
+#[test]
+fn virtual_zero_input_needs_no_membership_but_positive_input_does() {
+    let mut value = three_output_fixture();
+    value.witness.inputs[1].authentication_path = [[0xC7; 32]; super::PRIVATE_NOTE_TREE_DEPTH_V1];
+    preflight_private_note_relation_with_profile_v1(
+        &value.statement,
+        &value.witness,
+        value.profile,
+    )
+    .expect("zero cover is independent of the live accumulator");
+    value.witness.inputs[0].authentication_path = [[0xC7; 32]; super::PRIVATE_NOTE_TREE_DEPTH_V1];
+    assert_eq!(
+        preflight_private_note_relation_with_profile_v1(
+            &value.statement,
+            &value.witness,
+            value.profile
+        ),
+        Err(IvmPrivateNoteRelationErrorV1::Membership)
+    );
 }
 fn rebind_program(value: &mut Fixture, program: PrivateProgramV1) {
     value.witness.program = program;

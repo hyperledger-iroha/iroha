@@ -44,6 +44,8 @@ snapshot; a journal by itself cannot reconstruct proof witnesses or approve mone
 New lanes use `create_new` and the opaque `stage_bootstrap` owner. It exposes only
 checkpoint material until both initial hardware CAS and fresh selection succeed.
 Missing/corrupt existing history never falls back to a new empty lane.
+Credential provisioning and concrete disk create/restore entry points currently
+have Core test callers; product coordinator integration remains open.
 
 The separate coordinator operation journal binds its initializer to the exact lane
 and asset incarnation and reserves caller-persisted identities against exact public

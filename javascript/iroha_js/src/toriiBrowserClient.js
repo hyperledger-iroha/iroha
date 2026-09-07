@@ -7,6 +7,7 @@ import {
   NumericV1Error,
 } from "./numericV1.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
 import {
   noritoDecodeBlockProofs,
   noritoEncodeMultisigContractCallApproveRequest,
@@ -2070,6 +2071,25 @@ export class ToriiBrowserClient {
 
   get networkId() {
     return this.#networkId;
+  }
+
+  /** Discover account bootstrap policy without using configured credentials or signing callbacks. */
+  async getAccountCapabilities(options = {}) {
+    const opts = signalOnlyOptions(options, "getAccountCapabilities options");
+    const { signal, cleanup } = requestSignal(opts, this.#timeoutMs);
+    try {
+      const response = await this.#fetchImpl(this._url("/v1/accounts/capabilities"), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        signal,
+      });
+      return await readAccountCapabilitiesResponseV1(response, { signal });
+    } finally {
+      cleanup();
+    }
   }
 
   getKagemushaReadiness(options = {}) {

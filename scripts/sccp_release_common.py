@@ -66,6 +66,7 @@ BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX = (
 SORA_TAIRA_CHAIN_ID_HASH_HEX = (
     "cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7"
 )
+SORA_TAIRA_NETWORK_TAG = 0x40
 SEMANTIC_PROFILE_HASH_DOMAIN = b"sccp:semantic-proof-profile:v1"
 SORA_FINALITY_ANCHOR_HASH_DOMAIN = b"sccp:sora-finality-anchor:v1"
 REQUIRED_SEMANTICS = (
@@ -330,7 +331,7 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
 PROFILE_DOMAINS = {
     "ethereum-mainnet": 1,
     "bsc-mainnet": 2,
-    "tron-mainnet": 3,
+    "tron-mainnet": 5,
     "ton-mainnet": 4,
 }
 
@@ -547,6 +548,59 @@ class SccpReleaseError(ValueError):
     """A bounded, public-safe SCCP release validation failure."""
 
 
+def create_isolated_git_directory(
+    parent: Path, *, object_format: str, commit: str,
+) -> Path:
+    """Create fixed Git metadata without source config, refs, attributes, or templates.
+
+    The caller owns the private scratch parent and its cleanup. It supplies the
+    original object store through GIT_OBJECT_DIRECTORY, and may inspect the
+    original worktree/index with GIT_WORK_TREE, GIT_INDEX_FILE and optional
+    locks disabled. No source metadata is copied or modified here.
+    """
+    oid_length = {"sha1": 40, "sha256": 64}.get(object_format) if type(object_format) is str else None
+    if (
+        oid_length is None
+        or type(commit) is not str
+        or re.fullmatch(r"[0-9a-f]{" + str(oid_length) + r"}", commit) is None
+        or not any(character != "0" for character in commit)
+    ):
+        raise SccpReleaseError("isolated Git source identity is not canonical")
+    try:
+        metadata = parent.lstat()
+        if (
+            not parent.is_absolute()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mode & 0o077
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise SccpReleaseError("isolated Git scratch parent must be owner-only")
+        directory = Path(tempfile.mkdtemp(prefix="source-git-", dir=parent))
+        (directory / "objects").mkdir(mode=0o700)
+        (directory / "refs").mkdir(mode=0o700)
+        config = (
+            "[core]\n"
+            f"\trepositoryformatversion = {1 if object_format == 'sha256' else 0}\n"
+            "\tbare = true\n"
+            f"\tattributesFile = {os.devnull}\n"
+            f"\thooksPath = {os.devnull}\n"
+            "\tfsmonitor = false\n"
+        )
+        if object_format == "sha256":
+            config += "[extensions]\n\tobjectFormat = sha256\n"
+        for name, payload in (("config", config.encode("ascii")), ("HEAD", (commit + "\n").encode("ascii"))):
+            descriptor = os.open(
+                directory / name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+        return directory
+    except OSError:
+        raise SccpReleaseError("isolated Git source context could not be created") from None
+
+
 class _SecretScanBudget:
     """One aggregate recursive-decoding budget shared across streamed chunks."""
 
@@ -686,6 +740,9 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
             "source_profile",
             "protocol_version",
             "chain_id_hash_hex",
+            "epoch",
+            "epoch_end_height",
+            "roster_commitment_hex",
             "checkpoint_height",
             "checkpoint_block_hash_hex",
             "checkpoint_context_id_hex",
@@ -713,12 +770,33 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
     )
     if chain_id_hash.hex() != SORA_TAIRA_CHAIN_ID_HASH_HEX:
         _fail("SORA finality anchor has the wrong Taira chain id")
+    epoch = _require_int(
+        value["epoch"],
+        label="SORA anchor epoch",
+        minimum=1,
+        maximum=2**64 - 1,
+    )
+    epoch_end_height = _require_int(
+        value["epoch_end_height"],
+        label="SORA anchor epoch_end_height",
+        minimum=1,
+        maximum=2**64 - 1,
+    )
+    roster_commitment = bytes.fromhex(
+        _require_hex(
+            value["roster_commitment_hex"],
+            label="SORA anchor roster commitment",
+            byte_length=32,
+        )
+    )
     checkpoint_height = _require_int(
         value["checkpoint_height"],
         label="SORA anchor checkpoint_height",
         minimum=1,
         maximum=2**64 - 1,
     )
+    if checkpoint_height > epoch_end_height:
+        _fail("SORA anchor checkpoint exceeds its authenticated epoch boundary")
     block_hash = bytes.fromhex(
         _require_hex(
             value["checkpoint_block_hash_hex"],
@@ -743,6 +821,7 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
     _require_pairwise_distinct(
         (
             ("SORA anchor chain id", chain_id_hash.hex()),
+            ("SORA anchor roster commitment", roster_commitment.hex()),
             ("SORA anchor checkpoint block", block_hash.hex()),
             ("SORA anchor checkpoint context id", context_id.hex()),
             (
@@ -752,9 +831,12 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
         )
     )
     canonical = (
-        b"\x01\x01"
+        bytes((1, SORA_TAIRA_NETWORK_TAG))
         + _push_u16(protocol_version)
         + chain_id_hash
+        + epoch.to_bytes(8, "little")
+        + epoch_end_height.to_bytes(8, "little")
+        + roster_commitment
         + checkpoint_height.to_bytes(8, "little")
         + block_hash
         + context_id
@@ -1803,15 +1885,10 @@ def reject_secret_material(
         first = False
 
 
-def validate_trust_policy_bytes(
-    data: bytes, *, allow_test_policy: bool = False
+def _validate_trust_policy_bytes(
+    data: bytes, *, test_fixture: bool
 ) -> tuple[dict[str, Any], bytes]:
-    """Validate canonical external role-to-key trust-root bytes.
-
-    Production callers never set ``allow_test_policy``. Separate fixture-only
-    tools are the only entrypoints allowed to consume the deliberately distinct
-    test policy schema.
-    """
+    """Implement the production and explicitly isolated fixture decoders."""
 
     reject_secret_material(data, label="release trust policy")
     value = parse_json_bytes(
@@ -1819,9 +1896,9 @@ def validate_trust_policy_bytes(
     )
     require_canonical_json_file(data, value, label="release trust policy")
     expected_schema = (
-        TEST_TRUST_POLICY_SCHEMA if allow_test_policy else TRUST_POLICY_SCHEMA
+        TEST_TRUST_POLICY_SCHEMA if test_fixture else TRUST_POLICY_SCHEMA
     )
-    expected_environment = "test-fixture" if allow_test_policy else "production"
+    expected_environment = "test-fixture" if test_fixture else "production"
     policy_keys = [
         "schema",
         "environment",
@@ -1831,7 +1908,7 @@ def validate_trust_policy_bytes(
         "circuit_auditors",
         "proof_systems",
     ]
-    if not allow_test_policy:
+    if not test_fixture:
         policy_keys.extend(
             (
                 "issued_at_unix_ms",
@@ -1863,7 +1940,7 @@ def validate_trust_policy_bytes(
             "release trust policy schema/environment is not valid for this entrypoint"
         )
     _require_id(policy["policy_id"], label="release trust policy policy_id")
-    if not allow_test_policy:
+    if not test_fixture:
         issued_at = _require_int(
             policy["issued_at_unix_ms"],
             label="release trust policy issued_at_unix_ms",
@@ -2007,7 +2084,7 @@ def validate_trust_policy_bytes(
         signer_ids.add(auditor_id)
         keys.add(key)
 
-    if not allow_test_policy and (
+    if not test_fixture and (
         keys & FORBIDDEN_FIXTURE_PUBLIC_KEYS
         or any(identity.startswith("fixture-") for identity in signer_ids)
     ):
@@ -2021,7 +2098,7 @@ def validate_trust_policy_bytes(
         length=len(PROFILE_ORDER),
     )
     audit_signatures: set[bytes] = set()
-    if not allow_test_policy:
+    if not test_fixture:
         root_signers = _require_list(
             policy["offline_policy_root_signers"],
             label="offline policy-root signers",
@@ -2174,7 +2251,7 @@ def validate_trust_policy_bytes(
             "destination_build",
             "audit_attestations",
         ]
-        if not allow_test_policy:
+        if not test_fixture:
             proof_keys.extend(
                 (
                     "anchor_circuit_id",
@@ -2217,7 +2294,7 @@ def validate_trust_policy_bytes(
             for marker in ("smoke", "test", "signal-binding", "labeled-signal")
         ):
             _fail("production proof policy must not approve fixture-only circuits")
-        if not allow_test_policy:
+        if not test_fixture:
             anchor_circuit_id = _require_id(
                 proof["anchor_circuit_id"], label="anchor proof-system circuit_id"
             )
@@ -2255,7 +2332,7 @@ def validate_trust_policy_bytes(
             "prover_build_sha256_hex",
             "toolchain_lock_sha256_hex",
         ]
-        if not allow_test_policy:
+        if not test_fixture:
             hash_fields.extend(
                 (
                     "source_archive_sha256_hex",
@@ -2279,7 +2356,7 @@ def validate_trust_policy_bytes(
             )
         for field in hash_fields:
             _require_hex(proof[field], label=f"proof-system {field}", byte_length=32)
-        if not allow_test_policy:
+        if not test_fixture:
             for field in ("message_kat_sha256_hex", "anchor_kat_sha256_hex"):
                 if proof[field] in kat_hashes:
                     _fail("every profile must bind unique message and anchor KAT bytes")
@@ -2356,7 +2433,7 @@ def validate_trust_policy_bytes(
         )
         for field, digest in destination_build.items():
             _require_hex(digest, label=f"destination build {field}", byte_length=32)
-        if not allow_test_policy:
+        if not test_fixture:
             current_validator_build_receipt_hashes = tuple(
                 destination_build[field]
                 for field in VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
@@ -2382,6 +2459,7 @@ def validate_trust_policy_bytes(
             ("semantic_proof_profile_hash_hex", profile_hash.hex()),
             ("sora_finality_anchor_hash_hex", anchor_hash.hex()),
             ("anchor_chain_id_hash_hex", anchor["chain_id_hash_hex"]),
+            ("anchor_roster_commitment_hex", anchor["roster_commitment_hex"]),
             ("anchor_checkpoint_block_hash_hex", anchor["checkpoint_block_hash_hex"]),
             ("anchor_checkpoint_context_id_hex", anchor["checkpoint_context_id_hex"]),
             (
@@ -2393,7 +2471,7 @@ def validate_trust_policy_bytes(
             ("prover_build_sha256_hex", proof["prover_build_sha256_hex"]),
             ("toolchain_lock_sha256_hex", proof["toolchain_lock_sha256_hex"]),
         ]
-        if not allow_test_policy:
+        if not test_fixture:
             proof_hash_roles.extend((field, proof[field]) for field in hash_fields[9:])
         proof_hash_roles.extend(destination_build.items())
         _require_pairwise_distinct(proof_hash_roles)
@@ -2424,7 +2502,7 @@ def validate_trust_policy_bytes(
                     "signature_b64",
                     *(
                         ("completed_at_unix_ms", "unresolved_findings")
-                        if not allow_test_policy
+                        if not test_fixture
                         else ()
                     ),
                 ),
@@ -2438,7 +2516,7 @@ def validate_trust_policy_bytes(
                 _fail(
                     "proof-system audit does not match the independent trusted auditor"
                 )
-            if not allow_test_policy:
+            if not test_fixture:
                 _require_int(
                     audit["completed_at_unix_ms"],
                     label="circuit audit completed_at_unix_ms",
@@ -2491,15 +2569,34 @@ def validate_trust_policy_bytes(
     return policy, data
 
 
-def load_trust_policy(
-    path: Path, *, allow_test_policy: bool = False
-) -> tuple[dict[str, Any], bytes]:
-    """Load and validate a canonical external role-to-key trust root."""
+def validate_trust_policy_bytes(data: bytes) -> tuple[dict[str, Any], bytes]:
+    """Validate a canonical production role-to-key trust root."""
+
+    return _validate_trust_policy_bytes(data, test_fixture=False)
+
+
+def validate_test_trust_policy_bytes(data: bytes) -> tuple[dict[str, Any], bytes]:
+    """Validate the distinct trust-root schema used only by fixture tooling."""
+
+    return _validate_trust_policy_bytes(data, test_fixture=True)
+
+
+def load_trust_policy(path: Path) -> tuple[dict[str, Any], bytes]:
+    """Load and validate a canonical production role-to-key trust root."""
 
     data = read_direct_file(
         path, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES
     )
-    return validate_trust_policy_bytes(data, allow_test_policy=allow_test_policy)
+    return validate_trust_policy_bytes(data)
+
+
+def load_test_trust_policy(path: Path) -> tuple[dict[str, Any], bytes]:
+    """Load the distinct trust root accepted only by fixture tooling."""
+
+    data = read_direct_file(
+        path, label="release test trust policy", maximum=MAX_TRUST_POLICY_BYTES
+    )
+    return validate_test_trust_policy_bytes(data)
 
 
 def _workspace_crate_version() -> str:
@@ -3881,7 +3978,6 @@ def _invoke_lane_validator(
     artifact: Path,
     trust_policy_path: Path,
     evidence_path: Path,
-    environment: str,
     expected_executable_hash: str,
 ) -> tuple[bytes, bytes, int, str]:
     return _invoke_validator_command(
@@ -3891,7 +3987,6 @@ def _invoke_lane_validator(
             str(artifact.absolute()),
             str(trust_policy_path.absolute()),
             str(evidence_path.absolute()),
-            environment,
         ),
         expected_executable_hash,
     )
@@ -3906,12 +4001,11 @@ def verify_rust_release_signatures(
     evidence: Mapping[str, Any],
     evidence_bytes: bytes,
     validator_path: Path,
-    environment: str,
 ) -> tuple[dict[str, Any], str]:
     """Require Rust/iroha_crypto to independently verify every trust signature."""
 
-    if environment not in ("production", "test-fixture"):
-        _fail("Rust release signature environment is invalid")
+    if trust_policy.get("environment") != "production":
+        _fail("Rust release signature validation requires a production trust policy")
     _, executable_hash = authenticate_validator_executable(
         validator_path, evidence["validator"]
     )
@@ -3921,7 +4015,6 @@ def verify_rust_release_signatures(
             "validate-release",
             str(trust_policy_path.absolute()),
             str(evidence_path.absolute()),
-            environment,
         ),
         executable_hash,
     )
@@ -3961,7 +4054,7 @@ def verify_rust_release_signatures(
     )
     if (
         receipt["schema"] != "sccp-release-signature-validation-final-v1"
-        or receipt["environment"] != environment
+        or receipt["environment"] != "production"
         or receipt["policy_id"] != trust_policy["policy_id"]
         or receipt["release_id"] != evidence["release_id"]
         or receipt["policy_sha256_hex"] != sha256_hex(trust_policy_bytes)
@@ -4013,9 +4106,7 @@ def verify_rust_semantic_proofs(
     """Require the authenticated Rust validator to decode and pair every audited proof."""
 
     if trust_policy["environment"] != "production":
-        if semantic_records:
-            _fail("test-fixture evidence cannot request semantic proof validation")
-        return ()
+        _fail("Rust semantic proof validation requires a production trust policy")
     if len(semantic_records) != len(PROFILE_ORDER):
         _fail("production semantic proof validation requires every launch profile")
     artifact_by_path = {entry["path"]: entry for entry in evidence["artifacts"]}
@@ -4038,7 +4129,6 @@ def verify_rust_semantic_proofs(
                 str(trust_policy_path.absolute()),
                 str(evidence_path.absolute()),
                 expected_profile,
-                "production",
             ),
             expected_executable_hash,
         )
@@ -4347,15 +4437,11 @@ def verify_rust_lane_evidence(
     *,
     trust_policy_path: Path,
     evidence_path: Path,
-    environment: str,
 ) -> tuple[list[dict[str, Any]], str]:
     """Independently validate every typed lane artifact with the Rust verifier."""
 
-    if (
-        environment not in ("production", "test-fixture")
-        or trust_policy["environment"] != environment
-    ):
-        _fail("Rust lane validation environment does not match the trust policy")
+    if trust_policy.get("environment") != "production":
+        _fail("Rust lane validation requires a production trust policy")
 
     _, executable_hash = authenticate_validator_executable(
         validator_path, evidence["validator"]
@@ -4381,7 +4467,6 @@ def verify_rust_lane_evidence(
             artifact_path,
             trust_policy_path,
             evidence_path,
-            environment,
             executable_hash,
         )
         if executed_hash != executable_hash:

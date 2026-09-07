@@ -113,7 +113,10 @@ pub mod isi {
             )?;
             let (nft_id, nft_value) = nft.clone().into_key_value();
             super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &nft_id)?;
-            super::super::nft_custody::ensure_nft_destination_unreserved(&state_transaction.world, authority)?;
+            super::super::nft_custody::ensure_nft_destination_unreserved(
+                &state_transaction.world,
+                authority,
+            )?;
             if state_transaction.world.nft(&nft_id).is_ok() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
@@ -222,7 +225,10 @@ pub mod isi {
                 destination,
             } = self;
             super::super::nft_custody::ensure_nft_unreserved(&state_transaction.world, &object)?;
-            super::super::nft_custody::ensure_nft_destination_unreserved(&state_transaction.world, &destination)?;
+            super::super::nft_custody::ensure_nft_destination_unreserved(
+                &state_transaction.world,
+                &destination,
+            )?;
             state_transaction.world.account(&source)?;
             let _created =
                 ensure_receiving_account(authority, &destination, None, state_transaction)?;

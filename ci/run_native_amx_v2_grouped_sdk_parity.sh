@@ -515,7 +515,7 @@ case "$surface" in
     assert_openapi_replay_marker
     ;;
   python)
-    observed_test_count=65
+    observed_test_count=67
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
@@ -532,7 +532,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=63
+    observed_test_count=65
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
@@ -601,7 +601,7 @@ case "$surface" in
     fi
     ;;
   swift)
-    observed_test_count=7
+    observed_test_count=9
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for grouped Native AMX V2 Swift parity" >&2
       exit 1
@@ -640,7 +640,7 @@ if not matches or any(int(match.group(1)) != expected for match in matches):
 PY
     ;;
   kotlin)
-    observed_test_count=9
+    observed_test_count=11
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -675,7 +675,7 @@ PY
     if [[ -n "$sdk_gradle_launcher" ]]; then
       gradle_command=("$sdk_gradle_launcher")
     else
-      gradle_command=(sh "${repo_root}/java/iroha_android/gradlew")
+      gradle_command=(sh "${repo_root}/kotlin/gradlew")
     fi
     run_and_capture \
       env GRADLE_USER_HOME="$sdk_gradle_user_home" JAVA_HOME="$java_home" \
@@ -683,14 +683,14 @@ PY
       IROHA_NATIVE_AMX_V2_GROUPED_GRADLE_BUILD_ROOT="$gradle_build_root" \
       "${gradle_command[@]}" \
       --offline --no-daemon --no-build-cache --rerun-tasks --console=plain \
-      --project-dir "${repo_root}/java/iroha_android" \
+      --project-dir "${repo_root}/kotlin" \
       --project-cache-dir "${temporary_root}/java-project-cache" \
       --init-script "$gradle_init_path" \
-      :core:test \
-      --tests org.hyperledger.iroha.android.consensus.NativeAmxV2GroupedFixtureTests
+      :core-jvm:test \
+      --tests org.hyperledger.iroha.sdk.consensus.NativeAmxV2GroupedFixtureTests
     assert_gradle_report \
       "$gradle_build_root" \
-      org.hyperledger.iroha.android.consensus.NativeAmxV2GroupedFixtureTests \
+      org.hyperledger.iroha.sdk.consensus.NativeAmxV2GroupedFixtureTests \
       "$observed_test_count"
     ;;
 esac

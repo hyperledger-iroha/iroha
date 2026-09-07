@@ -373,25 +373,40 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     let any = instr.as_any();
     // Native game charges reserve bounded record traversal and crypto before execution.
     if let Some(proof) = any.downcast_ref::<dm_isi::game::SettleGameSessionV1>() {
-        return 250_000_u64.saturating_add((proof.proof.proof_bytes.len() as u64).saturating_mul(5));
+        return 250_000_u64
+            .saturating_add((proof.proof.proof_bytes.len() as u64).saturating_mul(5));
     }
     if let Some(proof) = any.downcast_ref::<dm_isi::game::VerifyExecutionProofV1>() {
-        return 250_000_u64.saturating_add((proof.proof.proof_bytes.len() as u64).saturating_mul(5));
+        return 250_000_u64
+            .saturating_add((proof.proof.proof_bytes.len() as u64).saturating_mul(5));
     }
-    if any.is::<dm_isi::game::RegisterExecutionProofProfileV1>() { return 32_000; }
+    if any.is::<dm_isi::game::RegisterExecutionProofProfileV1>() {
+        return 32_000;
+    }
     if let Some(checkpoint) = any.downcast_ref::<dm_isi::game::CommitGameCheckpointV1>() {
         return 40_000_u64.saturating_add((checkpoint.encode().len() as u64).saturating_mul(5));
     }
     if let Some(session) = any.downcast_ref::<dm_isi::game::OpenGameSessionV1>() {
         let seats = u64::from(session.manifest.max_participants.min(32));
-        let payout_cases = if session.stake.is_zero() { 0 } else { seats * (seats + 1) / 2 };
-        return 32_000_u64.saturating_add(payout_cases.saturating_mul(1_024))
+        let payout_cases = if session.stake.is_zero() {
+            0
+        } else {
+            seats * (seats + 1) / 2
+        };
+        return 32_000_u64
+            .saturating_add(payout_cases.saturating_mul(1_024))
             .saturating_add((session.encode().len() as u64).saturating_mul(5));
     }
     if any.is::<dm_isi::game::JoinGameSessionV1>()
-        || any.is::<dm_isi::game::StartGameSessionV1>() || any.is::<dm_isi::game::ChallengeGameSessionV1>()
-        || any.is::<dm_isi::game::CommitGameInputsV1>() || any.is::<dm_isi::game::RevealGameInputsV1>()
-        || any.is::<dm_isi::game::AdvanceGameDeadlineV1>() || any.is::<dm_isi::game::ExpireGameSessionV1>() || any.is::<dm_isi::game::ClaimGamePayoutV1>() || any.is::<dm_isi::game::StakeGameItemV1>() {
+        || any.is::<dm_isi::game::StartGameSessionV1>()
+        || any.is::<dm_isi::game::ChallengeGameSessionV1>()
+        || any.is::<dm_isi::game::CommitGameInputsV1>()
+        || any.is::<dm_isi::game::RevealGameInputsV1>()
+        || any.is::<dm_isi::game::AdvanceGameDeadlineV1>()
+        || any.is::<dm_isi::game::ExpireGameSessionV1>()
+        || any.is::<dm_isi::game::ClaimGamePayoutV1>()
+        || any.is::<dm_isi::game::StakeGameItemV1>()
+    {
         return 32_000;
     }
     // Register

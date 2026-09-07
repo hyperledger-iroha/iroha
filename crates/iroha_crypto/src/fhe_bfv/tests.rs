@@ -375,9 +375,9 @@ fn diag() -> &'static BfvTestDiagnostics {
             include_str!("testdata/compact_diagnostics_v1.tsv"),
             1274,
             [
-                0xc7, 0x51, 0x4b, 0x97, 0x55, 0xe3, 0x6f, 0xd2, 0xc1, 0xe1, 0xdd, 0x89, 0x6f, 0x62,
-                0x7c, 0x2d, 0xa1, 0x25, 0x9c, 0x46, 0x9d, 0xe7, 0xb2, 0xe8, 0x26, 0xcf, 0x55, 0x2a,
-                0x83, 0xbb, 0x24, 0x2f,
+                0x75, 0x25, 0x73, 0x43, 0x9b, 0xa5, 0xc7, 0x06, 0x45, 0x16, 0x95, 0x01, 0xa0, 0xd8,
+                0x05, 0xa3, 0xa6, 0x8a, 0x84, 0x34, 0xc0, 0xe5, 0x02, 0x83, 0x97, 0xe2, 0x09, 0xf3,
+                0xfa, 0x38, 0x05, 0x0d,
             ],
         )
     })
@@ -1576,22 +1576,22 @@ fn bounded_bootstrap_refresh_round_seed_domain_is_separate_from_exact_mode() {
     params.validate().expect("BFV params are valid");
     validate_bfv_seeded_bootstrap_refresh_round_capacity(
         &params,
-        2,
+        1,
         "exact bootstrap domain-separation test",
     )
     .expect("exact bootstrap refresh capacity is valid");
     validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
         &params,
-        2,
+        1,
         "bounded bootstrap domain-separation test",
     )
     .expect("bounded bootstrap refresh capacity is valid");
     let key_id = "bfv-bootstrap-round-domain-separation";
     let seed = b"bfv-bootstrap-round-domain-separation-seed";
-    let_row! { exact_round_seed = bootstrap_refresh_round_seed( BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id, 2, seed, 0, ) };
-    let_row! { bounded_round_seed = bootstrap_refresh_round_seed( BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id, 2, seed, 0, ) };
-    let_row! { exact_round_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[ BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id.as_bytes(), &2_u16.to_le_bytes(), seed, &0_u16.to_le_bytes(), ]) .into() };
-    let_row! { bounded_round_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[ BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id.as_bytes(), &2_u16.to_le_bytes(), seed, &0_u16.to_le_bytes(), ]) .into() };
+    let_row! { exact_round_seed = bootstrap_refresh_round_seed( BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id, 1, seed, 0, ) };
+    let_row! { bounded_round_seed = bootstrap_refresh_round_seed( BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id, 1, seed, 0, ) };
+    let_row! { exact_round_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[ BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id.as_bytes(), &1_u16.to_le_bytes(), seed, &0_u16.to_le_bytes(), ]) .into() };
+    let_row! { bounded_round_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[ BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN, key_id.as_bytes(), &1_u16.to_le_bytes(), seed, &0_u16.to_le_bytes(), ]) .into() };
     let_row! { exact_rotation_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, seed]).into() };
     let_row! { bounded_rotation_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN, seed]).into() };
     assert_eq_row! { exact_round_seed, exact_round_seed_transcript, "exact bootstrap refresh round seed must bind the explicit round transcript" };
@@ -1601,11 +1601,11 @@ fn bounded_bootstrap_refresh_round_seed_domain_is_separate_from_exact_mode() {
     assert_ne_row! { bounded_round_seed, bounded_rotation_seed_transcript, "bounded bootstrap round seed must be separated from rotation seed derivation", };
     let_row! { (_exact_secret_key, exact_public_key, _) = keygen_from_seed(&params, b"bfv-bootstrap-round-domain-exact-keygen") .expect("exact keygen") };
     let_row! { (_bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(&params, b"bfv-bootstrap-round-domain-bounded-keygen") .expect("bounded keygen") };
-    let_row! { exact_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &exact_public_key, key_id, 2, seed, ) .expect("exact bootstrap key") };
-    let_row! { bounded_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &bounded_public_key, key_id, 2, seed, ) .expect("bounded bootstrap key") };
-    let_row! { bounded_key_repeat = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &bounded_public_key, key_id, 2, seed, ) .expect("repeat bounded bootstrap key") };
+    let_row! { exact_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &exact_public_key, key_id, 1, seed, ) .expect("exact bootstrap key") };
+    let_row! { bounded_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &bounded_public_key, key_id, 1, seed, ) .expect("bounded bootstrap key") };
+    let_row! { bounded_key_repeat = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &bounded_public_key, key_id, 1, seed, ) .expect("repeat bounded bootstrap key") };
     assert_eq_row! { bounded_key_repeat, bounded_key, "bounded bootstrap refresh derivation must remain deterministic for the same seed", };
-    let_row! { exact_key_for_bounded_public_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &bounded_public_key, key_id, 2, seed, ) .expect("exact bootstrap key for same public key") };
+    let_row! { exact_key_for_bounded_public_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &bounded_public_key, key_id, 1, seed, ) .expect("exact bootstrap key for same public key") };
     assert_eq_row! { exact_key_for_bounded_public_key.public_key_digest, bounded_key.public_key_digest, "same-public-key exact and bounded bootstrap keys must bind the same public-key digest", };
     assert_ne_row! { exact_key.round_refreshes[0], bounded_key.round_refreshes[0], "exact and bounded bootstrap refreshes must not reuse same-seed round material", };
     for (round_index, (exact_refresh, bounded_refresh)) in exact_key_for_bounded_public_key
@@ -3997,7 +3997,7 @@ fn bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds() {
         "bounded-noise bootstrap input",
     )
     .expect("input fits fresh bounded-noise budget");
-    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key", 2, b"bfv-rounded-bootstrap-refresh", ) .expect("bounded-noise bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key", 1, b"bfv-rounded-bootstrap-refresh", ) .expect("bounded-noise bootstrap key") };
     validate_bootstrap_key_bounded_noise_zero_refreshes(&params, &secret_key, &bootstrap_key)
         .expect("bounded-noise bootstrap refreshes decrypt to zero");
     validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
@@ -4018,24 +4018,67 @@ fn bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds() {
     let_row! { all_zero_refresh = BfvCiphertext { c0: zero_poly(&params), c1: zero_poly(&params), } };
     mutation_row! { inert_bootstrap_key = bootstrap_key.clone(); inert_bootstrap_key.zero_refresh = all_zero_refresh.clone(); inert_bootstrap_key.round_refreshes[0] = all_zero_refresh; assert_diag! { 266 => validate_bootstrap_key_bounded_noise_zero_refresh_transcript( &params, &public_key, &inert_bootstrap_key, b"bfv-rounded-bootstrap-refresh", ) }; };
     let_row! { first = bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &ciphertext, 0) .expect("first bounded-noise bootstrap refresh") };
-    let_row! { second = bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &first, 1) .expect("second bounded-noise bootstrap refresh") };
-    let_row! { multi_round = bootstrap_ciphertext_bounded_noise_rounds(&params, &bootstrap_key, &ciphertext, 2) .expect("multi-round bounded-noise bootstrap refresh") };
-    let_row! { rns_second = bootstrap_ciphertext_bounded_noise_rns_exact_round( &params, &rns_chain, &bootstrap_key, &first, 1, ) .expect("RNS bounded-noise bootstrap refresh") };
-    let_row! { rns_multi_round = bootstrap_ciphertext_bounded_noise_rns_exact_rounds( &params, &rns_chain, &bootstrap_key, &ciphertext, 2, ) .expect("RNS multi-round bounded-noise bootstrap refresh") };
+    let_row! { second = bootstrap_ciphertext_bounded_noise(&params, &bootstrap_key, &ciphertext) .expect("default bounded-noise bootstrap refresh") };
+    let_row! { multi_round = bootstrap_ciphertext_bounded_noise_rounds(&params, &bootstrap_key, &ciphertext, 1) .expect("counted bounded-noise bootstrap refresh") };
+    let_row! { rns_second = bootstrap_ciphertext_bounded_noise_rns_exact_round( &params, &rns_chain, &bootstrap_key, &ciphertext, 0, ) .expect("RNS bounded-noise bootstrap refresh") };
+    let_row! { rns_multi_round = bootstrap_ciphertext_bounded_noise_rns_exact_rounds( &params, &rns_chain, &bootstrap_key, &ciphertext, 1, ) .expect("RNS counted bounded-noise bootstrap refresh") };
+    assert_eq!(first, second);
     assert_eq!(rns_second, second);
     assert_eq!(multi_round, second);
     assert_eq!(rns_multi_round, second);
     assert_ne!(second, ciphertext);
-    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh = mismatched_zero_refresh.round_refreshes[1].clone(); assert_diag! { 267 => bootstrap_ciphertext_bounded_noise_round(&params, &mismatched_zero_refresh, &ciphertext, 0) }; };
-    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes[1] = duplicated_round_refresh.round_refreshes[0].clone(); assert_diag! { 268 => bootstrap_ciphertext_bounded_noise_rns_exact_rounds( &params, &rns_chain, &duplicated_round_refresh, &ciphertext, 2, ) }; };
-    assert_diag! { 269 => bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &duplicated_round_refresh, fresh_bound, 2, ) };
+    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh.c0[0] = add_mod_u64(mismatched_zero_refresh.zero_refresh.c0[0], 1, params.ciphertext_modulus); assert_diag! { 267 => bootstrap_ciphertext_bounded_noise_round(&params, &mismatched_zero_refresh, &ciphertext, 0) }; };
+    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes.push(duplicated_round_refresh.round_refreshes[0].clone()); assert_diag! { 268 => validate_bootstrap_key_entries(&params, &duplicated_round_refresh) }; };
+    assert_diag! { 269 => validate_bootstrap_key_refresh_summary_consistency(&duplicated_round_refresh) };
+    assert_error_contains(
+        bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+            &params,
+            &rns_chain,
+            &duplicated_round_refresh,
+            &ciphertext,
+            1,
+        ),
+        "round refresh ciphertexts",
+        "RNS bounded refresh admission must reject surplus duplicate material",
+    );
+    assert_error_contains(
+        bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+            &params,
+            &duplicated_round_refresh,
+            fresh_bound,
+            1,
+        ),
+        "round refresh ciphertexts",
+        "bounded refresh bounds must reject surplus duplicate material",
+    );
     let_row! { all_zero_refresh = BfvCiphertext { c0: zero_poly(&params), c1: zero_poly(&params), } };
     mutation_row! { inert_zero_refresh = bootstrap_key.clone(); inert_zero_refresh.zero_refresh = all_zero_refresh.clone(); inert_zero_refresh.round_refreshes[0] = all_zero_refresh.clone(); validate_bootstrap_key(&params, &inert_zero_refresh) .expect("shape validation remains available for inert bounded refresh diagnostics"); assert_diag! { 270 => validate_bootstrap_key_bounded_noise_zero_refreshes( &params, &secret_key, &inert_zero_refresh, ) }; };
     assert_diag! { 271 => bootstrap_ciphertext_bounded_noise_round(&params, &inert_zero_refresh, &ciphertext, 0) };
     assert_diag! { 272 => bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &inert_zero_refresh, fresh_bound, 1, ) };
-    mutation_row! { inert_second_round = bootstrap_key.clone(); inert_second_round.round_refreshes[1] = all_zero_refresh; validate_bootstrap_key(&params, &inert_second_round) .expect("shape validation remains available for inert bounded round diagnostics"); assert_diag! { 273 => bootstrap_ciphertext_bounded_noise_rns_exact_rounds( &params, &rns_chain, &inert_second_round, &ciphertext, 2, ) }; };
-    assert_diag! { 274 => bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &inert_second_round, fresh_bound, 2, ) };
-    let_row! { output_bound = bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &bootstrap_key, fresh_bound, 2, ) .expect("bounded-noise bootstrap output bound") };
+    mutation_row! { inert_second_round = bootstrap_key.clone(); inert_second_round.round_refreshes.push(all_zero_refresh); validate_bootstrap_key_entries(&params, &inert_second_round) .expect("shape validation remains available for inert bounded round diagnostics"); assert_diag! { 273 => validate_bootstrap_key_refresh_material_not_inert(&inert_second_round) }; };
+    assert_diag! { 274 => validate_bootstrap_key_refresh_material_not_inert(&inert_second_round) };
+    assert_error_contains(
+        bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+            &params,
+            &rns_chain,
+            &inert_second_round,
+            &ciphertext,
+            1,
+        ),
+        "round refresh ciphertexts",
+        "RNS bounded refresh admission must reject surplus inert material",
+    );
+    assert_error_contains(
+        bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+            &params,
+            &inert_second_round,
+            fresh_bound,
+            1,
+        ),
+        "round refresh ciphertexts",
+        "bounded refresh bounds must reject surplus inert material",
+    );
+    let_row! { output_bound = bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &bootstrap_key, fresh_bound, 1, ) .expect("bounded-noise bootstrap output bound") };
     let_row! { profile = validate_ciphertext_bounded_noise( &params, &secret_key, &second, output_bound, "bounded-noise bootstrap output", ) .expect("bounded-noise bootstrap output fits propagated bound") };
     assert_eq!(&profile.plaintext[..2], &[77, 19]);
     let_row! { err = bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &bootstrap_key, fresh_bound, 3, ) .expect_err("over-key-capacity bounded-noise bootstrap rounds must be rejected") };
@@ -4064,11 +4107,11 @@ fn bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds() {
     let_row! { err = bfv_bootstrap_key_refresh_bounded_noise_output_bound( &params, &malformed_bootstrap_key, fresh_bound, 1, ) .expect_err("malformed bounded bootstrap keys must fail after public preflight") };
     assert_row! { err.to_string().contains("round refresh ciphertexts"), "unexpected error: {err}" };
     let mut nonzero_bootstrap = bootstrap_key.clone();
-    nonzero_bootstrap.round_refreshes[1] =
-        add_plain_scalar_bounded_noise(&params, &nonzero_bootstrap.round_refreshes[1], 1)
+    nonzero_bootstrap.round_refreshes[0] =
+        add_plain_scalar_bounded_noise(&params, &nonzero_bootstrap.round_refreshes[0], 1)
             .expect("add rounded plaintext to bounded-noise bootstrap refresh");
     let_row! { err = validate_bootstrap_key_bounded_noise_zero_refreshes( &params, &secret_key, &nonzero_bootstrap, ) .expect_err("non-zero bounded-noise bootstrap refresh must be rejected") };
-    assert_row! { err.to_string().contains("round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("round_refreshes[0]"), "unexpected error: {err}" };
     let_row! { too_narrow_chain = BfvRnsModulusChain { moduli: vec![4_292_018_177], } };
     let_row! { err = bootstrap_ciphertext_bounded_noise_rns_exact_round( &params, &too_narrow_chain, &bootstrap_key, &ciphertext, 0, ) .expect_err("too-narrow RNS chain must be rejected before bounded-noise bootstrap refresh") };
     assert_row! { err.to_string().contains("does not cover"), "unexpected error: {err}" };
@@ -4082,7 +4125,7 @@ fn bounded_noise_refresh_key_zero_plaintext_validators_reject_inert_and_oversize
     assert!(u128::from(oversized_delta) < capacity);
     let_row! { (secret_key, public_key) = keygen_bounded_noise_from_seed(&params, b"bfv-rounded-refresh-noise-keygen") .expect("bounded-noise keygen") };
     let_row! { rotation_key = rotation_key_bounded_noise_from_seed( &params, &public_key, 1, b"bfv-rounded-refresh-noise-rotation", ) .expect("bounded-noise rotation key") };
-    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key", 2, b"bfv-rounded-refresh-noise-bootstrap", ) .expect("bounded-noise bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key", 1, b"bfv-rounded-refresh-noise-bootstrap", ) .expect("bounded-noise bootstrap key") };
     validate_rotation_key_bounded_noise_zero_refresh(&params, &secret_key, &rotation_key)
         .expect("generated bounded-noise rotation refresh decrypts to zero");
     validate_bootstrap_key_bounded_noise_zero_refreshes(&params, &secret_key, &bootstrap_key)
@@ -4103,16 +4146,17 @@ fn bounded_noise_refresh_key_zero_plaintext_validators_reject_inert_and_oversize
     assert_row! { err.to_string() .contains("bounded-noise rotation key zero_refresh"), "unexpected error: {err}" };
     assert_row! { err.to_string().contains("rounded noise"), "unexpected error: {err}" };
     let mut oversized_bootstrap = bootstrap_key;
-    oversized_bootstrap.round_refreshes[1].c0[0] = add_mod_u64(
-        oversized_bootstrap.round_refreshes[1].c0[0],
+    oversized_bootstrap.round_refreshes[0].c0[0] = add_mod_u64(
+        oversized_bootstrap.round_refreshes[0].c0[0],
         oversized_delta,
         params.ciphertext_modulus,
     );
-    let_row! { bootstrap_profile = decrypt_with_bounded_noise_profile( &params, &secret_key, &oversized_bootstrap.round_refreshes[1], ) .expect("oversized bounded-noise bootstrap profile") };
+    oversized_bootstrap.zero_refresh = oversized_bootstrap.round_refreshes[0].clone();
+    let_row! { bootstrap_profile = decrypt_with_bounded_noise_profile( &params, &secret_key, &oversized_bootstrap.round_refreshes[0], ) .expect("oversized bounded-noise bootstrap profile") };
     assert!(bootstrap_profile.plaintext.iter().all(|&value| value == 0));
     assert_row! { bootstrap_profile.max_abs_noise > fresh_bound, "tampered bootstrap refresh noise {} must exceed bound {fresh_bound}", bootstrap_profile.max_abs_noise };
     let_row! { err = validate_bootstrap_key_bounded_noise_zero_refreshes( &params, &secret_key, &oversized_bootstrap, ) .expect_err("zero-plaintext bootstrap refresh with oversized noise must be rejected") };
-    assert_row! { err.to_string().contains("round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("round_refreshes[0]"), "unexpected error: {err}" };
     assert_row! { err.to_string().contains("rounded noise"), "unexpected error: {err}" };
 }
 #[test]
@@ -4237,13 +4281,13 @@ fn deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds() {
     let_row! { err = galois_key_from_seed(&params, &secret_key, 3, &delayed_placeholder_seed) .expect_err("delayed-placeholder BFV Galois key seeds must not derive key material") };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
     let identifier_params = ram_lfe_bfv_parameters_v1();
-    let_row! { err = derive_identifier_key_material_from_seed(&identifier_params, 8, b"", b"test-associated") .expect_err("empty BFV identifier key seeds must not derive key material") };
+    let_row! { err = derive_identifier_key_material_from_seed(&identifier_params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, b"", b"test-associated") .expect_err("empty BFV identifier key seeds must not derive key material") };
     assert_row! { err.to_string().contains("must not be empty"), "unexpected error: {err}" };
-    let_row! { err = derive_identifier_key_material_from_seed( &identifier_params, 8, &all_zero_seed, b"test-associated", ) .expect_err("all-zero BFV identifier key seeds must not derive key material") };
+    let_row! { err = derive_identifier_key_material_from_seed( &identifier_params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, &all_zero_seed, b"test-associated", ) .expect_err("all-zero BFV identifier key seeds must not derive key material") };
     assert_row! { err.to_string().contains("all zero"), "unexpected error: {err}" };
-    let_row! { err = derive_identifier_key_material_from_seed( &identifier_params, 8, &delayed_placeholder_seed, b"test-associated", ) .expect_err("delayed-placeholder BFV identifier key seeds must not derive key material") };
+    let_row! { err = derive_identifier_key_material_from_seed( &identifier_params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, &delayed_placeholder_seed, b"test-associated", ) .expect_err("delayed-placeholder BFV identifier key seeds must not derive key material") };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { (public_parameters, _, _) = derive_identifier_key_material_from_seed( &identifier_params, 8, b"bfv-empty-identifier-key-seed", b"test-associated", ) .expect("identifier key material") };
+    let_row! { (public_parameters, _, _) = derive_identifier_key_material_from_seed( &identifier_params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, b"bfv-empty-identifier-key-seed", b"test-associated", ) .expect("identifier key material") };
     let_row! { err = encrypt_identifier_from_seed(&public_parameters, b"id", b"") .expect_err("empty BFV identifier encryption seeds must not derive ciphertexts") };
     assert_row! { err.to_string().contains("must not be empty"), "unexpected error: {err}" };
     let_row! { err = encrypt_identifier_from_seed(&public_parameters, b"id", &all_zero_seed) .expect_err("all-zero BFV identifier encryption seeds must not derive ciphertexts") };
@@ -4274,7 +4318,7 @@ fn deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds() {
     assert_row! { err.to_string().contains("all zero"), "unexpected error: {err}" };
     let_row! { err = galois_key_bounded_noise_from_seed( &params, &bounded_secret_key, 3, &delayed_placeholder_seed, ) .expect_err("delayed-placeholder bounded-noise BFV Galois seeds must not derive key material") };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { err = derive_identifier_key_material_from_seed( &identifier_params, 8, &oversized_seed, b"test-associated", ) .expect_err("oversized BFV identifier key seeds must not derive key material") };
+    let_row! { err = derive_identifier_key_material_from_seed( &identifier_params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, &oversized_seed, b"test-associated", ) .expect_err("oversized BFV identifier key seeds must not derive key material") };
     assert_row! { err.to_string().contains("maximum supported length"), "unexpected error: {err}" };
     let_row! { err = encrypt_identifier_from_seed(&public_parameters, b"id", &oversized_seed) .expect_err("oversized BFV identifier encryption seeds must not derive ciphertexts") };
     assert_row! { err.to_string().contains("maximum supported length"), "unexpected error: {err}" };
@@ -4301,8 +4345,8 @@ fn seeded_encryption_preflights_public_input_and_seed_before_public_key_shape() 
     let_row! { zero_b_bounded_public_key = BfvPublicKey { b: zero_poly(&bounded_params), a: vec![1; bounded_params.degree()], } };
     assert_diag! { 295 => encrypt_bounded_noise_from_seed( &bounded_params, &zero_b_bounded_public_key, &[0], b"bfv-bounded-zero-b-public-key", ) };
     let identifier_params = ram_lfe_bfv_parameters_v1();
-    let_row! { identifier_public_parameters = BfvIdentifierPublicParameters { parameters: identifier_params, public_key: malformed_public_key.clone(), max_input_bytes: 3, } };
-    assert_diag! { 296 => encrypt_identifier_from_seed( &identifier_public_parameters, b"abcd", b"bfv-identifier-input-before-key", ) };
+    let_row! { identifier_public_parameters = BfvIdentifierPublicParameters { parameters: identifier_params, public_key: malformed_public_key.clone(), max_input_bytes: RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, } };
+    assert_diag! { 296 => encrypt_identifier_from_seed( &identifier_public_parameters, &vec![b'a'; usize::from(RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES) + 1], b"bfv-identifier-input-before-key", ) };
     assert_diag! { 297 => encrypt_identifier_from_seed(&identifier_public_parameters, b"abc", b"") };
     let_row! { invalid_identifier_capacity = BfvIdentifierPublicParameters { parameters: identifier_params, public_key: malformed_public_key, max_input_bytes: 0, } };
     assert_diag! { 298 => invalid_identifier_capacity.validate() };
@@ -5070,7 +5114,7 @@ fn refresh_key_transcripts_reject_tampered_public_material() {
     let_row! { err = validate_rotation_key_zero_refresh_transcript( &material.params, &material.public_key, &inert_rotation, b"bfv-eval-key-rotation", ) .expect_err("inert rotation refresh material must fail transcript validation") };
     assert_row! { err.to_string() .contains("rotation key zero_refresh must not be an all-zero ciphertext"), "unexpected error: {err}" };
     let bootstrap_seed = b"bfv-refresh-transcript-bootstrap";
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 2, bootstrap_seed, ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 1, bootstrap_seed, ) .expect("bootstrap key") };
     validate_bootstrap_key_zero_refresh_transcript(
         &material.params,
         &material.public_key,
@@ -5094,13 +5138,14 @@ fn refresh_key_transcripts_reject_tampered_public_material() {
     let_row! { err = validate_bootstrap_key_zero_refresh_transcript( &material.params, &material.public_key, &bootstrap_key, &oversized_bootstrap_seed, ) .expect_err("oversized bootstrap transcript seed must be rejected") };
     assert_row! { err.to_string().contains("maximum supported length"), "unexpected error: {err}" };
     let mut tampered_bootstrap_round = bootstrap_key.clone();
-    tampered_bootstrap_round.round_refreshes[1].c1[0] = add_mod_u64(
-        tampered_bootstrap_round.round_refreshes[1].c1[0],
+    tampered_bootstrap_round.round_refreshes[0].c1[0] = add_mod_u64(
+        tampered_bootstrap_round.round_refreshes[0].c1[0],
         1,
         material.params.ciphertext_modulus,
     );
+    tampered_bootstrap_round.zero_refresh = tampered_bootstrap_round.round_refreshes[0].clone();
     let_row! { err = validate_bootstrap_key_zero_refresh_transcript( &material.params, &material.public_key, &tampered_bootstrap_round, bootstrap_seed, ) .expect_err("tampered bootstrap round refresh must be rejected") };
-    assert_row! { err.to_string().contains("round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("zero_refresh does not match deterministic encrypted-zero transcript"), "unexpected error: {err}" };
     let mut inert_bootstrap_key = bootstrap_key.clone();
     inert_bootstrap_key.zero_refresh = all_zero_refresh.clone();
     inert_bootstrap_key.round_refreshes[0] = all_zero_refresh;
@@ -5109,18 +5154,18 @@ fn refresh_key_transcripts_reject_tampered_public_material() {
     let mut drifted_key_id = bootstrap_key;
     drifted_key_id.key_id.push_str("-drift");
     let_row! { err = validate_bootstrap_key_zero_refresh_transcript( &material.params, &material.public_key, &drifted_key_id, bootstrap_seed, ) .expect_err("bootstrap key-id drift must change the transcript") };
-    assert_row! { err.to_string().contains("zero_refresh"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("zero_refresh does not match deterministic encrypted-zero transcript"), "unexpected error: {err}" };
 }
 #[test]
 fn bootstrap_key_zero_refresh_proof_statement_digest_binds_public_material() {
     let material = evaluation_key_adversarial_material();
     let bootstrap_seed = b"bfv-bootstrap-proof-statement";
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-proof-key", 2, bootstrap_seed, ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-proof-key", 1, bootstrap_seed, ) .expect("bootstrap key") };
     let_row! { digest = bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &bootstrap_key, ) .expect("bootstrap proof statement digest") };
     assert_eq_row! { digest, bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &bootstrap_key ) .expect("repeat bootstrap proof statement digest") };
     let_row! { (bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests) = bootstrap_key_refresh_digest_summary_v1(&bootstrap_key) .expect("bootstrap key refresh summary") };
-    assert_eq!(bootstrap_round_count, 2);
-    assert_eq!(bootstrap_round_digests.len(), 2);
+    assert_eq!(bootstrap_round_count, 1);
+    assert_eq!(bootstrap_round_digests.len(), 1);
     let_row! { statement_material = BfvBootstrapKeyProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
     let_row! { statement_bytes = norito::to_bytes(&statement_material).expect("encode bootstrap statement material") };
     assert_eq_row! { digest, Hash::new_from_chunks(&[ BFV_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN, statement_bytes.as_slice(), ]) };
@@ -5136,40 +5181,92 @@ fn bootstrap_key_zero_refresh_proof_statement_digest_binds_public_material() {
     assert_diag! { 409 => bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &all_zero_public_key, &omitted_public_key_digest, ) };
     mutation_row! { all_zero_zero_refresh = bootstrap_key.clone(); let_row! { all_zero_refresh = BfvCiphertext { c0: zero_poly(&material.params), c1: zero_poly(&material.params), } }; all_zero_zero_refresh.zero_refresh = all_zero_refresh.clone(); all_zero_zero_refresh.round_refreshes[0] = all_zero_refresh.clone(); assert_diag! { 410 => bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &all_zero_zero_refresh, ) }; };
     assert_diag! { 411 => bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &all_zero_zero_refresh, ) };
-    mutation_row! { all_zero_round_refresh = bootstrap_key.clone(); all_zero_round_refresh.round_refreshes[1] = all_zero_refresh; assert_diag! { 412 => bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &all_zero_round_refresh, ) }; };
+    mutation_row! { all_zero_round_refresh = bootstrap_key.clone(); all_zero_round_refresh.round_refreshes[0] = all_zero_refresh;
+    all_zero_round_refresh.zero_refresh = all_zero_round_refresh.round_refreshes[0].clone(); assert_diag! { 412 => bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &all_zero_round_refresh, ) }; };
     assert_diag! { 413 => bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &all_zero_round_refresh, ) };
-    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh = mismatched_zero_refresh.round_refreshes[1].clone(); assert_diag! { 414 => bootstrap_key_refresh_digest_summary_v1(&mismatched_zero_refresh) }; };
+    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh.c0[0] = add_mod_u64(mismatched_zero_refresh.zero_refresh.c0[0], 1, material.params.ciphertext_modulus); assert_diag! { 414 => bootstrap_key_refresh_digest_summary_v1(&mismatched_zero_refresh) }; };
     assert_diag! { 415 => bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &mismatched_zero_refresh, ) };
     assert_diag! { 416 => bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &mismatched_zero_refresh, ) };
-    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes[1] = duplicated_round_refresh.round_refreshes[0].clone(); assert_diag! { 417 => bootstrap_key_refresh_digest_summary_v1(&duplicated_round_refresh) }; };
+    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes.push(duplicated_round_refresh.round_refreshes[0].clone()); assert_diag! { 417 => validate_bootstrap_key_refresh_summary_consistency(&duplicated_round_refresh) }; };
+    assert_error_contains(
+        bootstrap_key_refresh_digest_summary_v1(&duplicated_round_refresh),
+        "round refresh ciphertexts",
+        "bootstrap summary admission must reject surplus duplicate material",
+    );
     let mut tampered_refresh = bootstrap_key.clone();
-    tampered_refresh.round_refreshes[1].c0[0] = add_mod_u64(
-        tampered_refresh.round_refreshes[1].c0[0],
+    tampered_refresh.round_refreshes[0].c0[0] = add_mod_u64(
+        tampered_refresh.round_refreshes[0].c0[0],
         1,
         material.params.ciphertext_modulus,
     );
+    tampered_refresh.zero_refresh = tampered_refresh.round_refreshes[0].clone();
     let_row! { tampered_digest = bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &tampered_refresh, ) .expect("tampered but shape-valid bootstrap statement digest") };
     assert_ne_row! { digest, tampered_digest, "proof statement digest must bind every refresh ciphertext" };
     let_row! { bounded_tampered_digest = bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &tampered_refresh, ) .expect("tampered but shape-valid bounded bootstrap statement digest") };
     assert_ne_row! { bounded_digest, bounded_tampered_digest, "bounded proof statement digest must bind every refresh ciphertext" };
-    let_row! { three_round_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-proof-key-three-rounds", 3, b"bfv-bootstrap-proof-statement-three-rounds", ) .expect("three-round bootstrap key") };
-    let mut reordered_rounds = three_round_key.clone();
-    reordered_rounds.round_refreshes.swap(1, 2);
-    let_row! { three_round_digest = bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &three_round_key, ) .expect("three-round bootstrap statement digest") };
-    let_row! { reordered_digest = bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &reordered_rounds, ) .expect("reordered but shape-valid bootstrap statement digest") };
-    assert_ne_row! { three_round_digest, reordered_digest, "proof statement digest must bind refresh round order" };
-    let_row! { bounded_three_round_digest = bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &three_round_key, ) .expect("three-round bounded bootstrap statement digest") };
-    let_row! { bounded_reordered_digest = bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &reordered_rounds, ) .expect("reordered but shape-valid bounded bootstrap statement digest") };
-    assert_ne_row! { bounded_three_round_digest, bounded_reordered_digest, "bounded proof statement digest must bind refresh round order" };
+    // A supported statement has one refresh. The encoded statement schema still
+    // binds sequence order, and admission must reject a claimed surplus round.
+    let mut ordered_material = statement_material;
+    ordered_material.bootstrap_round_digests.extend([
+        Hash::new(b"bfv-proof-round-order-a"),
+        Hash::new(b"bfv-proof-round-order-b"),
+    ]);
+    let ordered_bytes = norito::to_bytes(&ordered_material).expect("encode ordered round digests");
+    ordered_material.bootstrap_round_digests.swap(1, 2);
+    let reordered_bytes =
+        norito::to_bytes(&ordered_material).expect("encode reordered round digests");
+    assert_ne!(
+        Hash::new_from_chunks(&[
+            BFV_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+            &ordered_bytes
+        ]),
+        Hash::new_from_chunks(&[
+            BFV_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+            &reordered_bytes
+        ]),
+        "proof statement encoding must bind refresh round order"
+    );
+    assert_ne!(
+        Hash::new_from_chunks(&[
+            BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+            &ordered_bytes
+        ]),
+        Hash::new_from_chunks(&[
+            BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+            &reordered_bytes
+        ]),
+        "bounded proof statement encoding must bind refresh round order"
+    );
+    let mut unsupported_rounds = bootstrap_key;
+    unsupported_rounds.max_refresh_rounds = 3;
+    for result in [
+        bootstrap_key_zero_refresh_proof_statement_digest(
+            &material.params,
+            &material.public_key,
+            &unsupported_rounds,
+        ),
+        bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+            &material.params,
+            &material.public_key,
+            &unsupported_rounds,
+        ),
+    ] {
+        assert!(
+            result
+                .expect_err("surplus rounds must fail statement admission")
+                .to_string()
+                .contains("supported limit")
+        );
+    }
 }
 #[test]
 fn bootstrap_key_transcript_proof_statement_digest_binds_governance_inventory() {
     let material = evaluation_key_adversarial_material();
     let bootstrap_seed = b"bfv-bootstrap-transcript-proof-statement";
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-transcript-proof-key", 2, bootstrap_seed, ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-transcript-proof-key", 1, bootstrap_seed, ) .expect("bootstrap key") };
     let_row! { bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: vec![material.rotation_key.clone()], galois_keys: vec![material.galois_key.clone()], bootstrap_key: Some(bootstrap_key.clone()), } };
     let_row! { rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: 1, seed: b"bfv-eval-key-rotation", }] };
-    let_row! { bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-transcript-proof-key", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-transcript-proof-key", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { digest = bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ) .expect("transcript-bound proof statement") .expect("bootstrap key is present") };
     assert_eq_row! { digest, bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ) .expect("repeat transcript-bound proof statement") .expect("bootstrap key is present") };
     assert_diag! { 418 => bundle.validate_bounded_noise_refresh_transcripts( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ) };
@@ -5178,21 +5275,21 @@ fn bootstrap_key_transcript_proof_statement_digest_binds_governance_inventory() 
     let evaluation_key_digest = bundle.digest(&material.params).expect("bundle digest");
     let_row! { refresh_transcript_digest = bundle .refresh_transcript_digest( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ) .expect("refresh transcript digest") };
     let_row! { (bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests) = bootstrap_key_refresh_digest_summary_v1(&bootstrap_key) .expect("transcript bootstrap key refresh summary") };
-    assert_eq!(bootstrap_round_count, 2);
-    assert_eq!(bootstrap_round_digests.len(), 2);
-    let_row! { statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), evaluation_key_digest, refresh_transcript_digest, bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bootstrap-transcript-proof-key".to_string(), max_refresh_rounds: 2, seed: bootstrap_seed.to_vec(), }, bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
+    assert_eq!(bootstrap_round_count, 1);
+    assert_eq!(bootstrap_round_digests.len(), 1);
+    let_row! { statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), evaluation_key_digest, refresh_transcript_digest, bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bootstrap-transcript-proof-key".to_string(), max_refresh_rounds: 1, seed: bootstrap_seed.to_vec(), }, bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
     let_row! { statement_bytes = norito::to_bytes(&statement_material) .expect("encode transcript-bound bootstrap statement material") };
     assert_eq_row! { digest, Hash::new_from_chunks(&[ BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN, statement_bytes.as_slice(), ]) };
     let_row! { raw_digest = bootstrap_key_zero_refresh_proof_statement_digest( &material.params, &material.public_key, &bootstrap_key, ) .expect("raw bootstrap-key statement") };
     assert_ne_row! { digest, raw_digest, "policy proof statements must bind transcript inventory, not only bootstrap key material" };
-    let three_round_bootstrap_seed = b"bfv-bootstrap-transcript-proof-statement-three-rounds";
-    let_row! { three_round_bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-transcript-proof-key-three-rounds", 3, three_round_bootstrap_seed, ) .expect("three-round bootstrap key") };
-    let_row! { three_round_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-transcript-proof-key-three-rounds", max_refresh_rounds: 3, seed: three_round_bootstrap_seed, }) };
-    let_row! { three_round_bundle = BfvEvaluationKeyBundle { bootstrap_key: Some(three_round_bootstrap_key), ..bundle.clone() } };
-    let_row! { three_round_digest = three_round_bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, three_round_bootstrap_transcript, ) .expect("three-round transcript-bound proof statement") .expect("bootstrap key is present") };
-    assert_ne_row! { digest, three_round_digest, "exact transcript proof statements must bind bootstrap round count and key material" };
-    mutation_row! { reordered_round_bundle = three_round_bundle; reordered_round_bundle .bootstrap_key .as_mut() .expect("bootstrap key is present") .round_refreshes .swap(1, 2); assert_diag! { 421 => reordered_round_bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, three_round_bootstrap_transcript, ) }; };
-    let_row! { wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-transcript-proof-key", max_refresh_rounds: 2, seed: b"bfv-bootstrap-transcript-proof-wrong-seed", }) };
+    let alternate_bootstrap_seed = b"bfv-bootstrap-transcript-proof-statement-alternate-seeds";
+    let_row! { alternate_bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-transcript-proof-key-alternate-seeds", 1, alternate_bootstrap_seed, ) .expect("alternate-seed bootstrap key") };
+    let_row! { alternate_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-transcript-proof-key-alternate-seeds", max_refresh_rounds: 1, seed: alternate_bootstrap_seed, }) };
+    let_row! { alternate_bundle = BfvEvaluationKeyBundle { bootstrap_key: Some(alternate_bootstrap_key), ..bundle.clone() } };
+    let_row! { alternate_digest = alternate_bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, alternate_bootstrap_transcript, ) .expect("alternate-seed transcript-bound proof statement") .expect("bootstrap key is present") };
+    assert_ne_row! { digest, alternate_digest, "exact transcript proof statements must bind bootstrap key material" };
+    mutation_row! { tampered_round_bundle = alternate_bundle; let key = tampered_round_bundle.bootstrap_key.as_mut().expect("bootstrap key is present"); key.round_refreshes[0].c0[0] = add_mod_u64(key.round_refreshes[0].c0[0], 1, material.params.ciphertext_modulus); key.zero_refresh = key.round_refreshes[0].clone(); assert_diag! { 421 => tampered_round_bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, alternate_bootstrap_transcript, ) }; };
+    let_row! { wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-transcript-proof-key", max_refresh_rounds: 1, seed: b"bfv-bootstrap-transcript-proof-wrong-seed", }) };
     let_row! { err = bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, wrong_bootstrap_seed, ) .expect_err("wrong bootstrap transcript seed must be rejected") };
     assert_row! { err.to_string() .contains("deterministic encrypted-zero transcript"), "unexpected error: {err}" };
     let mut drifted_bundle = bundle.clone();
@@ -5216,7 +5313,7 @@ fn bootstrap_key_proof_statement_digest_preflights_public_metadata() {
     assert_row! { err.to_string().contains("bootstrap key id"), "unexpected error: {err}" };
     let_row! { err = bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &params, &malformed_public_key, &full_mode_blank_key_id, ) .expect_err("bounded bootstrap proof statements must reject key-id metadata before full mode") };
     assert_row! { err.to_string().contains("bootstrap key id"), "unexpected error: {err}" };
-    let_row! { missing_round = bootstrap_key_with_rounds( "bootstrap-proof-key", 2, &malformed_refresh, vec![malformed_refresh.clone()], ) };
+    let_row! { missing_round = bootstrap_key_with_rounds( "bootstrap-proof-key", 1, &malformed_refresh, Vec::new(), ) };
     let_row! { err = bootstrap_key_zero_refresh_proof_statement_digest( &params, &malformed_public_key, &missing_round, ) .expect_err("round-count metadata must be rejected before public-key shape") };
     assert_row! { err.to_string().contains("round refresh ciphertexts"), "unexpected error: {err}" };
     let_row! { malformed_shape = bootstrap_key_with_rounds( "bootstrap-proof-key", 1, &malformed_refresh, vec![malformed_refresh.clone()], ) };
@@ -7507,7 +7604,7 @@ fn full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_prefl
         .expect("artifact bundle must match governed material commitments");
     let_row! { digest = circuit_artifact_bundle_digest(&params, &material, &artifacts) .expect("artifact bundle digest") };
     assert_eq_row! { digest, circuit_artifact_bundle_digest(&params, &material, &artifacts) .expect("repeat artifact bundle digest") };
-    assert_eq_row! { digest.to_string(), "6611fb2fefe992db66f31f64da77ca6c1f511d6d675bbd4df18ee63cbf84febb", "canonical full-bootstrap artifact bundle digest drifted" };
+    assert_eq_row! { digest.to_string(), "241aaae783163e8114f1c9e8548189398d9d6ed584384c2dd1cb1abb2f5cd781", "canonical full-bootstrap artifact bundle digest drifted" };
     let_row! { artifact_bundle_bytes = norito::to_bytes(&artifacts).expect("encode full-bootstrap artifact bundle") };
     assert_eq_row! { decode_bfv_full_bootstrap_circuit_artifact_bundle_bytes_v1( &params, &material, &artifact_bundle_bytes, ) .expect("decode canonical full-bootstrap artifact bundle bytes"), artifacts, "canonical artifact-bundle bytes must decode to typed artifact material" };
     assert_eq_row! { bfv_full_bootstrap_circuit_artifact_bundle_digest_from_bytes_v1( &params, &material, &artifact_bundle_bytes, ) .expect("hash canonical full-bootstrap artifact bundle bytes"), digest, "canonical artifact-bundle bytes must hash to the typed bundle digest" };
@@ -8474,13 +8571,24 @@ fn full_bootstrap_arithmetic_trace_profile_digest_binds_schema_and_native_materi
     assert_row! { schema.binds_fri_queries_to_air_commitment_roots, "proof schema must advertise AIR-root FRI query binding" };
     assert_row! { schema.requires_canonical_base_transcript_label, "proof schema must advertise canonical base transcript-label enforcement" };
     assert_row! { schema.rejects_suffixed_transcript_label_aliases, "proof schema must advertise suffixed transcript-label alias rejection" };
+    let fingerprint_hash = |bytes: &[u8]| {
+        bfv_native_stark_binding_hash_v1(
+            b"proof-key-commitment",
+            b"circuit-fingerprint",
+            &[
+                BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
+                bytes,
+            ],
+        )
+        .expect("native fingerprint digest frame")
+    };
     let_row! { prover_fingerprint = native_proof_circuit_fingerprint_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1) .expect("canonical native prover circuit fingerprint") };
     let_row! { verifier_fingerprint = native_proof_circuit_fingerprint_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1) .expect("canonical native verifier circuit fingerprint") };
     assert_eq_row! { prover_fingerprint, verifier_fingerprint, "native proof circuit fingerprint must stay role-independent" };
     let_row! { fingerprint_material = bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1( BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, ) .expect("canonical native proof circuit fingerprint material") };
     assert_eq_row! { fingerprint_material.field_count, BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1 };
     let_row! { fingerprint_material_bytes = norito::to_bytes(&fingerprint_material) .expect("encode native proof circuit fingerprint material") };
-    assert_eq_row! { prover_fingerprint, Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN, fingerprint_material_bytes.as_slice(), ]), "native proof circuit fingerprint must hash self-describing typed material" };
+    assert_eq_row! { prover_fingerprint, fingerprint_hash(fingerprint_material_bytes.as_slice()), "native proof circuit fingerprint must hash self-describing typed material" };
     let_row! { expected_centered_source_digest = canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1() .expect("canonical centered scale-round source-chain digest") };
     let_row! { expected_schema_payload_digest = canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1() .expect("canonical proof public-input schema payload digest") };
     let_row! { expected_release_prover_contract_digest = bfv_full_bootstrap_release_prover_contract_digest_v1() .expect("canonical release-prover contract digest") };
@@ -8510,10 +8618,7 @@ fn full_bootstrap_arithmetic_trace_profile_digest_binds_schema_and_native_materi
                 drifted.$field = false;
                 let drifted_bytes = norito::to_bytes(&drifted)
                     .expect("encode drifted fingerprint material");
-                let drifted_fingerprint = Hash::new_from_chunks(&[
-                    BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
-                    drifted_bytes.as_slice(),
-                ]);
+                let drifted_fingerprint = fingerprint_hash(drifted_bytes.as_slice());
                 assert_ne!(
                     prover_fingerprint,
                     drifted_fingerprint,
@@ -8526,19 +8631,19 @@ fn full_bootstrap_arithmetic_trace_profile_digest_binds_schema_and_native_materi
     stale_source_fingerprint_material.centered_scale_round_source_chain_digest =
         Hash::new(b"stale-native-fingerprint-centered-source-chain");
     let_row! { stale_source_fingerprint_bytes = norito::to_bytes(&stale_source_fingerprint_material) .expect("encode stale source-chain fingerprint material") };
-    let_row! { stale_source_fingerprint = Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN, stale_source_fingerprint_bytes.as_slice(), ]) };
+    let_row! { stale_source_fingerprint = fingerprint_hash(stale_source_fingerprint_bytes.as_slice()) };
     assert_ne_row! { prover_fingerprint, stale_source_fingerprint, "native proof circuit fingerprint must bind the centered scale-round source chain" };
     let mut stale_schema_fingerprint_material = fingerprint_material.clone();
     stale_schema_fingerprint_material.proof_public_input_schema_payload_digest =
         Hash::new(b"stale-native-fingerprint-proof-public-input-schema-payload");
     let_row! { stale_schema_fingerprint_bytes = norito::to_bytes(&stale_schema_fingerprint_material) .expect("encode stale schema-payload fingerprint material") };
-    let_row! { stale_schema_fingerprint = Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN, stale_schema_fingerprint_bytes.as_slice(), ]) };
+    let_row! { stale_schema_fingerprint = fingerprint_hash(stale_schema_fingerprint_bytes.as_slice()) };
     assert_ne_row! { prover_fingerprint, stale_schema_fingerprint, "native proof circuit fingerprint must bind the proof public-input schema payload" };
     let mut stale_release_contract_fingerprint_material = fingerprint_material.clone();
     stale_release_contract_fingerprint_material.release_prover_contract_digest =
         Hash::new(b"stale-native-fingerprint-release-prover-contract");
     let_row! { stale_release_contract_fingerprint_bytes = norito::to_bytes(&stale_release_contract_fingerprint_material) .expect("encode stale release-prover contract fingerprint material") };
-    let_row! { stale_release_contract_fingerprint = Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN, stale_release_contract_fingerprint_bytes.as_slice(), ]) };
+    let_row! { stale_release_contract_fingerprint = fingerprint_hash(stale_release_contract_fingerprint_bytes.as_slice()) };
     assert_ne_row! { prover_fingerprint, stale_release_contract_fingerprint, "native proof circuit fingerprint must bind the release-prover contract digest" };
     assert_fingerprint_policy_flag_bound! {
         validates_artifact_bound_prover_input => "artifact-bound prover input validation";
@@ -9194,7 +9299,7 @@ fn full_bootstrap_proof_schema_artifact_digest_is_stable() {
     let schema = proof_public_input_schema_v1();
     let_row! { schema_artifact = encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(&params, 1, &schema) .expect("encode canonical proof public-input schema artifact") };
     let schema_digest = Hash::new(&schema_artifact);
-    assert_eq_row! { schema_digest.to_string(), "a1354821e8d00ab90629e00a685827151076b813d132cb10e7684a4ab84b556b", "canonical proof public-input schema artifact digest drifted" };
+    assert_eq_row! { schema_digest.to_string(), "f68487d6cd9de0eacf854ba3ae262991365ec199d46082ed0bc6809f0de7b161", "canonical proof public-input schema artifact digest drifted" };
     let_row! { schema_payload_bytes = norito::to_bytes(&schema).expect("encode canonical proof public-input schema payload") };
     let_row! { schema_payload_digest = bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v1(&schema) .expect("hash canonical proof public-input schema payload material") };
     assert_eq_row! { canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1() .expect("canonical proof public-input schema payload digest"), schema_payload_digest, "canonical proof public-input schema payload digest must hash the exact typed Norito schema bytes" };
@@ -9243,10 +9348,10 @@ fn full_bootstrap_proof_schema_artifact_digest_is_stable() {
     let_row! { pair_supports_exact_residual_multiple = [u8::from( canonical_prover_key.supports_exact_residual_multiple, )] };
     let pair_supports_bounded_noise = [u8::from(canonical_prover_key.supports_bounded_noise)];
     let_row! { pair_native_verifier_obligation_flags = bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(&canonical_prover_key) };
-    assert_eq_row! { proof_key_pair_commitment, Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN, canonical_prover_key.backend.as_bytes(), canonical_prover_key.key_format.as_bytes(), canonical_prover_key.circuit_id.as_bytes(), pair_parameter_digest.as_slice(), pair_rns_modulus_chain_digest.as_slice(), pair_key_switch_decomposition_chain_digest.as_slice(), pair_centered_scale_round_source_chain_digest.as_slice(), pair_max_bootstrap_depth.as_slice(), pair_schema_digest.as_slice(), pair_evaluator_artifact_set_digest.as_slice(), pair_statement_material_version.as_slice(), pair_statement_material_field_count.as_slice(), pair_claim_version.as_slice(), pair_claim_field_count.as_slice(), canonical_prover_key.witness_digest_domain.as_slice(), pair_witness_digest_material_version.as_slice(), pair_witness_digest_material_field_count.as_slice(), pair_witness_trace_field_count.as_slice(), pair_witness_trace_bounds_field_count.as_slice(), pair_public_input_hash_count.as_slice(), pair_public_input_hash_bytes.as_slice(), pair_supports_exact_residual_multiple.as_slice(), pair_supports_bounded_noise.as_slice(), pair_native_verifier_obligation_flags.as_slice(), b"prover-key", canonical_prover_key.key_material.as_slice(), b"verifier-key", canonical_verifier_key.key_material.as_slice(), ]), "proof-key pair commitment must hash its dedicated profile/key-material transcript" };
+    assert_eq_row! { proof_key_pair_commitment, bfv_native_stark_binding_hash_v1(b"proof-key-commitment", b"pair", &[ BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN, canonical_prover_key.backend.as_bytes(), canonical_prover_key.key_format.as_bytes(), canonical_prover_key.circuit_id.as_bytes(), pair_parameter_digest.as_slice(), pair_rns_modulus_chain_digest.as_slice(), pair_key_switch_decomposition_chain_digest.as_slice(), pair_centered_scale_round_source_chain_digest.as_slice(), pair_max_bootstrap_depth.as_slice(), pair_schema_digest.as_slice(), pair_evaluator_artifact_set_digest.as_slice(), pair_statement_material_version.as_slice(), pair_statement_material_field_count.as_slice(), pair_claim_version.as_slice(), pair_claim_field_count.as_slice(), canonical_prover_key.witness_digest_domain.as_slice(), pair_witness_digest_material_version.as_slice(), pair_witness_digest_material_field_count.as_slice(), pair_witness_trace_field_count.as_slice(), pair_witness_trace_bounds_field_count.as_slice(), pair_public_input_hash_count.as_slice(), pair_public_input_hash_bytes.as_slice(), pair_supports_exact_residual_multiple.as_slice(), pair_supports_bounded_noise.as_slice(), pair_native_verifier_obligation_flags.as_slice(), b"prover-key", canonical_prover_key.key_material.as_slice(), b"verifier-key", canonical_verifier_key.key_material.as_slice(), ]).expect("native proof-key pair digest frame"), "proof-key pair commitment must hash its dedicated profile/key-material transcript" };
     let_row! { prover_key = sample_full_bootstrap_prover_key_with_material_commitment( &canonical_prover_key, Hash::new(b"sentinel full-bootstrap proof-key commitment for stable digest test"), ) };
     let_row! { prover_commitment = proof_key_material_commitment_v1(&prover_key) .expect("derive canonical prover-key material commitment") };
-    assert_eq_row! { prover_commitment.to_string(), "9d719e7217868f8a74adc155a3b6126a60e5b9a9a9b6c8ead528f4a0f59c8685", "canonical prover-key material commitment drifted" };
+    assert_eq_row! { prover_commitment.to_string(), "bb83d4bcb42cd5d9daa6755a04674bf387ccaf4cc21a3f88af3b78b9cc1bc84b", "canonical prover-key material commitment drifted" };
     let_row! { material_role_label = full_bootstrap_proof_key_role_label(prover_key.key_role) .expect("canonical prover role label") };
     let material_parameter_digest: [u8; Hash::LENGTH] = prover_key.parameter_digest.into();
     let_row! { material_rns_modulus_chain_digest: [u8; Hash::LENGTH] = prover_key.rns_modulus_chain_digest.into() };
@@ -9269,7 +9374,7 @@ fn full_bootstrap_proof_schema_artifact_digest_is_stable() {
     let_row! { material_supports_exact_residual_multiple = [u8::from(prover_key.supports_exact_residual_multiple)] };
     let material_supports_bounded_noise = [u8::from(prover_key.supports_bounded_noise)];
     let_row! { material_native_verifier_obligation_flags = bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(&prover_key) };
-    assert_eq_row! { prover_commitment, Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN, material_role_label, prover_key.backend.as_bytes(), prover_key.key_format.as_bytes(), prover_key.circuit_id.as_bytes(), material_parameter_digest.as_slice(), material_rns_modulus_chain_digest.as_slice(), material_key_switch_decomposition_chain_digest.as_slice(), material_centered_scale_round_source_chain_digest.as_slice(), material_max_bootstrap_depth.as_slice(), material_schema_digest.as_slice(), material_evaluator_artifact_set_digest.as_slice(), material_proof_key_pair_commitment.as_slice(), material_statement_material_version.as_slice(), material_statement_material_field_count.as_slice(), material_claim_version.as_slice(), material_claim_field_count.as_slice(), prover_key.witness_digest_domain.as_slice(), material_witness_digest_material_version.as_slice(), material_witness_digest_material_field_count.as_slice(), material_witness_trace_field_count.as_slice(), material_witness_trace_bounds_field_count.as_slice(), material_public_input_hash_count.as_slice(), material_public_input_hash_bytes.as_slice(), material_supports_exact_residual_multiple.as_slice(), material_supports_bounded_noise.as_slice(), material_native_verifier_obligation_flags.as_slice(), prover_key.key_material.as_slice(), ]), "proof-key material commitment must hash its dedicated role/profile/key-material transcript" };
+    assert_eq_row! { prover_commitment, bfv_native_stark_binding_hash_v1(b"proof-key-commitment", b"material", &[ BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN, material_role_label, prover_key.backend.as_bytes(), prover_key.key_format.as_bytes(), prover_key.circuit_id.as_bytes(), material_parameter_digest.as_slice(), material_rns_modulus_chain_digest.as_slice(), material_key_switch_decomposition_chain_digest.as_slice(), material_centered_scale_round_source_chain_digest.as_slice(), material_max_bootstrap_depth.as_slice(), material_schema_digest.as_slice(), material_evaluator_artifact_set_digest.as_slice(), material_proof_key_pair_commitment.as_slice(), material_statement_material_version.as_slice(), material_statement_material_field_count.as_slice(), material_claim_version.as_slice(), material_claim_field_count.as_slice(), prover_key.witness_digest_domain.as_slice(), material_witness_digest_material_version.as_slice(), material_witness_digest_material_field_count.as_slice(), material_witness_trace_field_count.as_slice(), material_witness_trace_bounds_field_count.as_slice(), material_public_input_hash_count.as_slice(), material_public_input_hash_bytes.as_slice(), material_supports_exact_residual_multiple.as_slice(), material_supports_bounded_noise.as_slice(), material_native_verifier_obligation_flags.as_slice(), prover_key.key_material.as_slice(), ]).expect("native proof-key material digest frame"), "proof-key material commitment must hash its dedicated role/profile/key-material transcript" };
 }
 #[test]
 fn full_bootstrap_linear_transform_artifacts_are_typed_and_executable() {
@@ -9693,10 +9798,44 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
     let_row! { (release_audit_package, release_audit_package_digest) = sample_external_review_release_audit_package_and_digest( &params, &material, &artifacts, "sora-zk-audit-wg-2026", reviewer_key_pair.private_key(), ) };
     mutation_row! { malformed_release_audited_key = bootstrap_key.clone(); malformed_release_audited_key.max_refresh_rounds = 1; assert_diag! { 914 => full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1( &params, &malformed_release_audited_key, &artifacts, &galois_keys, &ciphertext, &release_audit_package, Hash::new(b"stale audit package digest behind malformed key"), "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) }; };
     assert_diag! { 915 => full_with_release_audited_artifacts_output_residual_multiple_bound_v1( &params, &malformed_release_audited_key, &artifacts, &galois_keys, u128::MAX, &release_audit_package, Hash::new(b"stale audit package digest behind malformed key bound"), "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) };
-    let_row! { release_audited_output = full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &ciphertext, &release_audit_package, release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) .expect("release-audited exact full-bootstrap output") };
-    assert_eq!(release_audited_output, final_output);
-    let_row! { release_audited_bound = full_with_release_audited_artifacts_output_residual_multiple_bound_v1( &params, &bootstrap_key, &artifacts, &galois_keys, input_bound, &release_audit_package, release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) .expect("release-audited exact full-bootstrap bound") };
-    assert_eq!(release_audited_bound, final_bound);
+    assert!(
+        matches!(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &ciphertext,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            Err(BfvError::ProductionQualificationUnavailable(
+                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+            )),
+        ),
+        "a signed fixture audit cannot qualify exact execution without registered evidence",
+    );
+    assert!(
+        matches!(
+            full_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                input_bound,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            Err(BfvError::ProductionQualificationUnavailable(
+                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+            )),
+        ),
+        "a signed fixture audit cannot qualify exact bounds without registered evidence",
+    );
     let_row! { (machine_generated_release_audit_package, machine_generated_release_audit_package_digest) = bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1( &params, &material, &artifacts, "sora-zk-audit-wg-2026", reviewer_key_pair.private_key(), ) .expect("build machine-generated exact release audit package and digest") };
     assert_diag! { 916 => full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1( &params, &bootstrap_key, &artifacts, &galois_keys[1..], &ciphertext, &machine_generated_release_audit_package, machine_generated_release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) };
     assert_diag! { 917 => full_with_release_audited_artifacts_output_residual_multiple_bound_v1( &params, &bootstrap_key, &artifacts, &galois_keys, u128::MAX, &machine_generated_release_audit_package, machine_generated_release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) };
@@ -9801,10 +9940,44 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
     let_row! { (bounded_release_audit_package, bounded_release_audit_package_digest) = sample_external_review_release_audit_package_and_digest( &params, &bounded_material, &bounded_artifacts, "sora-zk-audit-wg-2026", reviewer_key_pair.private_key(), ) };
     mutation_row! { malformed_bounded_release_audited_key = bounded_bootstrap_key.clone(); malformed_bounded_release_audited_key.max_refresh_rounds = 1; assert_diag! { 939 => full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1( &params, &malformed_bounded_release_audited_key, &bounded_artifacts, &bounded_galois_keys, &bounded_ciphertext, &bounded_release_audit_package, Hash::new(b"stale bounded audit package digest behind malformed key"), "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) }; };
     assert_diag! { 940 => full_with_release_audited_artifacts_bounded_noise_output_bound_v1( &params, &malformed_bounded_release_audited_key, &bounded_artifacts, &bounded_galois_keys, u128::MAX, &bounded_release_audit_package, Hash::new(b"stale bounded audit package digest behind malformed key bound"), "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) };
-    let_row! { bounded_release_audited_output = full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys, &bounded_ciphertext, &bounded_release_audit_package, bounded_release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) .expect("release-audited bounded full-bootstrap output") };
-    assert_eq!(bounded_release_audited_output, bounded_final_output);
-    let_row! { bounded_release_audited_bound = full_with_release_audited_artifacts_bounded_noise_output_bound_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys, input_noise_bound, &bounded_release_audit_package, bounded_release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) .expect("release-audited bounded full-bootstrap bound") };
-    assert_eq!(bounded_release_audited_bound, bounded_final_bound);
+    assert!(
+        matches!(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            Err(BfvError::ProductionQualificationUnavailable(
+                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+            )),
+        ),
+        "a signed fixture audit cannot qualify bounded-noise execution without registered evidence",
+    );
+    assert!(
+        matches!(
+            full_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                input_noise_bound,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            Err(BfvError::ProductionQualificationUnavailable(
+                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+            )),
+        ),
+        "a signed fixture audit cannot qualify bounded-noise bounds without registered evidence",
+    );
     let_row! { ( machine_generated_bounded_release_audit_package, machine_generated_bounded_release_audit_package_digest, ) = bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1( &params, &bounded_material, &bounded_artifacts, "sora-zk-audit-wg-2026", reviewer_key_pair.private_key(), ) .expect("build machine-generated bounded release audit package and digest") };
     assert_diag! { 941 => full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys[1..], &bounded_ciphertext, &machine_generated_bounded_release_audit_package, machine_generated_bounded_release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) };
     assert_diag! { 942 => full_with_release_audited_artifacts_bounded_noise_output_bound_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys, u128::MAX, &machine_generated_bounded_release_audit_package, machine_generated_bounded_release_audit_package_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ) };
@@ -11026,11 +11199,11 @@ fn full_bootstrap_execution_proof_statement_binds_claim_and_artifacts() {
     let_row! { exact_claim = BfvFullBootstrapExecutionProofClaimV1 { slot_index: 0, input_ciphertext: input.clone(), output_ciphertext: output.clone(), bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple, input_bound: 1, output_bound: 1, galois_key_set_digest: Hash::new( b"canonical synthetic full-bootstrap execution Galois key set digest", ), execution_witness_digest: Hash::new( b"canonical synthetic full-bootstrap execution witness digest", ), } };
     let_row! { exact_statement = execution_proof_statement_digest_v1( &params, &public_key, &bootstrap_key, &artifacts, &exact_claim, ) .expect("exact full-bootstrap execution proof statement") };
     assert_eq_row! { exact_statement, execution_proof_statement_digest_v1( &params, &public_key, &bootstrap_key, &artifacts, &exact_claim, ) .expect("repeat exact full-bootstrap execution proof statement") };
-    assert_eq_row! { exact_statement.to_string(), "e0fb7248645497af2afada4e0b6e8cfd7e3134f40d19f870cbf0e1854afad6c7", "canonical exact full-bootstrap execution proof statement digest drifted" };
+    assert_eq_row! { exact_statement.to_string(), "2f3eac2b85afce3ff7c293bef19b1ada2e3f8caa79eb10a7e9413f6f71ae4f77", "canonical exact full-bootstrap execution proof statement digest drifted" };
     let_row! { bounded_claim = BfvFullBootstrapExecutionProofClaimV1 { bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise, ..exact_claim.clone() } };
     let_row! { bounded_statement = execution_proof_statement_digest_v1( &params, &public_key, &bootstrap_key, &artifacts, &bounded_claim, ) .expect("bounded full-bootstrap execution proof statement") };
     assert_ne_row! { exact_statement, bounded_statement, "exact and bounded full-bootstrap execution statements must be separated" };
-    assert_eq_row! { bounded_statement.to_string(), "4d1cc75c22abadfcd967f526e0a58ac9df3432831f4cc389b0cc38bc08e4c133", "canonical bounded full-bootstrap execution proof statement digest drifted" };
+    assert_eq_row! { bounded_statement.to_string(), "cb3360b32f3a98664b49aa46b578aa4515ab948bb2d812b1586d76ff1b095469", "canonical bounded full-bootstrap execution proof statement digest drifted" };
     let_row! { statement_material = BfvFullBootstrapExecutionProofStatementMaterial { version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params, public_key: public_key.clone(), bootstrap_key: bootstrap_key.clone(), full_bootstrap_material_digest: circuit_material_digest(&params, &material) .expect("full-bootstrap material digest"), artifact_bundle_digest: circuit_artifact_bundle_digest(&params, &material, &artifacts) .expect("artifact bundle digest"), claim: exact_claim.clone(), } };
     let_row! { statement_bytes = norito::to_bytes(&statement_material).expect("encode execution statement material") };
     assert_eq_row! { exact_statement, Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN, statement_bytes.as_slice(), ]), "execution proof statement digest must hash self-describing typed material" };
@@ -11178,14 +11351,40 @@ fn full_bootstrap_native_stark_air_domain_tag_binds_statement_hash() {
     let repeated_tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash);
     let alternate_tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(alternate_statement_hash);
     assert_eq!(tag, repeated_tag);
-    assert_ne_row! { tag, alternate_tag, "native STARK/AIR domain tags must bind the execution statement hash" };
-    assert_eq!(tag.len(), Hash::LENGTH * 2);
+    assert_ne!(
+        tag, alternate_tag,
+        "domain tags bind the execution statement"
+    );
+    assert_eq!(tag.len(), BFV_GOLDILOCKS_DIGEST384_BYTES_V1 * 2);
     assert!(tag.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    assert_row! { tag.bytes() .all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_lowercase()), "native STARK/AIR domain tags must use canonical lowercase hex" };
-    let statement_hash_bytes: [u8; Hash::LENGTH] = statement_hash.into();
-    let_row! { expected_digest: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN, &statement_hash_bytes, ]) .into() };
-    assert_eq!(tag, hex::encode(expected_digest));
-    assert_eq_row! { BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1, "IROHA-BFV-FULL-BOOTSTRAP-AIR-V1" };
+    assert!(
+        tag.bytes()
+            .all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_lowercase())
+    );
+    // Independently reproduced through fastpq_isi::hash_bytes_384_v1, using catalog
+    // iroha-privacy-exact12-v1, protocol ram_lfe_bfv_v1, the six-lane STARK profile,
+    // role air-transcript, phase domain-tag, zero coordinates, and the explicit
+    // domain string followed by the statement's 32 bytes. This avoids recomputing
+    // the expected value with the BFV implementation under test.
+    assert_eq!(
+        tag,
+        "4fbe81387345ec0a93659bda617368b94d21445b3f5b3a05a4843b4c092cc07c9dbce812c3aa01eff40c1ea537abc9fa"
+    );
+    assert_eq!(
+        alternate_tag,
+        "6bf5a2c1cb97d6ce4bdcc6ec6e0c4c25ef117aa06eb03e5687a280424eff9152b9d3ff02df7179be3a29af392676eece"
+    );
+    for encoded in [tag, alternate_tag] {
+        let bytes: [u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] = hex::decode(encoded)
+            .expect("canonical hex")
+            .try_into()
+            .expect("complete digest");
+        assert!(BfvGoldilocksDigest384V1::from_le_bytes(bytes).is_some());
+    }
+    assert_eq!(
+        BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1,
+        "IROHA-BFV-FULL-BOOTSTRAP-AIR-V1"
+    );
 }
 #[test]
 fn refresh_key_generators_preflight_metadata_and_public_key_before_masks() {
@@ -11224,7 +11423,7 @@ fn refresh_key_generators_reject_malformed_public_transcript_seeds() {
     let oversized_rotation_seed = vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
     let_row! { err = rotation_key_from_seed( &material.params, &material.public_key, 1, &oversized_rotation_seed, ) .expect_err("oversized rotation transcript seeds must not generate keys") };
     assert_row! { err.to_string().contains("maximum supported length"), "unexpected error: {err}" };
-    let_row! { err = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 2, b"", ) .expect_err("empty bootstrap transcript seeds must not generate keys") };
+    let_row! { err = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 1, b"", ) .expect_err("empty bootstrap transcript seeds must not generate keys") };
     assert_row! { err.to_string().contains("must not be empty"), "unexpected error: {err}" };
     let all_zero_bootstrap_seed = vec![0_u8; 32];
     let_row! { err = bootstrap_key_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", &all_zero_bootstrap_seed, ) .expect_err("all-zero bootstrap transcript seeds must not generate keys") };
@@ -11245,10 +11444,10 @@ fn refresh_key_generators_reject_malformed_public_transcript_seeds() {
 fn evaluation_key_bundle_refresh_transcripts_cover_all_public_masks() {
     let material = evaluation_key_adversarial_material();
     let bootstrap_seed = b"bfv-bundle-refresh-transcript-bootstrap";
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 2, bootstrap_seed, ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 1, bootstrap_seed, ) .expect("bootstrap key") };
     let_row! { bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: vec![material.rotation_key.clone()], galois_keys: vec![material.galois_key.clone()], bootstrap_key: Some(bootstrap_key), } };
     let_row! { rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: material.rotation_key.rotation_steps, seed: b"bfv-eval-key-rotation", }] };
-    let_row! { bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     bundle
         .validate_refresh_transcripts(
             &material.params,
@@ -11258,7 +11457,7 @@ fn evaluation_key_bundle_refresh_transcripts_cover_all_public_masks() {
         )
         .expect("bundle refresh transcripts match generated public masks");
     let_row! { transcript_digest = bundle .refresh_transcript_digest( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ) .expect("bundle refresh transcript digest") };
-    let_row! { transcript_material = BfvRefreshTranscriptDigestMaterial { version: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_VERSION_V1, field_count: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), evaluation_key_digest: bundle .digest(&material.params) .expect("evaluation-key digest"), rotation_transcripts: vec![BfvRotationKeyTranscriptDigestMaterial { rotation_steps: material.rotation_key.rotation_steps, seed: b"bfv-eval-key-rotation".to_vec(), }], bootstrap_transcript: Some(BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bootstrap-refresh-key".to_owned(), max_refresh_rounds: 2, seed: bootstrap_seed.to_vec(), }), } };
+    let_row! { transcript_material = BfvRefreshTranscriptDigestMaterial { version: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_VERSION_V1, field_count: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), evaluation_key_digest: bundle .digest(&material.params) .expect("evaluation-key digest"), rotation_transcripts: vec![BfvRotationKeyTranscriptDigestMaterial { rotation_steps: material.rotation_key.rotation_steps, seed: b"bfv-eval-key-rotation".to_vec(), }], bootstrap_transcript: Some(BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bootstrap-refresh-key".to_owned(), max_refresh_rounds: 1, seed: bootstrap_seed.to_vec(), }), } };
     let_row! { transcript_material_bytes = norito::to_bytes(&transcript_material).expect("encode transcript digest material") };
     let_row! { canonical_transcript_digest = Hash::new( [ BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN, transcript_material_bytes.as_slice(), ] .concat(), ) };
     assert_eq!(transcript_digest, canonical_transcript_digest);
@@ -11268,7 +11467,7 @@ fn evaluation_key_bundle_refresh_transcripts_cover_all_public_masks() {
     assert_ne_row! { transcript_statement, raw_bootstrap_statement, "transcript-bound proof statements must bind transcript inventory, not only bootstrap key bytes" };
     let_row! { bootstrap_key = bundle .bootstrap_key .as_ref() .expect("bundle carries a bootstrap key") };
     let_row! { (bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests) = bootstrap_key_refresh_digest_summary_v1(bootstrap_key) .expect("exact bootstrap key refresh summary") };
-    let_row! { statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), evaluation_key_digest: bundle .digest(&material.params) .expect("evaluation-key digest"), refresh_transcript_digest: transcript_digest, bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bootstrap-refresh-key".to_owned(), max_refresh_rounds: 2, seed: bootstrap_seed.to_vec(), }, bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
+    let_row! { statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params: material.params, public_key: material.public_key.clone(), evaluation_key_digest: bundle .digest(&material.params) .expect("evaluation-key digest"), refresh_transcript_digest: transcript_digest, bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bootstrap-refresh-key".to_owned(), max_refresh_rounds: 1, seed: bootstrap_seed.to_vec(), }, bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
     let_row! { statement_bytes = norito::to_bytes(&statement_material) .expect("encode exact transcript-bound bootstrap statement material") };
     assert_eq_row! { transcript_statement, Hash::new_from_chunks(&[ BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN, statement_bytes.as_slice(), ]) };
     assert_ne_row! { transcript_statement, Hash::new_from_chunks(&[ BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN, statement_bytes.as_slice(), ]), "exact transcript proof statements must not alias bounded-noise transcript statements" };
@@ -11292,12 +11491,12 @@ fn evaluation_key_bundle_refresh_transcripts_cover_all_public_masks() {
     assert_row! { err.to_string().contains("missing rotation key"), "unexpected error: {err}" };
     let_row! { err = bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &wrong_rotation_transcripts, bootstrap_transcript, ) .expect_err("statement digest must reject unmatched rotation transcript seeds") };
     assert_row! { err.to_string().contains("missing rotation key"), "unexpected error: {err}" };
-    let_row! { wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: b"bfv-bundle-refresh-transcript-wrong-bootstrap", }) };
+    let_row! { wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: b"bfv-bundle-refresh-transcript-wrong-bootstrap", }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &rotation_transcripts, wrong_bootstrap_seed, ) .expect_err("bundle transcript validation must reject wrong bootstrap seed") };
     assert_row! { err.to_string() .contains("deterministic encrypted-zero transcript"), "unexpected error: {err}" };
     let_row! { err = bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, wrong_bootstrap_seed, ) .expect_err("statement digest must reject wrong bootstrap seed") };
     assert_row! { err.to_string() .contains("deterministic encrypted-zero transcript"), "unexpected error: {err}" };
-    let_row! { drifted_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key-drift", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { drifted_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key-drift", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &rotation_transcripts, drifted_bootstrap_metadata, ) .expect_err("bundle transcript validation must reject bootstrap metadata drift") };
     assert_row! { err.to_string().contains("metadata"), "unexpected error: {err}" };
     let_row! { err = bundle .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, drifted_bootstrap_metadata, ) .expect_err("statement digest must reject bootstrap metadata drift") };
@@ -11314,10 +11513,10 @@ fn evaluation_key_bundle_refresh_transcripts_cover_all_public_masks() {
 fn evaluation_key_bundle_refresh_transcripts_reject_malformed_public_metadata() {
     let material = evaluation_key_adversarial_material();
     let bootstrap_seed = b"bfv-bundle-refresh-transcript-bootstrap";
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 2, bootstrap_seed, ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 1, bootstrap_seed, ) .expect("bootstrap key") };
     let_row! { bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: vec![material.rotation_key.clone()], galois_keys: vec![material.galois_key.clone()], bootstrap_key: Some(bootstrap_key), } };
     let_row! { valid_rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: material.rotation_key.rotation_steps, seed: b"bfv-eval-key-rotation", }] };
-    let_row! { valid_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { valid_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { empty_rotation_seed = [BfvRotationKeyTranscriptSeed { rotation_steps: material.rotation_key.rotation_steps, seed: b"", }] };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &empty_rotation_seed, valid_bootstrap_transcript, ) .expect_err("empty rotation transcript seeds must fail metadata preflight") };
     assert_row! { err.to_string().contains("must not be empty"), "unexpected error: {err}" };
@@ -11353,35 +11552,35 @@ fn evaluation_key_bundle_refresh_transcripts_reject_malformed_public_metadata() 
     let_row! { too_many_rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: material.rotation_key.rotation_steps, seed: b"bfv-eval-key-rotation", }; BFV_EVALUATION_KEY_MAX_ROTATION_KEYS + 1] };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &too_many_rotation_transcripts, valid_bootstrap_transcript, ) .expect_err("oversized rotation transcript inventories must fail metadata preflight") };
     assert_row! { err.to_string().contains("at most"), "unexpected error: {err}" };
-    let_row! { empty_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: b"", }) };
+    let_row! { empty_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: b"", }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, empty_bootstrap_seed, ) .expect_err("empty bootstrap transcript seeds must fail metadata preflight") };
     assert_row! { err.to_string().contains("must not be empty"), "unexpected error: {err}" };
-    let_row! { all_zero_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: &all_zero_rotation_seed, }) };
+    let_row! { all_zero_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: &all_zero_rotation_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, all_zero_bootstrap_seed, ) .expect_err("all-zero bootstrap transcript seeds must fail metadata preflight") };
     assert_row! { err.to_string().contains("all zero"), "unexpected error: {err}" };
-    let_row! { placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: b"replace_before_production", }) };
+    let_row! { placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: b"replace_before_production", }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, placeholder_bootstrap_seed, ) .expect_err("placeholder bootstrap transcript seeds must fail metadata preflight") };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { binary_decorated_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: &binary_decorated_placeholder_transcript_seed, }) };
+    let_row! { binary_decorated_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: &binary_decorated_placeholder_transcript_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, binary_decorated_placeholder_bootstrap_seed, ) .expect_err( "binary-decorated placeholder bootstrap transcript seeds must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { binary_split_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: &binary_split_placeholder_transcript_seed, }) };
+    let_row! { binary_split_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: &binary_split_placeholder_transcript_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, binary_split_placeholder_bootstrap_seed, ) .expect_err( "binary-split placeholder bootstrap transcript seeds must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { delayed_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 2, seed: &delayed_placeholder_transcript_seed, }) };
+    let_row! { delayed_placeholder_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 1, seed: &delayed_placeholder_transcript_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, delayed_placeholder_bootstrap_seed, ) .expect_err("delayed-placeholder bootstrap transcript seeds must fail metadata preflight") };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "replace_before_production", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "replace_before_production", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, placeholder_bootstrap_metadata, ) .expect_err("placeholder bootstrap transcript key ids must fail metadata preflight") };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { binary_decorated_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "\0replace_before_production\0", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { binary_decorated_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "\0replace_before_production\0", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, binary_decorated_placeholder_bootstrap_metadata, ) .expect_err( "binary-decorated placeholder bootstrap transcript key ids must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { binary_split_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "re\0place_before_production", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { binary_split_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "re\0place_before_production", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, binary_split_placeholder_bootstrap_metadata, ) .expect_err( "binary-split placeholder bootstrap transcript key ids must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
     let oversized_bootstrap_key_id = "k".repeat(BFV_BOOTSTRAP_KEY_ID_MAX_BYTES + 1);
-    let_row! { malformed_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: &oversized_bootstrap_key_id, max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { malformed_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: &oversized_bootstrap_key_id, max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { err = bundle .validate_refresh_transcripts( &material.params, &material.public_key, &valid_rotation_transcripts, malformed_bootstrap_metadata, ) .expect_err("oversized bootstrap transcript key ids must fail metadata preflight") };
     assert_row! { err.to_string().contains("maximum supported length"), "unexpected error: {err}" };
     let_row! { zero_bootstrap_rounds = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bootstrap-refresh-key", max_refresh_rounds: 0, seed: bootstrap_seed, }) };
@@ -11421,10 +11620,10 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     let_row! { rotation_key = rotation_key_bounded_noise_from_seed(&params, &public_key, 1, rotation_seed) .expect("bounded-noise rotation key") };
     let_row! { galois_key = galois_key_bounded_noise_from_seed(&params, &secret_key, 3, b"bfv-bounded-bundle-galois") .expect("bounded-noise Galois key") };
     let bootstrap_seed = b"bfv-bounded-bundle-bootstrap";
-    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key", 2, bootstrap_seed, ) .expect("bounded-noise bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key", 1, bootstrap_seed, ) .expect("bounded-noise bootstrap key") };
     let_row! { bundle = BfvEvaluationKeyBundle { relinearization_key, rotation_keys: vec![rotation_key], galois_keys: vec![galois_key], bootstrap_key: Some(bootstrap_key), } };
     let_row! { rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: 1, seed: rotation_seed, }] };
-    let_row! { bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     bundle
         .validate_bounded_noise_refresh_transcripts(
             &params,
@@ -11441,13 +11640,13 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     let_row! { binary_split_placeholder_rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: 1, seed: &binary_split_placeholder_transcript_seed, }] };
     let_row! { err = bundle .validate_bounded_noise_refresh_transcripts( &params, &public_key, &binary_split_placeholder_rotation_transcripts, bootstrap_transcript, ) .expect_err( "binary-split placeholder bounded-noise rotation transcript seeds must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { delayed_placeholder_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 2, seed: &delayed_placeholder_transcript_seed, }) };
+    let_row! { delayed_placeholder_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 1, seed: &delayed_placeholder_transcript_seed, }) };
     let_row! { err = bundle .validate_bounded_noise_refresh_transcripts( &params, &public_key, &rotation_transcripts, delayed_placeholder_bootstrap_transcript, ) .expect_err( "delayed-placeholder bounded-noise bootstrap transcript seeds must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { binary_split_placeholder_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 2, seed: &binary_split_placeholder_transcript_seed, }) };
+    let_row! { binary_split_placeholder_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 1, seed: &binary_split_placeholder_transcript_seed, }) };
     let_row! { err = bundle .validate_bounded_noise_refresh_transcripts( &params, &public_key, &rotation_transcripts, binary_split_placeholder_bootstrap_transcript, ) .expect_err( "binary-split placeholder bounded-noise bootstrap transcript seeds must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
-    let_row! { binary_split_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "re\0place_before_production", max_refresh_rounds: 2, seed: bootstrap_seed, }) };
+    let_row! { binary_split_placeholder_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed { key_id: "re\0place_before_production", max_refresh_rounds: 1, seed: bootstrap_seed, }) };
     let_row! { err = bundle .validate_bounded_noise_refresh_transcripts( &params, &public_key, &rotation_transcripts, binary_split_placeholder_bootstrap_metadata, ) .expect_err( "binary-split placeholder bounded-noise bootstrap transcript key ids must fail metadata preflight", ) };
     assert_row! { err.to_string().contains("placeholder text"), "unexpected error: {err}" };
     bundle
@@ -11457,7 +11656,7 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
         .validate_bounded_noise_secret_key_consistency(&params, &secret_key)
         .expect("bounded-noise bundle key material matches secret key");
     let_row! { bounded_digest = bundle .bounded_noise_refresh_transcript_digest( &params, &public_key, &rotation_transcripts, bootstrap_transcript, ) .expect("bounded-noise bundle transcript digest") };
-    let_row! { transcript_material = BfvRefreshTranscriptDigestMaterial { version: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_VERSION_V1, field_count: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_FIELD_COUNT_V1, params, public_key: public_key.clone(), evaluation_key_digest: bundle.digest(&params).expect("evaluation-key digest"), rotation_transcripts: vec![BfvRotationKeyTranscriptDigestMaterial { rotation_steps: 1, seed: rotation_seed.to_vec(), }], bootstrap_transcript: Some(BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bounded-bootstrap-refresh-key".to_owned(), max_refresh_rounds: 2, seed: bootstrap_seed.to_vec(), }), } };
+    let_row! { transcript_material = BfvRefreshTranscriptDigestMaterial { version: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_VERSION_V1, field_count: BFV_REFRESH_TRANSCRIPT_DIGEST_MATERIAL_FIELD_COUNT_V1, params, public_key: public_key.clone(), evaluation_key_digest: bundle.digest(&params).expect("evaluation-key digest"), rotation_transcripts: vec![BfvRotationKeyTranscriptDigestMaterial { rotation_steps: 1, seed: rotation_seed.to_vec(), }], bootstrap_transcript: Some(BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bounded-bootstrap-refresh-key".to_owned(), max_refresh_rounds: 1, seed: bootstrap_seed.to_vec(), }), } };
     let_row! { transcript_material_bytes = norito::to_bytes(&transcript_material).expect("encode transcript digest material") };
     let_row! { expected_bounded_digest = Hash::new( [ BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN, transcript_material_bytes.as_slice(), ] .concat(), ) };
     let_row! { exact_domain_digest = Hash::new( [ BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN, transcript_material_bytes.as_slice(), ] .concat(), ) };
@@ -11470,7 +11669,7 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     let evaluation_key_digest = bundle.digest(&params).expect("evaluation-key digest");
     let_row! { bootstrap_key = bundle .bootstrap_key .as_ref() .expect("bundle carries a bootstrap key") };
     let_row! { (bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests) = bootstrap_key_refresh_digest_summary_v1(bootstrap_key) .expect("bounded bootstrap key refresh summary") };
-    let_row! { bounded_statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params, public_key: public_key.clone(), evaluation_key_digest, refresh_transcript_digest: bounded_digest, bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bounded-bootstrap-refresh-key".to_owned(), max_refresh_rounds: 2, seed: bootstrap_seed.to_vec(), }, bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
+    let_row! { bounded_statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial { version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1, field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1, params, public_key: public_key.clone(), evaluation_key_digest, refresh_transcript_digest: bounded_digest, bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial { key_id: "bounded-bootstrap-refresh-key".to_owned(), max_refresh_rounds: 1, seed: bootstrap_seed.to_vec(), }, bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests, bootstrap_key: bootstrap_key.clone(), } };
     let_row! { bounded_statement_bytes = norito::to_bytes(&bounded_statement_material) .expect("encode bounded transcript-bound bootstrap statement material") };
     assert_eq_row! { bounded_statement, Hash::new_from_chunks(&[ BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN, bounded_statement_bytes.as_slice(), ]) };
     assert_ne_row! { bounded_statement, Hash::new_from_chunks(&[ BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN, bounded_statement_bytes.as_slice(), ]), "bounded transcript proof statements must not alias exact transcript statements" };
@@ -11478,13 +11677,13 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     drifted_inventory_bundle.galois_keys.clear();
     let_row! { drifted_inventory_statement = drifted_inventory_bundle .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &params, &public_key, &rotation_transcripts, bootstrap_transcript, ) .expect("drifted but shape-valid bounded bundle statement") .expect("bundle carries a bootstrap key") };
     assert_ne_row! { bounded_statement, drifted_inventory_statement, "bounded proof statements must bind the full evaluation-key bundle digest" };
-    let three_round_bootstrap_seed = b"bfv-bounded-bundle-bootstrap-three-rounds";
-    let_row! { three_round_bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key-three-rounds", 3, three_round_bootstrap_seed, ) .expect("three-round bounded-noise bootstrap key") };
-    let_row! { three_round_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key-three-rounds", max_refresh_rounds: 3, seed: three_round_bootstrap_seed, }) };
-    let_row! { three_round_bundle = BfvEvaluationKeyBundle { bootstrap_key: Some(three_round_bootstrap_key), ..bundle.clone() } };
-    let_row! { three_round_statement = three_round_bundle .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &params, &public_key, &rotation_transcripts, three_round_bootstrap_transcript, ) .expect("three-round bounded bundle statement") .expect("bundle carries a bootstrap key") };
-    assert_ne_row! { bounded_statement, three_round_statement, "bounded transcript proof statements must bind bootstrap round count and key material" };
-    mutation_row! { reordered_round_bundle = three_round_bundle; reordered_round_bundle .bootstrap_key .as_mut() .expect("bundle carries a bootstrap key") .round_refreshes .swap(1, 2); assert_diag! { 1013 => reordered_round_bundle .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &params, &public_key, &rotation_transcripts, three_round_bootstrap_transcript, ) }; };
+    let alternate_bootstrap_seed = b"bfv-bounded-bundle-bootstrap-alternate-seeds";
+    let_row! { alternate_bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "bounded-bootstrap-refresh-key-alternate-seeds", 1, alternate_bootstrap_seed, ) .expect("alternate-seed bounded-noise bootstrap key") };
+    let_row! { alternate_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key-alternate-seeds", max_refresh_rounds: 1, seed: alternate_bootstrap_seed, }) };
+    let_row! { alternate_bundle = BfvEvaluationKeyBundle { bootstrap_key: Some(alternate_bootstrap_key), ..bundle.clone() } };
+    let_row! { alternate_statement = alternate_bundle .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &params, &public_key, &rotation_transcripts, alternate_bootstrap_transcript, ) .expect("alternate-seed bounded bundle statement") .expect("bundle carries a bootstrap key") };
+    assert_ne_row! { bounded_statement, alternate_statement, "bounded transcript proof statements must bind bootstrap key material" };
+    mutation_row! { tampered_round_bundle = alternate_bundle; let key = tampered_round_bundle.bootstrap_key.as_mut().expect("bootstrap key is present"); key.round_refreshes[0].c0[0] = add_mod_u64(key.round_refreshes[0].c0[0], 1, params.ciphertext_modulus); key.zero_refresh = key.round_refreshes[0].clone(); assert_diag! { 1013 => tampered_round_bundle .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &params, &public_key, &rotation_transcripts, alternate_bootstrap_transcript, ) }; };
     let_row! { err = bundle .validate_refresh_transcripts( &params, &public_key, &rotation_transcripts, bootstrap_transcript, ) .expect_err("exact transcript validation must reject bounded-noise masks") };
     assert_row! { err.to_string() .contains("deterministic encrypted-zero transcript"), "unexpected error: {err}" };
     let_row! { err = bundle .refresh_transcript_digest( &params, &public_key, &rotation_transcripts, bootstrap_transcript, ) .expect_err("exact transcript digest must reject bounded-noise masks") };
@@ -11494,7 +11693,7 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     let_row! { wrong_rotation_transcripts = [BfvRotationKeyTranscriptSeed { rotation_steps: 1, seed: b"bfv-bounded-bundle-wrong-rotation", }] };
     let_row! { err = bundle .validate_bounded_noise_refresh_transcripts( &params, &public_key, &wrong_rotation_transcripts, bootstrap_transcript, ) .expect_err("wrong bounded-noise rotation seed must be rejected") };
     assert_row! { err.to_string().contains("bounded-noise rotation key"), "unexpected error: {err}" };
-    let_row! { wrong_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 2, seed: b"bfv-bounded-bundle-wrong-bootstrap", }) };
+    let_row! { wrong_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed { key_id: "bounded-bootstrap-refresh-key", max_refresh_rounds: 1, seed: b"bfv-bounded-bundle-wrong-bootstrap", }) };
     let_row! { err = bundle .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &params, &public_key, &rotation_transcripts, wrong_bootstrap_transcript, ) .expect_err("wrong bounded-noise bootstrap seed must be rejected") };
     assert_row! { err.to_string().contains("bounded-noise bootstrap key"), "unexpected error: {err}" };
     let mut stale_public_key_digest_bundle = bundle.clone();
@@ -11519,11 +11718,12 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     assert_row! { err.to_string() .contains("evaluation-key bundle rotation_keys[0].zero_refresh"), "unexpected error: {err}" };
     let mut tampered_bootstrap_refresh_bundle = bundle.clone();
     let_row! { bootstrap_key = tampered_bootstrap_refresh_bundle .bootstrap_key .as_mut() .expect("bundle carries bootstrap key") };
-    bootstrap_key.round_refreshes[1] =
-        add_plain_scalar_bounded_noise(&params, &bootstrap_key.round_refreshes[1], 1)
+    bootstrap_key.round_refreshes[0] =
+        add_plain_scalar_bounded_noise(&params, &bootstrap_key.round_refreshes[0], 1)
             .expect("tamper rounded bootstrap refresh");
+    bootstrap_key.zero_refresh = bootstrap_key.round_refreshes[0].clone();
     let_row! { err = tampered_bootstrap_refresh_bundle .validate_bounded_noise_zero_refreshes(&params, &secret_key) .expect_err("non-zero bounded-noise bundle bootstrap refresh must be rejected") };
-    assert_row! { err.to_string() .contains("evaluation-key bundle bootstrap_key round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string() .contains("evaluation-key bundle bootstrap_key round_refreshes[0]"), "unexpected error: {err}" };
     let mut oversized_rotation_bundle = bundle.clone();
     oversized_rotation_bundle.rotation_keys[0].zero_refresh.c0[0] = add_mod_u64(
         oversized_rotation_bundle.rotation_keys[0].zero_refresh.c0[0],
@@ -11538,16 +11738,17 @@ fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() 
     assert_row! { err.to_string().contains("rounded noise"), "unexpected error: {err}" };
     let mut oversized_bootstrap_bundle = bundle.clone();
     let_row! { bootstrap_key = oversized_bootstrap_bundle .bootstrap_key .as_mut() .expect("bundle carries bootstrap key") };
-    bootstrap_key.round_refreshes[1].c0[0] = add_mod_u64(
-        bootstrap_key.round_refreshes[1].c0[0],
+    bootstrap_key.round_refreshes[0].c0[0] = add_mod_u64(
+        bootstrap_key.round_refreshes[0].c0[0],
         oversized_delta,
         params.ciphertext_modulus,
     );
-    let_row! { bootstrap_profile = decrypt_with_bounded_noise_profile(&params, &secret_key, &bootstrap_key.round_refreshes[1]) .expect("oversized bundle bootstrap refresh profile") };
+    bootstrap_key.zero_refresh = bootstrap_key.round_refreshes[0].clone();
+    let_row! { bootstrap_profile = decrypt_with_bounded_noise_profile(&params, &secret_key, &bootstrap_key.round_refreshes[0]) .expect("oversized bundle bootstrap refresh profile") };
     assert!(bootstrap_profile.plaintext.iter().all(|&value| value == 0));
     assert!(bootstrap_profile.max_abs_noise > fresh_bound);
     let_row! { err = oversized_bootstrap_bundle .validate_bounded_noise_zero_refreshes(&params, &secret_key) .expect_err("oversized bounded-noise bundle bootstrap refresh must be rejected") };
-    assert_row! { err.to_string() .contains("evaluation-key bundle bootstrap_key round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string() .contains("evaluation-key bundle bootstrap_key round_refreshes[0]"), "unexpected error: {err}" };
     assert_row! { err.to_string().contains("rounded noise"), "unexpected error: {err}" };
     let mut tampered_relinearization_bundle = bundle.clone();
     tampered_relinearization_bundle.relinearization_key.entries[0].b[0] = add_mod_u64(
@@ -11902,32 +12103,59 @@ fn bootstrap_refresh_uses_round_specific_public_material() {
     let params = params();
     let_row! { (secret_key, public_key, _) = keygen_from_seed(&params, b"bfv-bootstrap-round-keygen").expect("keygen") };
     let_row! { ciphertext = encrypt_from_seed( &params, &public_key, &[91], b"bfv-bootstrap-round-input-ciphertext", ) .expect("encrypt") };
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 2, b"bfv-bootstrap-round-refresh", ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 1, b"bfv-bootstrap-round-refresh", ) .expect("bootstrap key") };
     assert_eq!(bootstrap_key.mode, BfvBootstrapKeyMode::RefreshOnlyV1);
-    assert_eq!(bootstrap_key.round_refreshes.len(), 2);
+    assert_eq!(bootstrap_key.round_refreshes.len(), 1);
     assert_eq!(bootstrap_key.zero_refresh, bootstrap_key.round_refreshes[0]);
-    assert_ne_row! { bootstrap_key.round_refreshes[0], bootstrap_key.round_refreshes[1], "bootstrap round refresh material must be domain-separated" };
+    let alternate_seed_key = bootstrap_key_from_seed(
+        &params,
+        &public_key,
+        "bootstrap-refresh-key",
+        b"bfv-bootstrap-alternate-round-refresh",
+    )
+    .expect("alternate refresh key");
+    assert_ne_row! { bootstrap_key.round_refreshes[0], alternate_seed_key.round_refreshes[0], "bootstrap refresh material must bind its seed" };
     let_row! { first = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 0).expect("first refresh") };
-    let_row! { second = bootstrap_ciphertext_round(&params, &bootstrap_key, &first, 1).expect("second refresh") };
-    let_row! { multi_round = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 2) .expect("multi-round bootstrap refresh") };
+    let_row! { second = bootstrap_ciphertext(&params, &bootstrap_key, &ciphertext).expect("default refresh") };
+    let_row! { multi_round = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 1) .expect("counted bootstrap refresh") };
     let_row! { repeated_first = bootstrap_ciphertext_round(&params, &bootstrap_key, &first, 0) .expect("repeated first refresh") };
-    let_row! { err = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 2) .expect_err("out-of-range bootstrap rounds must be rejected") };
+    let_row! { err = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 1) .expect_err("out-of-range bootstrap rounds must be rejected") };
     assert_eq!(multi_round, second);
     assert_ne!(second, repeated_first);
-    assert!(err.to_string().contains("round index 2"));
+    assert!(err.to_string().contains("round index 1"));
     let_row! { err = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 0) .expect_err("zero-round multi-round bootstrap refresh must be rejected") };
     assert_row! { err.to_string().contains("at least one round"), "unexpected error: {err}" };
     let_row! { err = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 3) .expect_err("over-key-capacity multi-round bootstrap refresh must be rejected") };
     assert_row! { err.to_string().contains("max_refresh_rounds"), "unexpected error: {err}" };
-    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh = mismatched_zero_refresh.round_refreshes[1].clone(); assert_diag! { 1035 => bootstrap_ciphertext_round(&params, &mismatched_zero_refresh, &ciphertext, 0) }; };
-    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes[1] = duplicated_round_refresh.round_refreshes[0].clone(); assert_diag! { 1036 => bootstrap_ciphertext_rounds(&params, &duplicated_round_refresh, &ciphertext, 2) }; };
-    assert_diag! { 1037 => bfv_bootstrap_key_refresh_output_residual_multiple_bound( &params, &duplicated_round_refresh, 0, 2, ) };
+    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh.c0[0] = add_mod_u64(mismatched_zero_refresh.zero_refresh.c0[0], 1, params.ciphertext_modulus); assert_diag! { 1035 => bootstrap_ciphertext_round(&params, &mismatched_zero_refresh, &ciphertext, 0) }; };
+    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes.push(duplicated_round_refresh.round_refreshes[0].clone()); assert_diag! { 1036 => validate_bootstrap_key_entries(&params, &duplicated_round_refresh) }; };
+    assert_diag! { 1037 => validate_bootstrap_key_refresh_summary_consistency(&duplicated_round_refresh) };
+    assert_error_contains(
+        bootstrap_ciphertext_rounds(&params, &duplicated_round_refresh, &ciphertext, 1),
+        "round refresh ciphertexts",
+        "counted refresh admission must reject surplus duplicate material",
+    );
+    assert_error_contains(
+        bfv_bootstrap_key_refresh_output_residual_multiple_bound(
+            &params,
+            &duplicated_round_refresh,
+            0,
+            1,
+        ),
+        "round refresh ciphertexts",
+        "refresh bounds must reject surplus duplicate material",
+    );
     let_row! { all_zero_refresh = BfvCiphertext { c0: zero_poly(&params), c1: zero_poly(&params), } };
     mutation_row! { inert_zero_refresh = bootstrap_key.clone(); inert_zero_refresh.zero_refresh = all_zero_refresh.clone(); inert_zero_refresh.round_refreshes[0] = all_zero_refresh.clone(); validate_bootstrap_key(&params, &inert_zero_refresh) .expect("shape validation remains available for inert refresh diagnostics"); assert_diag! { 1038 => validate_bootstrap_key_zero_refreshes(&params, &secret_key, &inert_zero_refresh) }; };
     assert_diag! { 1039 => bootstrap_ciphertext_round(&params, &inert_zero_refresh, &ciphertext, 0) };
     assert_diag! { 1040 => bfv_bootstrap_key_refresh_output_residual_multiple_bound( &params, &inert_zero_refresh, 0, 1, ) };
-    mutation_row! { inert_second_round = bootstrap_key.clone(); inert_second_round.round_refreshes[1] = all_zero_refresh; validate_bootstrap_key(&params, &inert_second_round) .expect("shape validation remains available for inert round diagnostics"); assert_diag! { 1041 => bootstrap_ciphertext_rounds(&params, &inert_second_round, &ciphertext, 2) }; };
-    assert_eq_row! { decrypt(&params, &secret_key, &second).expect("decrypt second refresh")[0], 91 };
+    mutation_row! { inert_second_round = bootstrap_key.clone(); inert_second_round.round_refreshes.push(all_zero_refresh); validate_bootstrap_key_entries(&params, &inert_second_round) .expect("shape validation remains available for inert round diagnostics"); assert_diag! { 1041 => validate_bootstrap_key_refresh_material_not_inert(&inert_second_round) }; };
+    assert_error_contains(
+        bootstrap_ciphertext_rounds(&params, &inert_second_round, &ciphertext, 1),
+        "round refresh ciphertexts",
+        "counted refresh admission must reject surplus inert material",
+    );
+    assert_eq_row! { decrypt(&params, &secret_key, &second).expect("decrypt refreshed ciphertext")[0], 91 };
 }
 #[test]
 fn bootstrap_full_mode_requires_circuit_material() {
@@ -12498,7 +12726,7 @@ fn refresh_key_zero_plaintext_validators_reject_inert_and_nonzero_masks() {
     let params = params();
     let_row! { (secret_key, public_key, _) = keygen_from_seed(&params, b"bfv-refresh-zero-keygen").expect("keygen") };
     let_row! { rotation_key = rotation_key_from_seed(&params, &public_key, 1, b"bfv-refresh-zero-rotation") .expect("rotation key") };
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 2, b"bfv-refresh-zero-bootstrap", ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 1, b"bfv-refresh-zero-bootstrap", ) .expect("bootstrap key") };
     validate_rotation_key_zero_refresh(&params, &secret_key, &rotation_key)
         .expect("generated rotation refresh decrypts to zero");
     validate_bootstrap_key_zero_refreshes(&params, &secret_key, &bootstrap_key)
@@ -12512,11 +12740,11 @@ fn refresh_key_zero_plaintext_validators_reject_inert_and_nonzero_masks() {
     let_row! { err = validate_rotation_key_zero_refresh(&params, &secret_key, &nonzero_rotation) .expect_err("non-zero rotation refresh must be rejected") };
     assert_row! { err.to_string().contains("rotation key zero_refresh"), "unexpected error: {err}" };
     let mut nonzero_bootstrap = bootstrap_key;
-    nonzero_bootstrap.round_refreshes[1] =
-        add_plain_scalar(&params, &nonzero_bootstrap.round_refreshes[1], 1)
+    nonzero_bootstrap.round_refreshes[0] =
+        add_plain_scalar(&params, &nonzero_bootstrap.round_refreshes[0], 1)
             .expect("add non-zero plaintext to bootstrap refresh");
     let_row! { err = validate_bootstrap_key_zero_refreshes(&params, &secret_key, &nonzero_bootstrap) .expect_err("non-zero bootstrap refresh must be rejected") };
-    assert_row! { err.to_string().contains("round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("round_refreshes[0]"), "unexpected error: {err}" };
 }
 #[test]
 fn bounded_noise_zero_refresh_helper_rejects_inert_and_nonzero_masks() {
@@ -12547,10 +12775,10 @@ fn refresh_key_zero_plaintext_validators_reject_oversized_zero_residuals() {
     let_row! { oversized_delta = u64::try_from( oversized_multiple .checked_mul(u128::from(params.plaintext_modulus)) .expect("oversized residual delta fits u128"), ) .expect("oversized residual delta fits u64") };
     let_row! { (secret_key, public_key, _) = keygen_from_seed(&params, b"bfv-refresh-zero-residual-keygen").expect("keygen") };
     let_row! { rotation_key = rotation_key_from_seed( &params, &public_key, 1, b"bfv-refresh-zero-residual-rotation", ) .expect("rotation key") };
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 2, b"bfv-refresh-zero-residual-bootstrap", ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 1, b"bfv-refresh-zero-residual-bootstrap", ) .expect("bootstrap key") };
     let_row! { rotation_profile = decrypt_with_exact_residual_profile(&params, &secret_key, &rotation_key.zero_refresh) .expect("rotation refresh residual profile") };
     assert_row! { rotation_profile.max_abs_residual_multiple <= residual_bound, "generated rotation refresh residual {} must fit bound {residual_bound}", rotation_profile.max_abs_residual_multiple };
-    let_row! { bootstrap_profile = decrypt_with_exact_residual_profile( &params, &secret_key, &bootstrap_key.round_refreshes[1], ) .expect("bootstrap refresh residual profile") };
+    let_row! { bootstrap_profile = decrypt_with_exact_residual_profile( &params, &secret_key, &bootstrap_key.round_refreshes[0], ) .expect("bootstrap refresh residual profile") };
     assert_row! { bootstrap_profile.max_abs_residual_multiple <= residual_bound, "generated bootstrap refresh residual {} must fit bound {residual_bound}", bootstrap_profile.max_abs_residual_multiple };
     let mut oversized_rotation = rotation_key;
     oversized_rotation.zero_refresh.c0[0] = add_mod_u64(
@@ -12561,19 +12789,20 @@ fn refresh_key_zero_plaintext_validators_reject_oversized_zero_residuals() {
     let_row! { err = validate_rotation_key_zero_refresh(&params, &secret_key, &oversized_rotation) .expect_err("zero-plaintext rotation refresh with oversized residual must be rejected") };
     assert_row! { err.to_string().contains("encrypted-zero refresh bound"), "unexpected error: {err}" };
     let mut oversized_bootstrap = bootstrap_key;
-    oversized_bootstrap.round_refreshes[1].c0[0] = add_mod_u64(
-        oversized_bootstrap.round_refreshes[1].c0[0],
+    oversized_bootstrap.round_refreshes[0].c0[0] = add_mod_u64(
+        oversized_bootstrap.round_refreshes[0].c0[0],
         oversized_delta,
         params.ciphertext_modulus,
     );
+    oversized_bootstrap.zero_refresh = oversized_bootstrap.round_refreshes[0].clone();
     let_row! { err = validate_bootstrap_key_zero_refreshes(&params, &secret_key, &oversized_bootstrap) .expect_err("zero-plaintext bootstrap refresh with oversized residual must be rejected") };
-    assert_row! { err.to_string().contains("round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("round_refreshes[0]"), "unexpected error: {err}" };
     assert_row! { err.to_string().contains("encrypted-zero refresh bound"), "unexpected error: {err}" };
 }
 #[test]
 fn evaluation_key_bundle_zero_refresh_diagnostics_cover_all_public_masks() {
     let material = evaluation_key_adversarial_material();
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 2, b"bfv-bundle-zero-refresh-bootstrap", ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", 1, b"bfv-bundle-zero-refresh-bootstrap", ) .expect("bootstrap key") };
     let_row! { bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: vec![material.rotation_key.clone()], galois_keys: vec![material.galois_key.clone()], bootstrap_key: Some(bootstrap_key), } };
     bundle
         .validate_zero_refreshes(&material.params, &material.secret_key)
@@ -12589,11 +12818,11 @@ fn evaluation_key_bundle_zero_refresh_diagnostics_cover_all_public_masks() {
     assert_row! { err.to_string().contains("rotation_keys[0]"), "unexpected error: {err}" };
     let mut nonzero_bootstrap = bundle;
     let_row! { bootstrap_key = nonzero_bootstrap .bootstrap_key .as_mut() .expect("bundle carries bootstrap key") };
-    bootstrap_key.round_refreshes[1] =
-        add_plain_scalar(&material.params, &bootstrap_key.round_refreshes[1], 1)
+    bootstrap_key.round_refreshes[0] =
+        add_plain_scalar(&material.params, &bootstrap_key.round_refreshes[0], 1)
             .expect("add non-zero plaintext to bootstrap refresh");
     let_row! { err = nonzero_bootstrap .validate_zero_refreshes(&material.params, &material.secret_key) .expect_err("non-zero bundle bootstrap refresh must be rejected") };
-    assert_row! { err.to_string().contains("round_refreshes[1]"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("round_refreshes[0]"), "unexpected error: {err}" };
 }
 #[test]
 fn evaluation_key_bundle_secret_consistency_rejects_tampered_key_switch_entries() {
@@ -12633,25 +12862,35 @@ fn bootstrap_refresh_rns_exact_matches_scalar_refresh() {
     let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
     let_row! { (secret_key, public_key, _) = keygen_from_seed(&params, b"bfv-bootstrap-rns-keygen").expect("keygen") };
     let_row! { ciphertext = encrypt_from_seed( &params, &public_key, &[77], b"bfv-bootstrap-rns-input-ciphertext", ) .expect("encrypt") };
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 2, b"bfv-bootstrap-rns-zero-refresh", ) .expect("bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &params, &public_key, "bootstrap-refresh-key", 1, b"bfv-bootstrap-rns-zero-refresh", ) .expect("bootstrap key") };
     let_row! { scalar_round_zero = bootstrap_ciphertext(&params, &bootstrap_key, &ciphertext).expect("scalar round zero") };
     let_row! { rns_round_zero = bootstrap_ciphertext_rns_exact(&params, &chain, &bootstrap_key, &ciphertext) .expect("RNS exact round zero") };
     let_row! { registered_round_zero = bootstrap_ciphertext_registered_rns_exact(&params, &bootstrap_key, &ciphertext) .expect("registered RNS exact round zero") };
     assert_eq!(rns_round_zero, scalar_round_zero);
     assert_eq!(registered_round_zero, scalar_round_zero);
-    let_row! { scalar_indexed = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 1) .expect("scalar indexed refresh") };
-    let_row! { rns_indexed = bootstrap_ciphertext_rns_exact_round(&params, &chain, &bootstrap_key, &ciphertext, 1) .expect("RNS exact indexed refresh") };
-    let_row! { registered_indexed = bootstrap_ciphertext_registered_rns_exact_round(&params, &bootstrap_key, &ciphertext, 1) .expect("registered RNS exact indexed refresh") };
+    let_row! { scalar_indexed = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 0) .expect("scalar indexed refresh") };
+    let_row! { rns_indexed = bootstrap_ciphertext_rns_exact_round(&params, &chain, &bootstrap_key, &ciphertext, 0) .expect("RNS exact indexed refresh") };
+    let_row! { registered_indexed = bootstrap_ciphertext_registered_rns_exact_round(&params, &bootstrap_key, &ciphertext, 0) .expect("registered RNS exact indexed refresh") };
     assert_eq!(rns_indexed, scalar_indexed);
     assert_eq!(registered_indexed, scalar_indexed);
-    let_row! { scalar = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 2) .expect("scalar multi-round refresh") };
-    let_row! { rns = bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 2) .expect("RNS exact multi-round refresh") };
-    let_row! { registered_rns = bootstrap_ciphertext_registered_rns_exact_rounds(&params, &bootstrap_key, &ciphertext, 2) .expect("registered RNS exact multi-round refresh") };
+    let_row! { scalar = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 1) .expect("scalar counted refresh") };
+    let_row! { rns = bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 1) .expect("RNS exact counted refresh") };
+    let_row! { registered_rns = bootstrap_ciphertext_registered_rns_exact_rounds(&params, &bootstrap_key, &ciphertext, 1) .expect("registered RNS exact counted refresh") };
     assert_eq!(rns, scalar);
     assert_eq!(registered_rns, scalar);
     assert_eq_row! { decrypt(&params, &secret_key, &rns).expect("decrypt RNS refresh")[0], 77 };
-    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh = mismatched_zero_refresh.round_refreshes[1].clone(); assert_diag! { 1190 => bootstrap_ciphertext_rns_exact_round( &params, &chain, &mismatched_zero_refresh, &ciphertext, 0, ) }; };
-    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes[1] = duplicated_round_refresh.round_refreshes[0].clone(); assert_diag! { 1191 => bootstrap_ciphertext_registered_rns_exact_rounds( &params, &duplicated_round_refresh, &ciphertext, 2, ) }; };
+    mutation_row! { mismatched_zero_refresh = bootstrap_key.clone(); mismatched_zero_refresh.zero_refresh.c0[0] = add_mod_u64(mismatched_zero_refresh.zero_refresh.c0[0], 1, params.ciphertext_modulus); assert_diag! { 1190 => bootstrap_ciphertext_rns_exact_round( &params, &chain, &mismatched_zero_refresh, &ciphertext, 0, ) }; };
+    mutation_row! { duplicated_round_refresh = bootstrap_key.clone(); duplicated_round_refresh.round_refreshes.push(duplicated_round_refresh.round_refreshes[0].clone()); assert_diag! { 1191 => validate_bootstrap_key_entries(&params, &duplicated_round_refresh) }; };
+    assert_error_contains(
+        bootstrap_ciphertext_registered_rns_exact_rounds(
+            &params,
+            &duplicated_round_refresh,
+            &ciphertext,
+            1,
+        ),
+        "round refresh ciphertexts",
+        "registered RNS refresh admission must reject surplus duplicate material",
+    );
     let_row! { err = bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 0) .expect_err("zero-round RNS bootstrap refresh must be rejected") };
     assert_row! { err.to_string().contains("at least one round"), "unexpected error: {err}" };
     let_row! { err = bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 3) .expect_err("over-key-capacity RNS bootstrap refresh must be rejected") };
@@ -13381,13 +13620,25 @@ fn evaluation_key_bundle_digest_rejects_inert_refresh_material() {
     );
     assert_diag! { 1263 => all_zero_bootstrap_descriptor.digest(&material.params) };
     let_row! { all_zero_bootstrap_round = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 2, &material.zero_refresh, vec![material.zero_refresh.clone(), all_zero_refresh], )), } };
-    all_zero_bootstrap_round.validate(&material.params).expect(
+    validate_bootstrap_key_entries(
+        &material.params,
+        all_zero_bootstrap_round
+            .bootstrap_key
+            .as_ref()
+            .expect("bootstrap key"),
+    )
+    .expect(
         "shape validation remains available for owner diagnostics over all-zero bootstrap rounds",
     );
-    assert_diag! { 1264 => all_zero_bootstrap_round.digest(&material.params) };
-    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bundle-digest-refresh-key", 2, b"bfv-bundle-digest-refresh-helper", ) .expect("bootstrap key") };
-    mutation_row! { drifted_zero_refresh = bootstrap_key.clone(); drifted_zero_refresh.zero_refresh = drifted_zero_refresh.round_refreshes[1].clone(); let_row! { drifted_zero_refresh_bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(drifted_zero_refresh), } }; assert_diag! { 1265 => validate_evaluation_key_bundle_digest_refresh_material_v1(&drifted_zero_refresh_bundle) }; };
-    mutation_row! { duplicated_round_refresh = bootstrap_key; duplicated_round_refresh.round_refreshes[1] = duplicated_round_refresh.round_refreshes[0].clone(); let_row! { duplicated_round_refresh_bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(duplicated_round_refresh), } }; assert_diag! { 1266 => validate_evaluation_key_bundle_digest_refresh_material_v1(&duplicated_round_refresh_bundle) }; };
+    assert_diag! { 1264 => validate_refresh_ciphertext_not_all_zero("evaluation-key bundle bootstrap_key.round_refreshes[1]", &all_zero_bootstrap_round.bootstrap_key.as_ref().expect("bootstrap key").round_refreshes[1]) };
+    let_row! { bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bundle-digest-refresh-key", 1, b"bfv-bundle-digest-refresh-helper", ) .expect("bootstrap key") };
+    mutation_row! { drifted_zero_refresh = bootstrap_key.clone(); drifted_zero_refresh.zero_refresh.c0[0] = add_mod_u64(drifted_zero_refresh.zero_refresh.c0[0], 1, material.params.ciphertext_modulus); let_row! { drifted_zero_refresh_bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(drifted_zero_refresh), } }; assert_diag! { 1265 => validate_evaluation_key_bundle_digest_refresh_material_v1(&drifted_zero_refresh_bundle) }; };
+    mutation_row! { duplicated_round_refresh = bootstrap_key; duplicated_round_refresh.round_refreshes.push(duplicated_round_refresh.round_refreshes[0].clone()); let_row! { duplicated_round_refresh_bundle = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(duplicated_round_refresh), } }; assert_diag! { 1266 => validate_bootstrap_key_refresh_summary_consistency(duplicated_round_refresh_bundle.bootstrap_key.as_ref().expect("bootstrap key")) }; };
+    assert_error_contains(
+        validate_evaluation_key_bundle_digest_refresh_material_v1(&duplicated_round_refresh_bundle),
+        "round refresh ciphertexts",
+        "bundle digest admission must reject surplus duplicate material",
+    );
 }
 #[test]
 fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
@@ -13429,14 +13680,27 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata() {
     assert!(err.to_string().contains("supported limit"));
     let_row! { err = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &material.params, &material.public_key, "bootstrap-refresh-key", BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS + 1, b"bfv-oversized-bounded-noise-bootstrap-refresh-rounds", ) .expect_err("oversized bounded-noise bootstrap refresh-round capacity must be rejected") };
     assert!(err.to_string().contains("supported limit"));
-    let_row! { missing_round_refresh = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 2, &material.zero_refresh, vec![material.zero_refresh.clone()], )), } };
+    let_row! { missing_round_refresh = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 1, &material.zero_refresh, Vec::new(), )), } };
     assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &missing_round_refresh, "round refresh ciphertexts", "missing per-round bootstrap refresh material must be rejected", };
     let mut malformed_zero_refresh = material.zero_refresh.clone();
     malformed_zero_refresh.c0.pop();
-    let_row! { malformed_missing_round_refresh = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 2, &malformed_zero_refresh, vec![malformed_zero_refresh.clone()], )), } };
+    let_row! { malformed_missing_round_refresh = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 1, &malformed_zero_refresh, Vec::new(), )), } };
     assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &malformed_missing_round_refresh, "round refresh ciphertexts", "bootstrap round-count metadata must be rejected before malformed refresh shapes", };
     let_row! { duplicate_round_refresh = BfvEvaluationKeyBundle { relinearization_key: material.relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 2, &material.zero_refresh, vec![material.zero_refresh.clone(), material.zero_refresh.clone()], )), } };
-    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &duplicate_round_refresh, "duplicate round refresh", "duplicate per-round bootstrap refresh material must be rejected", };
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &duplicate_round_refresh, "supported limit", "unsupported multi-round bootstrap refresh material must be rejected", };
+    let duplicate_error = validate_bootstrap_key_entries(
+        &material.params,
+        duplicate_round_refresh
+            .bootstrap_key
+            .as_ref()
+            .expect("bootstrap key"),
+    )
+    .expect_err("duplicate per-round bootstrap refresh material must be rejected");
+    assert!(
+        duplicate_error
+            .to_string()
+            .contains("duplicate round refresh")
+    );
 }
 #[test]
 fn evaluation_key_bundle_rejects_adversarial_galois_and_bundle_metadata() {
@@ -13469,7 +13733,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
     assert_call! { assert_bundle_error_contains; &malformed_bootstrap_key_id, "canonical", "bootstrap key-id metadata must be rejected before malformed relinearization shapes", };
     let_row! { err = malformed_bootstrap_key_id .digest(&material.params) .expect_err("digest must preflight bundle metadata before encoding") };
     assert_row! { err.to_string().contains("canonical"), "unexpected error: {err}" };
-    let_row! { missing_bootstrap_round = BfvEvaluationKeyBundle { relinearization_key: malformed_relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 2, &material.zero_refresh, vec![material.zero_refresh.clone()], )), } };
+    let_row! { missing_bootstrap_round = BfvEvaluationKeyBundle { relinearization_key: malformed_relinearization_key.clone(), rotation_keys: Vec::new(), galois_keys: Vec::new(), bootstrap_key: Some(bootstrap_key_with_rounds( "bootstrap-refresh-key", 1, &material.zero_refresh, Vec::new(), )), } };
     assert_call! { assert_bundle_error_contains; &missing_bootstrap_round, "round refresh ciphertexts", "bootstrap round-count metadata must be rejected before malformed relinearization shapes", };
     let_row! { shape_only_relinearization_error = BfvEvaluationKeyBundle { relinearization_key: malformed_relinearization_key, rotation_keys: vec![BfvRotationKey { rotation_steps: 1, zero_refresh: BfvCiphertext { c0: Vec::new(), c1: Vec::new(), }, }], galois_keys: Vec::new(), bootstrap_key: None, } };
     assert_call! { assert_bundle_error_contains; &shape_only_relinearization_error, "relinearization key expected", "valid public metadata should still reach key-material shape validation", };
@@ -13583,20 +13847,20 @@ fn identifier_public_parameters_reject_overwide_envelope_capacity() {
     let_row! { (_, public_key, _) = keygen_from_seed(&params, b"bfv-overwide-identifier-keygen").expect("keygen") };
     let_row! { public_parameters = BfvIdentifierPublicParameters { parameters: params, public_key, max_input_bytes: RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES + 1, } };
     let_row! { err = public_parameters .validate() .expect_err("identifier public parameters must reject overwide envelopes") };
-    assert_row! { err.to_string().contains("registered RAM-LFE"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("max_input_bytes must be exactly 63"), "unexpected error: {err}" };
     let_row! { err = derive_identifier_key_material_from_seed( &params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES + 1, b"bfv-overwide-identifier-seed", b"phone#retail", ) .expect_err("identifier key derivation must reject overwide envelopes") };
-    assert_row! { err.to_string().contains("registered RAM-LFE"), "unexpected error: {err}" };
+    assert_row! { err.to_string().contains("max_input_bytes must be exactly 63"), "unexpected error: {err}" };
 }
 #[test]
 fn identifier_envelope_decryption_rejects_adversarial_plaintext_metadata() {
     let params = ram_lfe_bfv_parameters_v1();
-    let_row! { (public_parameters, secret_key, _) = derive_identifier_key_material_from_seed( &params, 3, b"identifier-envelope-negative-seed", b"email#retail", ) .expect("derive identifier key material") };
+    let_row! { (public_parameters, secret_key, _) = derive_identifier_key_material_from_seed( &params, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES, b"identifier-envelope-negative-seed", b"email#retail", ) .expect("derive identifier key material") };
     let_row! { mut ciphertext = encrypt_identifier_from_seed(&public_parameters, b"a", b"identifier-envelope-valid") .expect("encrypt identifier") };
     let mut declared_too_long = ciphertext.clone();
     declared_too_long.slots[0] = encrypt_from_seed(
         &params,
         &public_parameters.public_key,
-        &[4],
+        &[u64::from(RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES) + 1],
         b"identifier-envelope-long-len",
     )
     .expect("encrypt adversarial length");
@@ -14164,7 +14428,7 @@ fn registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline() {
     assert_eq!(basis_rotation_bounds, scalar_rotation_bounds);
     assert_eq!(registered_basis_rotation_bounds, scalar_rotation_bounds);
     assert_eq_row! { decrypt_bounded_noise(&params, &secret_key, &registered_basis_rotated[0]) .expect("decrypt rotated")[0], 29 };
-    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "registered-bounded-bootstrap", 2, b"bfv-registered-bounded-refresh-bootstrap", ) .expect("bounded-noise bootstrap key") };
+    let_row! { bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed( &params, &public_key, "registered-bounded-bootstrap", 1, b"bfv-registered-bounded-refresh-bootstrap", ) .expect("bounded-noise bootstrap key") };
     let_row! { scalar_round_zero = bootstrap_ciphertext_bounded_noise(&params, &bootstrap_key, &lhs) .expect("bounded-noise scalar round zero refresh") };
     let_row! { registered_round_zero = bootstrap_ciphertext_bounded_noise_registered_rns_exact(&params, &bootstrap_key, &lhs) .expect("registered bounded-noise RNS round zero refresh") };
     let_row! { basis_round_zero = bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact( &params, &decomposition_chain, &chain, &bootstrap_key, &lhs, ) .expect("bounded-noise basis-extension RNS round zero refresh") };
@@ -14173,18 +14437,18 @@ fn registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline() {
     assert_eq!(basis_round_zero, scalar_round_zero);
     assert_eq!(registered_basis_round_zero, scalar_round_zero);
     assert_eq_row! { decrypt_bounded_noise(&params, &secret_key, &registered_round_zero) .expect("decrypt round zero refreshed")[0], 17 };
-    let_row! { scalar_indexed = bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &lhs, 1) .expect("bounded-noise scalar indexed refresh") };
-    let_row! { registered_indexed = bootstrap_ciphertext_bounded_noise_registered_rns_exact_round( &params, &bootstrap_key, &lhs, 1, ) .expect("registered bounded-noise RNS indexed refresh") };
-    let_row! { basis_indexed = bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_round( &params, &decomposition_chain, &chain, &bootstrap_key, &lhs, 1, ) .expect("bounded-noise basis-extension RNS indexed refresh") };
-    let_row! { registered_basis_indexed = bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_round( &params, &bootstrap_key, &lhs, 1, ) .expect("registered bounded-noise basis-extension RNS indexed refresh") };
+    let_row! { scalar_indexed = bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &lhs, 0) .expect("bounded-noise scalar indexed refresh") };
+    let_row! { registered_indexed = bootstrap_ciphertext_bounded_noise_registered_rns_exact_round( &params, &bootstrap_key, &lhs, 0, ) .expect("registered bounded-noise RNS indexed refresh") };
+    let_row! { basis_indexed = bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_round( &params, &decomposition_chain, &chain, &bootstrap_key, &lhs, 0, ) .expect("bounded-noise basis-extension RNS indexed refresh") };
+    let_row! { registered_basis_indexed = bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_round( &params, &bootstrap_key, &lhs, 0, ) .expect("registered bounded-noise basis-extension RNS indexed refresh") };
     assert_eq!(registered_indexed, scalar_indexed);
     assert_eq!(basis_indexed, scalar_indexed);
     assert_eq!(registered_basis_indexed, scalar_indexed);
     assert_eq_row! { decrypt_bounded_noise(&params, &secret_key, &registered_indexed) .expect("decrypt indexed refreshed")[0], 17 };
-    let_row! { scalar_refreshed = bootstrap_ciphertext_bounded_noise_rounds(&params, &bootstrap_key, &lhs, 2) .expect("bounded-noise scalar bootstrap refresh") };
-    let_row! { registered_refreshed = bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds( &params, &bootstrap_key, &lhs, 2, ) .expect("registered bounded-noise RNS bootstrap refresh") };
-    let_row! { basis_refreshed = bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_rounds( &params, &decomposition_chain, &chain, &bootstrap_key, &lhs, 2, ) .expect("bounded-noise basis-extension RNS bootstrap refresh") };
-    let_row! { registered_basis_refreshed = bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_rounds( &params, &bootstrap_key, &lhs, 2, ) .expect("registered bounded-noise basis-extension RNS bootstrap refresh") };
+    let_row! { scalar_refreshed = bootstrap_ciphertext_bounded_noise_rounds(&params, &bootstrap_key, &lhs, 1) .expect("bounded-noise scalar bootstrap refresh") };
+    let_row! { registered_refreshed = bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds( &params, &bootstrap_key, &lhs, 1, ) .expect("registered bounded-noise RNS bootstrap refresh") };
+    let_row! { basis_refreshed = bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_rounds( &params, &decomposition_chain, &chain, &bootstrap_key, &lhs, 1, ) .expect("bounded-noise basis-extension RNS bootstrap refresh") };
+    let_row! { registered_basis_refreshed = bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_rounds( &params, &bootstrap_key, &lhs, 1, ) .expect("registered bounded-noise basis-extension RNS bootstrap refresh") };
     assert_eq!(registered_refreshed, scalar_refreshed);
     assert_eq!(basis_refreshed, scalar_refreshed);
     assert_eq!(registered_basis_refreshed, scalar_refreshed);

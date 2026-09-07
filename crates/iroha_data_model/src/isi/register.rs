@@ -10,6 +10,7 @@ isi! {
     /// `RegisterBox` below is an enum that groups concrete `Register<T>` variants
     /// (e.g., `Peer`, `Domain`, `Account`, ...). It is not a heap `Box`; the "Box" suffix means
     /// "boxed-up family of variants" for easy visiting and serialization.
+    #[norito_schema(name = "iroha_data_model::isi::register::Register")]
     pub struct Register<O: Registered> {
         /// The object that should be registered, should be uniquely identifiable by its id.
         pub object: O::With,
@@ -167,6 +168,7 @@ impl RegisterCommitteePeerWithPop {
 }
 isi! {
     /// Generic instruction for an unregistration of an object from the identifiable destination.
+    #[norito_schema(name = "iroha_data_model::isi::register::Unregister")]
     pub struct Unregister<O: Identifiable> {
         /// [`Identifiable::Id`] of the object which should be unregistered.
         pub object: O::Id,
@@ -285,6 +287,7 @@ where
 }
 isi_box! {
     /// Enum with all supported [`Register`] instructions.
+    #[norito_schema(name = "iroha_data_model::isi::register::RegisterBox")]
     pub enum RegisterBox {
         /// Register [`Peer`] (requires Proof-of-Possession).
         Peer(RegisterPeerWithPop),
@@ -303,6 +306,7 @@ isi_box! {
     }
 }
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::register::RegisterType")]
     pub(crate) enum RegisterType {
         Peer,
         Domain,
@@ -315,6 +319,7 @@ enum_type! {
 }
 isi_box! {
     /// Enum with all supported [`Unregister`] instructions.
+    #[norito_schema(name = "iroha_data_model::isi::register::UnregisterBox")]
     pub enum UnregisterBox {
         /// Unregister [`Peer`].
         Peer(Unregister<Peer>),
@@ -333,6 +338,7 @@ isi_box! {
     }
 }
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::register::UnregisterType")]
     pub(crate) enum UnregisterType {
         Peer,
         Domain,

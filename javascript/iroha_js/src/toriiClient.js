@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
 import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
+import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
 import {
   resolveToriiClientConfig,
   extractConfidentialGasConfig,
@@ -76,7 +77,7 @@ import {
   ensureNodeDataModelCompatibility,
   normalizeNodeCapabilitiesResponse,
 } from "./toriiCompatibility.js";
-import { privacyExact12CapabilityManifestTransportV1 } from "./privacyCapabilityTransport.js";
+import { registerPrivacyExact12CapabilityManifestTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
@@ -1623,6 +1624,10 @@ export class ToriiClient {
       throw new Error("fetch implementation is required");
     }
     Object.defineProperties(this, { _baseUrl: { value: normalizedBaseUrl }, _fetch: { value: fetchImpl } });
+    registerPrivacyExact12CapabilityManifestTransportV1(
+      this,
+      (requestOptions) => this.#fetchPrivacyExact12CapabilityManifestV1(requestOptions),
+    );
     if (
       opts[TORII_TEST_NATIVE_BINDING] !== undefined &&
       (opts[TORII_TEST_NATIVE_BINDING] === null ||
@@ -1761,6 +1766,20 @@ export class ToriiClient {
         "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
     }
+  }
+
+  /** Discover exact network identity and the explicit V1 account-signing default without credentials. */
+  async getAccountCapabilities(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getAccountCapabilities");
+    assertSupportedOptionKeys(rest, new Set([]), "getAccountCapabilities options");
+    const response = await this._request("GET", "/v1/accounts/capabilities", {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      redirect: "error",
+      disableRetries: true,
+      publicRequest: true,
+    });
+    return readAccountCapabilitiesResponseV1(response, { signal });
   }
 
   /** Fetch the universally compiled, asset-neutral KagemushaReadinessV1 projection. */
@@ -6729,22 +6748,47 @@ export class ToriiClient {
   }
 
   /** @internal Raw bounded canonical manifest transport for N-API admission. */
-  async [privacyExact12CapabilityManifestTransportV1](options) {
+  async #fetchPrivacyExact12CapabilityManifestV1(options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "getPrivacyExact12CapabilityManifestV1",
+      VPN_SESSION_OPTION_KEYS,
+      (auth, context) => ToriiClient.#normalizeCanonicalAuth(auth, context),
     );
+    const origin = new URL(this._baseUrl);
+    if (origin.protocol !== "https:" || origin.username || origin.password) {
+      throw new TypeError("Exact12 capability admission requires an HTTPS Torii origin without URL credentials");
+    }
+    const expectedNetworkId = networkIdBytes(
+      this._localSigningContext?.networkId,
+      "Exact12 capability admission LocalSigningContext.networkId",
+    );
+    const expectedUrl = new URL("/v1/privacy/capabilities", `${this._baseUrl}/`).href;
     const context = "Exact12 capability manifest response";
-    const response = await this._request("GET", "/v1/privacy/capabilities", {
-      headers: { Accept: APPLICATION_NORITO },
+    const response = await this.#request("GET", "/v1/privacy/capabilities", {
+      headers: { Accept: APPLICATION_NORITO, "Cache-Control": "no-store" },
       disableRetries: true,
       redirect: "error",
+      cache: "no-store",
       signal, canonicalAuth,
     });
-    await this._expectStatus(response, [200], { signal });
+    let responseRedirected;
+    let responseUrl;
+    try {
+      responseRedirected = responseRedirectedWithoutUserGetter(response);
+      responseUrl = responseUrlWithoutUserGetter(response);
+    } catch (error) {
+      cancelResponseBodyBestEffort(response, `${context} rejected unreadable origin metadata`);
+      throw error;
+    }
+    if (responseRedirected || responseUrl !== expectedUrl) {
+      cancelResponseBodyBestEffort(response, `${context} rejected redirected or other-origin bytes`);
+      throw new TypeError(`${context} must come from the exact authenticated URL without redirects`);
+    }
+    await this.#expectStatus(response, [200], { signal });
     let contentType;
     try {
-      contentType = this._getHeader(response, "content-type");
+      contentType = this.#getHeader(response, "content-type");
     } catch (error) {
       cancelResponseBodyBestEffort(
         response,
@@ -6756,13 +6800,17 @@ export class ToriiClient {
       cancelResponseBodyBestEffort(response, `${context} rejected non-Norito bytes`);
       throw new TypeError(`${context} must use exactly ${APPLICATION_NORITO}`);
     }
-    const { bytes } = await this._readBoundedResponseBytes(
+    const { bytes } = await this.#readBoundedResponseBytes(
       response,
       PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES,
       context,
       { signal },
     );
-    return Buffer.from(bytes);
+    return Object.freeze({
+      archive: Buffer.from(bytes),
+      expectedNetworkId: Uint8Array.from(expectedNetworkId),
+      origin: origin.origin,
+    });
   }
 
   /**
@@ -10902,18 +10950,25 @@ export class ToriiClient {
   }
 
   async _request(method, path, options = {}) {
+    return this.#request(method, path, options);
+  }
+
+  async #request(method, path, options = {}) {
     const pathIsAbsolute = isAbsoluteUrl(path);
     const url = pathIsAbsolute ? new URL(path) : new URL(path, this._baseUrl + "/");
     const protocol = url.protocol.toLowerCase();
     const originMatches =
       url.host === this.#baseHost && protocol === this.#baseProtocol;
-    const initHeaders = this._createHeaders(options.headers);
+    // Bootstrap discovery must never inherit account, API, operator, or cookie credentials.
+    const initHeaders = options.publicRequest === true
+      ? { ...options.headers }
+      : this.#createHeaders(options.headers);
     const operatorSigningContext = options.requireIsoOperatorAuth === true
       ? requireIsoOperatorSigningContext(options.operatorSigningContext, initHeaders)
       : resolveOperatorSigningContext(options.operatorSigningContext);
     const hasCredentials = headersContainCredentials(initHeaders);
     const canonicalAuth = options.canonicalAuth
-      ? ToriiClient._normalizeCanonicalAuth(options.canonicalAuth)
+      ? ToriiClient.#normalizeCanonicalAuth(options.canonicalAuth)
       : null;
     const hasCanonicalAuth = canonicalAuth !== null;
     const hasOperatorAuth = operatorSigningContext !== null;
@@ -11009,6 +11064,8 @@ export class ToriiClient {
       method: methodUpper,
       headers: initHeaders,
       body: options.body,
+      ...(options.cache === "no-store" ? { cache: "no-store" } : {}),
+      ...(options.publicRequest === true ? { credentials: "omit" } : {}),
     };
     // Canonical authentication and caller-supplied nonce headers are one-shot.
     // It is unsafe to replay them after dispatch or to let Fetch follow a
@@ -11324,6 +11381,10 @@ export class ToriiClient {
   }
 
   _createHeaders(provided = {}) {
+    return this.#createHeaders(provided);
+  }
+
+  #createHeaders(provided = {}) {
     const headers = {};
     const applyEntries = (source) => {
       if (!source) {
@@ -11462,6 +11523,10 @@ export class ToriiClient {
   }
 
   async _expectStatus(response, expected, options = {}) {
+    return this.#expectStatus(response, expected, options);
+  }
+
+  async #expectStatus(response, expected, options = {}) {
     if (expected.includes(responseStatusWithoutUserGetter(response))) {
       return;
     }
@@ -11968,6 +12033,10 @@ export class ToriiClient {
   }
 
   _getHeader(response, name) {
+    return this.#getHeader(response, name);
+  }
+
+  #getHeader(response, name) {
     const headers = responseHeadersWithoutUserGetter(response);
     const value = headerValueWithoutUserGetter(headers, name);
     return value === undefined ? null : value;
@@ -12067,6 +12136,10 @@ export class ToriiClient {
   }
 
   async _readBoundedResponseBytes(response, maxBytes, context, { signal } = {}) {
+    return this.#readBoundedResponseBytes(response, maxBytes, context, { signal });
+  }
+
+  async #readBoundedResponseBytes(response, maxBytes, context, { signal } = {}) {
     const rejectResponse = (error) => {
       cancelResponseBodyBestEffort(response, `${context} rejected its response body`);
       throw error;
@@ -12076,7 +12149,7 @@ export class ToriiClient {
     }
     let contentLength;
     try {
-      contentLength = this._getHeader(response, "content-length");
+      contentLength = this.#getHeader(response, "content-length");
     } catch (error) {
       rejectResponse(error);
     }
@@ -12883,6 +12956,10 @@ export class ToriiClient {
   }
 
   static _normalizePrivateKey(value, context = "canonicalAuth.privateKey") {
+    return ToriiClient.#normalizePrivateKey(value, context);
+  }
+
+  static #normalizePrivateKey(value, context = "canonicalAuth.privateKey") {
     const path = typeof context === "string" ? context.replace(/\s+/g, ".") : "canonicalAuth";
     if (value === undefined || value === null) {
       throw createValidationError(
@@ -12930,6 +13007,10 @@ export class ToriiClient {
   }
 
   static _normalizeCanonicalAuth(auth, context = "canonicalAuth") {
+    return ToriiClient.#normalizeCanonicalAuth(auth, context);
+  }
+
+  static #normalizeCanonicalAuth(auth, context = "canonicalAuth") {
     if (auth === undefined || auth === null) {
       return null;
     }
@@ -12953,7 +13034,7 @@ export class ToriiClient {
         error,
       );
     }
-    const privateKey = ToriiClient._normalizePrivateKey(
+    const privateKey = ToriiClient.#normalizePrivateKey(
       record.privateKey,
       `${context}.privateKey`,
     );
@@ -17529,7 +17610,10 @@ function assertVpnResponseFields(record, requiredFields, context) {
   }
 }
 
-function normalizeVpnSessionOptions(options, context, supportedKeys = VPN_SESSION_OPTION_KEYS) {
+function normalizeVpnSessionOptions(
+  options, context, supportedKeys = VPN_SESSION_OPTION_KEYS,
+  normalizeCanonicalAuth = ToriiClient._normalizeCanonicalAuth,
+) {
   if (options === undefined) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -17540,7 +17624,7 @@ function normalizeVpnSessionOptions(options, context, supportedKeys = VPN_SESSIO
   const record = ensureRecord(options, `${context} options`);
   assertSupportedOptionKeys(record, supportedKeys, `${context} options`);
   const { signal } = normalizeSignalOption(record, context);
-  const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+  const canonicalAuth = normalizeCanonicalAuth(
     record.canonicalAuth,
     `${context}.canonicalAuth`,
   );
@@ -32703,10 +32787,9 @@ function loadVerifyingKeyClient() {
 
 const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/ipa",
-  "halo2/pasta/kaigi-roster-v1",
+  "halo2/pasta/kaigi-authorization-v1",
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",

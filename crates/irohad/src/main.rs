@@ -10749,7 +10749,7 @@ async fn start_telemetry(
 /// operator-controlled configuration.
 struct ConfigUpdateReceivers {
     log_level: tokio::sync::watch::Receiver<iroha_config::parameters::actual::Logger>,
-    acl: tokio::sync::watch::Receiver<iroha_config::client_api::NetworkAcl>,
+    acl: tokio::sync::watch::Receiver<iroha_torii_shared::configuration::NetworkAcl>,
     handshake: tokio::sync::mpsc::Receiver<SoranetHandshakeApplyRequest>,
 }
 #[allow(clippy::too_many_lines)]

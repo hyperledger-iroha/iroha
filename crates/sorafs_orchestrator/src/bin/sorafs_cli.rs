@@ -39,8 +39,8 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_primitives::numeric::Quantity;
+use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
 use iroha_version::codec::EncodeVersioned;
-use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use norito::{
     decode_from_bytes,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -90,8 +90,7 @@ use sorafs_manifest::{
 };
 use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use sorafs_orchestrator::{
-    AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
-    WriteModeHint,
+    FetchSession, OrchestratorConfig,
     appeals::{
         AppealClass, AppealClassConfig, AppealDisbursementError, AppealDisbursementInput,
         AppealDisbursementPlan, AppealPricingConfig, AppealQuote, AppealQuoteInput,
@@ -379,15 +378,6 @@ fn run() -> Result<(), String> {
                 "build" => manifest_build(args.collect()),
                 "submit" => manifest_submit(args.collect()),
                 "proposal" => manifest_proposal(args.collect()),
-                _ => Err(usage()),
-            }
-        }
-        "norito" => {
-            let Some(sub) = args.next() else {
-                return Err(usage());
-            };
-            match sub.as_str() {
-                "build" => norito_build(args.collect()),
                 _ => Err(usage()),
             }
         }
@@ -2986,7 +2976,6 @@ fn format_car_error(err: CarWriteError) -> String {
 }
 fn usage() -> String {
     "Usage:
-  sorafs_cli norito build --source=PATH --bytecode-out=PATH [--summary-out=PATH]
   sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
@@ -11658,13 +11647,12 @@ mod manifest_tests {
         let root = canonical_temp_path(&temp);
         let config_path = root.join("orchestrator.json");
         let json_out_path = root.join("summary.json");
+        let mut local_proxy = LocalQuicProxyConfig::default();
+        local_proxy.bind_addr = "127.0.0.1:0".into();
+        local_proxy.telemetry_label = Some("test-proxy".into());
+        local_proxy.proxy_mode = ProxyMode::Bridge;
         let config = OrchestratorConfig {
-            local_proxy: Some(LocalQuicProxyConfig {
-                bind_addr: "127.0.0.1:0".into(),
-                telemetry_label: Some("test-proxy".into()),
-                proxy_mode: ProxyMode::Bridge,
-                ..LocalQuicProxyConfig::default()
-            }),
+            local_proxy: Some(local_proxy),
             ..OrchestratorConfig::default()
         };
         let config_value = orchestrator_config_to_json(&config);
@@ -14060,87 +14048,6 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render manifest summary: {err}"))?;
     println!("{rendered}");
-    Ok(())
-}
-fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
-    let mut source_spec: Option<String> = None;
-    let mut bytecode_out: Option<PathBuf> = None;
-    let mut summary_out: Option<PathBuf> = None;
-    for arg in raw_args {
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
-        match key {
-            "--source" => source_spec = Some(value.to_string()),
-            "--bytecode-out" => bytecode_out = Some(PathBuf::from(value)),
-            "--summary-out" => summary_out = Some(PathBuf::from(value)),
-            _ => {
-                return Err(format!(
-                    "unrecognised option `{key}` for `sorafs_cli norito build`"
-                ));
-            }
-        }
-    }
-    let source_spec = source_spec.ok_or_else(|| {
-        "missing required `--source=PATH` for `sorafs_cli norito build`".to_string()
-    })?;
-    let bytecode_out = bytecode_out.ok_or_else(|| {
-        "missing required `--bytecode-out=PATH` for `sorafs_cli norito build`".to_string()
-    })?;
-    let (source_text, source_path) = if source_spec == "-" {
-        let mut buf = String::new();
-        io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(|err| format!("failed to read Kotodama source from stdin: {err}"))?;
-        (buf, None)
-    } else {
-        let path = PathBuf::from(&source_spec);
-        let contents = fs::read_to_string(&path)
-            .map_err(|err| format!("failed to read Kotodama source `{}`: {err}", path.display()))?;
-        (contents, Some(path))
-    };
-    let source_name = source_path
-        .as_ref()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "<stdin>".to_owned());
-    let bytecode = CompilerSession::default()
-        .build(CompileRequest {
-            source: &source_text,
-            source_name: Some(&source_name),
-        })
-        .map_err(|diagnostics| {
-            format!(
-                "failed to compile Kotodama source:\n{}",
-                diagnostics.render_human()
-            )
-        })?
-        .artifact;
-    let abi_version = ivm::ProgramMetadata::parse(&bytecode)
-        .map_err(|err| format!("compiler produced invalid Kotodama artifact: {err}"))?
-        .metadata
-        .abi_version;
-    write_bytes(&bytecode_out, &bytecode)?;
-    let mut summary = Map::new();
-    insert_value!(summary["bytecode_path"] = bytecode_out.display().to_string());
-    insert_value!(summary["bytecode_len"] = bytecode.len() as u64);
-    insert_value!(summary["bytecode_blake3_hex"] = hex_encode(blake3_hash(&bytecode).as_bytes()));
-    insert_value!(summary["abi_version"] = abi_version as u64);
-    match &source_path {
-        Some(path) => {
-            insert_value!(summary["source_kind"] = "file");
-            insert_value!(summary["source_path"] = path.display().to_string());
-        }
-        None => {
-            insert_value!(summary["source_kind"] = "stdin");
-        }
-    }
-    let summary_value = Value::Object(summary);
-    let rendered = to_string_pretty(&summary_value)
-        .map_err(|err| format!("failed to render summary: {err}"))?;
-    println!("{rendered}");
-    if let Some(path) = summary_out {
-        write_text(&path, rendered.as_bytes())?;
-    }
     Ok(())
 }
 fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {

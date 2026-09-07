@@ -37,6 +37,26 @@ public abstract record class TransactionInstruction
         return Convert.ToBase64String(EncodeInstructionBox(authorityAccountId));
     }
 
+    /// <summary>Create a Kaigi call using the final V1 typed configuration and authorization.</summary>
+    public static CreateKaigiInstruction CreateKaigi(Hyperledger.Iroha.Kaigi.NewKaigi call,
+        Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(call, authorization);
+
+    /// <summary>Join a Kaigi call.</summary>
+    public static JoinKaigiInstruction JoinKaigi(Hyperledger.Iroha.Kaigi.KaigiId callId, string participant,
+        Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(callId, participant, authorization);
+
+    /// <summary>Leave a Kaigi call.</summary>
+    public static LeaveKaigiInstruction LeaveKaigi(Hyperledger.Iroha.Kaigi.KaigiId callId, string participant,
+        Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(callId, participant, authorization);
+
+    /// <summary>End a Kaigi call.</summary>
+    public static EndKaigiInstruction EndKaigi(Hyperledger.Iroha.Kaigi.KaigiId callId, ulong? endedAtMs = null,
+        Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(callId, endedAtMs, authorization);
+
+    /// <summary>Record a Kaigi usage segment.</summary>
+    public static RecordKaigiUsageInstruction RecordKaigiUsage(Hyperledger.Iroha.Kaigi.KaigiId callId,
+        ulong durationMs, ulong billedGas, Hyperledger.Iroha.Kaigi.KaigiUsageArtifactsV1? authorization = null) => new(callId, durationMs, billedGas, authorization);
+
     public static TransferAssetInstruction TransferAsset(string assetDefinitionId, string quantity, string destinationAccountId)
     {
         return new TransferAssetInstruction(assetDefinitionId, quantity, destinationAccountId);

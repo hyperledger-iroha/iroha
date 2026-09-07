@@ -11,6 +11,7 @@ use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
     KotobaTranslationEntry, TriggerDescriptor,
 };
+pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
 use norito::{
     Decode, Encode,
     core::{
@@ -19,7 +20,6 @@ use norito::{
     },
 };
 use std::io::Write;
-pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
 /// Maximum accepted logical vector length for admission.
 pub const VECTOR_LENGTH_MAX: u8 = 64;
 /// Magic prefix identifying IVM bytecode.

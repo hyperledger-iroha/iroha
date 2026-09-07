@@ -1,9 +1,10 @@
 use crate::{
     Error, Result, TransitionBatch,
     backend::{
-        self, BackendArtifact, BackendConfig, ExecutionMode, MerkleTreeRoleV1,
-        PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS, TRANSCRIPT_TAG_ALPHA_PREFIX,
-        TRANSCRIPT_TAG_COLUMN_MIX_PREFIX, TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
+        self, BackendArtifact, BackendConfig, ExecutionMode, LOOKUP_PRODUCT_DOMAIN,
+        MerkleTreeRoleV1, PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS,
+        TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_COLUMN_MIX_PREFIX, TRANSCRIPT_TAG_GAMMA,
+        TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
     },
     field::GoldilocksFp4V1,
     ordering,
@@ -27,10 +28,10 @@ mod lde_leaf_cache;
 const PROTOCOL_VERSION: u16 = 1;
 #[cfg(test)]
 /// Canonical first-release schema identity for [`PublicIO`].
-const PUBLIC_IO_SCHEMA_NAME: &str = "fastpq_prover::proof::PublicIOV1";
+const PUBLIC_IO_SCHEMA_NAME: &str = "fastpq_prover::proof::FastpqStateTransitionPublicIoV1";
 #[cfg(test)]
 /// Canonical first-release schema identity for [`Proof`].
-const PROOF_SCHEMA_NAME: &str = "fastpq_prover::proof::ProofV1";
+const PROOF_SCHEMA_NAME: &str = "fastpq_prover::proof::FastpqStateTransitionProofV1";
 /// Default maximum transitions accepted by the V1 verifier.
 const DEFAULT_MAX_VERIFY_TRANSITIONS: usize = 256;
 /// Default maximum batch payload bytes accepted by the V1 verifier.
@@ -51,7 +52,7 @@ const DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES: usize = 16;
 const DEFAULT_MAX_VERIFY_AIR_ROW_VALUES: usize = trace::DEFAULT_MAX_TRACE_COLUMNS;
 /// Public inputs committed by the prover and checked by the verifier.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
-#[norito(schema_name = "fastpq_prover::proof::PublicIOV1")]
+#[norito(schema_name = "fastpq_prover::proof::FastpqStateTransitionPublicIoV1")]
 pub struct PublicIO {
     /// Data-space identifier (little-endian UUID).
     pub dsid: [u8; 16],
@@ -136,7 +137,7 @@ pub struct AirConstraintOpening {
 }
 /// Proof artifact produced by the FASTPQ prover.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::proof::ProofV1")]
+#[norito(schema_name = "fastpq_prover::proof::FastpqStateTransitionProofV1")]
 pub struct Proof {
     /// Protocol version used to derive Fiat–Shamir challenges.
     pub protocol_version: u16,
@@ -156,7 +157,11 @@ pub struct Proof {
     pub lde_root: GoldilocksDigest384V1,
     /// Number of evaluation rows committed by `lde_root`.
     pub lde_domain_size: u32,
-    /// Fp4 composition challenges sampled after both trace roots and the mixed LDE root.
+    /// Permission accumulator over the canonical witness LDE.
+    pub lookup_grand_product: u64,
+    /// Transcript-derived permission accumulator challenge.
+    pub lookup_challenge: u64,
+    /// Fp4 composition challenges sampled after the trace roots and permission challenge.
     pub alphas: Vec<GoldilocksFp4V1>,
     /// FRI folding challenges (`β_ℓ`).
     pub betas: Vec<GoldilocksFp4V1>,
@@ -270,12 +275,13 @@ impl Prover {
     /// Construct a prover using a canonical parameter set and explicit execution mode.
     ///
     /// This helper mirrors [`Prover::canonical`] but forces the backend to use the specified
-    /// [`ExecutionMode`], allowing operators to pin the prover to CPU or GPU execution explicitly.
+    /// [`ExecutionMode`]. CPU and automatic selection use the implemented CPU proof path.
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownParameter`] when the supplied name is not part of
-    /// the canonical FASTPQ catalogue.
+    /// the canonical FASTPQ catalogue, or [`Error::NativeV1GpuUnavailable`] for an explicit GPU
+    /// request. Final-V1 proof GPU dispatch is not implemented.
     pub fn canonical_with_execution_mode(
         parameter_name: &str,
         mode: ExecutionMode,
@@ -292,7 +298,8 @@ impl Prover {
     /// # Errors
     ///
     /// Returns [`Error::UnknownParameter`] when the named parameter set is not
-    /// part of the canonical FASTPQ catalogue.
+    /// part of the canonical FASTPQ catalogue, or [`Error::NativeV1GpuUnavailable`] when either
+    /// execution or Poseidon mode explicitly requires GPU proof dispatch.
     pub fn canonical_with_modes(
         parameter_name: &str,
         execution_mode: ExecutionMode,
@@ -304,6 +311,7 @@ impl Prover {
         let config = BackendConfig::new(params)
             .with_execution_mode(execution_mode)
             .with_poseidon_mode(poseidon_mode);
+        config.validate_native_v1_modes()?;
         Ok(Self::from_backend_config(config))
     }
     /// Return the sole canonical parameter set exposed by this crate.
@@ -319,7 +327,7 @@ impl Prover {
     /// # Errors
     ///
     /// Returns [`Error::InvalidProofSemantics`] unless the batch is an unchanged empty statement or
-    /// contains only fully witnessed transfers, or [`Error::VerifierLimitExceeded`]
+    /// contains only operations with a production root-bound V1 relation, or [`Error::VerifierLimitExceeded`]
     /// if the batch or generated proof exceeds the paired verifier's default limits.
     /// Other errors propagate from
     /// [`crate::trace_commitment`]
@@ -327,7 +335,7 @@ impl Prover {
     /// canonical verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
         enforce_default_verify_batch_limits(batch)?;
-        let proof = self.prove_with_semantics(batch, ProofSemantics::TransferStateTransition)?;
+        let proof = self.prove_with_semantics(batch, ProofSemantics::StateTransition)?;
         enforce_default_verify_limits(batch, &proof)?;
         Ok(proof)
     }
@@ -337,6 +345,7 @@ impl Prover {
         batch: &TransitionBatch,
         semantics: ProofSemantics,
     ) -> Result<Proof> {
+        self.backend.validate_native_v1_modes()?;
         validate_batch_semantics(batch, semantics)?;
         self.prove_raw(batch)
     }
@@ -358,6 +367,7 @@ impl Prover {
     }
 
     fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
+        self.backend.validate_native_v1_modes()?;
         if self.backend.parameter_name() != batch.parameter {
             return Err(Error::ParameterMismatch {
                 expected: self.backend.parameter_name().to_owned(),
@@ -385,10 +395,11 @@ impl Prover {
 /// # Errors
 ///
 /// Returns [`Error::InvalidProofSemantics`] unless the batch is an unchanged empty statement or
-/// contains only fully witnessed transfers, [`Error::UnknownParameter`] when the proof references
-/// an unknown parameter set, or another [`Error`] identifying the invalid proof component.
+/// contains only operations with a production root-bound V1 relation,
+/// [`Error::UnknownParameter`] when the proof references an unknown parameter set, or another
+/// [`Error`] identifying the invalid proof component.
 pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-    verify_with_semantics(batch, proof, ProofSemantics::TransferStateTransition)
+    verify_with_semantics(batch, proof, ProofSemantics::StateTransition)
 }
 
 /// Verify a proof under an explicitly selected, caller-authenticated semantic profile.
@@ -405,21 +416,16 @@ pub fn verify_with_semantics(
 /// # Errors
 ///
 /// Returns [`Error::VerifierLimitExceeded`] before semantic or cryptographic work when inputs
-/// exceed the supplied limits, [`Error::InvalidProofSemantics`] for batches outside the witnessed
-/// transfer profile, [`Error::UnknownParameter`] for unknown parameter sets, or another [`Error`]
-/// identifying the invalid proof component.
+/// exceed the supplied limits, [`Error::InvalidProofSemantics`] for batches containing operations
+/// without a production root-bound V1 relation, [`Error::UnknownParameter`] for unknown parameter
+/// sets, or another [`Error`] identifying the invalid proof component.
 #[allow(clippy::too_many_lines)]
 pub fn verify_with_limits(
     batch: &TransitionBatch,
     proof: &Proof,
     limits: VerifyLimits,
 ) -> Result<()> {
-    verify_with_limits_and_semantics(
-        batch,
-        proof,
-        limits,
-        ProofSemantics::TransferStateTransition,
-    )
+    verify_with_limits_and_semantics(batch, proof, limits, ProofSemantics::StateTransition)
 }
 
 /// Verify a proof under explicit resource limits and a caller-authenticated semantic profile.
@@ -464,16 +470,36 @@ fn verify_prechecked_with_semantics(
 /// This escape hatch is available only to unit tests and `dev-tools` builds. It checks the proof
 /// protocol and its binding to the supplied batch, but deliberately makes no claim that the batch
 /// operations are valid state updates.
-/// Batch-count and byte limits expand to match developer fixtures, consistently
-/// with [`Prover::prove_raw_statement`]. Production verification retains its
-/// explicit/default limits and must not use this developer-only helper.
+/// Applies the default verifier limits. Larger fixtures must select an explicit
+/// finite budget with [`verify_raw_statement_with_limits`].
 ///
 /// # Errors
 ///
 /// Returns the same cryptographic, encoding, or verifier-limit errors as [`verify_with_limits`].
 #[cfg(any(test, feature = "dev-tools"))]
 pub fn verify_raw_statement(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-    verify_with_limits_raw(batch, proof, prover_self_check_limits(batch, proof))
+    verify_raw_statement_with_limits(batch, proof, VerifyLimits::default())
+}
+
+/// Verify a raw cryptographic fixture under explicit, finite resource limits.
+///
+/// Available only to tests and `dev-tools`, this applies every normal resource
+/// and cryptographic check without assigning state-transition semantics. The
+/// caller must select the fixture budget; the verifier never expands it from
+/// proof-controlled lengths. Production verification remains subject to its
+/// authenticated semantic profile and independently selected admission limits.
+///
+/// # Errors
+///
+/// Returns the same cryptographic, encoding, or verifier-limit errors as
+/// [`verify_with_limits`].
+#[cfg(any(test, feature = "dev-tools"))]
+pub fn verify_raw_statement_with_limits(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    limits: VerifyLimits,
+) -> Result<()> {
+    verify_with_limits_raw(batch, proof, limits)
 }
 
 fn verify_with_limits_raw(
@@ -495,6 +521,8 @@ fn validate_canonical_goldilocks_elements(proof: &Proof) -> Result<()> {
 }
 
 fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()> {
+    ensure_canonical_goldilocks(proof.lookup_grand_product, "lookup_grand_product", &[])?;
+    ensure_canonical_goldilocks(proof.lookup_challenge, "lookup_challenge", &[])?;
     for (index, &alpha) in proof.alphas.iter().enumerate() {
         ensure_canonical_fp4(alpha, "alphas", &[index])?;
     }
@@ -668,6 +696,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     {
         return Err(Error::LdeRootMismatch);
     }
+    if proof.lookup_grand_product != expected_derived.lookup_grand_product {
+        return Err(Error::LookupGrandProductMismatch);
+    }
+    if proof.lookup_challenge != expected_derived.lookup_challenge {
+        return Err(Error::LookupChallengeMismatch);
+    }
     if proof.air_trace_root.as_fastpq() != expected_derived.air_trace_root {
         return Err(Error::AirTraceRootMismatch);
     }
@@ -700,6 +734,10 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
     );
+    let expected_lookup_challenge = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
+    if proof.lookup_challenge != expected_lookup_challenge {
+        return Err(Error::LookupChallengeMismatch);
+    }
     let expected_alpha_count = backend::air_composition_alpha_count(&column_names);
     if proof.alphas.len() != expected_alpha_count {
         return Err(Error::AirChallengeCountMismatch {
@@ -721,6 +759,10 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             air_composition_root.to_le_bytes(),
         ]
         .concat(),
+    );
+    transcript.append_message(
+        LOOKUP_PRODUCT_DOMAIN,
+        &proof.lookup_grand_product.to_le_bytes(),
     );
     let joint_fri =
         backend::JointFriBatch::from_transcript(&params, lde_domain_size, &mut transcript)?;
@@ -1488,12 +1530,19 @@ fn fold_fri_values(
     backend::fold_fri_coset(values, challenge, x, coset_generator)
 }
 fn batch_size_hint(batch: &TransitionBatch) -> usize {
-    let mut total = batch.parameter.len();
+    let mut total = batch.parameter.len().saturating_add(16 + 8 + 32 * 4); // fixed PublicInputs payload
     for transition in &batch.transitions {
         total = total
             .saturating_add(transition.key.len())
             .saturating_add(transition.pre_value.len())
-            .saturating_add(transition.post_value.len());
+            .saturating_add(transition.post_value.len())
+            .saturating_add(4); // operation discriminant
+        if matches!(
+            &transition.operation,
+            crate::OperationKind::RoleGrant { .. } | crate::OperationKind::RoleRevoke { .. }
+        ) {
+            total = total.saturating_add(32 + 32 + 8);
+        }
     }
     for (key, value) in &batch.metadata {
         total = total.saturating_add(key.len()).saturating_add(value.len());
@@ -1508,6 +1557,7 @@ fn proof_size_hint(proof: &Proof) -> usize {
     total = total.saturating_add(public_io_size_hint(&proof.public_io));
     total = total.saturating_add(GoldilocksDigest384V1::BYTES * 4); // proof roots
     total = total.saturating_add(4); // lde_domain_size
+    total = total.saturating_add(16); // lookup product and challenge
     total = total.saturating_add(proof.alphas.len().saturating_mul(32));
     total = total.saturating_add(proof.betas.len().saturating_mul(32));
     total = total.saturating_add(
@@ -1637,6 +1687,8 @@ fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<P
         air_composition_root: artifact.air_composition_root.into(),
         lde_root: artifact.lde_root.into(),
         lde_domain_size: artifact.lde_domain_size,
+        lookup_grand_product: artifact.lookup_grand_product,
+        lookup_challenge: artifact.lookup_challenge,
         alphas: artifact.alphas,
         betas: artifact.fri_betas,
         fri_layers,
@@ -1704,6 +1756,12 @@ mod tests {
         digest384(value).into()
     }
 
+    /// Cryptographic-layer tests intentionally bypass production statement
+    /// semantics; tests of the public gate call `super::verify` explicitly.
+    fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
+        super::verify_raw_statement(batch, proof)
+    }
+
     fn make_digest384_noncanonical(bytes: &mut [u8; GoldilocksDigest384V1::BYTES], lane: usize) {
         let offset = lane * 8;
         bytes[offset..offset + 8].copy_from_slice(&GOLDILOCKS_MODULUS.to_le_bytes());
@@ -1726,9 +1784,6 @@ mod tests {
             .expect("modulus reduction fits in u64")
     }
 
-    fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-        verify_with_limits_raw(batch, proof, VerifyLimits::default())
-    }
     fn verify_with_limits(
         batch: &TransitionBatch,
         proof: &Proof,
@@ -1958,6 +2013,8 @@ mod tests {
         target.air_trace_root = donor.air_trace_root;
         target.air_composition_root = donor.air_composition_root;
         target.lde_domain_size = donor.lde_domain_size;
+        target.lookup_grand_product = donor.lookup_grand_product;
+        target.lookup_challenge = donor.lookup_challenge;
         target.alphas = donor.alphas.clone();
         target.betas = donor.betas.clone();
         target.fri_layers = donor.fri_layers.clone();
@@ -2026,6 +2083,8 @@ mod tests {
             air_composition_root: digest384(13),
             lde_root: digest384(14),
             lde_domain_size: 1,
+            lookup_grand_product: 15,
+            lookup_challenge: 16,
             alphas: fp4_values(&[17, 18]),
             fri_layers: vec![digest384(19)],
             fri_betas: Vec::new(),
@@ -2161,15 +2220,73 @@ mod tests {
             OperationKind::MetaSet,
         ));
         batch.metadata.insert("meta".to_owned(), vec![9, 8, 7]);
-        let expected = "param".len() + "key".len() + 2 + 3 + "meta".len() + 3;
+        let expected =
+            "param".len() + (16 + 8 + 32 * 4) + "key".len() + 2 + 3 + 4 + "meta".len() + 3;
         assert_eq!(batch_size_hint(&batch), expected);
+    }
+    #[test]
+    fn batch_size_hint_counts_fixed_permission_operation_payloads() {
+        let mut batch = TransitionBatch::new("param", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"permission/key".to_vec(),
+            Vec::new(),
+            vec![1],
+            OperationKind::RoleGrant {
+                role_id: [0x11; 32],
+                permission_id: [0x22; 32],
+                epoch: 7,
+            },
+        ));
+        let base = "param".len() + (16 + 8 + 32 * 4) + "permission/key".len() + 1 + 4;
+        assert_eq!(batch_size_hint(&batch), base + 32 + 32 + 8);
     }
     #[test]
     fn raw_crypto_verifier_accepts_canonical_v1_roundtrip() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let proof = prover.prove_raw_statement(&batch).unwrap();
-        verify(&batch, &proof).unwrap();
+        verify_raw_statement(&batch, &proof).unwrap();
+    }
+    #[test]
+    fn raw_fixture_verifier_preserves_explicit_admission_limits() {
+        let batch = sample_batch();
+        let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        let limits = VerifyLimits {
+            max_proof_bytes: 0,
+            ..VerifyLimits::default()
+        };
+        assert!(matches!(
+            verify_raw_statement_with_limits(&batch, &proof, limits),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_proof_bytes",
+                max: 0,
+                ..
+            })
+        ));
+        assert_eq!(VerifyLimits::default().max_proof_bytes, 512 * 1024);
+    }
+    #[test]
+    fn raw_proof_is_independent_of_ambient_norito_layout() {
+        let prover = Prover::canonical_with_execution_mode(
+            "fastpq-state-transition-stark-v1",
+            ExecutionMode::Cpu,
+        )
+        .unwrap();
+        let batch = sample_batch();
+        let canonical = prover.prove_raw_statement(&batch).expect("canonical proof");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            verify_raw_statement(&batch, &canonical)
+                .expect("a proof must verify in another decode context");
+            prover
+                .prove_raw_statement(&batch)
+                .expect("proof generated in another decode context")
+        };
+        assert_eq!(canonical, alternate);
+        verify_raw_statement(&batch, &alternate)
+            .expect("canonical verification of alternate proof");
     }
     #[test]
     fn strict_state_profile_accepts_unchanged_empty_batch() {
@@ -2284,24 +2401,23 @@ mod tests {
         super::verify(&batch, &proof).expect("full-width slot verification");
     }
     #[test]
-    fn strict_state_profile_rejects_cryptographically_valid_metadata_statement() {
+    fn strict_state_profile_rejects_unrooted_metadata_statement() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let raw_proof = prover
             .prove_raw_statement(&batch)
-            .expect("cryptographically valid raw statement");
-
+            .expect("cryptographic fixture proof");
         assert!(matches!(
             prover.prove(&batch),
             Err(Error::InvalidProofSemantics {
-                profile: "transfer_state_transition",
+                profile: "state_transition",
                 ..
             })
         ));
         assert!(matches!(
             super::verify(&batch, &raw_proof),
             Err(Error::InvalidProofSemantics {
-                profile: "transfer_state_transition",
+                profile: "state_transition",
                 ..
             })
         ));
@@ -2310,7 +2426,7 @@ mod tests {
     fn verify_rejects_batch_parameter_mismatch_before_replay() {
         let (mut batch, proof) = sample_proof_with_size(8);
         batch.parameter = "test-mismatched-parameter".to_owned();
-        let err = verify(&batch, &proof).unwrap_err();
+        let err = verify_raw_statement(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
             Error::ParameterMismatch {
@@ -2324,7 +2440,7 @@ mod tests {
     fn verify_rejects_unknown_parameter_relabelled_proof() {
         let (batch, mut proof) = sample_proof_with_size(8);
         proof.parameter = "test-unknown-parameter".to_owned();
-        let err = verify(&batch, &proof).unwrap_err();
+        let err = verify_raw_statement(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
             Error::UnknownParameter(parameter) if parameter == "test-unknown-parameter"
@@ -2365,6 +2481,61 @@ mod tests {
         );
     }
     #[test]
+    fn native_v1_canonical_gpu_modes_fail_before_prover_construction() {
+        for execution in [ExecutionMode::Cpu, ExecutionMode::Auto, ExecutionMode::Gpu] {
+            for poseidon in [
+                PoseidonExecutionMode::Cpu,
+                PoseidonExecutionMode::Auto,
+                PoseidonExecutionMode::Gpu,
+            ] {
+                let result = Prover::canonical_with_modes(
+                    "fastpq-state-transition-stark-v1",
+                    execution,
+                    poseidon,
+                );
+                if execution == ExecutionMode::Gpu || poseidon == PoseidonExecutionMode::Gpu {
+                    assert!(matches!(result, Err(Error::NativeV1GpuUnavailable)));
+                } else {
+                    result.expect("CPU and automatic native-V1 modes are implemented");
+                }
+            }
+        }
+        assert!(matches!(
+            Prover::canonical_with_execution_mode(
+                "fastpq-state-transition-stark-v1",
+                ExecutionMode::Gpu,
+            ),
+            Err(Error::NativeV1GpuUnavailable)
+        ));
+    }
+    #[test]
+    fn native_v1_gpu_rejection_precedes_statement_and_witness_validation() {
+        let prover = Prover::from_backend_config(
+            BackendConfig::new(CANONICAL_PARAMETER_SETS[0]).with_execution_mode(ExecutionMode::Gpu),
+        );
+        let batch = TransitionBatch::new("invalid-parameter", PublicInputs::default());
+        for result in [prover.prove(&batch), prover.prove_raw_statement(&batch)] {
+            assert!(matches!(result, Err(Error::NativeV1GpuUnavailable)));
+        }
+    }
+    #[test]
+    fn native_v1_cpu_and_auto_proofs_are_identical() {
+        let parameter = "fastpq-state-transition-stark-v1";
+        let batch = TransitionBatch::new(parameter, PublicInputs::default());
+        let cpu = Prover::canonical_with_execution_mode(parameter, ExecutionMode::Cpu)
+            .expect("CPU prover")
+            .prove(&batch)
+            .expect("CPU proof");
+        let automatic = Prover::canonical_with_execution_mode(parameter, ExecutionMode::Auto)
+            .expect("automatic prover")
+            .prove(&batch)
+            .expect("automatic proof");
+        assert_eq!(
+            norito::core::to_bytes(&cpu).unwrap(),
+            norito::core::to_bytes(&automatic).unwrap()
+        );
+    }
+    #[test]
     fn materialise_proof_maps_backend_artifact_fields() {
         let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         assert_eq!(proof.protocol_version, PROTOCOL_VERSION);
@@ -2374,6 +2545,8 @@ mod tests {
         assert_eq!(proof.air_composition_root, wire_digest384(13));
         assert_eq!(proof.lde_root, wire_digest384(14));
         assert_eq!(proof.lde_domain_size, 1);
+        assert_eq!(proof.lookup_grand_product, 15);
+        assert_eq!(proof.lookup_challenge, 16);
         assert_eq!(proof.alphas, fp4_values(&[17, 18]));
         assert_eq!(proof.betas, Vec::<GoldilocksFp4V1>::new());
         assert_eq!(proof.fri_layers, vec![wire_digest384(19)]);
@@ -2623,12 +2796,22 @@ mod tests {
         let batch = sample_batch();
         let proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(matches!(
-            validate_batch_semantics(&batch, ProofSemantics::TransferStateTransition),
+            validate_batch_semantics(&batch, ProofSemantics::StateTransition),
+            Err(Error::InvalidProofSemantics { .. })
+        ));
+        assert!(matches!(
+            validate_batch_semantics(&batch, ProofSemantics::AxtTransferClaim),
             Err(Error::InvalidProofSemantics { .. })
         ));
 
         let limits = verify_limits_with_override(|limits| limits.max_transitions = 0);
-        let err = super::verify_with_limits(&batch, &proof, limits).unwrap_err();
+        let err = super::verify_with_limits_and_semantics(
+            &batch,
+            &proof,
+            limits,
+            ProofSemantics::AxtTransferClaim,
+        )
+        .unwrap_err();
         assert!(
             matches!(
                 err,
@@ -2915,17 +3098,9 @@ mod tests {
         proof.air_composition_root = target_proof.air_composition_root;
         proof.lde_domain_size = target_proof.lde_domain_size;
         let err = verify(&target, &proof).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Error::AirChallengeMismatch { .. }
-                    | Error::QueryMismatch { .. }
-                    | Error::QueryMerklePathMismatch { .. }
-                    | Error::AirMerklePathMismatch { .. }
-                    | Error::AirConstraintMismatch { .. }
-            ),
-            "unexpected verifier error: {err:?}"
-        );
+        // The permission challenge is sampled from the replaced commitment
+        // roots before AIR coefficients or Merkle openings are inspected.
+        assert!(matches!(err, Error::LookupChallengeMismatch));
     }
     #[test]
     fn verify_rejects_ordering_hash_mutation() {
@@ -3033,6 +3208,32 @@ mod tests {
         }
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::FriChallengeMismatch { round: 0 }));
+    }
+    #[test]
+    fn verify_rejects_wrong_lookup_challenge() {
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
+        let batch = sample_batch_with_size(8);
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
+        proof.lookup_challenge = if proof.lookup_challenge == 0 {
+            1
+        } else {
+            proof.lookup_challenge - 1
+        };
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::LookupChallengeMismatch));
+    }
+    #[test]
+    fn verify_rejects_wrong_lookup_grand_product() {
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
+        let batch = sample_batch_with_size(8);
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
+        proof.lookup_grand_product = if proof.lookup_grand_product == 0 {
+            1
+        } else {
+            proof.lookup_grand_product - 1
+        };
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::LookupGrandProductMismatch));
     }
     #[test]
     fn verify_rejects_modified_lde_root() {
@@ -4582,6 +4783,8 @@ mod tests {
             air_composition_root: wire_digest384(9),
             lde_root: wire_digest384(10),
             lde_domain_size: 1,
+            lookup_grand_product: 11,
+            lookup_challenge: 12,
             alphas: fp4_values(&[13, 14]),
             betas: vec![fp4(15), fp4(16)],
             fri_layers: vec![wire_digest384(17), wire_digest384(18)],
@@ -4636,6 +4839,20 @@ mod tests {
             <PublicIO as NoritoDeserialize<'static>>::schema_hash(),
             public_io_schema
         );
+        let public_io = PublicIO::default();
+        let public_io_bytes = norito::core::to_bytes(&public_io).expect("encode final public IO");
+        for retired_name in [
+            "fastpq_prover::proof::PublicIO",
+            "fastpq_prover::proof::PublicIOV1",
+        ] {
+            let mut retired = public_io_bytes.clone();
+            let retired_schema = norito::core::schema_hash_for_name(retired_name);
+            retired[6..22].copy_from_slice(&retired_schema);
+            assert!(
+                norito::decode_from_bytes::<PublicIO>(&retired).is_err(),
+                "retired public-IO schema {retired_name} must not decode as final V1"
+            );
+        }
 
         let proof_schema = norito::core::schema_hash_for_name(PROOF_SCHEMA_NAME);
         assert_eq!(<Proof as NoritoSerialize>::schema_hash(), proof_schema);
@@ -4644,14 +4861,20 @@ mod tests {
             proof_schema
         );
         let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
-        let mut encoded = norito::core::to_bytes(&proof).expect("encode release proof");
+        let encoded = norito::core::to_bytes(&proof).expect("encode release proof");
         assert_eq!(&encoded[6..22], proof_schema.as_slice());
-        let pre_release_schema = norito::core::schema_hash_for_name("fastpq_prover::proof::Proof");
-        encoded[6..22].copy_from_slice(&pre_release_schema);
-        assert!(
-            norito::decode_from_bytes::<Proof>(&encoded).is_err(),
-            "the pre-release proof schema must not decode as release V1"
-        );
+        for retired_name in [
+            "fastpq_prover::proof::Proof",
+            "fastpq_prover::proof::ProofV1",
+        ] {
+            let mut retired = encoded.clone();
+            let retired_schema = norito::core::schema_hash_for_name(retired_name);
+            retired[6..22].copy_from_slice(&retired_schema);
+            assert!(
+                norito::decode_from_bytes::<Proof>(&retired).is_err(),
+                "retired proof schema {retired_name} must not decode as final V1"
+            );
+        }
     }
     fn proof_with_every_goldilocks_container() -> Proof {
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
@@ -4694,8 +4917,38 @@ mod tests {
     }
 
     #[test]
+    fn proof_norito_decode_rejects_noncanonical_extension_elements() {
+        let baseline = proof_with_every_goldilocks_container();
+        for location in 0..4 {
+            for coefficient in 0..4 {
+                let mut proof = baseline.clone();
+                let value = match location {
+                    0 => &mut proof.betas[0],
+                    1 => &mut proof.fri_queries[0].rounds[0].values[0],
+                    2 => &mut proof.fri_queries[0].rounds[0].folded_value,
+                    _ => &mut proof.fri_queries[0].final_values[0],
+                };
+                let mut coefficients = value.coefficients();
+                coefficients[coefficient] = GOLDILOCKS_MODULUS;
+                *value = GoldilocksFp4V1::from_coefficients_unchecked_for_test(coefficients);
+                let bytes = norito::core::to_bytes(&proof).expect("encode adversarial proof");
+                assert!(
+                    norito::decode_from_bytes::<Proof>(&bytes).is_err(),
+                    "Fp4 location {location}, coefficient {coefficient} must fail at wire decode"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn canonical_preflight_covers_transcript_scalars() {
         let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_grand_product", &[], |proof| {
+            proof.lookup_grand_product = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_challenge", &[], |proof| {
+            proof.lookup_challenge = GOLDILOCKS_MODULUS;
+        });
         for lane in 0..4 {
             let mut coefficients = [0; 4];
             coefficients[lane] = GOLDILOCKS_MODULUS;
@@ -4712,6 +4965,12 @@ mod tests {
     #[test]
     fn canonical_preflight_covers_query_values() {
         let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_grand_product", &[], |proof| {
+            proof.lookup_grand_product = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_challenge", &[], |proof| {
+            proof.lookup_challenge = GOLDILOCKS_MODULUS;
+        });
         for lane in 0..4 {
             let mut coefficients = [0; 4];
             coefficients[lane] = GOLDILOCKS_MODULUS;
@@ -4745,6 +5004,12 @@ mod tests {
             &[0, 0],
             |proof| proof.air_openings[0].next_row[0] = GOLDILOCKS_MODULUS,
         );
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_grand_product", &[], |proof| {
+            proof.lookup_grand_product = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_challenge", &[], |proof| {
+            proof.lookup_challenge = GOLDILOCKS_MODULUS;
+        });
         for lane in 0..4 {
             let mut coefficients = [0; 4];
             coefficients[lane] = GOLDILOCKS_MODULUS;

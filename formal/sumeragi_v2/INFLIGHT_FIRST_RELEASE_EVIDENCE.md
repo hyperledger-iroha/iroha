@@ -40,13 +40,37 @@ checks:
 - exact binding scope for lane commit and release; and
 - the literal 4096 selected-entry ceiling.
 
-The twenty-two `_bug.cfg` controls are required to emit their named TLC invariant
+The twenty-five `_bug.cfg` controls are required to emit their named TLC invariant
 violation. They cover inverted QueuePlan-selection/reservation order, Kura-before-reservation,
 each READY ordering boundary, durable loss and improper volatile retention on
 crash, conflicting/ABA binding preimages, lane-commit and release scope drift,
 duplicate WSV application, each post-carrier cleanup boundary, each durable
-release boundary, a skipped or decreasing Commit-key prefix, and a 4097-entry
-selected conjunction.
+release boundary, a skipped or decreasing Commit-key prefix, a 4097-entry
+selected conjunction, direct release while Kura still owns the payload,
+a later Commit after that invalid release, and Kura activation without the
+actor's authenticated payload binding. The original twenty-two controls remain
+in order; the three ownership controls extend that corpus.
+
+The fixed configuration checks twenty invariants. It includes
+`MLDirectReleaseRequiresAbsentKura` and `MLTerminalDispositionExclusive` after
+`MLReleaseStageOrder`. A nonretired direct release requires no active Kura
+owner; every release disposition excludes a lane Commit owner, WSV application,
+a nonzero application count and an applying actor. The distinct retired
+non-producer branch retains its exact owner and complete ReleasePending checks.
+`MLValidatorCarrierOwnership` binds each Kura/input/READY/history/decision actor
+to `BindingA`, which `ActivateKura` publishes atomically with custody.
+The source-bound `persist_nonqueue_autonomous_payload_with_custody` bridge starts
+with producer-only binding custody, derives the local actor from the authenticated
+payload and frozen committee, and publishes that actor's binding and Kura custody
+through the checked transition. Its ordered contract then requires move-only
+authorization, signed Prepared/Live cursors, signed durable bootstrap publication,
+and authenticated durable completion under the same live cursor.
+
+The positive Apalache length remains **18**. That bound cannot cover the
+19-step terminal-conflict counterexample; the complete TLC exploration and its
+named `MLTerminalDispositionExclusive` control are required for that obligation.
+Neither current registration nor an older model's bounded result qualifies the
+repaired candidate. Fresh matching engine and production evidence remain required.
 
 ## Evidence status and projection boundary
 
@@ -171,7 +195,9 @@ group. Separately, the pre-Kura reservation-batch release path uses the same
 complete-group revalidation predicate while holding the Queue transition and
 FIFO locks, checks committee geometry, then consumes its move-only
 checked `DirectReleased` token immediately before the journal `release_batch`
-append. A strict retired non-producer replica corridor requires the complete
+append. Its nonretired projection requires empty Kura custody. Raw-key release
+helpers are test-only; the shipping Queue sink always owns the complete
+strict-absence authorization vector. A strict retired non-producer replica corridor requires the complete
 durable ReleasePending prefix and the exact signed actor/producer distinction.
 Queue proves that the unchanged ordered group is already FIFO-only, checks the
 same direct-release projection without inventing a Queue reservation owner, and

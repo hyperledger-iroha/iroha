@@ -125,8 +125,12 @@ final class SccpSubmitEncoding {
 
   private static void validateCanonicalReplayWitnessArchive(
       final byte[] archive, final String field) {
-    final CompactCursor cursor =
-        new CompactCursor(NoritoHeader.decode(archive, null).payload());
+    final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(archive, null);
+    if (decoded.header().flags() != NoritoHeader.COMPACT_LEN) {
+      throw new IllegalArgumentException(
+          field + " must use the canonical compact-length Norito layout");
+    }
+    final CompactCursor cursor = new CompactCursor(decoded.payload());
     final byte[] expectedRoot = requireFixed32(cursor.field(field + ".expected_shard_root"), field);
     final byte[] priorRecordDigest =
         requireFixed32(cursor.field(field + ".prior_record_digest"), field);
@@ -154,7 +158,7 @@ final class SccpSubmitEncoding {
     }
     SccpReplayV1.rootFromWitness(
         repeatedByte(1, 32),
-        null,
+        new byte[32],
         new SccpReplayV1.Witness(
             expectedRoot, priorRecordDigest, siblingBitmap, siblings));
   }

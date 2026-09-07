@@ -22,7 +22,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            let _ = client.submit_blocking(
+            let _ = client.submit(
                 Register::asset_definition({
                     let __asset_definition_id = AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -103,6 +103,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     .expect("serialize request envelope");
     // POST to the endpoint
     let url = client
+        .client()
         .torii_url
         .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
         .unwrap();

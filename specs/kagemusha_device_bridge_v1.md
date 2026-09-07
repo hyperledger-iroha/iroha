@@ -491,12 +491,12 @@ most 128 KiB. Methods 1 through 11 are, in order: reserve operation ID, accept
 qualification, accept authenticated reply, begin sender transition, prove the
 prepared sender transition, build the terminal envelope, accept the installed
 terminal, recover sender, recover the byte-identical terminal envelope, and
-release the outbox after a closed terminal receipt, and begin observation. The generic Kotlin Android
-SDK uses `org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1`
-`nativeContractV1`, `nativeOpenV1`, and `nativeInvokeV1`; the signed-app
-`KagemushaNativeCoreJniV1` exports delegate through the same native implementation.
-The Java Android facade uses the Kotlin transport. Swift invokes the corresponding
-C exports through the validated native loader. The SDK checks the complete
+release the outbox after a closed terminal receipt, and begin observation. Android callers use the canonical
+Kotlin SDK owner `org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1`
+with `nativeContractV1`, `nativeOpenV1`, and `nativeInvokeV1`. These three SDK JNI
+exports own the coordinator implementation; there is no application-specific JNI
+namespace. The Java Android facade uses the Kotlin transport. Swift invokes the
+corresponding C exports through the validated native loader. The SDK checks the complete
 ten-word ABI inventory, retains unsigned handle bits, serializes calls, and
 correlates all returned identities/envelopes before exposing bounded fields.
 

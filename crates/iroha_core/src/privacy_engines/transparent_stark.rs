@@ -18,7 +18,6 @@ use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
-use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -32,7 +31,6 @@ const GOLDILOCKS_EPSILON_V1: u64 = 0xffff_ffff;
 pub(crate) const GOLDILOCKS_GENERATOR_V1: u64 = 7;
 /// Two-adicity of the Goldilocks multiplicative group.
 pub(crate) const GOLDILOCKS_TWO_ADICITY_V1: u32 = 32;
-const TRANSCRIPT_FRAME_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:frame:v1";
 const TRANSCRIPT_INIT_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:init:v1";
 const TRANSCRIPT_ABSORB_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:absorb:v1";
 const TRANSCRIPT_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:challenge:v1";
@@ -159,6 +157,11 @@ pub(crate) struct TransparentStarkWorkSecurityV1 {
 /// Canonical Goldilocks field element.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GoldilocksFieldV1(pub(crate) u64);
+impl zeroize::Zeroize for GoldilocksFieldV1 {
+    fn zeroize(&mut self) {
+        self.zeroize_v1();
+    }
+}
 impl GoldilocksFieldV1 {
     /// Additive identity.
     pub(crate) const ZERO: Self = Self(0);
@@ -268,6 +271,11 @@ impl GoldilocksFieldV1 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GoldilocksFp4V1 {
     coefficients: [GoldilocksFieldV1; GOLDILOCKS_FP4_DEGREE_V1],
+}
+impl zeroize::Zeroize for GoldilocksFp4V1 {
+    fn zeroize(&mut self) {
+        self.zeroize_v1();
+    }
 }
 impl GoldilocksFp4V1 {
     /// Additive identity.
@@ -1052,29 +1060,6 @@ fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
     GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
         .expect("the pinned Exact12 catalog commitment is canonical")
         .to_le_bytes()
-}
-
-/// Hash an unambiguous domain-and-field frame with SHA-256.
-pub(crate) fn sha256_frame_v1(
-    domain: &[u8],
-    fields: &[&[u8]],
-) -> Result<[u8; 32], TransparentStarkErrorV1> {
-    let domain_len =
-        u16::try_from(domain.len()).map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)?;
-    let field_count =
-        u16::try_from(fields.len()).map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)?;
-    let mut hash = Sha256::new();
-    hash.update(TRANSCRIPT_FRAME_DOMAIN_V1);
-    hash.update(domain_len.to_be_bytes());
-    hash.update(domain);
-    hash.update(field_count.to_be_bytes());
-    for field in fields {
-        let length =
-            u64::try_from(field.len()).map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)?;
-        hash.update(length.to_be_bytes());
-        hash.update(field);
-    }
-    Ok(hash.finalize().into())
 }
 
 /// Hash one fully typed native-STARK frame with the canonical six-lane digest.

@@ -3,6 +3,8 @@
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheSchemeV1")]
 pub enum FheSchemeV1 {
     /// Brakerski/Fan-Vercauteren integer arithmetic scheme.
     #[default]
@@ -17,6 +19,8 @@ pub enum FheSchemeV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheParamLifecycleV1")]
 pub enum FheParamLifecycleV1 {
     /// Parameter set is published and awaiting activation.
     #[default]
@@ -30,6 +34,8 @@ pub enum FheParamLifecycleV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheParamSetV1")]
 pub struct FheParamSetV1 {
     /// Schema version; must equal [`FHE_PARAM_SET_VERSION_V1`].
     pub schema_version: u16,
@@ -247,6 +253,8 @@ impl FheParamSetV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "rounding_mode", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheDeterministicRoundingModeV1")]
 pub enum FheDeterministicRoundingModeV1 {
     /// Always round toward negative infinity.
     Floor,
@@ -262,6 +270,8 @@ pub enum FheDeterministicRoundingModeV1 {
     norito(tag = "refresh_transcript_mode", content = "value")
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::BfvRefreshTranscriptModeV1")]
 pub enum BfvRefreshTranscriptModeV1 {
     /// First-release exact-lift encrypted-zero refresh transcript derivation.
     #[default]
@@ -274,6 +284,8 @@ pub enum BfvRefreshTranscriptModeV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "bound_mode", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::BfvCiphertextBoundModeV1")]
 pub enum BfvCiphertextBoundModeV1 {
     /// Bound is an exact plaintext-modulus residual multiple.
     #[default]
@@ -285,6 +297,8 @@ pub enum BfvCiphertextBoundModeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::BfvRotationRefreshTranscriptV1")]
 pub struct BfvRotationRefreshTranscriptV1 {
     /// Rotation step count whose public refresh key is derived from `seed`.
     pub rotation_steps: u32,
@@ -295,6 +309,8 @@ pub struct BfvRotationRefreshTranscriptV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::BfvBootstrapRefreshTranscriptV1")]
 pub struct BfvBootstrapRefreshTranscriptV1 {
     /// Bootstrap key id whose refresh rounds are derived from `seed`.
     pub key_id: String,
@@ -307,6 +323,8 @@ pub struct BfvBootstrapRefreshTranscriptV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::BfvEvaluationKeyRefreshTranscriptV1")]
 pub struct BfvEvaluationKeyRefreshTranscriptV1 {
     /// Public BFV key used to derive rotation/bootstrap encrypted-zero masks.
     pub public_key: BfvPublicKey,
@@ -725,6 +743,8 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheExecutionPolicyV1")]
 pub struct FheExecutionPolicyV1 {
     /// Schema version; must equal [`FHE_EXECUTION_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -1104,6 +1124,8 @@ impl FheExecutionPolicyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheGovernanceBundleV1")]
 pub struct FheGovernanceBundleV1 {
     /// Schema version; must equal [`FHE_GOVERNANCE_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -1148,6 +1170,8 @@ impl FheGovernanceBundleV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFhePolicyReferenceV1")]
 pub struct SoracloudFhePolicyReferenceV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1`].
     pub schema_version: u16,
@@ -1182,6 +1206,8 @@ impl SoracloudFhePolicyReferenceV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFheGovernancePermissionScopeV1")]
 pub struct SoracloudFheGovernancePermissionScopeV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -1210,6 +1236,8 @@ impl SoracloudFheGovernancePermissionScopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFheGovernedMaterialV1")]
 pub struct SoracloudFheGovernedMaterialV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1`].
     pub schema_version: u16,
@@ -1466,6 +1494,8 @@ impl SoracloudFheGovernedMaterialV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFhePolicyVersionLifecycleV1")]
 pub enum SoracloudFhePolicyVersionLifecycleV1 {
     /// Exact version currently authorized for execution.
     Active,
@@ -1478,6 +1508,8 @@ pub enum SoracloudFhePolicyVersionLifecycleV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFhePolicyVersionStateV1")]
 pub struct SoracloudFhePolicyVersionStateV1 {
     /// Immutable authenticated material.
     pub material: SoracloudFheGovernedMaterialV1,
@@ -1527,6 +1559,8 @@ impl SoracloudFhePolicyVersionStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFhePolicyRecordV1")]
 pub struct SoracloudFhePolicyRecordV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1658,6 +1692,8 @@ impl SoracloudFhePolicyRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFheInputAdmissionProofV1")]
 pub struct SoracloudFheInputAdmissionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -1821,6 +1857,8 @@ impl SoracloudFheInputAdmissionProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFhePublicKeyProofV1")]
 pub struct SoracloudFhePublicKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -1923,6 +1961,8 @@ impl SoracloudFhePublicKeyProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFheBootstrapKeyProofV1")]
 pub struct SoracloudFheBootstrapKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2025,6 +2065,8 @@ impl SoracloudFheBootstrapKeyProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudFheFullBootstrapExecutionProofV1")]
 pub struct SoracloudFheFullBootstrapExecutionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2773,6 +2815,8 @@ pub fn soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds() -> Open
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SecretEnvelopeEncryptionV1")]
 pub enum SecretEnvelopeEncryptionV1 {
     /// Payload is client-encrypted and opaque to validators.
     ClientCiphertext,
@@ -2783,6 +2827,8 @@ pub enum SecretEnvelopeEncryptionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SecretEnvelopeV1")]
 pub struct SecretEnvelopeV1 {
     /// Schema version; must equal [`SECRET_ENVELOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -2866,6 +2912,8 @@ impl SecretEnvelopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextStateMetadataV1")]
 pub struct CiphertextStateMetadataV1 {
     /// MIME-style content hint for encrypted payload decoding.
     pub content_type: String,
@@ -2913,6 +2961,8 @@ impl CiphertextStateMetadataV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextStateRecordV1")]
 pub struct CiphertextStateRecordV1 {
     /// Schema version; must equal [`CIPHERTEXT_STATE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -2969,6 +3019,8 @@ impl CiphertextStateRecordV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheJobOperationV1")]
 pub enum FheJobOperationV1 {
     /// Element-wise homomorphic addition over two or more inputs.
     Add,
@@ -2987,6 +3039,8 @@ pub enum FheJobOperationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheJobInputRefV1")]
 pub struct FheJobInputRefV1 {
     /// Canonical state key of the ciphertext input.
     pub state_key: String,
@@ -3011,6 +3065,8 @@ impl FheJobInputRefV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheJobSpecV1")]
 pub struct FheJobSpecV1 {
     /// Schema version; must equal [`FHE_JOB_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3365,6 +3421,8 @@ impl FheJobSpecV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::DecryptionAuthorityModeV1")]
 pub enum DecryptionAuthorityModeV1 {
     /// Ciphertext keys are client-held; network records request/audit only.
     ClientHeld,
@@ -3375,6 +3433,8 @@ pub enum DecryptionAuthorityModeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::DecryptionAuthorityPolicyV1")]
 pub struct DecryptionAuthorityPolicyV1 {
     /// Schema version; must equal [`DECRYPTION_AUTHORITY_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -3498,6 +3558,8 @@ impl DecryptionAuthorityPolicyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::DecryptionRequestV1")]
 pub struct DecryptionRequestV1 {
     /// Schema version; must equal [`DECRYPTION_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -3659,6 +3721,8 @@ impl DecryptionRequestV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "metadata_level", content = "value"))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextQueryMetadataLevelV1")]
 pub enum CiphertextQueryMetadataLevelV1 {
     /// Return only digest-level key references.
     Minimal,
@@ -3669,6 +3733,8 @@ pub enum CiphertextQueryMetadataLevelV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextQuerySpecV1")]
 pub struct CiphertextQuerySpecV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3723,6 +3789,8 @@ impl CiphertextQuerySpecV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextInclusionProofV1")]
 pub struct CiphertextInclusionProofV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -3779,6 +3847,8 @@ impl CiphertextInclusionProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextQueryResultItemV1")]
 pub struct CiphertextQueryResultItemV1 {
     /// Binding owning the ciphertext state row.
     pub binding_name: Name,
@@ -3843,6 +3913,8 @@ impl CiphertextQueryResultItemV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::CiphertextQueryResponseV1")]
 pub struct CiphertextQueryResponseV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -3919,6 +3991,8 @@ impl CiphertextQueryResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoraDeploymentBundleV1")]
 pub struct SoraDeploymentBundleV1 {
     /// Schema version; must equal [`SORA_DEPLOYMENT_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -4302,3 +4376,6 @@ impl SoraDeploymentBundleV1 {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod captured_fhe_schema_tests;

@@ -10,14 +10,14 @@ import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 export const SCCP_DOMAIN_SORA = 0;
 export const SCCP_DOMAIN_ETH = 1;
 export const SCCP_DOMAIN_BSC = 2;
-export const SCCP_DOMAIN_TRON = 3;
+export const SCCP_DOMAIN_TRON = 5;
 export const SCCP_DOMAIN_TON = 4;
 
 /** Closed first-release SCCP payload codec inventory. */
-export const SCCP_CODEC_CANONICAL_TEXT = 0;
-export const SCCP_CODEC_EVM_ADDRESS20 = 1;
-export const SCCP_CODEC_TRON_ADDRESS21 = 2;
-export const SCCP_CODEC_TON_ACCOUNT36 = 3;
+export const SCCP_CODEC_CANONICAL_TEXT = 1;
+export const SCCP_CODEC_EVM_ADDRESS20 = 2;
+export const SCCP_CODEC_TRON_ADDRESS21 = 5;
+export const SCCP_CODEC_TON_ACCOUNT36 = 7;
 
 export const SCCP_CODEC_KEYS = Object.freeze({
   [SCCP_CODEC_CANONICAL_TEXT]: "canonical_text",
@@ -159,9 +159,9 @@ export const SCCP_REPLAY_BOUNDARIES_V1 = Object.freeze({
   ton_master_mint: 0x32,
   ton_master_burn: 0x33,
   ton_wallet_mint_credit: 0x34,
-  ton_wallet_burn_debit: 0x35,
-  ton_wallet_refund_debit: 0x36,
-  ton_wallet_refund_credit: 0x37,
+  ton_wallet_burn_authorization: 0x35,
+  ton_wallet_burn_lock: 0x36,
+  ton_wallet_burn_refund: 0x37,
 });
 
 export const SCCP_NETWORK_PROFILES = Object.freeze(
@@ -270,7 +270,7 @@ function integer(value, label, minimum, maximum = Number.MAX_SAFE_INTEGER) {
 }
 
 function protocolDomain(value, label) {
-  const domain = integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON);
+  const domain = integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON);
   if (!CLOSED_DOMAINS.has(domain)) {
     throw new TypeError(`${label} is an unsupported or reserved SCCP domain`);
   }
@@ -506,6 +506,17 @@ function replayPrincipalV1(value, label) {
   if (principal.kind === "sora_account" && Object.keys(principal).length === 2) {
     kind = 0;
     bytes = binary(principal.canonicalBytes, `${label}.canonicalBytes`);
+    let canonical;
+    try {
+      canonical = _canonicalAccountIdNoritoValue(bytes, `${label}.canonicalBytes`);
+    } catch (error) {
+      throw new TypeError(`${label}.canonicalBytes is not a canonical AccountId`, {
+        cause: error,
+      });
+    }
+    if (lowerHexBytes(canonical) !== lowerHexBytes(bytes)) {
+      throw new TypeError(`${label}.canonicalBytes is not the canonical AccountId encoding`);
+    }
   } else if (
     (principal.kind === "evm" || principal.kind === "tron") &&
     Object.keys(principal).length === 2
@@ -524,20 +535,15 @@ function replayPrincipalV1(value, label) {
   if (bytes.length === 0 || bytes.length > 0xffff) {
     throw new TypeError(`${label} has an invalid canonical length`);
   }
-  if (kind === 0) {
-    let canonicalBytes;
-    try {
-      canonicalBytes = _canonicalAccountIdNoritoValue(bytes, `${label}.canonicalBytes`);
-    } catch (error) {
-      throw new TypeError(`${label}.canonicalBytes must be an exact canonical SORA AccountId`, {
-        cause: error,
-      });
-    }
-    if (!equalBytes(bytes, canonicalBytes)) {
-      throw new TypeError(`${label}.canonicalBytes must be an exact canonical SORA AccountId`);
-    }
-  }
   return Object.freeze({ kind, bytes });
+}
+
+function replayPrincipalKindForBoundaryV1(boundary) {
+  if ([0x01, 0x02].includes(boundary)) return 0;
+  if ([0x10, 0x11].includes(boundary)) return 1;
+  if ([0x20, 0x21].includes(boundary)) return 2;
+  if (boundary >= 0x30 && boundary <= 0x37) return 3;
+  throw new TypeError("SCCP replay boundary is unsupported");
 }
 
 function replayDomainDirectionIsValidV1(source, target, boundary, actorKind) {
@@ -567,10 +573,14 @@ function replayDomainDirectionIsValidV1(source, target, boundary, actorKind) {
     B.ton_bridge_inbound_mint,
     B.ton_master_mint,
     B.ton_wallet_mint_credit,
-    B.ton_wallet_refund_debit,
-    B.ton_wallet_refund_credit,
   ];
-  const tonOutbound = [B.ton_bridge_outbound_burn, B.ton_master_burn, B.ton_wallet_burn_debit];
+  const tonOutbound = [
+    B.ton_bridge_outbound_burn,
+    B.ton_master_burn,
+    B.ton_wallet_burn_authorization,
+    B.ton_wallet_burn_lock,
+    B.ton_wallet_burn_refund,
+  ];
   return actorKind === 3 &&
     ((tonInbound.includes(boundary) && source === "sora-taira" && target === "ton-mainnet") ||
       (tonOutbound.includes(boundary) && source === "ton-mainnet" && target === "sora-taira"));
@@ -653,6 +663,9 @@ export function sccpReplayRecordDigestV1(value) {
     positive: true,
   });
   const principal = replayPrincipalV1(record.principal, "SCCP replay principal");
+  if (principal.kind !== replayPrincipalKindForBoundaryV1(operation)) {
+    throw new TypeError("SCCP replay operation and principal kind are inconsistent");
+  }
   const auxiliary = replayFixedBytesV1(
     record.auxiliaryIdentitySha256,
     32,
@@ -669,17 +682,17 @@ export function sccpReplayRecordDigestV1(value) {
     Uint8Array.of(0x04, operation),
     auxiliary,
   );
-  return prefixedLowerHex(
-    replayHashV1(
-      SCCP_REPLAY_MAGIC_V1,
-      Uint8Array.of(0x02, operation),
-      replayId,
-      payload,
-      amount,
-      principalDigest,
-      auxiliaryDigest,
-    ),
+  const digest = replayHashV1(
+    SCCP_REPLAY_MAGIC_V1,
+    Uint8Array.of(0x02, operation),
+    replayId,
+    payload,
+    amount,
+    principalDigest,
+    auxiliaryDigest,
   );
+  if (allZero(digest)) throw new TypeError("SCCP occupied record digest must be nonzero");
+  return prefixedLowerHex(digest);
 }
 
 function sccpReplayParentHashV1(level, left, right) {
@@ -711,10 +724,11 @@ function replayKeyBitV1(key, level) {
 
 /**
  * Reconstruct a shard root from one canonical compressed witness.
- * `recordDigest` is null for an empty leaf and the exact digest for membership.
+ * `recordDigest` is exactly 32 zero bytes for an empty leaf and a nonzero
+ * occupied digest for membership.
  */
 export function sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue) {
-  const key = replayFixedBytesV1(keyValue, 32, "SCCP replay key");
+  const key = replayFixedBytesV1(keyValue, 32, "SCCP replay key", { nonzero: false });
   const witness = exactFields(
     witnessValue,
     new Set(["expectedShardRoot", "priorRecordDigest", "siblingBitmap", "siblings"]),
@@ -724,6 +738,7 @@ export function sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue
     witness.expectedShardRoot,
     32,
     "SCCP witness expected shard root",
+    { nonzero: false },
   );
   const prior = replayFixedBytesV1(
     witness.priorRecordDigest,
@@ -739,7 +754,7 @@ export function sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue
   );
   if (bitmap[0] !== 0) throw new TypeError("SCCP witness bitmap has reserved high bits");
   const supplied = array(witness.siblings, "SCCP witness siblings").map((sibling, index) =>
-    replayFixedBytesV1(sibling, 32, `SCCP witness siblings[${index}]`),
+    replayFixedBytesV1(sibling, 32, `SCCP witness siblings[${index}]`, { nonzero: false }),
   );
   const setBits = bitmap.reduce((count, byte) => {
     let current = byte;
@@ -759,14 +774,15 @@ export function sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue
   );
   let suppliedIndex = 0;
   let current;
-  if (recordDigest === null) {
-    if (!allZero(prior)) throw new TypeError("SCCP non-membership witness has an occupied digest");
+  const digest = replayFixedBytesV1(recordDigest, 32, "SCCP prior record digest", {
+    nonzero: false,
+  });
+  if (lowerHexBytes(digest) !== lowerHexBytes(prior)) {
+    throw new TypeError("SCCP witness prior record digest mismatch");
+  }
+  if (allZero(digest)) {
     current = empty[0];
   } else {
-    const digest = replayFixedBytesV1(recordDigest, 32, "SCCP occupied record digest");
-    if (lowerHexBytes(digest) !== lowerHexBytes(prior)) {
-      throw new TypeError("SCCP membership witness record digest mismatch");
-    }
     current = replayHashV1(SCCP_REPLAY_MAGIC_V1, Uint8Array.of(0x11), key, digest);
   }
   for (let level = 0; level < SCCP_REPLAY_SMT_DEPTH_V1; level += 1) {
@@ -788,6 +804,30 @@ export function sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue
     matchesExpectedRoot: lowerHexBytes(current) === lowerHexBytes(expectedRoot),
     shard: key[0],
   });
+}
+
+/** Verify a replay witness against the caller's exact current shard root. */
+export function sccpReplayVerifyAgainstCurrentRootV1(
+  keyValue,
+  recordDigest,
+  witnessValue,
+  currentRootValue,
+) {
+  const currentRoot = replayFixedBytesV1(
+    currentRootValue,
+    32,
+    "SCCP current shard root",
+    { nonzero: false },
+  );
+  const reconstructed = sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue);
+  const currentHex = prefixedLowerHex(currentRoot);
+  if (
+    reconstructed.expectedRoot !== currentHex ||
+    reconstructed.root !== currentHex
+  ) {
+    throw new TypeError("SCCP replay witness does not match the current shard root");
+  }
+  return reconstructed;
 }
 
 function abiWordUnsigned(value, label) {
@@ -1324,6 +1364,9 @@ function parseSoraFinalityAnchor(value, label) {
       "source_network",
       "protocol_version",
       "chain_id_hash",
+      "epoch",
+      "epoch_end_height",
+      "roster_commitment",
       "checkpoint_height",
       "checkpoint_block_hash",
       "checkpoint_context_id",
@@ -1346,11 +1389,25 @@ function parseSoraFinalityAnchor(value, label) {
   if (record.chain_id_hash !== SORA_TAIRA_CHAIN_ID_HASH) {
     throw new TypeError(`${label}.chain_id_hash is not the Taira chain commitment`);
   }
+  const epoch = integer(record.epoch, `${label}.epoch`, 1);
+  const epochEndHeight = integer(
+    record.epoch_end_height,
+    `${label}.epoch_end_height`,
+    0,
+  );
+  const rosterCommitment = bytesFromUpperHex(
+    record.roster_commitment,
+    `${label}.roster_commitment`,
+    32,
+  );
   const checkpointHeight = integer(
     record.checkpoint_height,
     `${label}.checkpoint_height`,
     1,
   );
+  if (checkpointHeight > epochEndHeight) {
+    throw new TypeError(`${label}.checkpoint_height exceeds its epoch end height`);
+  }
   const checkpointHash = bytesFromUpperHex(
     record.checkpoint_block_hash,
     `${label}.checkpoint_block_hash`,
@@ -1366,7 +1423,13 @@ function parseSoraFinalityAnchor(value, label) {
     `${label}.checkpoint_finality_artifact_hash`,
     32,
   );
-  const roles = [chainHash, checkpointHash, contextId, finalityArtifactHash];
+  const roles = [
+    chainHash,
+    rosterCommitment,
+    checkpointHash,
+    contextId,
+    finalityArtifactHash,
+  ];
   if (new Set(roles.map(lowerHexBytes)).size !== roles.length) {
     throw new TypeError(`${label} reuses a consensus hash role`);
   }
@@ -1374,6 +1437,9 @@ function parseSoraFinalityAnchor(value, label) {
     Uint8Array.of(1, NETWORKS["sora-taira"].tag),
     unsignedLittleEndian(protocolVersion, 2, `${label}.protocol_version`),
     chainHash,
+    unsignedLittleEndian(epoch, 8, `${label}.epoch`),
+    unsignedLittleEndian(epochEndHeight, 8, `${label}.epoch_end_height`),
+    rosterCommitment,
     unsignedLittleEndian(checkpointHeight, 8, `${label}.checkpoint_height`),
     checkpointHash,
     contextId,
@@ -2974,7 +3040,7 @@ function parsePayloadProjection(value, expectedDomain, label) {
   );
   integer(transfer.version, `${label}.Transfer.version`, 1, 1);
   integer(transfer.source_domain, `${label}.Transfer.source_domain`, SCCP_DOMAIN_SORA, SCCP_DOMAIN_SORA);
-  const domain = integer(transfer.dest_domain, `${label}.Transfer.dest_domain`, 1, 4);
+  const domain = protocolDomain(transfer.dest_domain, `${label}.Transfer.dest_domain`);
   if (
     domain !== expectedDomain ||
     ![
@@ -3084,7 +3150,7 @@ export function normalizeSccpRecentMessages(value) {
     ) {
       throw new TypeError(`${label}.links do not identify this exact message`);
     }
-    if (integer(record.target_domain, `${label}.target_domain`, 1, 4) !== target.domain) {
+    if (protocolDomain(record.target_domain, `${label}.target_domain`) !== target.domain) {
       throw new TypeError(`${label} profile and domain fields disagree`);
     }
     const optionalText = (field) =>
@@ -3225,7 +3291,7 @@ function validateCanonicalTextBytes(bytes, label) {
 }
 
 function validateCodecValue(record, codecField, valueField, domain = null, label = "SCCP transfer") {
-  const codec = integer(record[codecField], `${label}.${codecField}`, 0, 3);
+  const codec = integer(record[codecField], `${label}.${codecField}`, 1, 7);
   if (!Object.prototype.hasOwnProperty.call(SCCP_CODEC_KEYS, codec)) {
     throw new TypeError(`${label}.${codecField} is unsupported or retired`);
   }
@@ -3354,7 +3420,7 @@ function parsePayload(value, lane = null, label = "SCCP payload") {
   const envelope = exactFields(value, new Set(["Transfer"]), label);
   const transfer = parseTransfer(envelope.Transfer, lane, `${label}.Transfer`);
   const bytes = concatenateBytes(
-    Uint8Array.of(0),
+    Uint8Array.of(2),
     canonicalSccpTransferPayloadBytes(envelope.Transfer),
   );
   return Object.freeze({ envelope, transfer, bytes, kind: "Transfer" });
@@ -3484,7 +3550,7 @@ export function sccpHubCommitmentFromPayload(contextValue, payload) {
 export function canonicalSccpHubCommitmentBytes(commitment) {
   const parsed = parseHubCommitment(commitment);
   return concatenateBytes(
-    Uint8Array.of(1, 0, parsed.context.lane.source.tag, parsed.context.lane.target.tag),
+    Uint8Array.of(1, 5, parsed.context.lane.source.tag, parsed.context.lane.target.tag),
     parsed.context.destinationBindingHash,
     parsed.context.routeConfigurationHash,
     parsed.messageId,

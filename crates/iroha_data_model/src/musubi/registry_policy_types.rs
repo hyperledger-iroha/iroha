@@ -5,6 +5,8 @@
     feature = "json",
     norito(tag = "kind", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiRegistryAdmissionModeV1")]
 pub enum MusubiRegistryAdmissionModeV1 {
     /// Reject new archives, releases, and aliases.
     Closed,
@@ -17,6 +19,8 @@ pub enum MusubiRegistryAdmissionModeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiRegistryPolicyV1")]
 pub struct MusubiRegistryPolicyV1 {
     /// Must equal one.
     pub version: u8,
@@ -40,3 +44,6 @@ impl Default for MusubiRegistryPolicyV1 {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_registry_policy_types_schema_tests;

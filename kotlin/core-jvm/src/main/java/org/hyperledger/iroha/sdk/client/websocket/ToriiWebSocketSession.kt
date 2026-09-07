@@ -6,17 +6,11 @@ import java.util.concurrent.CompletableFuture
 /** Handle for an active Torii WebSocket session. */
 interface ToriiWebSocketSession : AutoCloseable {
 
-    /** Sends a text frame. */
-    fun sendText(data: CharSequence, last: Boolean): CompletableFuture<Void>
+    /** Sends one complete immutable text message. */
+    fun sendText(data: String): CompletableFuture<Void>
 
-    /** Sends a binary frame. */
-    fun sendBinary(data: ByteBuffer, last: Boolean): CompletableFuture<Void>
-
-    /** Sends a ping frame. */
-    fun sendPing(message: ByteBuffer): CompletableFuture<Void>
-
-    /** Sends a pong frame. */
-    fun sendPong(message: ByteBuffer): CompletableFuture<Void>
+    /** Sends an owned copy of one complete binary message. */
+    fun sendBinary(data: ByteBuffer): CompletableFuture<Void>
 
     /** Initiates a close handshake. */
     fun close(statusCode: Int, reason: String): CompletableFuture<Void>

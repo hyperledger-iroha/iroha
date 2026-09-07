@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -29,12 +30,28 @@ import struct
 import subprocess
 import sys
 import time
+from types import ModuleType
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import private_settlement_release_runner as release_runner
+
+
+def _load_source_manifest_tools() -> ModuleType:
+    """Load the canonical release-source checker from this exact checkout."""
+    path = SCRIPT_DIR / "compute_workspace_source_manifest.py"
+    spec = importlib.util.spec_from_file_location("_smoke_workspace_source_manifest", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load workspace source-manifest tools: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_SOURCE_TOOLS = _load_source_manifest_tools()
 
 PROTOCOL = "AtomicPrivateSettlementV1"
 # Hash::prehashed sets the final byte's low marker bit, including empty input.
@@ -613,45 +630,36 @@ def git_bytes(repo: Path, arguments: list[str]) -> bytes:
 
 
 def source_seal(repo: Path, commit: str) -> dict[str, Any]:
-    """Verify the signature, clean index/worktree, and actual bytes of every signed source blob.
+    """Bind the signed commit to the canonical clean release-source identity.
 
-    Comparing actual Git blob IDs also detects tracked edits hidden by
-    assume-unchanged/skip-worktree flags. Symlinks are checked as signed link
-    text; submodules are rejected because their contents need a separate seal.
+    The shared checker verifies raw tracked bytes and accepts gitlinks only as
+    empty directories. Populated documentation checkouts remain unqualified.
     """
     digest(commit, "signed commit", (40, 64))
     require(repo.is_absolute() and repo.resolve(strict=True) == repo, "repository must be canonical")
     require(git_bytes(repo, ["rev-parse", "--show-toplevel"]).decode().strip() == str(repo), "not a repository root")
     require(git_bytes(repo, ["rev-parse", "HEAD"]).decode().strip() == commit, "HEAD differs from exact requested commit")
-    require(not git_bytes(repo, ["status", "--porcelain=v1", "--untracked-files=all"]), "signed source is not clean")
     git_bytes(repo, ["verify-commit", commit])
-    listing = git_bytes(repo, ["ls-tree", "-rz", commit])
-    records = []
-    for entry in listing.split(b"\0"):
-        if not entry:
-            continue
-        metadata, encoded_path = entry.split(b"\t", 1)
-        mode, kind, expected_oid = metadata.decode("ascii").split()
-        relative = os.fsdecode(encoded_path)
-        path = repo / relative
-        require(kind == "blob" and mode in {"100644", "100755", "120000"}, "source submodule/unsupported mode")
-        info = path.lstat()
-        if mode == "120000":
-            require(stat.S_ISLNK(info.st_mode), f"signed symlink replaced: {relative}")
-            data = os.fsencode(os.readlink(path))
-        else:
-            require(stat.S_ISREG(info.st_mode) and bool(info.st_mode & 0o111) == (mode == "100755"),
-                    f"signed source mode changed: {relative}")
-            data = read_bytes(path, limit=2**31, private=False)
-        actual_oid = hashlib.new("sha1" if len(expected_oid) == 40 else "sha256",
-                                 f"blob {len(data)}\0".encode() + data).hexdigest()
-        require(actual_oid == expected_oid, f"signed source bytes changed: {relative}")
-        records.append({"path": relative, "mode": mode, "blob": expected_oid, "sha256": sha(data)})
-    reject_unsigned_cargo_configuration(repo, {record["path"] for record in records})
-    require(records and git_bytes(repo, ["rev-parse", "HEAD"]).decode().strip() == commit
-            and not git_bytes(repo, ["status", "--porcelain=v1", "--untracked-files=all"]), "source changed during sealing")
-    return {"commit": commit, "tree": git_bytes(repo, ["rev-parse", f"{commit}^{{tree}}"]).decode().strip(),
-            "tracked_files": len(records), "source_sha256": sha(canonical(records))}
+    try:
+        identity = _SOURCE_TOOLS.release_source_identity(repo)
+        require(identity["head_commit"] == commit
+                and identity["head_tree"] == identity["index_tree"], "canonical source commit/tree differs")
+        signed_paths = set()
+        for entry in git_bytes(repo, ["ls-tree", "-rz", commit]).split(b"\0"):
+            if not entry:
+                continue
+            metadata, encoded_path = entry.split(b"\t", 1)
+            mode, kind, _ = metadata.decode("ascii").split()
+            require((kind == "blob" and mode in {"100644", "100755", "120000"})
+                    or (kind == "commit" and mode == "160000"), "unsupported source inventory mode")
+            signed_paths.add(os.fsdecode(encoded_path))
+        reject_unsigned_cargo_configuration(repo, signed_paths)
+        repeated = _SOURCE_TOOLS.release_source_identity(repo)
+    except (RuntimeError, subprocess.SubprocessError) as error:
+        raise CampaignError(f"canonical release source refused: {error}") from error
+    require(signed_paths and repeated == identity, "source changed during sealing")
+    return {"commit": commit, "tree": identity["head_tree"], "tracked_files": len(signed_paths),
+            "source_sha256": identity["workspace_source_manifest_sha256"]}
 
 
 def reject_unsigned_cargo_configuration(repo: Path, signed_paths: set[str]) -> None:

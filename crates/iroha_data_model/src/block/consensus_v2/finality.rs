@@ -31,6 +31,10 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot"
+)]
 pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
@@ -121,6 +125,8 @@ impl FinalizedNextEpochSnapshot {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact")]
 pub struct V2FinalityArtifact {
     /// Norito layout version; currently [`V2_FINALITY_ARTIFACT_VERSION`].
     pub format_version: u16,
@@ -1094,6 +1100,7 @@ mod tests {
             .expect("boundary snapshot")
             .leader_seed[0] ^= 0x80;
         let mut forged_roster = canonical.clone();
+        let network_id = forged_roster.height_context.network_id;
         let snapshot = forged_roster
             .height_context
             .next_epoch_snapshot
@@ -1106,7 +1113,17 @@ mod tests {
             .roster
             .sort_by(|left, right| left.validator.cmp(&right.validator));
         snapshot.quorum = DualQuorum::from_roster(&snapshot.roster).expect("mutated valid roster");
+        snapshot.kagemusha_mint_finality_epoch_roster =
+            mint_finality_roster(network_id, snapshot.epoch, &snapshot.roster);
+        snapshot.kagemusha_mint_finality_epoch_id = snapshot
+            .kagemusha_mint_finality_epoch_roster
+            .finality_epoch_id()
+            .expect("mutated paired-Pasta roster remains valid");
         for forged in [forged_seed, forged_roster] {
+            forged
+                .height_context
+                .validate()
+                .expect("forged transition remains structurally valid");
             assert_ne!(forged.height_context.id(), canonical.height_context.id());
             assert_eq!(
                 forged.validate(),
@@ -1115,3 +1132,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_finality_schema_tests;

@@ -14,6 +14,8 @@ import urllib.error
 import uuid
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
@@ -54,6 +56,321 @@ def test_default_image_base_url_uses_pinned_bookworm_build() -> None:
     assert "/latest" not in MODULE.default_image_base_url()
 
 
+@pytest.mark.parametrize("option", ["--image-base-url", "--debian-keyring"])
+def test_parse_args_rejects_retired_trust_overrides(monkeypatch, option) -> None:
+    monkeypatch.setattr(sys, "argv", ["prepare", option, "unused"])
+    with pytest.raises(SystemExit):
+        MODULE.parse_args()
+
+
+@pytest.mark.parametrize("url", [
+    "http://cloud.debian.org/images/cloud/bookworm/20260413-2447/SHA512SUMS",
+    "https://example.invalid/SHA512SUMS",
+    "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS",
+    "https://cloud.debian.org/images/cloud/bookworm/20260413-2447/SHA512SUMS?mirror=1",
+])
+def test_download_rejects_other_sources_even_with_cached_file(monkeypatch, tmp_path, url) -> None:
+    destination = tmp_path / "SHA512SUMS"
+    destination.write_bytes(b"cache")
+    monkeypatch.setattr(MODULE, "open_https_download", lambda _: pytest.fail("network accessed"))
+    with pytest.raises(SystemExit, match="exact repository-pinned official HTTPS"):
+        MODULE.download(url, destination)
+    assert destination.read_bytes() == b"cache"
+
+
+def test_https_download_installs_pinned_redirect_policy_and_timeout(monkeypatch) -> None:
+    class FakeOpener:
+        def open(self, url, timeout):
+            assert url == "https://cloud.debian.org/"
+            assert timeout == 60
+            return "response"
+
+    def build(handler):
+        with pytest.raises(SystemExit, match="exact official HTTPS mirror"):
+            handler.redirect_request(MODULE.urllib.request.Request("https://cloud.debian.org/"), None, 302, "redirect", {}, "https://elsewhere.invalid/")
+        return FakeOpener()
+
+    monkeypatch.setattr(MODULE.urllib.request, "build_opener", build)
+    assert MODULE.open_https_download("https://cloud.debian.org/") == "response"
+
+
+def test_official_archive_redirect_preserves_path_and_allows_one_hop() -> None:
+    initial = f"{MODULE.default_image_base_url()}/{MODULE.debian_archive_name('arm64')}"
+    mirror = initial.replace("https://cloud.debian.org/", "https://laotzu.ftp.acc.umu.se/")
+    handler = MODULE.PinnedDebianRedirects(initial)
+    request = MODULE.urllib.request.Request(initial)
+    redirected = handler.redirect_request(request, None, 302, "Found", {}, mirror)
+    assert redirected.full_url == mirror
+    with pytest.raises(SystemExit, match="exact official HTTPS mirror"):
+        handler.redirect_request(redirected, None, 302, "Found", {}, initial)
+
+
+@pytest.mark.parametrize("substitution", [
+    ("https:", "http:"),
+    ("laotzu.ftp.acc.umu.se", "another.ftp.acc.umu.se"),
+    ("laotzu.ftp.acc.umu.se", "user@laotzu.ftp.acc.umu.se"),
+    ("laotzu.ftp.acc.umu.se", "laotzu.ftp.acc.umu.se:443"),
+    ("20260413-2447/", "latest/"),
+    (".tar.xz", ".tar.xz?alternate=1"),
+    (".tar.xz", ".tar.xz#fragment"),
+])
+def test_official_archive_redirect_rejects_route_changes(substitution) -> None:
+    initial = f"{MODULE.default_image_base_url()}/{MODULE.debian_archive_name('arm64')}"
+    mirror = initial.replace("https://cloud.debian.org/", "https://laotzu.ftp.acc.umu.se/")
+    changed = mirror.replace(*substitution)
+    handler = MODULE.PinnedDebianRedirects(initial)
+    with pytest.raises(SystemExit, match="exact official HTTPS mirror"):
+        handler.redirect_request(MODULE.urllib.request.Request(initial), None, 302, "Found", {}, changed)
+
+
+@pytest.mark.parametrize("entry_style", ["plain", "binary", "relative"])
+def test_checksum_manifest_agrees_with_independent_pin(monkeypatch, tmp_path, entry_style) -> None:
+    name = MODULE.debian_archive_name("arm64")
+    digest = "a" * 128
+    monkeypatch.setattr(MODULE, "PINNED_ARCHIVE_SHA512", {name: digest})
+    prefix = {"plain": " ", "binary": "*", "relative": "*./"}[entry_style]
+    sums = tmp_path / "SHA512SUMS"
+    sums.write_text(f"{digest} {prefix}{name}\n")
+    MODULE.verify_checksum_manifest(sums, name)
+
+
+@pytest.mark.parametrize("failure", ["different", "duplicate", "missing", "short", "nonhex", "extra_field"])
+def test_checksum_manifest_rejects_tampering(monkeypatch, tmp_path, failure) -> None:
+    name = MODULE.debian_archive_name("arm64")
+    digest = "a" * 128
+    monkeypatch.setattr(MODULE, "PINNED_ARCHIVE_SHA512", {name: digest})
+    line = f"{digest}  {name}\n"
+    content = {
+        "different": line.replace(digest, "b" * 128),
+        "duplicate": line + line,
+        "missing": line.replace(name, "another.tar.xz"),
+        "short": line.replace(digest, digest[:-1]),
+        "nonhex": line.replace(digest, "z" * 128),
+        "extra_field": line.rstrip() + " extra\n",
+    }[failure]
+    sums = tmp_path / "SHA512SUMS"
+    sums.write_text(content)
+    with pytest.raises(SystemExit):
+        MODULE.verify_checksum_manifest(sums, name)
+
+
+@pytest.mark.parametrize("failure", [None, "manifest", "archive"])
+def test_main_checks_independent_pin_before_extraction(monkeypatch, tmp_path, failure) -> None:
+    output = tmp_path / "assets"
+    name = MODULE.debian_archive_name("arm64")
+    digest = hashlib.sha512(b"archive").hexdigest()
+    monkeypatch.setattr(MODULE, "PINNED_ARCHIVE_SHA512", {name: digest})
+    monkeypatch.setattr(MODULE, "parse_args", lambda: MODULE.argparse.Namespace(
+        output_dir=output, force=True, print_env=False,
+    ))
+    monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("arm64", "aarch64", "rootfs-aarch64"))
+    monkeypatch.setattr(MODULE, "find_tool", lambda name: name)
+    calls = []
+
+    def download(url, path):
+        assert url == f"{MODULE.default_image_base_url()}/{path.name}"
+        assert path.name in ("SHA512SUMS", name)
+        calls.append(path.name)
+        if path.name == "SHA512SUMS":
+            path.write_text(f"{('b' * 128) if failure == 'manifest' else digest}  {name}\n")
+        else:
+            path.write_bytes(b"bad archive" if failure == "archive" else b"archive")
+
+    def extract(archive, disk, force):
+        assert failure is None
+        assert archive.read_bytes() == b"archive"
+        assert force is True
+        disk.write_bytes(b"disk")
+        calls.append("extract")
+
+    def copy(_disk, rootfs, *_args):
+        rootfs.write_bytes(b"root")
+        calls.append("copy")
+
+    def normalize(*_args):
+        assert not (output / "disk.raw").exists()
+        calls.append("normalize")
+
+    monkeypatch.setattr(MODULE, "download", download)
+    monkeypatch.setattr(MODULE, "extract_disk", extract)
+    monkeypatch.setattr(MODULE, "root_partition_range", lambda _: (0, 4))
+    monkeypatch.setattr(MODULE, "copy_range", copy)
+    monkeypatch.setattr(MODULE, "patch_rootfs", lambda *_args: calls.append("patch"))
+    monkeypatch.setattr(MODULE, "normalize_rootfs", normalize)
+    monkeypatch.setattr(MODULE, "newest_boot_file", lambda _tool, _root, prefix: prefix + "cloud")
+    monkeypatch.setattr(MODULE, "dump_boot_file", lambda *_args: calls.append("dump"))
+    monkeypatch.setattr(MODULE, "write_env", lambda *_args: calls.append("env"))
+    if failure:
+        with pytest.raises(SystemExit, match="SHA512"):
+            MODULE.main()
+        assert "extract" not in calls
+        assert "env" not in calls
+    else:
+        MODULE.main()
+        assert calls == ["SHA512SUMS", name, "extract", "copy", "patch", "normalize", "dump", "dump", "env"]
+
+
+def _write_ext4_geometry(path: Path, size: int) -> None:
+    """Synthetic metadata for control-flow tests, not a valid filesystem."""
+    with path.open("w+b") as out:
+        out.truncate(size)
+        out.seek(1024)
+        superblock = bytearray(1024)
+        struct.pack_into("<H", superblock, 56, 0xEF53)
+        struct.pack_into("<I", superblock, 24, 2)
+        struct.pack_into("<I", superblock, 4, size // 4096)
+        out.write(superblock)
+
+
+@pytest.mark.parametrize("precheck", [0, 1])
+def test_normalize_rootfs_checks_then_resizes_before_truncating(
+    monkeypatch, tmp_path: Path, precheck: int
+) -> None:
+    assert MODULE.NORMALIZED_ROOTFS_BYTES == 1536 * 1024 * 1024
+    target = 1024 * 1024
+    monkeypatch.setattr(MODULE, "NORMALIZED_ROOTFS_BYTES", target)
+    rootfs = tmp_path / "rootfs.ext4"
+    _write_ext4_geometry(rootfs, 2 * target)
+    calls = []
+
+    def fake_run(args, *, check=True):
+        staged = Path(args[1] if args[0] == "resize2fs" else args[-1])
+        assert staged != rootfs
+        assert rootfs.stat().st_size == 2 * target
+        assert staged.stat().st_mode & 0o077 == 0
+        calls.append((args[:-1] if args[0] != "resize2fs" else [args[0], args[-1]], check))
+        if args[0] == "resize2fs":
+            assert staged.stat().st_size == 2 * target
+            assert args[-1] == "1M"
+            # Simulate an implementation that resizes the filesystem but leaves
+            # the containing file's length alone. Truncation must follow this.
+            with staged.open("r+b") as out:
+                out.seek(1024 + 4)
+                out.write(struct.pack("<I", target // 4096))
+        elif len(calls) == 4:
+            assert staged.stat().st_size == target
+        return subprocess.CompletedProcess(args, precheck if len(calls) == 1 else 0, "", "")
+
+    monkeypatch.setattr(MODULE, "run", fake_run)
+    MODULE.normalize_rootfs(rootfs, "e2fsck", "resize2fs")
+
+    assert rootfs.stat().st_size == target
+    assert calls == [
+        (["e2fsck", "-f", "-p"], False),
+        (["e2fsck", "-f", "-n"], True),
+        (["resize2fs", "1M"], True),
+        (["e2fsck", "-f", "-n"], True),
+    ]
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("failure", ["precheck2", "precheck4", "precheck8", "clean_check", "resize", "geometry", "short_file", "final_check", "replaced"])
+def test_normalize_rootfs_failure_preserves_original(
+    monkeypatch, tmp_path: Path, failure: str
+) -> None:
+    target = 1024 * 1024
+    monkeypatch.setattr(MODULE, "NORMALIZED_ROOTFS_BYTES", target)
+    rootfs = tmp_path / "rootfs.ext4"
+    _write_ext4_geometry(rootfs, 2 * target)
+    original = rootfs.read_bytes()
+    calls = []
+
+    def fake_run(args, *, check=True):
+        calls.append(args)
+        staged = Path(args[1] if args[0] == "resize2fs" else args[-1])
+        if len(calls) == 1 and failure.startswith("precheck"):
+            return subprocess.CompletedProcess(args, int(failure[-1]), "", "fsck failed")
+        if (failure, len(calls)) in [("clean_check", 2), ("resize", 3), ("final_check", 4)]:
+            raise subprocess.CalledProcessError(4, args, stderr="failed")
+        if args[0] == "resize2fs":
+            if failure == "replaced":
+                staged.unlink()
+                _write_ext4_geometry(staged, target)
+            elif failure != "geometry":
+                with staged.open("r+b") as out:
+                    out.seek(1024 + 4)
+                    out.write(struct.pack("<I", target // 4096))
+                    if failure == "short_file":
+                        out.truncate(target // 2)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(MODULE, "run", fake_run)
+    with pytest.raises((SystemExit, subprocess.CalledProcessError)):
+        MODULE.normalize_rootfs(rootfs, "e2fsck", "resize2fs")
+    assert rootfs.read_bytes() == original
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("field,value", [(56, 0), (24, 32), (4, 0), (4, 0xFFFFFFFF)])
+def test_ext4_geometry_rejects_invalid_or_unbacked_size(tmp_path: Path, field, value) -> None:
+    path = tmp_path / "rootfs.ext4"
+    _write_ext4_geometry(path, 8192)
+    with path.open("r+b") as out:
+        out.seek(1024 + field)
+        out.write(struct.pack("<H" if field == 56 else "<I", value))
+        out.flush()
+        with pytest.raises(SystemExit):
+            MODULE.ext4_filesystem_bytes(out)
+
+
+def test_ext4_geometry_honors_64bit_feature_flag(tmp_path: Path) -> None:
+    path = tmp_path / "rootfs.ext4"
+    _write_ext4_geometry(path, 8192)
+    with path.open("r+b") as out:
+        out.seek(1024 + 336)
+        out.write(struct.pack("<I", 1))
+        out.flush()
+        assert MODULE.ext4_filesystem_bytes(out) == 8192
+        out.seek(1024 + 96)
+        out.write(struct.pack("<I", 0x80))
+        out.flush()
+        with pytest.raises(SystemExit, match="exceeds"):
+            MODULE.ext4_filesystem_bytes(out)
+
+
+def test_normalize_rootfs_rejects_symlink_before_tools(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "original.ext4"
+    target.write_bytes(b"untouched")
+    rootfs = tmp_path / "rootfs.ext4"
+    rootfs.symlink_to(target)
+    monkeypatch.setattr(MODULE, "run", lambda *_args, **_kwargs: pytest.fail("tool invoked"))
+    with pytest.raises(SystemExit, match="non-symlinked"):
+        MODULE.normalize_rootfs(rootfs, "e2fsck", "resize2fs")
+    assert target.read_bytes() == b"untouched"
+
+
+def test_main_normalization_failure_removes_stale_env_and_stops_publication(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "assets"
+    output.mkdir(mode=0o700)
+    (output / "env.sh").write_text("stale success")
+    monkeypatch.setattr(MODULE, "parse_args", lambda: MODULE.argparse.Namespace(
+        output_dir=output, force=False, print_env=True,
+    ))
+    monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("arm64", "aarch64", "rootfs-aarch64"))
+    monkeypatch.setattr(MODULE, "find_tool", lambda name: name)
+    for name in ("verify_checksum_manifest", "verify_pinned_archive", "patch_rootfs"):
+        monkeypatch.setattr(MODULE, name, lambda *_args: None)
+    monkeypatch.setattr(MODULE, "download", lambda _url, path: path.write_bytes(b"download"))
+    monkeypatch.setattr(MODULE, "extract_disk", lambda _archive, disk, _force: disk.write_bytes(b"disk"))
+    monkeypatch.setattr(MODULE, "copy_range", lambda _disk, rootfs, *_args: rootfs.write_bytes(b"extracted root"))
+    monkeypatch.setattr(MODULE, "root_partition_range", lambda _: (0, 1))
+
+    def fail_normalization(*_args):
+        assert not (output / "disk.raw").exists()
+        raise SystemExit("normalization failed")
+
+    monkeypatch.setattr(MODULE, "normalize_rootfs", fail_normalization)
+    for name in ("newest_boot_file", "dump_boot_file", "write_env"):
+        monkeypatch.setattr(MODULE, name, lambda *_args: pytest.fail("published after failed resize"))
+    with pytest.raises(SystemExit, match="normalization failed"):
+        MODULE.main()
+    assert not (output / "env.sh").exists()
+    assert (output / MODULE.debian_archive_name("arm64")).read_bytes() == b"download"
+    assert (output / "rootfs-aarch64.ext4").read_bytes() == b"extracted root"
+
+
 def test_debian_archive_name_uses_pinned_build_suffix() -> None:
     assert (
         MODULE.debian_archive_name("arm64")
@@ -72,13 +389,11 @@ def test_parse_args_uses_host_arch_and_tmpdir_for_default_output(
 
     owner_tag = str(os.geteuid()) if hasattr(os, "geteuid") else "user"
     assert args.output_dir == tmp_path / f"iroha-inrou-portable-assets-{owner_tag}" / "aarch64"
-    assert args.image_base_url == MODULE.default_image_base_url()
     assert args.force is False
     assert args.print_env is False
 
 
 def test_parse_args_accepts_overrides(monkeypatch, tmp_path: Path) -> None:
-    keyring = tmp_path / "archive.gpg"
     output_dir = tmp_path / "assets"
     monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("amd64", "x86_64", "rootfs-x86_64"))
     monkeypatch.setattr(
@@ -90,10 +405,6 @@ def test_parse_args_accepts_overrides(monkeypatch, tmp_path: Path) -> None:
             str(output_dir),
             "--force",
             "--print-env",
-            "--image-base-url",
-            "https://images.example/debian",
-            "--debian-keyring",
-            str(keyring),
         ],
     )
 
@@ -102,8 +413,6 @@ def test_parse_args_accepts_overrides(monkeypatch, tmp_path: Path) -> None:
     assert args.output_dir == output_dir
     assert args.force is True
     assert args.print_env is True
-    assert args.image_base_url == "https://images.example/debian"
-    assert args.debian_keyring == keyring
 
 
 def test_host_asset_arch_maps_x86_64(monkeypatch) -> None:
@@ -157,25 +466,8 @@ def test_find_tool_reports_missing_tool(monkeypatch) -> None:
         raise AssertionError("missing e2fsprogs tool was accepted")
 
 
-def test_find_gpg_tool_prefers_gpgv_then_gpg(monkeypatch) -> None:
-    monkeypatch.setattr(
-        MODULE.shutil,
-        "which",
-        lambda name: "/usr/bin/gpg" if name == "gpg" else None,
-    )
-
-    assert MODULE.find_gpg_tool() == "/usr/bin/gpg"
 
 
-def test_find_gpg_tool_reports_missing_verifier(monkeypatch) -> None:
-    monkeypatch.setattr(MODULE.shutil, "which", lambda _name: None)
-
-    try:
-        MODULE.find_gpg_tool()
-    except SystemExit as error:
-        assert "required GPG verifier" in str(error)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("missing GPG verifier was accepted")
 
 
 def test_run_invokes_subprocess_with_text_capture(monkeypatch) -> None:
@@ -199,83 +491,12 @@ def test_run_invokes_subprocess_with_text_capture(monkeypatch) -> None:
     assert calls == [(["tool", "--flag"], False, True, True)]
 
 
-def test_resolve_debian_keyrings_rejects_missing_explicit_path(tmp_path: Path) -> None:
-    missing = tmp_path / "missing.gpg"
-
-    try:
-        MODULE.resolve_debian_keyrings(missing)
-    except SystemExit as error:
-        assert "--debian-keyring" in str(error)
-        assert str(missing) in str(error)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("missing explicit keyring path was accepted")
 
 
-def test_resolve_debian_keyrings_accepts_pathsep_env(
-    monkeypatch, tmp_path: Path
-) -> None:
-    keyring_a = tmp_path / "archive.gpg"
-    keyring_b = tmp_path / "cloud.gpg"
-    keyring_a.write_bytes(b"archive")
-    keyring_b.write_bytes(b"cloud")
-    monkeypatch.setenv(
-        MODULE.DEBIAN_KEYRING_ENV,
-        os.pathsep.join([str(tmp_path / "missing.gpg"), str(keyring_a), str(keyring_b)]),
-    )
-
-    assert MODULE.resolve_debian_keyrings() == [
-        keyring_a.resolve(),
-        keyring_b.resolve(),
-    ]
 
 
-def test_resolve_debian_keyrings_reports_when_no_keyrings_exist(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv(MODULE.DEBIAN_KEYRING_ENV, raising=False)
-    monkeypatch.setattr(
-        MODULE,
-        "DEBIAN_KEYRING_CANDIDATES",
-        (str(tmp_path / "missing-archive.gpg"), str(tmp_path / "missing-cloud.gpg")),
-    )
-
-    try:
-        MODULE.resolve_debian_keyrings()
-    except SystemExit as error:
-        message = str(error)
-        assert "Debian SHA512SUMS signature verification requires" in message
-        assert MODULE.DEBIAN_KEYRING_ENV in message
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("missing Debian keyrings were accepted")
 
 
-def test_verify_signed_sums_uses_gpgv_with_all_keyrings(
-    monkeypatch, tmp_path: Path
-) -> None:
-    calls = []
-
-    def fake_run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(MODULE, "run", fake_run)
-    sums = tmp_path / "SHA512SUMS"
-    signature = tmp_path / "SHA512SUMS.sign"
-    keyrings = [tmp_path / "archive.gpg", tmp_path / "cloud.gpg"]
-
-    MODULE.verify_signed_sums(sums, signature, keyrings, "/usr/bin/gpgv")
-
-    assert calls == [
-        [
-            "/usr/bin/gpgv",
-            "--keyring",
-            str(keyrings[0]),
-            "--keyring",
-            str(keyrings[1]),
-            str(signature),
-            str(sums),
-        ]
-    ]
 
 
 def test_download_reuses_existing_destination_without_network(monkeypatch, tmp_path: Path) -> None:
@@ -285,9 +506,9 @@ def test_download_reuses_existing_destination_without_network(monkeypatch, tmp_p
     def fail_urlopen(_url: str):
         raise AssertionError("download should not fetch existing destination")
 
-    monkeypatch.setattr(MODULE.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(MODULE, "open_https_download", fail_urlopen)
 
-    MODULE.download("https://example.invalid/asset.tar.xz", destination)
+    MODULE.download(f"{MODULE.default_image_base_url()}/SHA512SUMS", destination)
 
     assert destination.read_bytes() == b"existing"
 
@@ -308,12 +529,12 @@ def test_download_writes_temporary_file_then_replaces_destination(
         calls.append(url)
         return FakeResponse(b"downloaded")
 
-    monkeypatch.setattr(MODULE.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(MODULE, "open_https_download", fake_urlopen)
     destination = tmp_path / "nested" / "asset.tar.xz"
 
-    MODULE.download("https://example.invalid/asset.tar.xz", destination)
+    MODULE.download(f"{MODULE.default_image_base_url()}/SHA512SUMS", destination)
 
-    assert calls == ["https://example.invalid/asset.tar.xz"]
+    assert calls == [f"{MODULE.default_image_base_url()}/SHA512SUMS"]
     assert destination.read_bytes() == b"downloaded"
     assert not destination.with_suffix(".xz.tmp").exists()
 
@@ -327,10 +548,10 @@ def test_download_rejects_symlinked_destination(monkeypatch, tmp_path: Path) -> 
     def fail_urlopen(_url: str):
         raise AssertionError("symlinked destination must fail before network access")
 
-    monkeypatch.setattr(MODULE.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(MODULE, "open_https_download", fail_urlopen)
 
     try:
-        MODULE.download("https://example.invalid/asset.tar.xz", destination)
+        MODULE.download(f"{MODULE.default_image_base_url()}/SHA512SUMS", destination)
     except SystemExit as error:
         assert "symlinked download destination" in str(error)
     else:  # pragma: no cover - defensive assertion
@@ -353,9 +574,9 @@ def test_download_ignores_preplanted_legacy_temporary_symlink(
     destination = tmp_path / "asset.tar.xz"
     destination.with_suffix(".xz.tmp").symlink_to(target)
     response = FakeResponse(b"verified-download")
-    monkeypatch.setattr(MODULE.urllib.request, "urlopen", lambda _url: response)
+    monkeypatch.setattr(MODULE, "open_https_download", lambda _url: response)
 
-    MODULE.download("https://example.invalid/asset.tar.xz", destination)
+    MODULE.download(f"{MODULE.default_image_base_url()}/SHA512SUMS", destination)
 
     assert destination.read_bytes() == b"verified-download"
     assert target.read_bytes() == b"keep"
@@ -451,96 +672,14 @@ def test_verify_pinned_archive_rejects_unpinned_archive(tmp_path: Path) -> None:
         raise AssertionError("unsigned unpinned archive was accepted")
 
 
-def test_verify_signed_sums_uses_gpg_without_default_keyring(
-    monkeypatch, tmp_path: Path
-) -> None:
-    calls = []
-
-    def fake_run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(MODULE, "run", fake_run)
-    sums = tmp_path / "SHA512SUMS"
-    signature = tmp_path / "SHA512SUMS.sign"
-    keyring = tmp_path / "archive.gpg"
-
-    MODULE.verify_signed_sums(sums, signature, [keyring], "/usr/bin/gpg")
-
-    assert calls == [
-        [
-            "/usr/bin/gpg",
-            "--batch",
-            "--no-default-keyring",
-            "--keyring",
-            str(keyring),
-            "--verify",
-            str(signature),
-            str(sums),
-        ]
-    ]
 
 
-def test_verify_signed_sums_reports_verifier_failure(
-    monkeypatch, tmp_path: Path
-) -> None:
-    def fake_run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(1, args, stderr="bad signature")
-
-    monkeypatch.setattr(MODULE, "run", fake_run)
-    sums = tmp_path / "SHA512SUMS"
-    signature = tmp_path / "SHA512SUMS.sign"
-    keyring = tmp_path / "archive.gpg"
-
-    try:
-        MODULE.verify_signed_sums(sums, signature, [keyring], "/usr/bin/gpgv")
-    except SystemExit as error:
-        assert "failed to verify Debian SHA512SUMS signature" in str(error)
-        assert "bad signature" in str(error)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("GPG verification failure was accepted")
 
 
-def test_verify_archive_accepts_star_prefixed_relative_filename(tmp_path: Path) -> None:
-    archive = tmp_path / "debian-12-genericcloud-amd64-20260413-2447.tar.xz"
-    archive.write_bytes(b"archive")
-    sums = tmp_path / "SHA512SUMS"
-    sums.write_text(
-        f"{hashlib.sha512(b'archive').hexdigest()}  *./{archive.name}\n",
-        encoding="utf-8",
-    )
-
-    MODULE.verify_archive(archive, sums)
 
 
-def test_verify_archive_rejects_missing_archive_entry(tmp_path: Path) -> None:
-    archive = tmp_path / "debian-12-genericcloud-amd64-20260413-2447.tar.xz"
-    archive.write_bytes(b"archive")
-    sums = tmp_path / "SHA512SUMS"
-    sums.write_text(f"{hashlib.sha512(b'archive').hexdigest()}  other.tar.xz\n", encoding="utf-8")
-
-    try:
-        MODULE.verify_archive(archive, sums)
-    except SystemExit as error:
-        assert "does not list" in str(error)
-        assert archive.name in str(error)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("archive missing from SHA512SUMS was accepted")
 
 
-def test_verify_archive_rejects_checksum_mismatch(tmp_path: Path) -> None:
-    archive = tmp_path / "debian-12-genericcloud-amd64-20260413-2447.tar.xz"
-    archive.write_bytes(b"archive")
-    sums = tmp_path / "SHA512SUMS"
-    sums.write_text(f"{'0' * 128}  {archive.name}\n", encoding="utf-8")
-
-    try:
-        MODULE.verify_archive(archive, sums)
-    except SystemExit as error:
-        assert "SHA512 mismatch" in str(error)
-        assert str(archive) in str(error)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("archive with mismatched SHA512SUMS digest was accepted")
 
 
 def test_extract_disk_rejects_archive_without_disk_raw(tmp_path: Path) -> None:
@@ -772,283 +911,5 @@ def test_dump_boot_file_replaces_existing_destination(monkeypatch, tmp_path: Pat
     ]
 
 
-def test_main_orchestrates_signed_and_pinned_asset_flow(monkeypatch, tmp_path: Path) -> None:
-    output_dir = tmp_path / "assets"
-    keyring = tmp_path / "archive.gpg"
-    calls = []
-
-    monkeypatch.setattr(
-        MODULE,
-        "parse_args",
-        lambda: MODULE.argparse.Namespace(
-            output_dir=output_dir,
-            force=True,
-            print_env=True,
-            image_base_url="https://images.example/base///",
-            debian_keyring=keyring,
-        ),
-    )
-    monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("amd64", "x86_64", "rootfs-x86_64"))
-    monkeypatch.setattr(MODULE, "find_tool", lambda name: f"/tools/{name}")
-    monkeypatch.setattr(
-        MODULE,
-        "find_gpg_tool",
-        lambda: calls.append(("find_gpg",)) or "/tools/gpgv",
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "resolve_debian_keyrings",
-        lambda configured: calls.append(("resolve_keyrings", configured)) or [keyring],
-    )
-
-    def record_download(url: str, destination: Path) -> None:
-        calls.append(("download", url, destination.name))
-
-    monkeypatch.setattr(MODULE, "download", record_download)
-    monkeypatch.setattr(
-        MODULE,
-        "verify_signed_sums",
-        lambda sums, signature, keyrings, verifier: calls.append(
-            (
-                "verify_signature",
-                sums.name,
-                signature.name,
-                keyrings,
-                verifier,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_archive",
-        lambda archive, sums: calls.append(("verify_archive", archive.name, sums.name)),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_pinned_archive",
-        lambda archive: calls.append(("verify_pinned", archive.name)),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "extract_disk",
-        lambda archive, disk, force: calls.append(("extract_disk", archive.name, disk.name, force)),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "root_partition_range",
-        lambda disk: calls.append(("root_range", disk.name)) or (64, 128),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "copy_range",
-        lambda disk, rootfs, offset, length, force: calls.append(
-            ("copy_range", disk.name, rootfs.name, offset, length, force)
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "patch_rootfs",
-        lambda rootfs, label, debugfs, tune2fs: calls.append(
-            ("patch_rootfs", rootfs.name, label, debugfs, tune2fs)
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "newest_boot_file",
-        lambda debugfs, rootfs, prefix: calls.append(
-            ("newest_boot_file", debugfs, rootfs.name, prefix)
-        )
-        or f"{prefix}cloud",
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "dump_boot_file",
-        lambda debugfs, rootfs, source, destination: calls.append(
-            ("dump_boot_file", debugfs, rootfs.name, source, destination.name)
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "write_env",
-        lambda out, kernel, rootfs, initrd, print_env: calls.append(
-            ("write_env", out, kernel.name, rootfs.name, initrd.name, print_env)
-        ),
-    )
-
-    MODULE.main()
-
-    archive_name = MODULE.debian_archive_name("amd64")
-    assert output_dir.is_dir()
-    assert calls == [
-        ("find_gpg",),
-        ("resolve_keyrings", keyring),
-        ("download", "https://images.example/base/SHA512SUMS", "SHA512SUMS"),
-        ("download", "https://images.example/base/SHA512SUMS.sign", "SHA512SUMS.sign"),
-        ("verify_signature", "SHA512SUMS", "SHA512SUMS.sign", [keyring], "/tools/gpgv"),
-        ("download", f"https://images.example/base/{archive_name}", archive_name),
-        ("verify_archive", archive_name, "SHA512SUMS"),
-        ("verify_pinned", archive_name),
-        ("extract_disk", archive_name, "disk.raw", True),
-        ("root_range", "disk.raw"),
-        ("copy_range", "disk.raw", "rootfs-x86_64.ext4", 64, 128, True),
-        ("patch_rootfs", "rootfs-x86_64.ext4", "rootfs-x86_64", "/tools/debugfs", "/tools/tune2fs"),
-        ("newest_boot_file", "/tools/debugfs", "rootfs-x86_64.ext4", "vmlinuz-"),
-        ("newest_boot_file", "/tools/debugfs", "rootfs-x86_64.ext4", "initrd.img-"),
-        (
-            "dump_boot_file",
-            "/tools/debugfs",
-            "rootfs-x86_64.ext4",
-            "vmlinuz-cloud",
-            "vmlinux-x86_64",
-        ),
-        (
-            "dump_boot_file",
-            "/tools/debugfs",
-            "rootfs-x86_64.ext4",
-            "initrd.img-cloud",
-            "initrd-x86_64.img",
-        ),
-        (
-            "write_env",
-            output_dir.resolve(),
-            "vmlinux-x86_64",
-            "rootfs-x86_64.ext4",
-            "initrd-x86_64.img",
-            True,
-        ),
-    ]
 
 
-def test_main_requires_pinned_digest_after_mandatory_signature_verification(
-    monkeypatch, tmp_path: Path
-) -> None:
-    output_dir = tmp_path / "assets"
-    calls = []
-
-    monkeypatch.setattr(
-        MODULE,
-        "parse_args",
-        lambda: MODULE.argparse.Namespace(
-            output_dir=output_dir,
-            force=False,
-            print_env=False,
-            image_base_url="https://images.example/base",
-            debian_keyring=None,
-        ),
-    )
-    monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("arm64", "aarch64", "rootfs-aarch64"))
-    monkeypatch.setattr(MODULE, "find_tool", lambda name: f"/tools/{name}")
-    monkeypatch.setattr(MODULE, "find_gpg_tool", lambda: "/tools/gpgv")
-    monkeypatch.setattr(
-        MODULE,
-        "resolve_debian_keyrings",
-        lambda _configured: [tmp_path / "debian.gpg"],
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "download",
-        lambda url, destination: calls.append(("download", url, destination.name)),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_signed_sums",
-        lambda sums, signature, keyrings, verifier: calls.append(
-            ("verify_signature", sums.name, signature.name, keyrings[0].name, verifier)
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_archive",
-        lambda archive, sums: calls.append(("verify_archive", archive.name, sums.name)),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_pinned_archive",
-        lambda archive: calls.append(("verify_pinned", archive.name)),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "extract_disk",
-        lambda archive, disk, force: calls.append(("extract_disk", force)),
-    )
-    monkeypatch.setattr(MODULE, "root_partition_range", lambda _disk: (0, 1))
-    monkeypatch.setattr(
-        MODULE,
-        "copy_range",
-        lambda disk, rootfs, offset, length, force: calls.append(("copy_range", force)),
-    )
-    monkeypatch.setattr(MODULE, "patch_rootfs", lambda *_args: None)
-    monkeypatch.setattr(
-        MODULE,
-        "newest_boot_file",
-        lambda _debugfs, _rootfs, prefix: "vmlinuz-cloud"
-        if prefix == "vmlinuz-"
-        else "initrd.img-cloud",
-    )
-    monkeypatch.setattr(MODULE, "dump_boot_file", lambda *_args: None)
-    monkeypatch.setattr(MODULE, "write_env", lambda *_args: None)
-
-    MODULE.main()
-
-    archive_name = MODULE.debian_archive_name("arm64")
-    assert calls == [
-        ("download", "https://images.example/base/SHA512SUMS", "SHA512SUMS"),
-        ("download", "https://images.example/base/SHA512SUMS.sign", "SHA512SUMS.sign"),
-        ("verify_signature", "SHA512SUMS", "SHA512SUMS.sign", "debian.gpg", "/tools/gpgv"),
-        ("download", f"https://images.example/base/{archive_name}", archive_name),
-        ("verify_archive", archive_name, "SHA512SUMS"),
-        ("verify_pinned", archive_name),
-        ("extract_disk", True),
-        ("copy_range", True),
-    ]
-
-
-def test_main_rejects_missing_debian_sums_signature(monkeypatch, tmp_path: Path) -> None:
-    output_dir = tmp_path / "assets"
-    requested_urls = []
-
-    monkeypatch.setattr(
-        MODULE,
-        "parse_args",
-        lambda: MODULE.argparse.Namespace(
-            output_dir=output_dir,
-            force=False,
-            print_env=False,
-            image_base_url="https://images.example/base",
-            debian_keyring=None,
-        ),
-    )
-    monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("amd64", "x86_64", "rootfs-x86_64"))
-    monkeypatch.setattr(MODULE, "find_tool", lambda name: f"/tools/{name}")
-    monkeypatch.setattr(MODULE, "find_gpg_tool", lambda: "/tools/gpgv")
-    monkeypatch.setattr(
-        MODULE,
-        "resolve_debian_keyrings",
-        lambda _configured: [tmp_path / "debian.gpg"],
-    )
-
-    def reject_signature(url: str, _destination: Path) -> None:
-        requested_urls.append(url)
-        if url.endswith("/SHA512SUMS.sign"):
-            raise urllib.error.HTTPError(url, 404, "not found", {}, None)
-
-    monkeypatch.setattr(MODULE, "download", reject_signature)
-    monkeypatch.setattr(
-        MODULE,
-        "verify_signed_sums",
-        lambda *_args: (_ for _ in ()).throw(
-            AssertionError("missing signature must fail before GPG verification")
-        ),
-    )
-
-    try:
-        MODULE.main()
-    except urllib.error.HTTPError as error:
-        assert error.code == 404
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("missing Debian SHA512SUMS signature was accepted")
-
-    assert requested_urls == [
-        "https://images.example/base/SHA512SUMS",
-        "https://images.example/base/SHA512SUMS.sign",
-    ]

@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.sorafs
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
@@ -160,7 +162,7 @@ class SorafsReputationClientTest {
         }
         val partialAuth = ToriiCanonicalRequestAuth(
             "reputation-reader@sora",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             TIMESTAMP_MS,
             null,
         )
@@ -364,7 +366,7 @@ class SorafsReputationClientTest {
     private fun auth(keyPair: KeyPair, nonceSuffix: String): ToriiCanonicalRequestAuth =
         ToriiCanonicalRequestAuth(
             "reputation-reader@sora",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             TIMESTAMP_MS,
             "nonce-$nonceSuffix",
         )

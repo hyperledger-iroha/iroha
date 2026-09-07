@@ -153,7 +153,7 @@ impl<'a> TransferRowBinding<'a> {
 
     /// Prepare exact pair fields from this row and explicit public statement context.
     ///
-    /// Key bytes are the full canonical `asset/{asset}/{account}` UTF-8 key.
+    /// Key bytes are the complete canonical `FastpqBalanceKeyV1` Norito frame.
     /// Asset and both accounts use their exact Norito `Encode::encode` bytes.
     /// Call bytes are `batch_hash[32] || LE32(transcript) || LE32(delta) ||
     /// LE32(context_len) || context`; authority bytes are `authority_digest[32]
@@ -274,7 +274,10 @@ pub fn bind_canonical_rows<'a>(
                     TransferRowRole::Debit => &delta.from_account,
                     TransferRowRole::Credit => &delta.to_account,
                 };
-                let key = format!("asset/{}/{account}", delta.asset_definition).into_bytes();
+                let key = iroha_data_model::fastpq::transfer_balance_key(
+                    &delta.asset_definition,
+                    account,
+                )?;
                 let (before, after) = participant_balances(delta, role);
                 if last_values.get(&key).is_some_and(|value| *value != before) {
                     return Err(invariant("transfer repeated-key balances do not chain"));
@@ -499,7 +502,11 @@ mod tests {
                     };
                     let (before, after) = participant_balances(delta, role);
                     rows.push(StateTransition::new(
-                        format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+                        iroha_data_model::fastpq::transfer_balance_key(
+                            &delta.asset_definition,
+                            account,
+                        )
+                        .unwrap(),
                         before.to_le_bytes().to_vec(),
                         after.to_le_bytes().to_vec(),
                         OperationKind::Transfer,

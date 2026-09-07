@@ -53,11 +53,12 @@ use super::{
     },
     io_air::ZkX509IoEndpointV1,
 };
-#[cfg(test)]
-use crate::privacy_engines::transparent_stark::goldilocks_digest384_frame_v1;
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+};
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::{
+    GoldilocksDigest384V1, goldilocks_digest384_frame_v1,
 };
 use thiserror::Error;
 /// Stable identity of the native RFC adapter integrated only through MAIN.

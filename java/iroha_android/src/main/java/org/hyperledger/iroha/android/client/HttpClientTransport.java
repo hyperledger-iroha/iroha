@@ -56,10 +56,6 @@ import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels;
-import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
-import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
 import org.hyperledger.iroha.android.crypto.Blake3;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -459,26 +455,6 @@ public final class HttpClientTransport implements IrohaClient {
     final TransportRequest request =
         buildJsonGetRequest("/v1/ram-lfe/program-policies", Collections.emptyMap());
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
-  }
-
-  /** Fetches the authoritative protocol-v4 Sumeragi status snapshot. */
-  @Override
-  public CompletableFuture<SumeragiV2Status> getSumeragiStatus() {
-    return fetchExactJson(
-        buildExactOperatorJsonGetRequest(
-            "/v1/sumeragi/status", SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
-        SumeragiStatusModels::parseStatus,
-        "Sumeragi status");
-  }
-
-  /** Fetches operational Sumeragi evidence from its separate diagnostics route. */
-  @Override
-  public CompletableFuture<SumeragiDiagnosticsStatus> getSumeragiDiagnostics() {
-    return fetchExactJson(
-        buildExactOperatorJsonGetRequest(
-            "/v1/sumeragi/diagnostics", SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
-        SumeragiDiagnosticsModels::parseDiagnostics,
-        "Sumeragi diagnostics");
   }
 
   /** Fetch the exact result-bearing {@code SignedBlockWire} committed at {@code height}. */
@@ -2433,41 +2409,6 @@ public final class HttpClientTransport implements IrohaClient {
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
-    return builder.build();
-  }
-
-  private TransportRequest buildExactOperatorJsonGetRequest(
-      final String path, final long maximumResponseBytes) {
-    for (final String name : config.defaultHeaders().keySet()) {
-      if (name.equalsIgnoreCase("Accept")) {
-        throw new IllegalArgumentException(
-            "Accept must not be overridden for exact JSON requests");
-      }
-    }
-    OperatorRequestSigner.requireGeneratedAuth(config.defaultHeaders());
-    final URI target = resolvePath(path);
-    final Map<String, String> operatorHeaders =
-        OperatorRequestSigner.buildHeaders(
-            config.requireOperatorSigningContext(), "GET", target, new byte[0]);
-    final TransportRequest.Builder builder =
-        TransportRequest.builder()
-            .setUri(target)
-            .setMethod("GET")
-            .addHeader("Accept", APPLICATION_JSON)
-            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
-            .setTimeout(config.requestTimeout());
-    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
-      builder.addHeader(entry.getKey(), entry.getValue());
-    }
-    for (final Map.Entry<String, String> entry : operatorHeaders.entrySet()) {
-      builder.addHeader(entry.getKey(), entry.getValue());
-    }
-    TransportSecurity.requireHttpRequestAllowed(
-        "HttpClientTransport operator GET",
-        config.baseUri(),
-        target,
-        operatorHeaders,
-        null);
     return builder.build();
   }
 

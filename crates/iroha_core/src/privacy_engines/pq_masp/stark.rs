@@ -789,6 +789,100 @@ mod tests {
                 .expect("valid PQ-MASP consensus binding");
         (binding, limits)
     }
+    fn other_genesis_consensus_material(
+        statement: &PqMaspStarkStatementV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> (PqMaspStarkStatementV1, PrivacyNativeConsensusBindingV1) {
+        let mut genesis_bytes = *statement.context.network_id.as_bytes();
+        genesis_bytes[0] ^= 1;
+        let genesis = iroha_crypto::Hash::prehashed(genesis_bytes);
+        let mut other_statement = statement.clone();
+        other_statement.context.network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                genesis
+            ));
+        let other_binding =
+            PrivacyNativeConsensusBindingV1::new(&other_statement.context, genesis.into(), limits)
+                .expect("matched alternate-genesis consensus binding");
+        // Use the facade's exact preflight before any expensive proof work.
+        super::super::relation::validate_statement_v1(&other_statement)
+            .expect("alternate-genesis statement passes facade preflight");
+        other_binding
+            .validate_against_context(&other_statement.context, limits)
+            .expect("alternate-genesis statement and binding agree");
+        (other_statement, other_binding)
+    }
+    #[test]
+    fn other_genesis_fixture_passes_outer_preflight_and_changes_inner_public_input() {
+        let authorization_keys = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0xDC; 32]),
+            b"pq-masp-other-genesis-preflight-v1",
+        )
+        .expect("preflight ML-DSA authorization key");
+        let key_digest =
+            derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
+                .expect("preflight authorization key digest");
+        let (statement, _) = valid_fixture_with_authorization_key_digest(key_digest);
+        let (binding, limits) = consensus_material(&statement);
+        let (other_statement, other_binding) =
+            other_genesis_consensus_material(&statement, &limits);
+        assert_ne!(
+            other_statement.context.network_id,
+            statement.context.network_id
+        );
+        assert_ne!(other_binding.genesis_hash, binding.genesis_hash);
+        let mut restored_statement = other_statement.clone();
+        restored_statement.context.network_id = statement.context.network_id;
+        assert_eq!(restored_statement, statement);
+        let mut restored_binding = other_binding.clone();
+        restored_binding.network_id = binding.network_id;
+        restored_binding.genesis_hash = binding.genesis_hash;
+        assert_eq!(restored_binding, binding);
+        assert_ne!(
+            PqMaspStarkAdapterV1::new(&statement, &binding, &limits)
+                .public_input_digest_v1()
+                .expect("original inner public input"),
+            PqMaspStarkAdapterV1::new(&other_statement, &other_binding, &limits)
+                .public_input_digest_v1()
+                .expect("matched alternate-genesis inner public input"),
+            "a matched network/genesis substitution must change the inner commitment"
+        );
+        let statement_digest =
+            iroha_data_model::privacy::PrivacyStatementV1::PqMaspStarkV1(other_statement.clone())
+                .digest()
+                .expect("alternate-genesis statement digest");
+        let binding_digest = other_binding
+            .digest()
+            .expect("alternate-genesis binding digest");
+        // These inert bytes exercise only preflight and outer authorization;
+        // the ignored full-domain test below retains the real inner-proof gate.
+        let inert_inner = b"cross-genesis preflight only; not a STARK";
+        let authorized = authorize_pq_masp_stark_proof_v1(
+            statement_digest,
+            binding_digest,
+            key_digest,
+            authorization_keys.secret_key(),
+            inert_inner,
+            HedgedRngSeed::from_entropy([0xDD; 32]),
+        )
+        .expect("fresh alternate-genesis outer authorization");
+        let decoded = verify_pq_masp_authorization_v1(
+            statement_digest,
+            binding_digest,
+            key_digest,
+            &authorized,
+        )
+        .expect("alternate-genesis outer authorization verifies independently");
+        assert_eq!(decoded.stark_proof, inert_inner.as_slice());
+        assert_eq!(
+            super::super::verify_pq_masp_v1(&other_statement, &other_binding, &limits, &authorized,),
+            Err(super::super::PqMaspProofErrorV1::InvalidProof),
+            "valid statement, binding and outer authorization must reach the inner verifier"
+        );
+    }
     fn prepared_columns(
         statement: &PqMaspStarkStatementV1,
         witness: &PqMaspWitnessV1,
@@ -959,6 +1053,8 @@ mod tests {
                 .expect("authorization key digest");
         let (statement, witness) = valid_fixture_with_authorization_key_digest(key_digest);
         let (binding, limits) = consensus_material(&statement);
+        let (other_genesis_statement, matched_other_genesis) =
+            other_genesis_consensus_material(&statement, &limits);
         let mut rng = StdRng::from_seed([0xB7; 32]);
         let authorized_proof = super::super::prove_pq_masp_v1_with_rng(
             &statement,
@@ -1173,13 +1269,14 @@ mod tests {
             )),
             "an inconsistent network/genesis binding reached proof verification"
         );
-        let statement_digest =
-            iroha_data_model::privacy::PrivacyStatementV1::PqMaspStarkV1(statement.clone())
-                .digest()
-                .expect("canonical PQ-MASP statement digest");
-        let other_genesis_digest = other_genesis
+        let statement_digest = iroha_data_model::privacy::PrivacyStatementV1::PqMaspStarkV1(
+            other_genesis_statement.clone(),
+        )
+        .digest()
+        .expect("canonical alternate-genesis PQ-MASP statement digest");
+        let other_genesis_digest = matched_other_genesis
             .digest()
-            .expect("canonical changed-genesis binding digest");
+            .expect("canonical matched changed-genesis binding digest");
         let resigned_outer = authorize_pq_masp_stark_proof_v1(
             statement_digest,
             other_genesis_digest,
@@ -1198,7 +1295,12 @@ mod tests {
         .expect("freshly re-signed outer proof is independently valid");
         assert_eq!(resigned_authorization.stark_proof, proof.as_slice());
         assert_eq!(
-            super::super::verify_pq_masp_v1(&statement, &other_genesis, &limits, &resigned_outer,),
+            super::super::verify_pq_masp_v1(
+                &other_genesis_statement,
+                &matched_other_genesis,
+                &limits,
+                &resigned_outer,
+            ),
             Err(super::super::PqMaspProofErrorV1::InvalidProof),
             "fresh outer authorization rescued an inner proof from another genesis"
         );

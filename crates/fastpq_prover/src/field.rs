@@ -9,25 +9,19 @@ pub const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
 const FP4_NON_RESIDUE_V1: u64 = 7;
 
 /// Canonically encoded element of `Goldilocks[X] / (X^4 - 7)`.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    NoritoSerialize,
-    NoritoDeserialize,
-)]
+///
+/// The Norito payload is exactly four little-endian field limbs, without an
+/// inner struct length or field table. Both archive and slice readers reject
+/// coefficients outside the base field before constructing this type.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct GoldilocksFp4V1 {
     coefficients: [u64; 4],
 }
 
 impl GoldilocksFp4V1 {
+    /// Exact byte length of the final V1 polynomial-basis encoding.
+    pub const BYTES: usize = 32;
     /// Additive identity.
     pub const ZERO: Self = Self {
         coefficients: [0; 4],
@@ -153,6 +147,49 @@ impl GoldilocksFp4V1 {
     }
 }
 
+impl NoritoSerialize for GoldilocksFp4V1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        writer.write_all(&self.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+}
+
+impl<'de> NoritoDeserialize<'de> for GoldilocksFp4V1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical GoldilocksFp4V1 decode")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        let bytes = <[u8; Self::BYTES] as NoritoDeserialize>::try_deserialize(archived.cast())?;
+        Self::from_le_bytes(bytes).ok_or_else(|| {
+            norito::Error::Message("non-canonical GoldilocksFp4V1 coefficient".into())
+        })
+    }
+}
+
+impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksFp4V1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::Error> {
+        let prefix = bytes
+            .get(..Self::BYTES)
+            .ok_or(norito::Error::LengthMismatch)?;
+        let mut encoded = [0_u8; Self::BYTES];
+        encoded.copy_from_slice(prefix);
+        let value = Self::from_le_bytes(encoded).ok_or_else(|| {
+            norito::Error::Message("non-canonical GoldilocksFp4V1 coefficient".into())
+        })?;
+        norito::core::note_payload_access(bytes, Self::BYTES);
+        Ok((value, Self::BYTES))
+    }
+}
+
 /// Add arbitrary u64 representatives and return their canonical field sum.
 ///
 /// This is arithmetic normalization, not admission of noncanonical proof cells.
@@ -226,6 +263,81 @@ fn reduce_wide(value: u128) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norito::{codec::Encode, core::DecodeFromSlice};
+
+    #[test]
+    fn norito_wire_is_exactly_four_little_endian_limbs() {
+        let value = GoldilocksFp4V1::new([1, 2, 3, GOLDILOCKS_MODULUS_V1 - 1]).unwrap();
+        assert_eq!(value.encode(), value.to_le_bytes());
+        assert_eq!(value.encoded_len_exact(), Some(GoldilocksFp4V1::BYTES));
+        assert_eq!(value.encoded_len_hint(), Some(GoldilocksFp4V1::BYTES));
+        let encoded = norito::core::to_bytes(&value).expect("encode extension element");
+        assert_eq!(
+            norito::decode_from_bytes::<GoldilocksFp4V1>(&encoded).unwrap(),
+            value
+        );
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(value.encode(), value.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn norito_archive_rejects_each_noncanonical_coefficient() {
+        for coefficient in 0..4 {
+            for invalid in [GOLDILOCKS_MODULUS_V1, u64::MAX] {
+                let mut coefficients = [1, 2, 3, 4];
+                coefficients[coefficient] = invalid;
+                let invalid = GoldilocksFp4V1::from_coefficients_unchecked_for_test(coefficients);
+                let encoded = norito::core::to_bytes(&invalid).expect("encode adversarial fixture");
+                assert!(
+                    norito::decode_from_bytes::<GoldilocksFp4V1>(&encoded).is_err(),
+                    "noncanonical coefficient {coefficient} must not enter the typed field"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn norito_rejects_the_retired_struct_framing() {
+        #[derive(NoritoSerialize)]
+        #[norito(schema_name = "fastpq_prover::field::GoldilocksFp4V1")]
+        struct RetiredStructFrame {
+            coefficients: [u64; 4],
+        }
+
+        assert_eq!(
+            <RetiredStructFrame as NoritoSerialize>::schema_hash(),
+            <GoldilocksFp4V1 as NoritoSerialize>::schema_hash(),
+            "exercise payload rejection under the same field schema"
+        );
+        let retired = RetiredStructFrame {
+            coefficients: [1, 2, 3, 4],
+        };
+        let encoded = norito::core::to_bytes(&retired).expect("encode retired struct fixture");
+        assert!(norito::decode_from_bytes::<GoldilocksFp4V1>(&encoded).is_err());
+    }
+
+    #[test]
+    fn norito_slice_decode_is_bounded_and_canonical() {
+        let value = GoldilocksFp4V1::new([1, 2, 3, 4]).unwrap();
+        let encoded = value.to_le_bytes();
+        for length in 0..GoldilocksFp4V1::BYTES {
+            assert!(GoldilocksFp4V1::decode_from_slice(&encoded[..length]).is_err());
+        }
+        let mut with_suffix = encoded.to_vec();
+        with_suffix.extend_from_slice(&[0xA5; 8]);
+        assert_eq!(
+            GoldilocksFp4V1::decode_from_slice(&with_suffix).unwrap(),
+            (value, GoldilocksFp4V1::BYTES)
+        );
+        for coefficient in 0..4 {
+            let mut invalid = encoded;
+            invalid[coefficient * 8..coefficient * 8 + 8]
+                .copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_le_bytes());
+            assert!(GoldilocksFp4V1::decode_from_slice(&invalid).is_err());
+        }
+    }
 
     fn oracle_add(left: u64, right: u64) -> u64 {
         ((u128::from(left) + u128::from(right)) % u128::from(GOLDILOCKS_MODULUS_V1)) as u64

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import FrozenInstanceError, asdict
 from pathlib import Path
 from typing import Any, get_type_hints
 
@@ -392,6 +393,142 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
         == 2
     )
     _validate_application_evidence(fixture)
+
+
+def test_grouped_native_amx_v2_requires_canonical_swap_metadata() -> None:
+    fixture = _fixture()["golden"]
+    group = fixture["receipt_group"]
+    limit = 1 << 511
+    maximum = str(limit - 1)
+    minimum_magnitude = str(limit)
+    metadata = {
+        "epsilon_bps": 65535,
+        "twap_window_seconds": 4294967295,
+        "liquidity_profile": {"profile": "Tier2", "state": None},
+        "twap_local_per_xor": "1.25",
+        "volatility_class": {"bucket": "Elevated", "state": None},
+    }
+    for numeric in (
+        "0", "1.25", "-1.25", maximum, f"-{minimum_magnitude}",
+        f"{maximum[:-28]}.{maximum[-28:]}",
+        f"-{minimum_magnitude[:-28]}.{minimum_magnitude[-28:]}",
+    ):
+        payload = deepcopy(group)
+        payload["swap_metadata"] = {**metadata, "twap_local_per_xor": numeric}
+        parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+        assert parsed.swap_metadata is not None
+        assert parsed.swap_metadata.twap_local_per_xor == numeric
+        assert parsed.swap_metadata.epsilon_bps == 65535
+        assert parsed.swap_metadata.twap_window_seconds == 4294967295
+        diagnostics = deepcopy(fixture["expected_diagnostics"])
+        diagnostics["lane_settlement_commitments"] = [payload]
+        canonical = CanonicalSumeragiDiagnosticsStatus.from_payload(diagnostics)
+        assert (
+            canonical.lane_settlement_commitments[0]["swap_metadata"]["twap_local_per_xor"]
+            == numeric
+        )
+
+    invalid_numerics = (
+        None, True, 1, 1.25, {}, "", " ", " 1", "1 ", "+1", "01", "-0",
+        "1.0", "1.", ".5", "1e3", "NaN", "Infinity", "١", "1" * 157,
+        "0.00000000000000000000000000001", str(limit), str(-limit - 1),
+    )
+    invalid_metadata = [
+        {**metadata, "twap_local_per_xor": value} for value in invalid_numerics
+    ]
+    invalid_metadata.extend(
+        {**metadata, field: value}
+        for field, value in (
+            ("epsilon_bps", -1), ("epsilon_bps", 65536), ("epsilon_bps", True),
+            ("epsilon_bps", 1.0), ("twap_window_seconds", -1),
+            ("twap_window_seconds", 4294967296), ("twap_window_seconds", "300"),
+            ("twap_window_seconds", 1.0), ("liquidity_profile", "Tier2"),
+            ("liquidity_profile", {"profile": "Tier4", "state": None}),
+            ("liquidity_profile", {"profile": "Tier2", "state": {}}),
+            ("liquidity_profile", {"profile": "Tier2"}),
+            ("volatility_class", "Elevated"),
+            ("volatility_class", {"bucket": "Unknown", "state": None}),
+            ("volatility_class", {"bucket": "Elevated", "state": False}),
+            ("volatility_class", {"bucket": "Elevated", "state": None, "extra": 0}),
+        )
+    )
+    invalid_metadata.extend(
+        {key: value for key, value in metadata.items() if key != field}
+        for field in metadata
+    )
+    invalid_metadata.extend(({**metadata, "extra": None}, [], "metadata"))
+    for invalid in invalid_metadata:
+        payload = deepcopy(group)
+        payload["swap_metadata"] = invalid
+        with pytest.raises((TypeError, ValueError), match="."):
+            SumeragiLaneSettlementCommitment.from_payload(payload)
+        diagnostics = deepcopy(fixture["expected_diagnostics"])
+        diagnostics["lane_settlement_commitments"] = [payload]
+        with pytest.raises(RuntimeError, match="."):
+            CanonicalSumeragiDiagnosticsStatus.from_payload(diagnostics)
+
+
+def test_grouped_native_amx_v2_owns_immutable_checked_participant_settlement() -> None:
+    payload = _fixture()["golden"]["receipt_group"]
+    input_settlement = payload["native_amx_receipts"][0]["legs"][0][
+        "participant_settlement"
+    ]
+    expected = deepcopy(input_settlement)
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+    leg = parsed.native_amx_receipts[0].legs[0]
+    settlement = leg.participant_settlement
+    checked_hash = leg.participant_settlement_hash
+    assert (
+        compute_native_amx_participant_settlement_hash(asdict(settlement))
+        == checked_hash
+    )
+
+    input_settlement["source_ids"][0] = "FF" * 32
+    input_settlement["source_ids"].pop()
+    input_settlement["native_amx_receipts"] = [{}]
+    input_settlement["authority_context_height"] = 0
+    assert json.loads(json.dumps(asdict(settlement))) == expected
+
+    assert isinstance(settlement.source_ids, tuple)
+    with pytest.raises(FrozenInstanceError):
+        settlement.authority_context_height = 0
+    with pytest.raises(FrozenInstanceError):
+        settlement.source_ids = ()
+    with pytest.raises(TypeError):
+        settlement.source_ids[0] = settlement.source_ids[1]
+    with pytest.raises(AttributeError):
+        settlement.source_ids.pop()
+    with pytest.raises(FrozenInstanceError):
+        settlement.native_amx_receipts = ()
+
+    assert json.loads(json.dumps(asdict(settlement))) == expected
+    assert (
+        compute_native_amx_participant_settlement_hash(asdict(settlement))
+        == checked_hash
+    )
+    assert leg.prepare_qc.body.participant_settlement_commitment == checked_hash
+    assert leg.commit_qc.body.participant_settlement_commitment == checked_hash
+
+    caller_sources = list(settlement.source_ids)
+    constructed = SumeragiNativeAmxParticipantSettlement(
+        lane_id=settlement.lane_id,
+        dataspace_id=settlement.dataspace_id,
+        lane_incarnation=settlement.lane_incarnation,
+        participant_lane_block_height=settlement.participant_lane_block_height,
+        authority_context_height=settlement.authority_context_height,
+        previous_native_settlement_hash=settlement.previous_native_settlement_hash,
+        source_ids=caller_sources,
+    )
+    constructed_wire = json.dumps(asdict(constructed))
+    assert json.loads(constructed_wire) == expected
+    caller_sources[0] = "FF" * 32
+    caller_sources.pop()
+    assert isinstance(constructed.source_ids, tuple)
+    assert json.dumps(asdict(constructed)) == constructed_wire
+    assert (
+        compute_native_amx_participant_settlement_hash(asdict(constructed))
+        == checked_hash
+    )
 
 
 @pytest.mark.parametrize(

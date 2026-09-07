@@ -21,6 +21,9 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[event_set(
+        schema_name = "iroha_data_model::events::data::sorafs::model::SorafsGatewayEventSet"
+    )]
     pub enum SorafsGatewayEvent {
         /// The gateway rejected a request due to a GAR policy violation.
         GarViolation(SorafsGarViolation),

@@ -1,6 +1,14 @@
 # Iroha Kotlin SDK
 
-Kotlin rewrite of the `iroha_android` and `norito_java` for Hyperledger Iroha 3.
+The canonical JVM/Android SDK for Kotlin and Java applications using Iroha 3.
+
+Java-source runtime consumer tests live in `core-jvm/src/test/java` and exercise
+this implementation directly. Both Kotlin and Java compilation enforce JDK 8
+APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
+
+```sh
+./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
+```
 
 ## Artifacts
 
@@ -55,6 +63,65 @@ and resets both counters to zero. `rotateHardwareEpoch()` does not first drain t
 remains callable with saturated counters and pending receipts. The native provider must arrange
 rollover before counter exhaustion; the managed wallet does not schedule automatic rotation.
 
+### Attestation command
+
+The `tools` application verifies collected Android key evidence using the pure
+`core-jvm` attestation verifier. `client-android` owns device/key provisioning.
+Run `./gradlew :tools:test :tools:installDist --console=plain`, then
+`tools/build/install/iroha-attestation/bin/iroha-attestation --help`.
+The repository launcher `scripts/android_keystore_attestation.sh` builds and
+invokes that same command. Trust roots, challenge, alias SPKI, snapshot hash and
+evaluation time are explicit command inputs. Bundle metadata supplies no trust.
+The tool emits a verified JSON record; shared fixture tests are host evidence,
+not physical StrongBox qualification.
+
+### CUDA acceleration
+
+`org.hyperledger.iroha.sdk.gpu.CudaAccelerators` is shared by Kotlin and Java
+callers. Construct it with an explicit `Backend`, `disabled()`, or
+`loadNative(absoluteLibraryPath)`. Each of its five operations accepts an ordered
+batch, validates dimensions and canonical BN254 limbs, and owns its inputs and
+outputs. `status` describes device state; a null result means no accelerated
+computation. Native errors remain visible. See the [bridge contract and hardware
+task](../specs/sdk/android/gpu_operator_guide.md) for the required native artifact
+and numerical qualification. Ordinary host tests do not qualify CUDA hardware.
+
+### JNI declaration and export checks
+
+Run `scripts/check_kotlin_jni.py` from the repository root after compiling all
+three SDK modules and rebuilding `connect_norito_bridge`. Supply every main
+class output with `--classes MODULE=DIR`, where MODULE is `core-jvm`,
+`client-android`, or `kagemusha-wallet-android`, and supply the library with
+`--library PATH`. `--report PATH` writes the inspected class/library hashes and
+method descriptors after a successful check. `--help` describes the arguments.
+
+The check reads class files without reflection or class loading. It requires
+JDK 8 bytecode and Kotlin-owned native declarations, checks explicit signing
+context and the closed privacy surface, and rejects missing or undeclared JNI
+exports, including duplicate implementation namespaces. JNI names follow the
+[JVM native lookup rules](https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html#resolving-native-method-names).
+Matching export names does not prove argument types, receiver semantics, source
+build provenance, native execution, or device behavior. Those remain separate
+release checks. The current migration still has 55 Android implementation
+exports to retire, so this strict export check is not yet a passing release gate.
+
+Android managed consumers run with
+`./gradlew :client-android:testDebugUnitTest :kagemusha-wallet-android:testDebugUnitTest`.
+The `:client-android:testDebugHostNative` task separately executes the tagged
+Java key-manager native consumer against the rebuilt host library in the
+required, absolute `IROHA_NATIVE_LIBRARY_PATH` directory. Missing libraries
+fail before execution; a missing native capability fails the test. Its results
+are never reused from Gradle's test cache. This host JNI task does not qualify
+Android native artifacts, StrongBox, or physical devices.
+
+### Java transaction metadata
+
+`JsonValue` is one immutable Kotlin-owned type for both JVM languages. Its
+`string`, `number`, `bool`, `nullValue`, and `parse` factories are callable from
+Java. Parsing normalizes JSON; signed-wire decoding still rejects alternate
+lexical forms. `TransactionPayload` copies metadata and exposes an immutable
+map. Use `JsonValue.nullValue()` for JSON null; a Java null value is rejected.
+
 ### Transaction identity
 
 Every ordinary `TransactionPayload` requires a nominal, immutable `NetworkId` parsed from the
@@ -77,7 +144,7 @@ and transaction ID.
 ### One-shot signed HTTP requests
 
 Signed transactions, signed queries, transaction batches, and every request carrying an Iroha
-nonce are dispatched at most once. The default URLConnection transport does not follow 307/308
+nonce are dispatched at most once. The default OkHttp transport does not follow 307/308
 redirects or retry connection/status failures. Custom `HttpTransportExecutor` implementations must
 honor `TransportRequest.replayPolicy`: only unsigned, bodyless `GET`, `HEAD`, and `OPTIONS` requests
 are `RETRY_SAFE`; all other requests are `ONE_SHOT`.
@@ -112,9 +179,28 @@ the instruction commits; only a receipt read from committed WSV state uses
 `replaced` lifecycle values.
 
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require a per-call
-`ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The transport signs the exact
+`ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The auth context accepts a
+`RequestSigner` callback; applications retain ownership of software, hardware, or remote keys.
+Use `RequestSigner.ed25519(privateKey)` for a JCA Ed25519 signer. The SDK builds the exact
+canonical message, rejects empty, all-zero or oversized callback signatures, and propagates
+signing failures without retrying. Auth contexts do not expose private-key properties.
+The transport signs the exact
 POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt
 path account to be the same exact canonical I105 account as the signer.
+
+Nearby's `IrohaPeerNearbySessionV1` owns the authenticated IPM1 boundary for Kotlin and Java.
+`seal` accepts an `IrohaPeerWireMessageV1`; `open` returns a verified message for the session's
+profile. Ciphertext authentication and complete IPM1 decoding must succeed before the receive
+sequence advances. Encode the encrypted record for the Android radio transport and decode it
+before calling `open`. Temporary plaintext buffers are wiped, and closing the session destroys
+its owned keys. Radio/device lifecycle qualification is separate from the host protocol tests.
+
+Nexus app requests and results are immutable values. Constructors snapshot keys, payloads,
+metadata and scopes; byte accessors return owned copies and collections reject mutation.
+`NexusSignableTransaction(payloadBytes, authority, signingPublicKey)` derives `payloadHashHex`
+from its exact owned payload. Nexus uses only the canonical `ed25519` algorithm. Create a new
+value to change authority or signing context. Transfer receipts snapshot nested JSON status
+and bind their hash to the exact signed transaction; admission alone does not establish Applied.
 
 If `submitTransaction` cannot obtain an authoritative admission result, it fails with
 `AmbiguousTransactionSubmissionException`. Use its `hashHex` or `reconcileWith(client)` to query
@@ -205,6 +291,15 @@ type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
 fields and tags, and current Native AMX V2 evidence. The parsers reject
 status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
 participant rows, and inconsistent carrier identities.
+
+Diagnostics are immutable values for Kotlin and Java callers. Construction owns
+the NPoS seed, evidence vectors and nested JSON maps/arrays; changing supplied
+collections cannot change validated evidence. Constructors enforce unsigned
+counters, vector limits and the parser's nesting bound. Canonical wire values
+also own their signer, manifest and liveness vectors; decoders reject element
+counts that cannot fit the remaining frame before allocating. Direct Native AMX
+round construction enforces the same positive height and unsigned view bounds
+as parsing. Java-source fixture and mutation tests run in this module.
 
 ### KAGEMUSHA peer transports
 
@@ -415,7 +510,15 @@ have a gap.
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs. The local catalog never
 establishes activation or readiness; proof submission requires a fresh
-committed `/v1/privacy/capabilities` snapshot from live Torii.
+committed `/v1/privacy/capabilities` manifest from live Torii.
+`HttpClientTransport.getPrivacyCapabilities(canonicalAuth)` performs a one-shot
+authenticated HTTPS fetch for `ClientConfig`'s immutable local network, verifies
+the exact response URL and bounded Norito body, and native-validates its signatures
+and deployment network before privately binding its origin. Public archive decoding
+is inspection-only and cannot mint admission. Native construction validates the
+selected activation and limits; the transaction encoder also requires the token's
+network to equal the enclosing transaction network. Java consumers use this same
+Kotlin-owned boundary.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.
@@ -681,7 +784,7 @@ val config = ClientConfig.builder()
     .setLocalSigningContext(LocalSigningContext(networkId))
     // Configure the Torii endpoint and other client policy here.
     .build()
-val transport = HttpClientTransport.withExecutor(executor, config)
+val transport = HttpClientTransport(executor, config)
 val vkBytes = byteArrayOf(1, 2, 3)
 
 val registerDraft = transport.registerVerifyingKey(
@@ -761,16 +864,62 @@ optional and may be absent for backends that do not expose a deterministic
 alias index. Unknown aliases surface as `Optional.empty()` without throwing:
 
 ```kotlin
-val client = HttpClientTransport.createDefault(config)
-
-val resolved = client.resolveAccountAlias("some_alias@universal").join()
-if (resolved.isPresent) {
-    val record = resolved.get()
-    println("account_id=${record.accountId} source=${record.source}")
-} else {
-    println("alias not found")
+HttpClientTransport.createDefault(config).use { client ->
+    val resolved = client.resolveAccountAlias("some_alias@universal").join()
+    if (resolved.isPresent) {
+        val record = resolved.get()
+        println("account_id=${record.accountId} source=${record.source}")
+    } else {
+        println("alias not found")
+    }
 }
 ```
+
+HTTP and SSE use `OkHttpTransportExecutor` on JVM and Android. Client `close()`
+cancels that client's calls, open streams and transaction-status polls. Default
+clients own their backend; injected backends remain application-owned and can
+serve other clients. Closing a client rejects subsequent network operations.
+
+`ToriiEventStreamClient` also owns its stream readers. Closing a handle or client
+disposes the response and completes caller cancellation without `onError` or
+`onClosed` callbacks. Blocking SSE reads run on the client's own reader executor;
+`Builder.setReaderExecutor(...)` explicitly borrows an application executor.
+Listeners may close the client from `onOpen`; response ownership is established
+before callbacks run.
+
+WebSockets use `NettyWebSocketConnector`, injected through
+`ToriiWebSocketClient.builder().setWebSocketConnector(connector)`.
+`NettyWebSocketConnector.create()` owns its NIO event loop. The constructor
+`NettyWebSocketConnector(eventLoopGroup, sslContext)` borrows application
+resources; closing it cancels its sessions and pending handshakes without
+shutting down the borrowed group. TLS always verifies the hostname.
+The connection deadline covers DNS, TCP, TLS and the single HTTP upgrade.
+Redirects and failed upgrades are never replayed.
+
+`sendText` and `sendBinary` send complete messages; binary buffers are copied
+before a send returns. A successful send future means queue acceptance.
+The engine bounds individual frames, aggregate messages, queued bytes and queued
+message count, and handles wire ping/pong internally. Callbacks must not block;
+they may close their session or connector. Close a subscription to cancel both
+its pending handshake and any scheduled reconnect.
+
+Android attestation verification requires an explicit non-empty challenge.
+Construct the verifier with `AttestationVerifier.builder(revocationPolicy,
+evaluationTimeEpochMillis)` and independently trusted roots. A different policy
+or evaluation time requires a new verifier context.
+
+For application TLS, pool or dispatcher configuration, construct an
+`OkHttpClient` without application/network interceptors and pass it to
+`OkHttpTransportExecutor(client)`. The adapter borrows those resources while
+owning its calls. `OkHttpTransportExecutor.create(...)` creates an owned adapter;
+its optional scheduling executor remains borrowed, allowing Android applications
+to tag their worker threads explicitly. Close the adapter separately when it was
+injected into SDK clients. Java consumers use the same types with try-with-resources.
+
+The adapter disables redirects and authentication follow-ups. Signed/mutating
+requests dispatch once, including connection loss and `Retry-After: 0`; transport
+failures never imply that a submitted transaction was rejected. Buffered bounds
+apply after decompression. Close each streaming response/body when finished.
 
 ## Reading Kotodama Manifests
 

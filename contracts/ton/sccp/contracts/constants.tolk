@@ -6,16 +6,16 @@ const SCCP_DOMAIN_TON = 4
 /// SORA SCCP protocol-domain identifier.
 const SCCP_DOMAIN_SORA = 0
 /// Canonical TON account codec identifier.
-const SCCP_CODEC_TON_ADDRESS36 = 3
+const SCCP_CODEC_TON_ADDRESS36 = 7
 /// Canonical text codec identifier.
-const SCCP_CODEC_CANONICAL_TEXT = 0
+const SCCP_CODEC_CANONICAL_TEXT = 1
 /// Taira XOR uses nine decimal places; the TON Jetton uses the same base unit.
 const SCCP_TAIRA_TO_TON_MULTIPLIER = 1
 /// Maximum TEP-74 `VarUInteger 16` value (15 value bytes).
 const SCCP_MAX_JETTON_AMOUNT = 0xffffffffffffffffffffffffffffff
 
 const SCCP_PAYLOAD_VERSION = 1
-const SCCP_PAYLOAD_DISCRIMINATOR = 0
+const SCCP_PAYLOAD_DISCRIMINATOR = 2
 const SCCP_MESSAGE_SCHEMA_VERSION = 1
 const SCCP_STORAGE_VERSION = 1
 const SCCP_TON_MAINNET_GLOBAL_ID = -239
@@ -29,7 +29,7 @@ const SCCP_SORA_NETWORK_BYTES_V1 = 22
 const SCCP_TON_MAINNET_NETWORK_BYTES_V1 = 90
 const SCCP_TON_TO_SORA_LANE_HASH_V1 = 0x53c771f37951401d26513e2519cf46b93c582f75529d3949a6c548217ec87b55
 const SCCP_SORA_TO_TON_LANE_HASH_V1 = 0x4876fd8bf67c75bbe3e96c884e82a8e794a2bd277f2f206cb19b96bedbf19bc0
-const SCCP_DESTINATION_PROOF_BACKEND = 3
+const SCCP_DESTINATION_PROOF_BACKEND = 2
 const SCCP_GROTH16_PUBLIC_SIGNAL_COUNT = 11
 const SCCP_GROTH16_VK_IC_COUNT = 12
 /// BLS12-381 scalar field used by the destination Groth16 verifier.

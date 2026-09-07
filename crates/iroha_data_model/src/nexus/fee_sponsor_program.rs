@@ -26,6 +26,8 @@ pub enum FeeSponsorProgramIdParseError {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramId")]
 pub struct FeeSponsorProgramId {
     /// Sponsor account that owns the program.
     pub sponsor: AccountId,
@@ -68,6 +70,10 @@ impl FromStr for FeeSponsorProgramId {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramRevisionKey"
+)]
 pub struct FeeSponsorProgramRevisionKey {
     /// Program owning the immutable revision.
     pub program_id: FeeSponsorProgramId,
@@ -93,6 +99,8 @@ impl FeeSponsorProgramRevisionKey {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramLifecycle")]
 pub enum FeeSponsorProgramLifecycle {
     /// Program is being provisioned and has never sponsored transactions.
     Staged,
@@ -109,6 +117,8 @@ pub enum FeeSponsorProgramLifecycle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorEligibility")]
 pub enum FeeSponsorEligibility {
     /// Only explicitly enrolled accounts may use the program.
     EnrolledOnly,
@@ -119,6 +129,8 @@ pub enum FeeSponsorEligibility {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "effect", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorRuleEffect")]
 pub enum FeeSponsorRuleEffect {
     /// Permit the matched operation unless a deny rule also matches it.
     Allow,
@@ -129,6 +141,10 @@ pub enum FeeSponsorRuleEffect {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorNativeInstructionSelector"
+)]
 pub struct FeeSponsorNativeInstructionSelector {
     /// Exact registered instruction wire ID.
     pub wire_id: String,
@@ -141,6 +157,8 @@ pub struct FeeSponsorNativeInstructionSelector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "operation", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorMultisigOperation")]
 pub enum FeeSponsorMultisigOperation {
     /// Propose a transaction for an existing multisig account.
     Propose,
@@ -155,6 +173,8 @@ pub enum FeeSponsorMultisigOperation {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorMultisigSelector")]
 pub struct FeeSponsorMultisigSelector {
     /// Non-empty, strictly ordered set of explicitly allowed operations.
     pub operations: Vec<FeeSponsorMultisigOperation>,
@@ -165,6 +185,8 @@ pub struct FeeSponsorMultisigSelector {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorContractSelector")]
 pub struct FeeSponsorContractSelector {
     /// Exact target address.
     pub contract_address: ContractAddress,
@@ -178,6 +200,8 @@ pub struct FeeSponsorContractSelector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorIvmSelector")]
 pub struct FeeSponsorIvmSelector {
     /// Hash of the signed IVM bytecode.
     pub code_hash: Hash,
@@ -191,6 +215,8 @@ pub struct FeeSponsorIvmSelector {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorRuleSelector")]
 pub enum FeeSponsorRuleSelector {
     /// One native instruction wire ID, optionally restricted to an asset definition.
     NativeInstruction(FeeSponsorNativeInstructionSelector),
@@ -207,6 +233,8 @@ pub enum FeeSponsorRuleSelector {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorRule")]
 pub struct FeeSponsorRule {
     /// Revision-local stable rule identifier used in diagnostics.
     pub id: Name,
@@ -230,6 +258,8 @@ impl FeeSponsorRule {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorAssetBudget")]
 pub struct FeeSponsorAssetBudget {
     /// Canonical fee asset governed by these limits.
     pub asset_definition_id: AssetDefinitionId,
@@ -250,6 +280,8 @@ pub struct FeeSponsorAssetBudget {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramRevision")]
 pub struct FeeSponsorProgramRevision {
     /// Program owning this revision.
     pub program_id: FeeSponsorProgramId,
@@ -505,6 +537,8 @@ impl FeeSponsorProgramRevision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramActivation")]
 pub struct FeeSponsorProgramActivation {
     /// Revision that will become active.
     pub revision: u64,
@@ -517,6 +551,8 @@ pub struct FeeSponsorProgramActivation {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgram")]
 pub struct FeeSponsorProgram {
     /// Stable program identifier.
     pub id: FeeSponsorProgramId,
@@ -555,6 +591,8 @@ impl FeeSponsorProgram {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorEnrollmentKey")]
 pub struct FeeSponsorEnrollmentKey {
     /// Program granting eligibility.
     pub program_id: FeeSponsorProgramId,
@@ -565,6 +603,8 @@ pub struct FeeSponsorEnrollmentKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorEnrollment")]
 pub struct FeeSponsorEnrollment {
     /// Enrollment primary key.
     pub key: FeeSponsorEnrollmentKey,
@@ -575,6 +615,8 @@ pub struct FeeSponsorEnrollment {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorVaultKey")]
 pub struct FeeSponsorVaultKey {
     /// Program owning the allocation.
     pub program_id: FeeSponsorProgramId,
@@ -585,6 +627,8 @@ pub struct FeeSponsorVaultKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorVault")]
 pub struct FeeSponsorVault {
     /// Vault primary key.
     pub key: FeeSponsorVaultKey,
@@ -595,6 +639,8 @@ pub struct FeeSponsorVault {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBlockBudgetWindow")]
 pub struct FeeSponsorBlockBudgetWindow {
     /// Consensus block height.
     pub height: u64,
@@ -603,6 +649,10 @@ pub struct FeeSponsorBlockBudgetWindow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramEpochBudgetWindow"
+)]
 pub struct FeeSponsorProgramEpochBudgetWindow {
     /// Height-derived epoch number.
     pub epoch: u64,
@@ -611,6 +661,10 @@ pub struct FeeSponsorProgramEpochBudgetWindow {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBeneficiaryEpochBudgetWindow"
+)]
 pub struct FeeSponsorBeneficiaryEpochBudgetWindow {
     /// Height-derived epoch number.
     pub epoch: u64,
@@ -626,6 +680,8 @@ pub struct FeeSponsorBeneficiaryEpochBudgetWindow {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBudgetWindow")]
 pub enum FeeSponsorBudgetWindow {
     /// Aggregate capacity consumed in one exact consensus block.
     Block(FeeSponsorBlockBudgetWindow),
@@ -638,6 +694,8 @@ pub enum FeeSponsorBudgetWindow {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBudgetCounterKey")]
 pub struct FeeSponsorBudgetCounterKey {
     /// Program whose capacity was consumed.
     pub program_id: FeeSponsorProgramId,
@@ -650,6 +708,8 @@ pub struct FeeSponsorBudgetCounterKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeSponsorBudgetCounter")]
 pub struct FeeSponsorBudgetCounter {
     /// Counter primary key.
     pub key: FeeSponsorBudgetCounterKey,
@@ -665,6 +725,8 @@ pub struct FeeSponsorBudgetCounter {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeDebitSource")]
 pub enum FeeDebitSource {
     /// Charge the transaction authority's ordinary account balance.
     Account(AccountId),
@@ -675,6 +737,8 @@ pub enum FeeDebitSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "code", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::fee_sponsor_program::FeeRejectionCode")]
 pub enum FeeRejectionCode {
     /// Signed fee intent is absent or malformed.
     InvalidFeeIntent,
@@ -1185,3 +1249,6 @@ mod tests {
         assert!("policy_not_found".parse::<FeeRejectionCode>().is_err());
     }
 }
+
+#[cfg(test)]
+mod captured_fee_sponsor_program_schema_tests;

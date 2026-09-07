@@ -224,7 +224,7 @@ class CanonicalRequestSignerTest {
             uri,
             ByteArray(0),
             longestLexicalAlias,
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             timestampMs,
             "account-limit",
         )
@@ -238,7 +238,7 @@ class CanonicalRequestSignerTest {
                 uri,
                 ByteArray(0),
                 excessiveAccount,
-                keyPair.private,
+                RequestSigner.ed25519(keyPair.private),
                 timestampMs,
                 "account-limit-plus-one",
             )
@@ -262,7 +262,7 @@ class CanonicalRequestSignerTest {
                     uri,
                     ByteArray(0),
                     invalidAccount,
-                    keyPair.private,
+                    RequestSigner.ed25519(keyPair.private),
                     timestampMs,
                     "invalid-account",
                 )
@@ -274,7 +274,7 @@ class CanonicalRequestSignerTest {
                     uri,
                     emptyMap(),
                     invalidAccount,
-                    keyPair.private,
+                    RequestSigner.ed25519(keyPair.private),
                     timestampMs,
                     "invalid-body-account",
                 )
@@ -322,7 +322,7 @@ class CanonicalRequestSignerTest {
             uri,
             ByteArray(0),
             i105,
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             timestampMs,
             "i105-header-hex",
         )
@@ -363,7 +363,7 @@ class CanonicalRequestSignerTest {
                 uri,
                 ByteArray(0),
                 alias,
-                keyPair.private,
+                RequestSigner.ed25519(keyPair.private),
                 timestampMs,
                 "alias-header-$index",
             )
@@ -376,7 +376,7 @@ class CanonicalRequestSignerTest {
             uri,
             emptyMap(),
             i105,
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             timestampMs,
             "i105-body",
         )
@@ -417,7 +417,7 @@ class CanonicalRequestSignerTest {
             uri,
             body,
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             timestampMs,
             nonce,
         )
@@ -468,7 +468,7 @@ class CanonicalRequestSignerTest {
                 uri,
                 bodyBytes,
                 "alice ",
-                keyPair.private,
+                RequestSigner.ed25519(keyPair.private),
                 timestampMs,
                 "nonce",
             )
@@ -480,7 +480,7 @@ class CanonicalRequestSignerTest {
                 uri,
                 bodyBytes,
                 "alice@universal",
-                keyPair.private,
+                RequestSigner.ed25519(keyPair.private),
                 timestampMs,
                 "\nnonce",
             )
@@ -492,7 +492,7 @@ class CanonicalRequestSignerTest {
                 uri,
                 body,
                 " alice",
-                keyPair.private,
+                RequestSigner.ed25519(keyPair.private),
                 timestampMs,
                 "nonce",
             )
@@ -504,7 +504,7 @@ class CanonicalRequestSignerTest {
                 uri,
                 body,
                 "alice@universal",
-                keyPair.private,
+                RequestSigner.ed25519(keyPair.private),
                 timestampMs,
                 "nonce ",
             )

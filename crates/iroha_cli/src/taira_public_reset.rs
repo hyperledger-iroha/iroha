@@ -74,17 +74,21 @@ const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-inten
 
 #[path = "taira_public_reset_host.rs"]
 mod host;
+#[path = "taira_public_reset_source.rs"]
+mod source;
 
 /// Strict compiled public-reset command.
 #[derive(clap::Args, Debug)]
 pub(crate) struct PublicReset {
-    /// Select the strict read-only admission check.
+    /// Select source export, signed admission, or reset execution.
     #[command(subcommand)]
     command: PublicResetCommand,
 }
 
 #[derive(clap::Subcommand, Debug)]
 enum PublicResetCommand {
+    /// Export the exact clean local source manifest without contacting hosts or loading keys.
+    SourceManifest(PublicResetSourceManifest),
     /// Verify the signed reset inventory and pinned local inputs without contacting any host.
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
@@ -92,6 +96,13 @@ enum PublicResetCommand {
     /// Internal fixed-protocol host dispatcher. Requests are read only from stdin.
     #[command(name = "host-dispatch", hide = true)]
     HostDispatch(host::PublicResetHost),
+}
+
+#[derive(clap::Args, Debug)]
+struct PublicResetSourceManifest {
+    /// Absolute path to the clean optimizations checkout with a direct .git directory.
+    #[arg(long, value_name = "DIR")]
+    source_root: PathBuf,
 }
 
 #[derive(clap::Args, Debug)]
@@ -239,6 +250,10 @@ impl PublicReset {
     /// Run before client configuration or any ledger signing identity is loaded.
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
+            PublicResetCommand::SourceManifest(args) => {
+                source::export_manifest(&args.source_root, &mut output)?;
+                return Ok(());
+            }
             PublicResetCommand::Preflight(args) => {
                 let (admitted, _chain_guard) = admit(
                     &args.inventory,
@@ -549,9 +564,13 @@ struct SourceManifestV1 {
 #[norito(deny_unknown_fields)]
 struct SourceFileV1 {
     path: String,
+    // Regular permissions (0644/0755), or Git type 0120000/0160000.
     mode: u16,
+    // Byte length of regular content, raw symlink text, or gitlink commit hex.
     size: u64,
+    // Git blob ID for files/links; indexed commit ID for an empty gitlink.
     git_blob_sha1: String,
+    // SHA-256 of the bytes identified by size; all entries remain in the closure.
     sha256: String,
 }
 
@@ -1470,6 +1489,7 @@ fn validate_source_closure(revision: &RevisionV1) -> Result<()> {
     validate_source_root(source_root)?;
     validate_git_provenance(source_root, revision)?;
     let actual = inspect_source_tree(source_root, &manifest.tracked_files)?;
+    validate_git_provenance(source_root, revision)?;
     if actual != manifest.tracked_files {
         return Err(eyre!(
             "source root is dirty or differs from the exact signed tracked closure"
@@ -1507,87 +1527,19 @@ fn validate_source_root(_path: &Path) -> Result<()> {
 }
 
 fn inspect_source_tree(root: &Path, expected: &[SourceFileV1]) -> Result<Vec<SourceFileV1>> {
-    let index = git_output(root, &["ls-files", "--stage", "-z"])?;
-    let records = index
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty());
-    let mut indexed = BTreeMap::new();
-    for record in records {
-        let record = std::str::from_utf8(record).wrap_err("Git index record is not UTF-8")?;
-        let (metadata, path) = record
-            .split_once('\t')
-            .ok_or_else(|| eyre!("Git index record is malformed"))?;
-        let fields: Vec<&str> = metadata.split(' ').collect();
-        if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[2] != "0" {
-            return Err(eyre!(
-                "source index contains a symlink, submodule, merge stage, or unsupported mode"
-            ));
-        }
-        validate_source_relative_path(path)?;
-        validate_lower_hex("Git blob SHA-1", fields[1], 40)?;
-        if indexed
-            .insert(
-                path.to_owned(),
-                (fields[0].to_owned(), fields[1].to_owned()),
-            )
-            .is_some()
-        {
-            return Err(eyre!("Git index contains a duplicate source path"));
-        }
+    let actual = source::capture_tree(root)?;
+    if actual.as_slice() != expected {
+        return Err(eyre!("source root differs from its exact tracked manifest"));
     }
-    if indexed.len() != expected.len() || indexed.len() > MAX_SOURCE_FILES {
-        return Err(eyre!(
-            "signed source manifest is not the exact Git index closure"
-        ));
-    }
-    let mut actual = Vec::with_capacity(expected.len());
-    for entry in expected {
-        validate_source_relative_path(&entry.path)?;
-        validate_lower_hex("source file SHA-256", &entry.sha256, 64)?;
-        validate_lower_hex("source Git blob SHA-1", &entry.git_blob_sha1, 40)?;
-        let (git_mode, git_blob) = indexed
-            .get(&entry.path)
-            .ok_or_else(|| eyre!("signed source manifest names an untracked path"))?;
-        let expected_mode = if git_mode == "100755" { 0o755 } else { 0o644 };
-        if entry.mode != expected_mode || &entry.git_blob_sha1 != git_blob {
-            return Err(eyre!("signed source manifest mode/blob binding mismatch"));
-        }
-        let path = root.join(&entry.path);
-        let (mut file, snapshot) = open_pinned_regular(&path, "source closure file")?;
-        if snapshot.len != entry.size || snapshot.len > MAX_SOURCE_FILE_BYTES {
-            return Err(eyre!("source closure file size mismatch"));
-        }
-        #[cfg(unix)]
-        if snapshot.mode & 0o7777 != u32::from(entry.mode) {
-            return Err(eyre!("source closure file mode mismatch"));
-        }
-        let digest = sha256_reader(&mut file, &path)?;
-        ensure_pinned_unchanged(&path, "source closure file", &file, &snapshot)?;
-        if digest != entry.sha256 {
-            return Err(eyre!("source closure file SHA-256 mismatch"));
-        }
-        actual.push(entry.clone());
-    }
-    actual.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(actual)
 }
 
 fn validate_git_provenance(root: &Path, revision: &RevisionV1) -> Result<()> {
-    let git_dir = root.join(".git");
-    let metadata =
-        fs::symlink_metadata(&git_dir).wrap_err("source .git directory is unavailable")?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(eyre!("source .git must be one direct directory"));
-    }
-    let branch = git_text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
-    let head = git_text(root, &["rev-parse", "--verify", "HEAD"])?;
-    let tree = git_text(root, &["rev-parse", "--verify", "HEAD^{tree}"])?;
-    let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
-    if branch != SOURCE_BRANCH
+    let [branch, head, tree] = source::clean_git_identity(root)?;
+    if branch != revision.branch
         || head != revision.commit
         || head != crate::VERGEN_GIT_SHA
         || tree != revision.tree
-        || !status.is_empty()
     {
         return Err(eyre!(
             "source checkout is not the exact clean optimizations HEAD/tree compiled into this CLI"
@@ -1608,11 +1560,15 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     Ok(value.to_owned())
 }
 
-fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = std::process::Command::new(GIT)
+fn git_command(root: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(GIT);
+    command
         .env_clear()
         .env("LC_ALL", "C")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("--no-pager")
         .arg("--no-optional-locks")
@@ -1621,7 +1577,12 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
         .arg("-c")
         .arg("core.hooksPath=/dev/null")
         .arg("-C")
-        .arg(root)
+        .arg(root);
+    command
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = git_command(root)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()

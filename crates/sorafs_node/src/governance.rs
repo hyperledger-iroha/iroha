@@ -4011,7 +4011,7 @@ fn encode_governance_two_slot_value_v1<T: norito::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, GovernancePublishError> {
-    norito::to_bytes(value).map_err(|error| {
+    norito::encode_canonical(value).map_err(|error| {
         GovernancePublishError::other(format!("failed to encode {label}: {error}"))
     })
 }
@@ -8803,7 +8803,7 @@ fn append_runtime_signed_dag_payload(
     let block_digest_hex = blake3::hash(&block_bytes).to_hex().to_string();
     let block_cid_hex = hex::encode(&block.block_cid);
     let block_path = runtime_dag_block_path(root, sequence, &block_cid_hex);
-    let head_bytes = norito::to_bytes(&head).map_err(|err| {
+    let head_bytes = norito::encode_canonical(&head).map_err(|err| {
         GovernancePublishError::other(format!("encode governance runtime DAG head: {err}"))
     })?;
     let mut entry = JsonMap::new();
@@ -9248,9 +9248,9 @@ fn canonical_runtime_source_payload_len(
     fn encoded_bounded_len<T: norito::NoritoSerialize>(
         value: &T,
     ) -> Result<usize, GovernancePublishError> {
-        let exact = norito::core::encoded_frame_len(value).map_err(|error| {
+        let exact = norito::canonical_frame_len(value).map_err(|error| {
             GovernancePublishError::other(format!(
-                "failed to size canonical governance source payload without allocation: {error}"
+                "failed to size canonical governance source payload without an output frame: {error}"
             ))
         })?;
         if exact > GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES {
@@ -9299,7 +9299,7 @@ fn canonical_runtime_source_payload_bytes(
         value: &T,
         expected_len: usize,
     ) -> Result<Vec<u8>, GovernancePublishError> {
-        let bytes = norito::to_bytes(value).map_err(|error| {
+        let bytes = norito::encode_canonical(value).map_err(|error| {
             GovernancePublishError::other(format!(
                 "failed to encode canonical governance source payload: {error}"
             ))
@@ -9349,7 +9349,7 @@ fn preflight_runtime_signed_dag_payload(
         )));
     }
     // Every variable-size source variant is semantically bounded before this
-    // point, and `encoded_frame_len` above performs a real serialization into
+    // point, and `canonical_frame_len` above performs a real serialization into
     // a counting sink. The remaining node/block fields are fixed-width except
     // for the already qualified, 128-byte-bounded publisher identity. One
     // fixed envelope allowance therefore bounds the node, and a second bounds
@@ -9385,7 +9385,7 @@ where
     T: norito::NoritoSerialize,
 {
     let max = bytes.len().max(1);
-    let value = norito::decode_from_bytes_with_limits(
+    norito::decode_canonical_with_limits(
         bytes,
         DecodeLimits::new(
             MAX_REPUTATION_TRUST_EDGES,
@@ -9395,18 +9395,12 @@ where
             128,
         ),
     )
-    .map_err(|error| {
-        GovernancePublishError::other(format!("{label} canonical decode failed: {error}"))
-    })?;
-    let canonical = norito::to_bytes(&value).map_err(|error| {
-        GovernancePublishError::other(format!("{label} canonical encode failed: {error}"))
-    })?;
-    if canonical != bytes {
-        return Err(GovernancePublishError::other(format!(
-            "{label} bytes are noncanonical"
-        )));
-    }
-    Ok(value)
+    .map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => {
+            GovernancePublishError::other(format!("{label} bytes are noncanonical"))
+        }
+        error => GovernancePublishError::other(format!("{label} canonical decode failed: {error}")),
+    })
 }
 fn runtime_dag_decode_allocation_limit(input_bytes: usize) -> usize {
     input_bytes
@@ -9805,7 +9799,7 @@ fn validate_runtime_dag_provider_binding(
 fn runtime_dag_transition_body_digest(
     body: &RuntimeDagQualificationTransitionBodyV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
-    let canonical = norito::to_bytes(body).map_err(|error| {
+    let canonical = norito::encode_canonical(body).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG provider transition body: {error}"
         ))
@@ -9827,7 +9821,7 @@ pub fn governance_dag_key_transition_signing_payload_v1(
         incoming_segment_revision,
         transition_body_digest,
     };
-    let canonical = norito::to_bytes(&payload).map_err(|error| {
+    let canonical = norito::encode_canonical(&payload).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG key-transition signing payload: {error}"
         ))
@@ -9841,7 +9835,7 @@ pub fn governance_dag_key_transition_signing_payload_v1(
 fn runtime_dag_archive_signing_bytes(
     body: &RuntimeDagQualificationArchiveBodyV1,
 ) -> Result<Vec<u8>, GovernancePublishError> {
-    let canonical = norito::to_bytes(body).map_err(|error| {
+    let canonical = norito::encode_canonical(body).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG qualification archive body: {error}"
         ))
@@ -9894,7 +9888,7 @@ fn verify_runtime_dag_binding_signature(
 fn runtime_dag_transition_digest(
     transition: &RuntimeDagQualificationTransitionV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
-    let canonical = norito::to_bytes(transition).map_err(|error| {
+    let canonical = norito::encode_canonical(transition).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG provider transition: {error}"
         ))
@@ -9907,7 +9901,7 @@ fn runtime_dag_transition_digest(
 fn runtime_dag_archive_digest(
     archive: &RuntimeDagQualificationArchiveV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
-    let canonical = norito::to_bytes(archive).map_err(|error| {
+    let canonical = norito::encode_canonical(archive).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG qualification archive: {error}"
         ))
@@ -10273,7 +10267,7 @@ fn write_runtime_dag_qualification_state<T: norito::NoritoSerialize>(
     max_bytes: usize,
     immutable: bool,
 ) -> Result<Vec<u8>, GovernancePublishError> {
-    let bytes = norito::to_bytes(value).map_err(|error| {
+    let bytes = norito::encode_canonical(value).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode canonical governance runtime DAG qualification state: {error}"
         ))
@@ -12014,7 +12008,7 @@ fn runtime_dag_producer_checkpoint_generation(
 fn runtime_dag_producer_checkpoint_record(
     checkpoint: &RuntimeDagProducerCheckpointV1,
 ) -> Result<GovernanceDagSealedStateRecord, GovernancePublishError> {
-    let payload = norito::to_bytes(checkpoint).map_err(|error| {
+    let payload = norito::encode_canonical(checkpoint).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG producer checkpoint: {error}"
         ))
@@ -12220,7 +12214,7 @@ fn runtime_dag_producer_staging_revision(
     head: &RuntimeDagProducerStagedArtifactV1,
     index: &RuntimeDagProducerStagedArtifactV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
-    let checkpoint_bytes = norito::to_bytes(checkpoint).map_err(|error| {
+    let checkpoint_bytes = norito::encode_canonical(checkpoint).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG staging checkpoint: {error}"
         ))
@@ -13800,7 +13794,7 @@ fn commit_runtime_dag_producer_transaction(
         ));
     }
     validate_runtime_dag_producer_intent_bounds(root, &intent, &staged)?;
-    let intent_payload = norito::to_bytes(&intent).map_err(|error| {
+    let intent_payload = norito::encode_canonical(&intent).map_err(|error| {
         GovernancePublishError::other(format!(
             "encode governance runtime DAG producer intent: {error}"
         ))
@@ -14854,7 +14848,7 @@ fn ensure_canonical_governance_encoding<T: norito::NoritoSerialize>(
     encoded: &[u8],
     payload_kind: &'static str,
 ) -> Result<(), GovernancePublishError> {
-    let canonical = norito::to_bytes(value).map_err(|err| {
+    let canonical = norito::encode_canonical(value).map_err(|err| {
         GovernancePublishError::other(format!(
             "failed to canonically encode {payload_kind} before publication: {err}"
         ))

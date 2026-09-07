@@ -5,6 +5,7 @@ isi! {
     ///
     /// `alias = None` clears the current binding.
     /// `alias = Some(...)` sets/updates the binding and optionally refreshes lease metadata.
+    #[norito_schema(name = "iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias")]
     pub struct SetAssetDefinitionAlias {
         /// Asset definition that should be updated.
         pub asset_definition_id: AssetDefinitionId,

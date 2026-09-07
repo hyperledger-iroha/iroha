@@ -2022,6 +2022,7 @@ impl KagemushaOperationLookupV1 {
 isi! {
     /// Atomically debit online funds, increase the pooled reserve, and accept one fixed issuance.
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1")]
     pub struct TopUpKagemushaV1 {
         /// Complete deterministic pre-finality issuance intent.
         pub request: KagemushaTopUpRequestV1,
@@ -2031,6 +2032,7 @@ isi! {
 isi! {
     /// Verify and settle one full or partial hardware-bound redemption voucher.
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1")]
     pub struct RedeemKagemushaV1 {
         /// Complete terminal redemption request.
         pub request: KagemushaRedemptionRequestV1,
@@ -2200,6 +2202,8 @@ fn ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     Hash::new(preimage)
 }
 
+#[cfg(all(test, feature = "json"))]
+pub(crate) mod generated_identity_values;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2511,7 +2515,7 @@ mod tests {
             .expect("attach mint authorization")
     }
 
-    fn top_up_request() -> KagemushaTopUpRequestV1 {
+    pub(super) fn top_up_request() -> KagemushaTopUpRequestV1 {
         let profile = hardware_profile();
         let network_id = network();
         let asset = asset();
@@ -2551,7 +2555,7 @@ mod tests {
         attach_test_mint_authorization(request)
     }
 
-    fn redemption_request() -> KagemushaRedemptionRequestV1 {
+    pub(super) fn redemption_request() -> KagemushaRedemptionRequestV1 {
         let network_id = network();
         let asset = asset();
         let asset_incarnation = asset_incarnation(1);

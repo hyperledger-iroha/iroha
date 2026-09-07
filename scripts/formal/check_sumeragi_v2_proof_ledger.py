@@ -59000,6 +59000,7 @@ if ingress_ownership.as_ref().is_some_and(|ownership| {
         || !ownership.matches_semantic_origin(&sender)
         || !ownership.matches_reply_routes(reply_routes.as_ref())
 }) {
+    self.output_guard.close_admission_for_restart();
     return V2LaneIngressOutcome::Rejected;
 }
 """,
@@ -66165,20 +66166,6 @@ self.collect_committed_lane_sessions();
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
         """
-let autonomous_anchor =
-    self.canonical_autonomous_anchor_matches_kura(&session.proposal);
-let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
-    &session.prepare_qc,
-    autonomous_anchor,
-)?;
-""",
-        "anchored lane persistence must derive autonomous execution authority from the checked PrepareQC role",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
-        """
 if autonomous_certificate {
     persisted = persisted.saturating_add(1);
     continue;
@@ -66188,54 +66175,9 @@ if autonomous_certificate {
         errors,
         count=2,
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
-        """
-if self.lane_sessions.len() >= hydration_capacity
-    && !self.lane_sessions.contains_proposal(proposal)
-{
-    self.output_guard.close_admission_for_restart();
-    return Err(V2LaneWorkError::InvalidContext(
-        "historical autonomous recovery sessions exceed bounded capacity".to_owned(),
-    ));
-}
-self.lane_sessions
-    .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
-    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
-self.authorize_autonomous_ready_from_durable_input(
-    &record.payload,
-    proposal,
-    record.historical_context_id,
-)
-.map_err(V2LaneWorkError::InvalidContext)?;
-""",
-        "late canonical lane hydration must bound and authorize every exact historical recovery proposal before successor work",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
-        """
-raw_proposals.sort_by_key(|proposal| {
-    let descriptor = &proposal.descriptor;
-    (descriptor.proposal_height, descriptor.lane_id, descriptor.dataspace_id,
-        descriptor.lane_block_height, proposal.proposal_hash,)
-});
-for proposal in raw_proposals {
-    self.lane_sessions
-        .insert_recovered_proposal_replacing_uncommitted_conflict(proposal)
-        .map_err(|error| {
-            self.output_guard.close_admission_for_restart();
-            V2LaneWorkError::InvalidContext(format!(
-                "canonical raw lane hydration conflicts with retained session state: {error}"
-            ))
-        })?;
-}
-""",
-        "canonical raw lane hydration must replay the complete predecessor chain in deterministic order and fail closed on conflicts",
-        errors,
-    )
+    # Required historical/raw hydration is bound once by the canonical
+    # _require_lane_predecessor_ordering_source_contracts call below. Its atomic
+    # batch and publication checks replace the superseded per-proposal path.
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::prune_finalized_merge_sidecars"),
@@ -69096,40 +69038,11 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
     _require_lane_predecessor_ordering_source_contracts(
         lane_path, lane_ack_items, lane_items, errors
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("reconstruct_durable_lane_certificate"),
-        """
-let artifact = self.kura.read_certified_lane_block_artifact(
-    proposal.descriptor.lane_id,
-    proposal.descriptor.lane_block_height,
-);
-let Some(artifact) = artifact else {
-    return Ok(None);
-};
-if artifact.proposal != *proposal {
-    return Ok(None);
-}
-""",
-        "lane recovery reconstruction must begin from the exact certified Kura artifact",
-        errors,
+    _require_lane_public_certificate_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("reconstruct_durable_lane_certificate"),
-        """
-let requester_is_current_validator = self
-    .context
-    .roster
-    .iter()
-    .any(|entry| &entry.validator == sender);
-if !requester_is_current_validator && !artifact.commit_qc.validator_set.contains(sender) {
-    return Err(());
-}
-""",
-        "lane recovery reconstruction must authenticate current or historical membership",
-        errors,
-    )
+    errors.extend(_lane_recovery_cache_source_fidelity_errors(repo_root))
+    errors.extend(_terminal_lane_source_fidelity_errors(repo_root))
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("serve_durable_lane_certificate"),
@@ -69563,88 +69476,9 @@ if certified_body_request_is_superseded_after_decision(request, terminal_subject
         "shared current Serve classification must bind transport ownership, retire unauthenticated input locally, and retain authenticated Decision supersession for durable negative settlement",
         errors,
     )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-match inbound.message() {
-    BlockMessage::KuraReplicaAdvert(_) => {
-        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-    }
-    BlockMessage::LaneBlockProposal(_)
-    | BlockMessage::LaneExecutablePayload(_)
-    | BlockMessage::LaneBlockNewViewVote(_)
-    | BlockMessage::LaneBlockNewViewCertificate(_)
-    | BlockMessage::LaneBlockVote(_)
-    | BlockMessage::LaneBlockQc(_)
-    | BlockMessage::LaneBlockCertificate(_)
-    | BlockMessage::LaneHistoricalRecoveryRequest(_)
-    | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
-        let _ = lane_work
-            .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
-        let _ = lane_work.service_next_historical_recovery()?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-    }
-    BlockMessage::V2(_) => {}
-}
-""",
-        "KuraReplicaAdvert ingress must bypass both consensus reducers through its exact durable admission seam",
-        errors,
+    _require_ordinary_ingress_consumer_source_contracts(
+        ordinary_ingress_consumer_path, ordinary_ingress_consumer, errors,
     )
-    if ordinary_ingress_consumer is not None:
-        consumer_tokens = rust_code_tokens(ordinary_ingress_consumer.body)
-        kura_terminal_positions = _token_sequence_positions(
-            consumer_tokens,
-            rust_code_tokens(
-                """
-BlockMessage::KuraReplicaAdvert(_) => {
-    admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-}
-"""
-            ),
-        )
-        lane_local_positions = _token_sequence_positions(
-            consumer_tokens,
-            rust_code_tokens(
-                """
-BlockMessage::LaneBlockProposal(_)
-| BlockMessage::LaneExecutablePayload(_)
-| BlockMessage::LaneBlockNewViewVote(_)
-| BlockMessage::LaneBlockNewViewCertificate(_)
-| BlockMessage::LaneBlockVote(_)
-| BlockMessage::LaneBlockQc(_)
-| BlockMessage::LaneBlockCertificate(_)
-| BlockMessage::LaneHistoricalRecoveryRequest(_)
-| BlockMessage::LaneHistoricalRecoveryResponse(_) => {
-    let _ = lane_work
-        .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
-"""
-            ),
-        )
-        consensus_owner_positions = _token_sequence_positions(
-            consumer_tokens,
-            rust_code_tokens(
-                "let mut ingress_ownership = inbound.take_ingress_ownership()"
-            ),
-        )
-        if (
-            len(kura_terminal_positions) != 1
-            or len(lane_local_positions) != 1
-            or len(consensus_owner_positions) != 1
-            or not (
-                kura_terminal_positions[0]
-                < lane_local_positions[0]
-                < consensus_owner_positions[0]
-            )
-        ):
-            errors.append(
-                f"{ordinary_ingress_consumer_path}:{ordinary_ingress_consumer.line}: "
-                "KuraReplicaAdvert ingress "
-                "must bypass both consensus reducers through its exact durable "
-                "admission seam before lane-local or leader-wire dispatch"
-            )
     _require_rust_token_sequence(
         ordinary_ingress_consumer_path,
         ordinary_ingress_consumer,
@@ -69708,39 +69542,6 @@ if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
 """,
         "runner ingress must retain canonical message, semantic origin, and source-isolated routes through checked dequeue and Runtime binding",
         errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["historical_body_guard"],
-        "historical body route must reconstruct from Kura under the output guard",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-services.post_durable_history_response_on_reply_routes_with_permit(
-    response_peer,
-    reply_routes,
-    ingress_ownership,
-    response,
-    permit,
-)
-""",
-        "historical global responses preserve the complete prevalidated route set",
-        errors,
-        count=2,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        ordinary_ingress_consumer,
-        """
-if reply_routes.semantic_target() != &sender {
-""",
-        "historical response route sets must match their authenticated semantic target",
-        errors,
-        count=2,
     )
     _require_rust_token_sequence(
         runner_path,

@@ -437,7 +437,7 @@ mod tests {
         }
     }
     fn sample_merge_entry() -> MergeLedgerEntry {
-        let mut lane_validators: Vec<_> = (0..4)
+        let mut lane_validators: Vec<_> = (1_u8..=4)
             .map(|seed| {
                 PeerId::new(
                     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)

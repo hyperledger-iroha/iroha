@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "runner": "architecture-macos-arm64-128g-20260906",
+  "release_ceiling_bytes": 13958643712,
+  "model_reduction_percent": 25,
+  "model_packages": [
+    "iroha_data_model",
+    "iroha_model_base",
+    "iroha_privacy_model",
+    "iroha_service_model"
+  ],
+  "surfaces": {
+    "sdk": {
+      "cargo_args": [
+        "build",
+        "-p",
+        "iroha",
+        "--lib"
+      ],
+      "state": "measured",
+      "baseline": {
+        "report_sha256": "d1a93d2f8d08326f1235c4fa3b0920268e1a4c389a569c6138a9626419e82279",
+        "input_sha256": "4256b0cd9dcd1b114b9ce5baee7b59f270926f14861783f6d4795bafbb4034db",
+        "compiler_measurements_sha256": "055b2ff99d93c4edda5f9dfd39675f938089f054cfa36d81ce3364103750a252",
+        "model_unit": {
+          "crate_types": [
+            "lib"
+          ],
+          "features": [
+            "application-model",
+            "bls",
+            "gost",
+            "governance",
+            "http",
+            "json",
+            "mv",
+            "norito_derive",
+            "pqc",
+            "sm",
+            "transparent_api"
+          ],
+          "kind": [
+            "lib"
+          ],
+          "name": "iroha_data_model",
+          "package_id": "workspace#iroha_data_model@2.0.0-rc.2.0",
+          "profile": {
+            "debug_assertions": true,
+            "debuginfo": 0,
+            "opt_level": "0",
+            "overflow_checks": true,
+            "test": false
+          },
+          "source_path": "src/lib.rs"
+        },
+        "model_peak_bytes": 13295861760
+      },
+      "model_limit_bytes": 9971896320,
+      "introduced_units": []
+    },
+    "model": {
+      "cargo_args": [
+        "build",
+        "-p",
+        "iroha_data_model",
+        "--lib"
+      ],
+      "state": "measured",
+      "baseline": {
+        "report_sha256": "7c6f36e2f528a2de9ae4424ba235a13212c261a36b08709cb35d4d2a94f3077d",
+        "input_sha256": "1e6781959e8678dbf77291317e675a23a14230c8f1d50f4fac0c28d0a0c93cd4",
+        "compiler_measurements_sha256": "6085dc6fcb6e7fd8f2b8d7f428e56e9fcfcb6f5675bec4489a4dee1d0438cb3b",
+        "model_unit": {
+          "crate_types": [
+            "lib"
+          ],
+          "features": [
+            "application-model",
+            "bls",
+            "default",
+            "gost",
+            "governance",
+            "json",
+            "mv",
+            "norito_derive",
+            "pqc",
+            "sm"
+          ],
+          "kind": [
+            "lib"
+          ],
+          "name": "iroha_data_model",
+          "package_id": "workspace#iroha_data_model@2.0.0-rc.2.0",
+          "profile": {
+            "debug_assertions": true,
+            "debuginfo": 0,
+            "opt_level": "0",
+            "overflow_checks": true,
+            "test": false
+          },
+          "source_path": "src/lib.rs"
+        },
+        "model_peak_bytes": 13275365376
+      },
+      "model_limit_bytes": 9956524032,
+      "introduced_units": []
+    },
+    "core-tests": {
+      "cargo_args": [
+        "test",
+        "-p",
+        "iroha_core",
+        "--features",
+        "iroha-core-tests"
+      ],
+      "state": "pending",
+      "reason": "TODO: Requalify the complete Core test build; frozen grouped governance fixtures fail."
+    },
+    "torii-tests": {
+      "cargo_args": [
+        "test",
+        "-p",
+        "iroha_torii"
+      ],
+      "state": "pending",
+      "reason": "TODO: Requalify the complete Torii test build after the stale caller/fixture migration."
+    },
+    "daemon-release": {
+      "cargo_args": [
+        "build",
+        "--release",
+        "-p",
+        "irohad",
+        "--bin",
+        "iroha3d"
+      ],
+      "state": "pending",
+      "reason": "TODO: Requalify the complete daemon release build with its repaired shared-Torii dependency."
+    },
+    "native-bridge-release": {
+      "cargo_args": [
+        "build",
+        "--release",
+        "-p",
+        "connect_norito_bridge",
+        "--lib",
+        "--features",
+        "privacy-production-enabled"
+      ],
+      "state": "measured",
+      "baseline": {
+        "report_sha256": "3239dc3e861619afeb20a6c018849a0492bf5aee74a5c3bb48cc8cf7bf8e0d95",
+        "input_sha256": "7241242d7ea7710a5a566392508713bfb28c0b97ac0e47eae49df5ec72faaa94",
+        "compiler_measurements_sha256": "31089c30c88f6f85a9e193b9abe1135d8f4047b79b6f76651741949f336a6c15",
+        "model_unit": {
+          "crate_types": [
+            "lib"
+          ],
+          "features": [
+            "application-model",
+            "bls",
+            "bridge",
+            "gost",
+            "governance",
+            "json",
+            "mv",
+            "norito_derive",
+            "pqc",
+            "privacy-exact12-conformance",
+            "sm",
+            "transparent_api"
+          ],
+          "kind": [
+            "lib"
+          ],
+          "name": "iroha_data_model",
+          "package_id": "workspace#iroha_data_model@2.0.0-rc.2.0",
+          "profile": {
+            "debug_assertions": false,
+            "debuginfo": 0,
+            "opt_level": "1",
+            "overflow_checks": false,
+            "test": false
+          },
+          "source_path": "src/lib.rs"
+        },
+        "model_peak_bytes": 32736935936
+      },
+      "model_limit_bytes": 24552701952,
+      "introduced_units": []
+    },
+    "javascript-native-release": {
+      "cargo_args": [
+        "build",
+        "--release",
+        "-p",
+        "iroha_js_host",
+        "--lib"
+      ],
+      "state": "measured",
+      "baseline": {
+        "report_sha256": "5bf51f8b9cd0231b9cdd9407e79f4c804b5739ccba127dc923b3960e348b689e",
+        "input_sha256": "26d886cf671006d7d695911f8ac391b0884ccd2449825940585d7ade5e498042",
+        "compiler_measurements_sha256": "699e55a3a33bf848507a844879793d3db8443771c565f0c6b34aea825e85ddb1",
+        "model_unit": {
+          "crate_types": [
+            "lib"
+          ],
+          "features": [
+            "application-model",
+            "bls",
+            "bridge",
+            "gost",
+            "governance",
+            "http",
+            "json",
+            "mv",
+            "norito_derive",
+            "pqc",
+            "sm",
+            "transparent_api"
+          ],
+          "kind": [
+            "lib"
+          ],
+          "name": "iroha_data_model",
+          "package_id": "workspace#iroha_data_model@2.0.0-rc.2.0",
+          "profile": {
+            "debug_assertions": false,
+            "debuginfo": 0,
+            "opt_level": "1",
+            "overflow_checks": false,
+            "test": false
+          },
+          "source_path": "src/lib.rs"
+        },
+        "model_peak_bytes": 32704380928
+      },
+      "model_limit_bytes": 24528285696,
+      "introduced_units": []
+    }
+  }
+}

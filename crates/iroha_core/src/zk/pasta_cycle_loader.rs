@@ -635,6 +635,7 @@ where
     /// Source-indexed scalar coefficients for every deferred equality.
     pub(super) equations: Vec<Vec<(usize, Inner<C>)>>,
 }
+#[cfg(test)]
 impl<C> DeferredEquationWitness<C>
 where
     C: CurveAffineExt,
@@ -729,6 +730,13 @@ where
     Inner<C>: BigPrimeField,
 {
     /// Select exact cached point chunks by a strictly increasing source map.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Reciprocal source-map inspection is only used by circuit regression tests"
+        )
+    )]
     pub(super) fn mapped_poseidon_elements_v1(
         &self,
         points: &[C],

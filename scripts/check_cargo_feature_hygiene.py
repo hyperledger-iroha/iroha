@@ -289,8 +289,8 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha": {
         "default": ("tls-rustls-native-roots", "gost", "sm"),
-        "gost": ("iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"),
-        "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
+        "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
+        "sm": ("iroha_crypto/sm", "iroha_data_model/sm"),
         "tls-rustls-native-roots": (
             "reqwest/rustls-tls-native-roots",
             "tokio-tungstenite/rustls-tls-native-roots",
@@ -450,12 +450,10 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "dev-tests",
         "dev-tools",
         "fastpq-gpu",
-        "goldilocks_backend",
         "halo2-dev-tests",
         "ids_projection",
         "iroha-core-tests",
         "kagemusha-real-proof-harness",
-        "kaigi_privacy_mocks",
         "privacy-release-evidence",
         "profiling",
         "proofs-full",
@@ -470,7 +468,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     ),
     "iroha_torii": (
         "bench",
-        "goldilocks_backend",
         "halo2-dev-tests",
         "pprof",
         "profiling",
@@ -507,7 +504,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_genesis": ("dev-tools", "sm-ffi-openssl"),
     "iroha_telemetry": (
         "dev-telemetry",
-        "otel-exporter",
         "telegram",
     ),
     "ivm": (
@@ -515,14 +511,13 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "bench",
         "cuda",
         "dev-tools",
-        "goldilocks_backend",
         "ivm_vrf_tests",
         "ivm_zk_tests",
         "metal",
     ),
     "iroha_primitives": ("bench", "ffi_export", "iroha_ffi", "trybuild-tests"),
     "iroha_kagami": ("dev-tools",),
-    "iroha_zkp_halo2": ("bench", "goldilocks_backend", "schema-structural"),
+    "iroha_zkp_halo2": ("bench", "schema-structural"),
     "iroha_executor": ("debug",),
 }
 

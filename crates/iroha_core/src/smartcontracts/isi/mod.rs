@@ -11,6 +11,8 @@ pub mod defi;
 pub mod domain;
 /// Native asset escrow instruction handlers.
 pub mod escrow;
+/// Generic game custody and proof settlement transitions.
+pub mod game;
 pub mod identifier;
 /// Kagemusha reserve settlement instruction handlers.
 pub mod kagemusha;
@@ -21,6 +23,10 @@ pub mod multisig;
 /// Musubi package registry instruction handlers.
 pub mod musubi;
 pub mod nft;
+/// Shared protected NFT reservation and exact-price sale support.
+pub mod nft_custody;
+/// Generic native exact-price NFT marketplace.
+pub mod nft_market;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
 /// Canonical first-release privacy governance and proof admission.
@@ -28,12 +34,6 @@ pub mod privacy;
 /// Atomic private cross-dataspace settlement carrier execution.
 pub mod private_settlement;
 pub mod query;
-/// Generic game custody and proof settlement transitions.
-pub mod game;
-/// Shared protected NFT reservation and exact-price sale support.
-pub mod nft_custody;
-/// Generic native exact-price NFT marketplace.
-pub mod nft_market;
 pub mod ram_lfe;
 pub mod repo;
 pub mod rwa;

@@ -2,6 +2,9 @@
 //! This validates Core publication/recovery semantics, not physical hardware qualification.
 
 use super::*;
+use crate::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::{
+    KagemushaHistoryNodeRecordV1, KagemushaHistoryRootSelectionV1,
+};
 use crate::zk::kagemusha_v1_state::tests::{
     AcceptSnapshotRecursiveVerifierV1, coordinator_operation_store_tests,
     snapshot_device_public_key, snapshot_device_signature,

@@ -1031,24 +1031,65 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         // Core validates exact-price NFT consent and protected custody.
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::OfferNftV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::BuyNftV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::CancelNftOfferV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::OfferNftV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::BuyNftV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::nft_market::CancelNftOfferV1>()
+        {
+            execute!(executor, isi);
+        }
         // Native races enforce every signature, deadline and custody effect in Core.
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::RegisterExecutionProofProfileV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::VerifyExecutionProofV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::SettleGameSessionV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::OpenGameSessionV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::JoinGameSessionV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::StartGameSessionV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::CommitGameCheckpointV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ChallengeGameSessionV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::CommitGameInputsV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::RevealGameInputsV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::AdvanceGameDeadlineV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ExpireGameSessionV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ClaimGamePayoutV1>() { execute!(executor, isi); }
-        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::StakeGameItemV1>() { execute!(executor, isi); }
+        if let Some(isi) =
+            any.downcast_ref::<iroha_data_model::isi::game::RegisterExecutionProofProfileV1>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::VerifyExecutionProofV1>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::SettleGameSessionV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::OpenGameSessionV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::JoinGameSessionV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::StartGameSessionV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::CommitGameCheckpointV1>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ChallengeGameSessionV1>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::CommitGameInputsV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::RevealGameInputsV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::AdvanceGameDeadlineV1>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ExpireGameSessionV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::ClaimGamePayoutV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::game::StakeGameItemV1>() {
+            execute!(executor, isi);
+        }
         // Core owns the signature, chain/client binding, canonical policy,
         // active-account, address-slot, escrow, and lifecycle invariants. The
         // three VPN instructions form one indivisible native surface and must
@@ -2947,6 +2988,7 @@ pub mod account {
     #[cfg(test)]
     mod reserved_transfer_control_tests {
         use super::*;
+        use crate::prelude;
         use core::num::NonZeroU64;
 
         #[derive(Debug)]
@@ -5541,7 +5583,7 @@ mod sorafs_permission_tests {
         instruction: T,
         visit: impl Fn(&mut MockExecutor, &T),
     ) {
-        with_mock_permissions(vec![PermissionObject::from(CanBindSorafsAlias)], || {
+        with_mock_permissions(Vec::new(), || {
             let mut executor = MockExecutor::new(false);
             visit(&mut executor, &instruction);
             assert!(
@@ -5895,6 +5937,11 @@ mod sorafs_permission_tests {
             fn $name() {
                 let instruction = $instruction;
                 assert_denied_without_permission(instruction.clone(), $visitor);
+                assert_denied_with_permission(
+                    instruction.clone(),
+                    PermissionObject::from(CanRegisterDomain),
+                    $visitor,
+                );
                 assert_allowed_with_permission(
                     instruction,
                     PermissionObject::from($permission),

@@ -32,7 +32,9 @@ pub type Result<T, E = PrivacyError> = core::result::Result<T, E>;
     norito::codec::Encode,
     norito::codec::Decode,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_crypto::privacy::LaneCommitmentId")]
 pub struct LaneCommitmentId(u16);
 impl LaneCommitmentId {
     /// Create a new identifier.
@@ -366,3 +368,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

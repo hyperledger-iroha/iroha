@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+
 import java.net.URI
 import java.time.Duration
 import java.util.Collections
@@ -33,9 +35,12 @@ import org.hyperledger.iroha.sdk.musubi.MusubiSearchQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiVersionV1
 
 /** Exact-network authenticated client for the twelve typed Musubi registry queries. */
-class MusubiToriiClientV1 private constructor(builder: Builder) {
+class MusubiToriiClientV1 private constructor(builder: Builder) : AutoCloseable {
+    /** Cancels this client's calls; an injected executor remains application-owned. */
+    override fun close() { executor.close() }
+
     private val executor: HttpTransportExecutor =
-        builder.executor ?: PlatformHttpTransportExecutor.createDefault()
+        HttpTransportScope.create(builder.executor)
     private val baseUri: URI = builder.baseUri
     private val localSigningContext: LocalSigningContext = checkNotNull(builder.localSigningContext) {
         "localSigningContext must be configured before building a Musubi client"
@@ -281,7 +286,7 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
                 target,
                 body,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
             )
         } else {
             CanonicalRequestSigner.buildHeaders(
@@ -290,7 +295,7 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
                 target,
                 body,
                 canonicalAuth.accountId,
-                canonicalAuth.privateKey,
+                canonicalAuth.signer,
                 timestampMs,
                 nonce!!,
             )

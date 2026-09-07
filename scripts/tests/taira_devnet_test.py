@@ -1027,6 +1027,7 @@ class FakeRuntime:
                     f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n'
                     "[nexus.storage]\n"
                     f"local_budget_bytes = {module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n"
+                    f"max_wsv_memory_bytes = {module.TAIRA_NEXUS_MAX_WSV_MEMORY_BYTES}\n"
                     "[nexus.storage.disk_budget_weights]\n"
                     + storage_weights
                     + "[sorafs.storage]\n"
@@ -1698,7 +1699,7 @@ class TairaDevnetTests(unittest.TestCase):
                 )
 
     def test_taira_guest_image_bound_is_exact_across_stage_and_validator_config(self) -> None:
-        expected = 10 * 1024 * 1024 * 1024
+        expected = 1600 * 1024 * 1024
         self.assertEqual(module.TAIRA_INROU_GUEST_IMAGE_MAX_BYTES, expected)
         self.assertEqual(module.MAX_INROU_CANARY_GUEST_BYTES, expected)
         self.assertEqual(
@@ -1715,11 +1716,22 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(
             cli_source.count(
                 "const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = "
-                "10 * 1024 * 1024 * 1024;"
+                "defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES;"
             ),
             1,
-            "the native stager must use the same exact 10 GiB Taira bound",
+            "the native stager must use the same exact shared Taira bound",
         )
+        helper_path = REPO_ROOT / "scripts" / "ci" / "prepare_inrou_portable_guest_assets.py"
+        helper_spec = importlib.util.spec_from_file_location("taira_guest_assets_profile", helper_path)
+        assert helper_spec is not None and helper_spec.loader is not None
+        helper = importlib.util.module_from_spec(helper_spec)
+        helper_spec.loader.exec_module(helper)
+        self.assertEqual(helper.NORMALIZED_ROOTFS_BYTES, 1536 * 1024 * 1024)
+        self.assertEqual(
+            module.TAIRA_INROU_MAX_STORAGE_BYTES,
+            helper.NORMALIZED_ROOTFS_BYTES + (16 + 64) * 1024 * 1024,
+        )
+        self.assertLessEqual(helper.NORMALIZED_ROOTFS_BYTES + 27_236_288 + 13_923_072, expected)
 
     def test_up_requires_an_explicit_inrou_canary_workspace(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -3489,6 +3501,7 @@ class TairaDevnetTests(unittest.TestCase):
         source_nexus = (
             "[nexus.storage]\n"
             f"local_budget_bytes = {module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n"
+            f"max_wsv_memory_bytes = {module.TAIRA_NEXUS_MAX_WSV_MEMORY_BYTES}\n"
         )
         source_sorafs = "[sorafs.storage]\nenabled = false\n"
         cases = (

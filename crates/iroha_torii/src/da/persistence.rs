@@ -3721,6 +3721,11 @@ fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::Read
     fs::read_dir(spool_dir).map(Some)
 }
 fn create_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<()> {
+    match secure_file_metadata::from_path(spool_dir) {
+        Ok(metadata) => return validate_spool_dir_metadata(spool_dir, &metadata),
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(map_spool_dir_open_error(spool_dir, err)),
+    }
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -3729,21 +3734,32 @@ fn create_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(spool_dir)?;
-    let metadata = secure_file_metadata::from_path(spool_dir)?;
+    let metadata = secure_file_metadata::from_path(spool_dir)
+        .map_err(|err| map_spool_dir_open_error(spool_dir, err))?;
     validate_spool_dir_metadata(spool_dir, &metadata)
+}
+fn map_spool_dir_open_error(spool_dir: &Path, err: std::io::Error) -> std::io::Error {
+    #[cfg(unix)]
+    if err.raw_os_error() == Some(libc::ELOOP) {
+        return invalid_spool_dir_type(spool_dir);
+    }
+    err
+}
+fn invalid_spool_dir_type(spool_dir: &Path) -> std::io::Error {
+    std::io::Error::new(
+        ErrorKind::InvalidData,
+        format!(
+            "DA spool path `{}` is not a direct directory",
+            spool_dir.display()
+        ),
+    )
 }
 fn validate_spool_dir_metadata(
     spool_dir: &Path,
     metadata: &secure_file_metadata::SecureMetadata,
 ) -> std::io::Result<()> {
     if !secure_file_metadata::is_direct_directory(metadata) {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!(
-                "DA spool path `{}` is not a direct directory",
-                spool_dir.display()
-            ),
-        ));
+        return Err(invalid_spool_dir_type(spool_dir));
     }
     Ok(())
 }

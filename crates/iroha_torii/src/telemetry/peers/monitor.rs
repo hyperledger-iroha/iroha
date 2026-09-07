@@ -2,12 +2,12 @@ use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
 use crate::operator_signatures;
 use eyre::{Report, eyre};
 use http::StatusCode;
-use iroha_config::client_api::ConfigGetDTO;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
-use iroha_telemetry::metrics::Status;
+use iroha_torii_shared::configuration::Configuration;
+use iroha_torii_shared::status::Status;
 use norito::json::{self, Value};
 use reqwest::{Client, redirect::Policy};
 use std::{
@@ -743,7 +743,7 @@ fn construct_geo_query(
     Ok(url)
 }
 fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
-    let config = json::from_slice::<ConfigGetDTO>(bytes)
+    let config = json::from_slice::<Configuration>(bytes)
         .map_err(|error| eyre!("failed to decode canonical /v1/configuration payload: {error}"))?;
     Ok(PeerConfigSnapshot::from(&config))
 }

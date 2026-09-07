@@ -233,12 +233,13 @@ mod model {
         #[norito(required)]
         pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
-    /// Signature of transaction
+    /// Signature of a transaction, encoded in its declared tuple-field frame.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(decode_from_slice)]
     pub struct TransactionSignature(pub SignatureOf<TransactionPayload>);
     /// A single signature produced by a multisig member.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -294,13 +295,6 @@ mod model {
                 return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
             }
             Ok(())
-        }
-    }
-    impl<'a> norito::core::DecodeFromSlice<'a> for TransactionSignature {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-            let (inner, used) =
-                <SignatureOf<TransactionPayload> as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-            Ok((TransactionSignature(inner), used))
         }
     }
     /// Payload signed when committing to a sealed transaction.
@@ -929,6 +923,9 @@ pub enum PrivacyTransactionIntentErrorV1 {
     /// A platform payload length cannot be represented by the fixed u64 frame.
     #[error("privacy transaction-intent payload length overflow")]
     PayloadLengthOverflow,
+    /// The statement targets a different network, or the payload is genesis-only.
+    #[error("privacy statement network does not match the transaction network domain")]
+    NetworkDomainMismatch,
     /// The stored intent digest is zero.
     #[error("privacy statement transaction-intent digest must not be zero")]
     ZeroIntentDigest,
@@ -1183,7 +1180,7 @@ impl TransactionPayload {
     /// - `statement.context.transaction_intent_digest` becomes 32 zero bytes;
     /// - `envelope.statement_digest` becomes 32 zero bytes.
     ///
-    /// For ZK-ACE, the replay nullifier also becomes 32 zero bytes because it is derived from the
+    /// For ZK-ACE, the replay nullifier also becomes 48 zero bytes because it is derived from the
     /// resulting intent-bound authorization projection. For Vega, the device-authentication digest
     /// also becomes 32 zero bytes because `H_dev` binds the resulting transaction-intent digest.
     /// For the native IVM private-note protocol, the self-authenticating action digest likewise
@@ -1220,12 +1217,18 @@ impl TransactionPayload {
     ///
     /// # Errors
     ///
-    /// Returns a canonical projection error or an exact derived-field mismatch.
+    /// Returns a canonical projection error, network-domain mismatch, or an exact
+    /// derived-field mismatch.
     pub fn validate_privacy_transaction_intent_binding_v1(
         &self,
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
         let scan = scan_privacy_transaction_intent_v1(&self.instructions);
         let submission = validate_exact_direct_privacy_submission_v1(&scan)?;
+        if self.domain
+            != TransactionDomain::Network(submission.envelope.statement.context().network_id)
+        {
+            return Err(PrivacyTransactionIntentErrorV1::NetworkDomainMismatch);
+        }
         let expected_intent = self.privacy_transaction_intent_digest_v1()?;
         let actual_intent = submission
             .envelope
@@ -2474,9 +2477,15 @@ fn test_network_id(seed: u8) -> NetworkId {
         Hash::prehashed([seed; Hash::LENGTH]),
     ))
 }
+#[cfg(test)]
+#[path = "signed/authorization_tests.rs"]
+mod authorization_tests;
 #[cfg(all(test, feature = "fault_injection"))]
 #[path = "signed/fault_injection_tests.rs"]
 mod fault_injection_tests;
+#[cfg(test)]
+#[path = "signed/signature_codec_tests.rs"]
+mod signature_codec_tests;
 #[cfg(test)]
 #[path = "signed_model_tests.rs"]
 mod tests;

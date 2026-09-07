@@ -16,6 +16,8 @@ use norito::codec::{Decode, Encode};
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(tag = "event", content = "payload"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::social::SocialEvent")]
 pub enum SocialEvent {
     /// Promotional reward paid for a valid binding.
     RewardPaid(ViralRewardApplied),
@@ -32,6 +34,8 @@ pub enum SocialEvent {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::social::ViralRewardApplied")]
 pub struct ViralRewardApplied {
     /// UAID receiving the payout.
     pub uaid: UniversalAccountId,
@@ -61,6 +65,8 @@ pub struct ViralRewardApplied {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::social::ViralEscrowCreated")]
 pub struct ViralEscrowCreated {
     /// Escrow record captured at creation.
     pub escrow: ViralEscrowRecord,
@@ -71,6 +77,8 @@ pub struct ViralEscrowCreated {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::social::ViralEscrowReleased")]
 pub struct ViralEscrowReleased {
     /// Delivered escrow record.
     pub escrow: ViralEscrowRecord,
@@ -89,6 +97,8 @@ pub struct ViralEscrowReleased {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::social::ViralEscrowCancelled")]
 pub struct ViralEscrowCancelled {
     /// Escrow record being refunded.
     pub escrow: ViralEscrowRecord,
@@ -102,3 +112,6 @@ pub mod prelude {
         ViralRewardApplied,
     };
 }
+
+#[cfg(test)]
+mod captured_social_schema_tests;

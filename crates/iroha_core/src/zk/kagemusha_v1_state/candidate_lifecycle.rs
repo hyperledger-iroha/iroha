@@ -274,6 +274,7 @@ fn validate_outbox_reservation(
 }
 
 /// Return the implementation slot floor for one terminal operation.
+#[cfg(test)]
 pub(super) const fn implementation_live_outbox_slot_bytes_v1(
     operation_kind: KagemushaOperationKindV1,
 ) -> Option<u64> {

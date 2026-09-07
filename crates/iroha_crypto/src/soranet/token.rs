@@ -800,7 +800,8 @@ pub trait TokenStore: std::fmt::Debug + Send {
 struct TokenRecord {
     expires_at: SystemTime,
 }
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::token::TokenStoreEntry")]
 struct TokenStoreEntry {
     id: [u8; 32],
     expires_at_secs: u64,
@@ -808,6 +809,8 @@ struct TokenStoreEntry {
 }
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::token::TokenStoreSnapshot")]
 struct TokenStoreSnapshot {
     version: u8,
     high_watermark_secs: u64,
@@ -3049,3 +3052,6 @@ mod tests {
     }
     // typed-matrix-residual:end token-runners
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

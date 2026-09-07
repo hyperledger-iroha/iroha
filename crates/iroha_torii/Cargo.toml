@@ -93,12 +93,6 @@ push = ["app_api"]
 ws_integration_tests = ["app_api_wss"]
 ## Prototype: read-only debug endpoints for proof tag index; forwards to `iroha_core/zk-proof-tags`.
 zk-proof-tags = ["iroha_core/zk-proof-tags"]
-goldilocks_backend = [
-    "dep:iroha_zkp_halo2",
-    "iroha_zkp_halo2/goldilocks_backend",
-    "iroha_core/goldilocks_backend",
-    "ivm/goldilocks_backend",
-]
 zk-halo2 = ["iroha_core/zk-halo2"]
 zk-halo2-ipa = ["iroha_core/zk-halo2-ipa"]
 zk-stark = ["iroha_core/zk-stark"]
@@ -148,7 +142,7 @@ prometheus = { workspace = true, optional = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
-axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros", "matched-path"] }
+axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros", "matched-path", "original-uri"] }
 tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
@@ -198,6 +192,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
+iroha_service_model = { workspace = true }
 criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
@@ -264,3 +259,8 @@ required-features = ["app_api"]
 name = "kagemusha_operation_contract"
 path = "tests/kagemusha_operation_contract.rs"
 required-features = ["app_api"]
+
+[[test]]
+name = "account_capabilities_contract"
+path = "tests/account_capabilities_contract.rs"
+required-features = ["node-api"]

@@ -29,6 +29,8 @@ pub const SCCP_V1_SUMERAGI_PROTOCOL_VERSION: u16 = PROTOCOL_VERSION;
 pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
 /// Exact decimal scale of the first-release XOR SCCP payload.
 pub const SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE: u32 = 9;
+/// Exact byte length of one canonical epoch-aware SORA finality anchor.
+pub const SCCP_V1_SORA_FINALITY_ANCHOR_BYTES: usize = 188;
 /// Maximum number of nonterminal routes in the V1 registry.
 ///
 /// Terminal revisions are immutable history needed to authenticate messages emitted before a
@@ -74,7 +76,7 @@ pub const SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbL
 const SCCP_DOMAIN_SORA: u32 = 0;
 const SCCP_DOMAIN_ETH: u32 = 1;
 const SCCP_DOMAIN_BSC: u32 = 2;
-const SCCP_DOMAIN_TRON: u32 = 3;
+const SCCP_DOMAIN_TRON: u32 = 5;
 const SCCP_DOMAIN_TON: u32 = 4;
 const EVM_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:evm-destination-binding:v1";
 const TRON_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:tron-destination-binding:v1";
@@ -306,6 +308,8 @@ pub enum SccpRouteValidationError {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpBn254G1PointV1")]
 pub struct SccpBn254G1PointV1 {
     /// Canonical big-endian base-field x coordinate.
     pub x: [u8; 32],
@@ -328,6 +332,8 @@ impl SccpBn254G1PointV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpBn254G2PointV1")]
 pub struct SccpBn254G2PointV1 {
     /// First x-coordinate Fq2 limb (`x[0]` in the Solidity verifier).
     pub x_c0: [u8; 32],
@@ -354,6 +360,8 @@ impl SccpBn254G2PointV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254IcV1")]
 pub struct SccpGroth16Bn254IcV1 {
     /// Constant IC point.
     pub constant: SccpBn254G1PointV1,
@@ -406,6 +414,8 @@ impl SccpGroth16Bn254IcV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254VerifyingKeyV1")]
 pub struct SccpGroth16Bn254VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -503,6 +513,8 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381IcV1")]
 pub struct SccpGroth16Bls12381IcV1 {
     /// Constant IC point.
     pub constant: [u8; 48],
@@ -559,6 +571,10 @@ impl SccpGroth16Bls12381IcV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381VerifyingKeyV1"
+)]
 pub struct SccpGroth16Bls12381VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -648,6 +664,10 @@ pub fn sccp_groth16_bls12381_verifying_key_hash_v1(
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254SemanticCircuitV1"
+)]
 pub struct SccpGroth16Bn254SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -669,6 +689,10 @@ pub struct SccpGroth16Bn254SemanticCircuitV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bls12381SemanticCircuitV1"
+)]
 pub struct SccpGroth16Bls12381SemanticCircuitV1 {
     /// Circuit-profile schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -687,6 +711,8 @@ pub struct SccpGroth16Bls12381SemanticCircuitV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "profile", content = "commitments")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSemanticProofProfileV1")]
 pub enum SccpSemanticProofProfileV1 {
     /// Groth16 proof of canonical payload semantics, message inclusion, and
     /// Taira finality rooted in the governed SORA checkpoint.
@@ -768,6 +794,8 @@ impl SccpSemanticProofProfileV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraFinalityAnchorV1")]
 pub struct SccpSoraFinalityAnchorV1 {
     /// Anchor schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -777,13 +805,19 @@ pub struct SccpSoraFinalityAnchorV1 {
     pub protocol_version: u16,
     /// Keccak-256 of the canonical 16-byte Taira chain identifier.
     pub chain_id_hash: [u8; 32],
+    /// Nonzero finalized Sumeragi election epoch governing the checkpoint.
+    pub epoch: u64,
+    /// Last height governed by the checkpoint's frozen election epoch.
+    pub epoch_end_height: u64,
+    /// Iroha hash of the authenticated ordered validator keys and aligned PoPs.
+    pub roster_commitment: [u8; 32],
     /// Nonzero finalized checkpoint height.
     pub checkpoint_height: u64,
     /// Hash of the canonical finalized checkpoint block header.
     pub checkpoint_block_hash: [u8; 32],
     /// Immutable Sumeragi-v2 height-context identifier at the checkpoint.
     pub checkpoint_context_id: [u8; 32],
-    /// Domain-separated hash of the canonical durable v2 finality artifact.
+    /// Iroha BLAKE2b-256 hash of the canonical bare-Norito v2 finality artifact.
     pub checkpoint_finality_artifact_hash: [u8; 32],
 }
 impl SccpSoraFinalityAnchorV1 {
@@ -798,9 +832,12 @@ impl SccpSoraFinalityAnchorV1 {
             || self.source_network != SccpNetworkV1::SoraTaira
             || self.protocol_version != SCCP_V1_SUMERAGI_PROTOCOL_VERSION
             || self.chain_id_hash != sccp_sora_taira_chain_id_hash_v1()
+            || self.epoch == 0
             || self.checkpoint_height == 0
+            || self.checkpoint_height > self.epoch_end_height
             || validate_hash_roles(&[
                 self.chain_id_hash,
+                self.roster_commitment,
                 self.checkpoint_block_hash,
                 self.checkpoint_context_id,
                 self.checkpoint_finality_artifact_hash,
@@ -818,6 +855,8 @@ impl SccpSoraFinalityAnchorV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpOutboundProofPolicyV1")]
 pub struct SccpOutboundProofPolicyV1 {
     /// Policy schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -842,6 +881,7 @@ impl SccpOutboundProofPolicyV1 {
         let mut roles = Vec::from(self.semantic_profile.commitments());
         roles.extend([
             self.sora_finality_anchor.chain_id_hash,
+            self.sora_finality_anchor.roster_commitment,
             self.sora_finality_anchor.checkpoint_block_hash,
             self.sora_finality_anchor.checkpoint_context_id,
             self.sora_finality_anchor.checkpoint_finality_artifact_hash,
@@ -876,6 +916,8 @@ impl SccpOutboundProofPolicyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpPortableVerifyingKeyRefV1")]
 pub struct SccpPortableVerifyingKeyRefV1 {
     /// Portable proof-backend registry namespace.
     pub backend: String,
@@ -919,6 +961,10 @@ impl SccpPortableVerifyingKeyRefV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::bridge::sccp_registry::SccpSoraOutboundExecutionPolicyV1"
+)]
 pub struct SccpSoraOutboundExecutionPolicyV1 {
     /// Policy schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -958,6 +1004,8 @@ impl SccpSoraOutboundExecutionPolicyV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "activation", content = "direction")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpRouteActivationV1")]
 pub enum SccpRouteActivationV1 {
     /// The complete route is governed but admits no transfers.
     #[codec(index = 0)]
@@ -1037,6 +1085,8 @@ impl SccpRouteActivationV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpInboundFinalityCutoffV1")]
 pub struct SccpInboundFinalityCutoffV1 {
     /// Retained lane checkpoint whose validity interval contains the cutoff.
     pub trust_anchor_hash: [u8; 32],
@@ -1058,6 +1108,8 @@ impl SccpInboundFinalityCutoffV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpRouteKeyV1")]
 pub struct SccpRouteKeyV1 {
     /// Exact external-to-SORA lane.
     pub lane_id: SccpLaneIdV1,
@@ -1116,6 +1168,8 @@ impl SccpRouteKeyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpEvmDestinationDeploymentV1")]
 pub struct SccpEvmDestinationDeploymentV1 {
     /// Exact ERC-20 token contract address.
     pub token_address: [u8; 20],
@@ -1154,6 +1208,8 @@ pub struct SccpEvmDestinationDeploymentV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpTronDestinationDeploymentV1")]
 pub struct SccpTronDestinationDeploymentV1 {
     /// Raw TRC-20 contract address without the `0x41` network byte.
     pub token_address: [u8; 20],
@@ -1196,6 +1252,8 @@ pub struct SccpTronDestinationDeploymentV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpTonMintBreakerGuardianKeysV1")]
 pub struct SccpTonMintBreakerGuardianKeysV1 {
     /// Guardian key at canonical index zero.
     pub guardian_0: [u8; 32],
@@ -1268,6 +1326,8 @@ impl From<SccpTonMintBreakerGuardianKeysV1> for [[u8; 32]; 5] {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpTonDestinationDeploymentV1")]
 pub struct SccpTonDestinationDeploymentV1 {
     /// Canonical raw Jetton master contract address.
     pub jetton_master_address: SccpTonAddressV1,
@@ -1316,6 +1376,8 @@ pub struct SccpTonDestinationDeploymentV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "family", content = "deployment")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpDestinationDeploymentV1")]
 pub enum SccpDestinationDeploymentV1 {
     /// EVM deployment for Ethereum or BSC.
     #[codec(index = 0)]
@@ -1475,6 +1537,8 @@ impl SccpDestinationDeploymentV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpSoraSettlementV1")]
 pub struct SccpSoraSettlementV1 {
     /// Canonical SORA-home asset definition locked and released by Core.
     pub asset_definition_id: AssetDefinitionId,
@@ -1545,6 +1609,8 @@ pub fn sccp_v1_taira_xor_asset_definition_id() -> AssetDefinitionId {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGovernedRouteV1")]
 pub struct SccpGovernedRouteV1 {
     /// Exact external-to-SORA lane governed by this record.
     pub lane_id: SccpLaneIdV1,
@@ -1588,11 +1654,23 @@ impl SccpGovernedRouteV1 {
             .destination
             .outbound_proof_policy()
             .sora_finality_anchor
-            .checkpoint_height
+            .epoch
             > maximum
+            || self
+                .destination
+                .outbound_proof_policy()
+                .sora_finality_anchor
+                .epoch_end_height
+                > maximum
+            || self
+                .destination
+                .outbound_proof_policy()
+                .sora_finality_anchor
+                .checkpoint_height
+                > maximum
         {
             return Some(
-                "SCCP proposal finality checkpoint exceeds the exact JSON integer maximum",
+                "SCCP proposal finality epoch or checkpoint exceeds the exact JSON integer maximum",
             );
         }
         match &self.destination {
@@ -1819,6 +1897,8 @@ impl SccpGovernedRouteV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpGovernedLaneV1")]
 pub struct SccpGovernedLaneV1 {
     /// Exact external-to-SORA lane.
     pub lane_id: SccpLaneIdV1,
@@ -2001,6 +2081,8 @@ impl SccpGovernedLaneV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::sccp_registry::SccpRegistryV1")]
 pub struct SccpRegistryV1 {
     /// Registry format version. First release accepts exactly `1`.
     pub version: u8,
@@ -2207,15 +2289,19 @@ pub fn canonical_sccp_sora_finality_anchor_bytes_v1(
     anchor: SccpSoraFinalityAnchorV1,
 ) -> Result<Vec<u8>, SccpRouteValidationError> {
     anchor.validate()?;
-    let mut out = Vec::with_capacity(140);
+    let mut out = Vec::with_capacity(SCCP_V1_SORA_FINALITY_ANCHOR_BYTES);
     out.push(anchor.version);
     out.push(sccp_network_tag_v1(anchor.source_network));
     push_u16(&mut out, anchor.protocol_version);
     out.extend_from_slice(&anchor.chain_id_hash);
+    push_u64(&mut out, anchor.epoch);
+    push_u64(&mut out, anchor.epoch_end_height);
+    out.extend_from_slice(&anchor.roster_commitment);
     push_u64(&mut out, anchor.checkpoint_height);
     out.extend_from_slice(&anchor.checkpoint_block_hash);
     out.extend_from_slice(&anchor.checkpoint_context_id);
     out.extend_from_slice(&anchor.checkpoint_finality_artifact_hash);
+    debug_assert_eq!(out.len(), SCCP_V1_SORA_FINALITY_ANCHOR_BYTES);
     Ok(out)
 }
 /// Hash one valid Taira finality anchor for destination-contract pinning.
@@ -3202,8 +3288,6 @@ mod tests {
         TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
     }
     use norito::codec::DecodeAll as _;
-    const SIGNATORY: &str =
-        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     fn word_u64(value: u64) -> [u8; 32] {
         let mut word = [0; 32];
         word[24..].copy_from_slice(&value.to_be_bytes());
@@ -3298,6 +3382,9 @@ mod tests {
                 source_network: SccpNetworkV1::SoraTaira,
                 protocol_version: SCCP_V1_SUMERAGI_PROTOCOL_VERSION,
                 chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+                epoch: 1,
+                epoch_end_height: 10,
+                roster_commitment: [0x78; 32],
                 checkpoint_height: 5,
                 checkpoint_block_hash: [0x73; 32],
                 checkpoint_context_id: [0x74; 32],
@@ -3604,15 +3691,38 @@ mod tests {
         gas.sora_outbound_execution_policy.gas_limit = hostile;
         cases.push(gas);
 
-        let mut finality = route(1, SccpRouteActivationV1::Staged);
-        let SccpDestinationDeploymentV1::Evm(deployment) = &mut finality.destination else {
+        let mut finality_epoch = route(1, SccpRouteActivationV1::Staged);
+        let SccpDestinationDeploymentV1::Evm(deployment) = &mut finality_epoch.destination else {
+            unreachable!("fixture is EVM")
+        };
+        deployment.outbound_proof_policy.sora_finality_anchor.epoch = hostile;
+        cases.push(finality_epoch);
+
+        let mut finality_epoch_end = route(1, SccpRouteActivationV1::Staged);
+        let SccpDestinationDeploymentV1::Evm(deployment) = &mut finality_epoch_end.destination
+        else {
+            unreachable!("fixture is EVM")
+        };
+        deployment
+            .outbound_proof_policy
+            .sora_finality_anchor
+            .epoch_end_height = hostile;
+        cases.push(finality_epoch_end);
+
+        let mut finality_checkpoint = route(1, SccpRouteActivationV1::Staged);
+        let SccpDestinationDeploymentV1::Evm(deployment) = &mut finality_checkpoint.destination
+        else {
             unreachable!("fixture is EVM")
         };
         deployment
             .outbound_proof_policy
             .sora_finality_anchor
             .checkpoint_height = hostile;
-        cases.push(finality);
+        deployment
+            .outbound_proof_policy
+            .sora_finality_anchor
+            .epoch_end_height = hostile;
+        cases.push(finality_checkpoint);
 
         let mut evm_multiplier = route(1, SccpRouteActivationV1::Staged);
         let SccpDestinationDeploymentV1::Evm(deployment) = &mut evm_multiplier.destination else {
@@ -3789,7 +3899,7 @@ mod tests {
         .expect("valid exact TRON route");
         assert_eq!(
             route_hash,
-            hex32("95c70a2f7b0125ae8c2d765a537d8ff9f7b4a903a13a96488bf5b33d88aec29c")
+            hex32("6b237ceca900d81735f4c4cb72257d0d8b225c5d39ee2ff6a40414b9077479cf")
         );
         let changed_cap = SccpTronDestinationDeploymentV1 {
             max_wrapped_supply: deployment.max_wrapped_supply - 1,
@@ -4690,8 +4800,17 @@ mod tests {
         );
         assert_eq!(
             anchor_hash,
-            hex32("31328ad8005a0f33e6050e8ae96f012b3285f7f14737486dce34f972686862f5")
+            hex32("e9b9a7ff38cde8cb071d473cf0c6570270118df418ad790959474daedea7a365")
         );
+        let anchor_bytes =
+            canonical_sccp_sora_finality_anchor_bytes_v1(policy.sora_finality_anchor)
+                .expect("canonical epoch-aware anchor bytes");
+        assert_eq!(anchor_bytes.len(), SCCP_V1_SORA_FINALITY_ANCHOR_BYTES);
+        assert_eq!(&anchor_bytes[0..4], &[1, 0x40, 4, 0]);
+        assert_eq!(&anchor_bytes[36..44], &1_u64.to_le_bytes());
+        assert_eq!(&anchor_bytes[44..52], &10_u64.to_le_bytes());
+        assert_eq!(&anchor_bytes[52..84], &[0x78; 32]);
+        assert_eq!(&anchor_bytes[84..92], &5_u64.to_le_bytes());
         assert_ne!(profile_hash, [0; 32]);
         assert_ne!(anchor_hash, [0; 32]);
         assert_ne!(profile_hash, anchor_hash);
@@ -4740,7 +4859,7 @@ mod tests {
             invalid.validate(),
             Err(SccpRouteValidationError::InvalidSemanticProofProfile)
         );
-        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 11] = [
+        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 14] = [
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.version = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| {
                 anchor.source_network = SccpNetworkV1::EthereumMainnet;
@@ -4752,6 +4871,11 @@ mod tests {
                 anchor.protocol_version = SCCP_V1_SUMERAGI_PROTOCOL_VERSION + 1;
             },
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.chain_id_hash[0] ^= 1,
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.epoch = 0,
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.epoch_end_height = anchor.checkpoint_height - 1;
+            },
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.roster_commitment = [0; 32],
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_height = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_block_hash = [0; 32],
             |anchor: &mut SccpSoraFinalityAnchorV1| {
@@ -5009,7 +5133,7 @@ mod tests {
             sccp_evm_destination_binding_hash_v1(lane().source, &baseline).expect("binding");
         assert_eq!(
             baseline_binding,
-            hex32("de9694e4eb5557c90e5aeb435435742a99aa334f83e41d2840b783b7d7c4ff0b")
+            hex32("0822a77973c618db69c82e50668670823f7b39eba240103833dc9e500f3811fc")
         );
         let baseline_route = SccpDestinationDeploymentV1::Evm(baseline)
             .route_configuration_hash(
@@ -5084,7 +5208,7 @@ mod tests {
                 .expect("TRON binding");
         assert_eq!(
             baseline_tron_binding,
-            hex32("ea8702cd8d7fbd36037ae5dd5c16ed45a831c53b3428aff2f8b4a5ef3ea29307")
+            hex32("e3a973b02a7e233698bd146af095dfb83f00438ee35d2a32d686fdc75ce8e5ec")
         );
         let baseline_tron_route = SccpDestinationDeploymentV1::Tron(baseline_tron)
             .route_configuration_hash(
@@ -5377,3 +5501,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_sccp_registry_schema_tests;

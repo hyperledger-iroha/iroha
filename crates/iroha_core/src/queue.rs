@@ -148,7 +148,7 @@ use iroha_data_model::{
 use iroha_logger::{trace, warn};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+use iroha_torii_shared::status::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
 pub use journal::QUEUE_PLAN_JOURNAL_VERSION;
@@ -1106,6 +1106,13 @@ impl DurableLaneQueueReleaseBarrierAuthorization {
     ) -> Option<bool> {
         (self.barrier == *barrier).then_some(self.terminal_absence)
     }
+}
+/// The production direct-release sink always owns the complete planner authority.
+/// Raw-key fixture transitions exist only in the crate's unit-test build.
+enum LaneQueueDirectReleaseGate {
+    StrictAbsence(Vec<StrictAbsenceDirectReleaseAuthorization>),
+    #[cfg(test)]
+    Fixture,
 }
 enum LaneQueueReleasePreparationGate {
     Authorized {
@@ -4407,10 +4414,10 @@ pub(crate) enum QueuePlanGossipAdmission {
     /// Exact quorum certificate authenticating this transaction and immutable routing plan.
     Certified(Arc<Vec<u8>>),
 }
-// TODO: Commit QueuePlanSynced admission intent in transaction-author-signed,
-// consensus-visible data. Certificate gossip closes honest handoff reordering,
-// but an optional transport attachment cannot prevent a Byzantine relay from
-// stripping that intent and presenting the same signed transaction as ordinary.
+// QueuePlanSynced admission intent is transaction-author-signed and consensus-visible.
+// Both gossip receive paths reject that intent without its quorum certificate;
+// candidate selection and block admission enforce the same autonomous-owner boundary.
+// Stripping the transport certificate cannot downgrade the signed admission intent.
 /// Process-local candidate fence; dropping it releases only its exact queued hashes.
 pub(crate) struct GlobalQueueSelectionLease {
     queue: Weak<Queue>,
@@ -6632,14 +6639,15 @@ impl Queue {
             LaneQueueReservationOutcome::AlreadyFinalized
         })
     }
-    /// Durably release one exact reservation back to ordinary FIFO ownership.
+    /// Test-only raw-key release of one reservation back to ordinary FIFO ownership.
     ///
     /// Repeating an exact release is harmless. A stale release cannot affect a re-admitted signed
     /// hash with a different full routing plan or proposal identity.
     ///
     /// # Errors
     /// Returns an exact-identity conflict or durable journal failure.
-    pub fn release_lane_reservation(
+    #[cfg(test)]
+    pub(crate) fn release_lane_reservation(
         &self,
         key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
@@ -6700,7 +6708,7 @@ impl Queue {
         }
         Ok(LaneQueueReservationOutcome::Finalized)
     }
-    /// Durably release an exact reservation batch in caller-supplied FIFO order.
+    /// Test-only raw-key release of an exact reservation batch in FIFO order.
     ///
     /// This is the crash-recovery companion to a durable autonomous-slot retirement record. The
     /// caller supplies the byte-identical reservation vector retained by that record. Queue
@@ -6712,11 +6720,12 @@ impl Queue {
     /// # Errors
     /// Returns an error for duplicate or malformed identities, an identity conflict, a missing
     /// journal when work remains live, or a durable journal failure.
-    pub fn release_lane_reservations_in_order(
+    #[cfg(test)]
+    pub(crate) fn release_lane_reservations_in_order(
         &self,
         keys: &[LaneQueueReservationKeyV1],
     ) -> Result<usize, LaneQueueReservationError> {
-        self.release_lane_reservations_in_order_inner(keys, None)
+        self.release_lane_reservations_in_order_inner(keys, LaneQueueDirectReleaseGate::Fixture)
     }
     /// Durably release the planner's exact strict-absence groups in original global FIFO order.
     ///
@@ -6729,12 +6738,15 @@ impl Queue {
         keys: &[LaneQueueReservationKeyV1],
         authorizations: Vec<StrictAbsenceDirectReleaseAuthorization>,
     ) -> Result<usize, LaneQueueReservationError> {
-        self.release_lane_reservations_in_order_inner(keys, Some(authorizations))
+        self.release_lane_reservations_in_order_inner(
+            keys,
+            LaneQueueDirectReleaseGate::StrictAbsence(authorizations),
+        )
     }
     fn release_lane_reservations_in_order_inner(
         &self,
         keys: &[LaneQueueReservationKeyV1],
-        authorizations: Option<Vec<StrictAbsenceDirectReleaseAuthorization>>,
+        gate: LaneQueueDirectReleaseGate,
     ) -> Result<usize, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -6749,60 +6761,68 @@ impl Queue {
                 ));
             }
         }
-        if let Some(authorizations) = authorizations.as_ref() {
-            let mut authorized_groups = BTreeSet::new();
-            let mut authorized_hashes = BTreeSet::new();
-            for authorization in authorizations {
-                let (group, group_keys, projection) =
-                    authorization.queue_group().ok_or_else(|| {
-                        LaneQueueReservationError::InvalidIdentity(
-                            "strict-absence direct-release authority is malformed".to_owned(),
-                        )
-                    })?;
-                if group_keys.is_empty()
-                    || !authorized_groups.insert(group.identity)
-                    || projection.before.queue.reservation_state
-                        != IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
-                    || projection.after.queue.reservation_state
-                        != IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
-                    || !projection.after.release.fifo_restored
-                {
-                    return Err(LaneQueueReservationError::InvalidIdentity(
-                        "strict-absence direct-release authority has a duplicate group or invalid terminal state"
-                            .to_owned(),
-                    ));
-                }
-                for key in group_keys {
-                    if !authorized_hashes.insert(key.entrypoint_hash) {
+        match &gate {
+            LaneQueueDirectReleaseGate::StrictAbsence(authorizations) => {
+                let mut authorized_groups = BTreeSet::new();
+                let mut authorized_hashes = BTreeSet::new();
+                for authorization in authorizations {
+                    let (group, group_keys, projection) =
+                        authorization.queue_group().ok_or_else(|| {
+                            LaneQueueReservationError::InvalidIdentity(
+                                "strict-absence direct-release authority is malformed".to_owned(),
+                            )
+                        })?;
+                    if group_keys.is_empty()
+                        || !authorized_groups.insert(group.identity)
+                        || projection.before.queue.reservation_state
+                            != IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
+                        || projection.after.queue.reservation_state
+                            != IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
+                        || !projection.after.release.fifo_restored
+                    {
                         return Err(LaneQueueReservationError::InvalidIdentity(
-                            "strict-absence direct-release groups overlap one Queue owner"
+                            "strict-absence direct-release authority has a duplicate group or invalid terminal state"
                                 .to_owned(),
                         ));
                     }
+                    for key in group_keys {
+                        if !authorized_hashes.insert(key.entrypoint_hash) {
+                            return Err(LaneQueueReservationError::InvalidIdentity(
+                                "strict-absence direct-release groups overlap one Queue owner"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                }
+                if authorized_hashes != entrypoint_hashes {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "strict-absence direct-release authorities differ from the exact global FIFO set"
+                            .to_owned(),
+                    ));
                 }
             }
-            if authorized_hashes != entrypoint_hashes {
-                return Err(LaneQueueReservationError::InvalidIdentity(
-                    "strict-absence direct-release authorities differ from the exact global FIFO set"
-                        .to_owned(),
-                ));
-            }
+            #[cfg(test)]
+            LaneQueueDirectReleaseGate::Fixture => {}
         }
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        if let Some(authorizations) = authorizations.as_ref() {
-            for authorization in authorizations {
-                let (group, group_keys, _) = authorization.queue_group().ok_or_else(|| {
-                    LaneQueueReservationError::InvalidIdentity(
-                        "strict-absence direct-release authority changed under the Queue lock"
-                            .to_owned(),
-                    )
-                })?;
-                self.revalidate_complete_live_pre_kura_group_locked(group, group_keys)?;
+        match &gate {
+            LaneQueueDirectReleaseGate::StrictAbsence(authorizations) => {
+                for authorization in authorizations {
+                    let (group, group_keys, _) = authorization.queue_group().ok_or_else(|| {
+                        LaneQueueReservationError::InvalidIdentity(
+                            "strict-absence direct-release authority changed under the Queue lock"
+                                .to_owned(),
+                        )
+                    })?;
+                    self.revalidate_complete_live_pre_kura_group_locked(group, group_keys)?;
+                }
             }
+            #[cfg(test)]
+            LaneQueueDirectReleaseGate::Fixture => {}
         }
         let store = self.lane_reservations.lock();
         for key in keys {
@@ -6819,11 +6839,17 @@ impl Queue {
                     .map(|record| (*key, record))
             })
             .collect::<Vec<_>>();
-        if authorizations.is_some() && records.len() != keys.len() {
-            return Err(LaneQueueReservationError::InvalidIdentity(
-                "strict-absence direct release lost an exact live reservation before its sink"
-                    .to_owned(),
-            ));
+        match &gate {
+            LaneQueueDirectReleaseGate::StrictAbsence(_) => {
+                if records.len() != keys.len() {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "strict-absence direct release lost an exact live reservation before its sink"
+                            .to_owned(),
+                    ));
+                }
+            }
+            #[cfg(test)]
+            LaneQueueDirectReleaseGate::Fixture => {}
         }
         for (_, record) in &records {
             self.validate_live_reservation_against_queue(record)?;
@@ -6852,33 +6878,37 @@ impl Queue {
         drop(store);
         drop(queue_guard);
         self.apply_lane_reservation_journal(move |journal| {
-            if let Some(authorizations) = authorizations {
-                for authorization in authorizations {
-                    let projection = authorization.consume_for_queue().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "strict-absence direct-release authority changed before append",
-                        )
-                    })?;
-                    let terminal =
-                        production_in_flight_first_release_terminal_owner(projection.after)
-                            .ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    "strict-absence direct release has no terminal owner",
-                                )
-                            })?;
-                    if !terminal.ordinary_fifo_owner
-                        || terminal.canonical_wsv_owner
-                        || terminal.commit_terminal
-                        || !terminal.release_terminal
-                    {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "strict-absence direct release is not FIFO-only terminal ownership",
-                        ));
+            match gate {
+                LaneQueueDirectReleaseGate::StrictAbsence(authorizations) => {
+                    for authorization in authorizations {
+                        let projection = authorization.consume_for_queue().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "strict-absence direct-release authority changed before append",
+                            )
+                        })?;
+                        let terminal =
+                            production_in_flight_first_release_terminal_owner(projection.after)
+                                .ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "strict-absence direct release has no terminal owner",
+                                    )
+                                })?;
+                        if !terminal.ordinary_fifo_owner
+                            || terminal.canonical_wsv_owner
+                            || terminal.commit_terminal
+                            || !terminal.release_terminal
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "strict-absence direct release is not FIFO-only terminal ownership",
+                            ));
+                        }
                     }
                 }
+                #[cfg(test)]
+                LaneQueueDirectReleaseGate::Fixture => {}
             }
             journal.release_batch(release_keys)
         })?;
@@ -8466,6 +8496,41 @@ impl Queue {
                 || self.queued_tx_enqueued_at_ms.contains_key(&hash)
             {
                 return Err(LaneQueueReservationError::Conflict { hash });
+            }
+            // Phase two durably records PlanTombstoned before removing this
+            // member's payload and FIFO identity. A crash before ForgetCommit
+            // therefore legitimately replays only these two exact terminal
+            // markers. Do not resurrect FIFO ownership, or mistake any partial
+            // remaining owner for the fully consumed member.
+            if retrying_commit_barrier
+                && plan_tombstone_marked
+                && !self.fifo_order_by_hash.contains_key(&hash)
+            {
+                if seen_live {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "lane reservation group has a Commit barrier after a live suffix"
+                            .to_owned(),
+                    ));
+                }
+                let expected_terminal_markers = (1_u32 << 1) | (1_u32 << 2);
+                if self
+                    .canonical_queue_hash_terminal_owner_mask_locked(store, hash, ownership, false)
+                    != expected_terminal_markers
+                {
+                    return Err(LaneQueueReservationError::Conflict { hash });
+                }
+                seen_commit_barrier = true;
+                journal
+                    .active_phases
+                    .push(LaneQueueReservationRecoveryPhaseV1 {
+                        key: *key,
+                        reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
+                        queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
+                        plan_tombstone_marked: true,
+                    });
+                // The caller still authenticates this exact phase against both
+                // retained journals before the cleanup transition can mutate.
+                continue;
             }
             let fifo_order = self
                 .fifo_order_by_hash

@@ -3652,7 +3652,14 @@ pub(crate) fn complete_tip_retirement_survives_completed_serve_body_cleanup_with
         panic!("Completed Serve must own the selected turn")
     };
     let completed = payload_store
-        .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+        .persist_completed_with_worker_readback(
+            &request,
+            body_store
+                .read_durable_body_for_certified_serve(&durable_body)
+                .expect("worker reads exact completed-Serve body"),
+            &body_store.instance_identity(),
+            &response,
+        )
         .expect("persist exact Completed-Serve tombstone");
     let serve_ordinal = lease.ordinal();
     let producer_ordinal = coordinator.producer_debts[&serve_ordinal];

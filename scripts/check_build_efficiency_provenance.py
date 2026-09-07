@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, MutableMapping, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 OBJECT_FORMAT = "sha1"
 OID_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -63,15 +63,14 @@ REQUIRED_SELECTED_ORIGINS = {
 }
 REQUIRED_SOURCE_BUDGET = {
     "path": "ci/source_file_budget.json",
-    "schema_version": 1,
-    "baseline": 5_067_263,
-    "ceiling": 4_540_000,
+    "schema_version": 2,
+    "production_limit": 5_000,
+    "test_limit": 3_000,
     "excluded_prefixes": (
         "docs/portal/node_modules/",
         "target/",
         "vendor/",
     ),
-    "commit_role": "source_budget_baseline",
 }
 REQUIRED_LOCK_PATH = "Cargo.lock"
 REQUIRED_SIGNATURE_KIND = "openpgp_v4_issuer_structure"
@@ -776,7 +775,8 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
             raise ProvenanceError(f"donor-origin path {path!r} must have a donor state")
     if observed_paths != expected_paths:
         raise ProvenanceError(
-            "selected_paths must contain exactly the 17 required paths in sorted order"
+            f"selected_paths must contain exactly the {len(expected_paths)} "
+            "required paths in sorted order"
         )
 
     anchor = require_object(manifest["signed_lock_anchor"], "signed_lock_anchor")
@@ -827,35 +827,35 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
     require_int(lock["bytes"], "signed_lock_anchor.cargo_lock.bytes", positive=True)
     require_sha256(lock["sha256"], "signed_lock_anchor.cargo_lock.sha256")
 
-    source_budget = require_object(manifest["source_budget"], "source_budget")
-    require_exact_keys(
-        source_budget,
-        {"path", "schema_version", "baseline", "ceiling", "excluded_prefixes", "commit_role"},
-        "source_budget",
+    validate_source_budget_contract(
+        manifest["source_budget"], REQUIRED_SOURCE_BUDGET, "source_budget"
     )
-    for key in ("path", "commit_role"):
-        actual = require_string(source_budget[key], f"source_budget.{key}")
-        if actual != REQUIRED_SOURCE_BUDGET[key]:
-            raise ProvenanceError(
-                f"source_budget.{key} is {actual!r}, expected {REQUIRED_SOURCE_BUDGET[key]!r}"
-            )
-    require_safe_path(source_budget["path"], "source_budget.path")
-    for key in ("schema_version", "baseline", "ceiling"):
-        actual = require_int(source_budget[key], f"source_budget.{key}", positive=True)
-        if actual != REQUIRED_SOURCE_BUDGET[key]:
-            raise ProvenanceError(
-                f"source_budget.{key} is {actual}, expected {REQUIRED_SOURCE_BUDGET[key]}"
-            )
-    prefixes = source_budget["excluded_prefixes"]
-    if not isinstance(prefixes, list):
-        raise ProvenanceError("source_budget.excluded_prefixes must be an array")
-    parsed_prefixes = tuple(
-        require_prefix(prefix, f"source_budget.excluded_prefixes[{index}]")
-        for index, prefix in enumerate(prefixes)
-    )
-    if parsed_prefixes != REQUIRED_SOURCE_BUDGET["excluded_prefixes"]:
-        raise ProvenanceError("source_budget.excluded_prefixes do not match the source guard")
     return manifest
+
+
+def validate_source_budget_contract(
+    payload: Any, expected: Mapping[str, Any], label: str
+) -> None:
+    """Pin the active per-file source policy."""
+    contract = require_object(payload, label)
+    require_exact_keys(contract, set(expected), label)
+    for key, required in expected.items():
+        field = f"{label}.{key}"
+        if isinstance(required, tuple):
+            raw = contract[key]
+            if not isinstance(raw, list):
+                raise ProvenanceError(f"{field} must be an array")
+            actual = tuple(
+                require_prefix(prefix, f"{field}[{index}]")
+                for index, prefix in enumerate(raw)
+            )
+        elif isinstance(required, int):
+            actual = require_int(contract[key], field, positive=True)
+        else:
+            actual = require_string(contract[key], field)
+        if actual != required:
+            raise ProvenanceError(f"{field} is {actual!r}, expected {required!r}")
+    require_safe_path(contract["path"], f"{label}.path")
 
 
 def _state_from_manifest(raw: Any, label: str) -> tuple[str, str] | None:
@@ -921,23 +921,27 @@ def historical_rust_count(
 
 
 def verify_current_source_budget(root: Path, contract: Mapping[str, Any]) -> None:
-    """Verify the current source budget retains the pinned baseline and goal."""
+    """Verify current file limits and counting scope, with no aggregate target."""
     path = root / str(contract["path"])
     payload = require_object(strict_json_file(path, str(contract["path"])), "current source budget")
     schema = require_int(payload.get("schema_version"), "current source budget.schema_version")
     if schema != contract["schema_version"]:
         raise ProvenanceError("current source budget schema_version changed")
-    aggregate = require_object(payload.get("aggregate_rust"), "current source budget.aggregate_rust")
-    baseline = require_int(aggregate.get("baseline"), "current source budget.aggregate_rust.baseline", positive=True)
-    ceiling = require_int(aggregate.get("ceiling"), "current source budget.aggregate_rust.ceiling", positive=True)
-    if baseline != contract["baseline"]:
-        raise ProvenanceError(
-            f"current source budget baseline is {baseline}, expected {contract['baseline']}"
-        )
-    if ceiling != contract["ceiling"]:
-        raise ProvenanceError(
-            f"current source budget ceiling is {ceiling}, expected {contract['ceiling']}"
-        )
+    require_exact_keys(
+        payload,
+        {"schema_version", "limits", "excluded_prefixes", "exceptions"},
+        "current source budget",
+    )
+    limits = require_object(payload.get("limits"), "current source budget.limits")
+    require_exact_keys(limits, {"production", "test"}, "current source budget.limits")
+    for kind in ("production", "test"):
+        actual = require_int(limits[kind], f"current source budget {kind}", positive=True)
+        expected = contract[f"{kind}_limit"]
+        if actual != expected:
+            raise ProvenanceError(
+                f"current source budget {kind} limit is {actual}, expected {expected}"
+            )
+    require_object(payload["exceptions"], "current source budget.exceptions")
     prefixes = payload.get("excluded_prefixes")
     if not isinstance(prefixes, list):
         raise ProvenanceError("current source budget excluded_prefixes must be an array")
@@ -949,7 +953,7 @@ def verify_current_source_budget(root: Path, contract: Mapping[str, Any]) -> Non
         raise ProvenanceError("current source budget exclusions changed")
 
 
-def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int]:
+def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int | str]:
     """Validate the complete build-efficiency provenance contract."""
     manifest = validate_manifest_schema(payload)
     if store.object_format() != manifest["object_format"]:
@@ -1055,14 +1059,6 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int]:
         "signed lock anchor",
         verified_blobs,
     )
-    verify_tree_state(
-        store,
-        head,
-        lock["path"],
-        lock_state,
-        "HEAD",
-        verified_blobs,
-    )
     lock_bytes = verified_blobs[lock["blob"]]
     if len(lock_bytes) != lock["bytes"]:
         raise ProvenanceError(
@@ -1074,18 +1070,26 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int]:
             f"Cargo.lock SHA-256 is {lock_sha256}, expected {lock['sha256']}"
         )
 
-    source_budget = manifest["source_budget"]
-    baseline_role = source_budget["commit_role"]
-    if lineage[baseline_role]["rust"]["lines"] != source_budget["baseline"]:
-        raise ProvenanceError(
-            "source budget baseline does not equal its pinned commit's Rust count"
-        )
-    verify_current_source_budget(root, source_budget)
+    # New crate boundaries may refresh the lockfile. Authenticate the HEAD blob
+    # independently; the release source seal and binary attestations bind the
+    # candidate lock to its own artifacts and reject drift at every checkpoint.
+    head_lock = store.tree_entry(head, lock["path"])
+    if head_lock is None or head_lock.mode != "100644" or head_lock.object_type != "blob":
+        raise ProvenanceError("HEAD Cargo.lock must be a regular 100644 blob")
+    verify_tree_state(
+        store, head, lock["path"], (head_lock.mode, head_lock.oid), "HEAD", verified_blobs
+    )
+    head_lock_bytes = verified_blobs[head_lock.oid]
+
+    verify_current_source_budget(root, manifest["source_budget"])
     return {
         "roles": len(lineage),
         "selected_paths": len(manifest["selected_paths"]),
         "historical_rust_paths": total_historical_paths,
-        "cargo_lock_bytes": len(lock_bytes),
+        "historical_cargo_lock_bytes": len(lock_bytes),
+        "head_cargo_lock_blob": head_lock.oid,
+        "head_cargo_lock_bytes": len(head_lock_bytes),
+        "head_cargo_lock_sha256": hashlib.sha256(head_lock_bytes).hexdigest(),
     }
 
 
@@ -1107,10 +1111,13 @@ def main() -> int:
         "build_efficiency_provenance: "
         f"roles={report['roles']} selected_paths={report['selected_paths']} "
         f"historical_rust_paths={report['historical_rust_paths']} "
-        f"cargo_lock_bytes={report['cargo_lock_bytes']} "
+        f"historical_cargo_lock_bytes={report['historical_cargo_lock_bytes']} "
+        f"head_cargo_lock_blob={report['head_cargo_lock_blob']} "
+        f"head_cargo_lock_bytes={report['head_cargo_lock_bytes']} "
+        f"head_cargo_lock_sha256={report['head_cargo_lock_sha256']} "
         "structural_signature_only=true "
-        f"baseline={REQUIRED_SOURCE_BUDGET['baseline']} "
-        f"ceiling={REQUIRED_SOURCE_BUDGET['ceiling']}"
+        f"production_limit={REQUIRED_SOURCE_BUDGET['production_limit']} "
+        f"test_limit={REQUIRED_SOURCE_BUDGET['test_limit']}"
     )
     return 0
 

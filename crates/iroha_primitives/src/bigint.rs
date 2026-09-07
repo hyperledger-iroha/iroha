@@ -38,7 +38,8 @@ pub enum BigIntError {
 ///
 /// This is a raw integer. [`crate::numeric::Numeric`] uses it as a mantissa
 /// alongside a separate scale value.
-#[derive(Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, PartialEq, Eq, Hash, Default, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::bigint::BigInt")]
 pub struct BigInt {
     inner: InnerBigInt,
 }

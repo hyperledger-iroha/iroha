@@ -13,6 +13,8 @@ use norito::codec::{Decode, Encode};
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::portfolio::UniversalPortfolio")]
 pub struct UniversalPortfolio {
     /// Universal account identifier the snapshot describes.
     pub uaid: UniversalAccountId,
@@ -27,6 +29,8 @@ pub struct UniversalPortfolio {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::portfolio::PortfolioTotals")]
 pub struct PortfolioTotals {
     /// Number of accounts bound to the UAID.
     pub accounts: u64,
@@ -39,6 +43,8 @@ pub struct PortfolioTotals {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::portfolio::DataspacePortfolio")]
 pub struct DataspacePortfolio {
     /// Dataspace identifier.
     pub dataspace_id: DataSpaceId,
@@ -53,6 +59,8 @@ pub struct DataspacePortfolio {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::portfolio::AccountPortfolio")]
 pub struct AccountPortfolio {
     /// Canonical account identifier.
     pub account_id: AccountId,
@@ -67,6 +75,8 @@ pub struct AccountPortfolio {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::portfolio::AssetPosition")]
 pub struct AssetPosition {
     /// Fully qualified asset identifier (definition + account).
     pub asset_id: AssetId,
@@ -102,3 +112,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_portfolio_schema_tests;

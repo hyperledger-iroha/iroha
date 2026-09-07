@@ -129,8 +129,15 @@ function assertLoadableSourceProvenance(verification, paths) {
         }),
       ],
       {
-        env: { ...process.env, NODE_OPTIONS: "" },
+        env: {
+          ...process.env,
+          NODE_OPTIONS: "",
+          // Electron's execPath is an application (or renderer helper). Run
+          // this verifier as Node, never as another GUI or renderer process.
+          ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        },
         maxBuffer: 16 * 1024,
+        timeout: 15_000,
       },
     );
     return;

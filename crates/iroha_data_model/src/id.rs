@@ -12,13 +12,15 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use norito::core::{DecodeFromSlice, Error as NoritoError};
 use std::borrow::Borrow;
+#[cfg(all(test, feature = "json"))]
+pub(crate) mod base_wire_fixtures;
 const NETWORK_ID_LITERAL_BYTES: usize =
     "hash:".len() + iroha_crypto::Hash::LENGTH * 2 + "#".len() + 4;
 /// Maximum byte length of a canonical [`ChainId`].
 ///
 /// Chain identifiers are ASCII, so this is also the maximum character count. The bound keeps every
 /// signed, configured, and peer-advertised chain identity small before any allocation is performed.
-pub const MAX_CHAIN_ID_BYTES: usize = 128;
+pub use iroha_primitives::chain_id::MAX_CHAIN_ID_BYTES;
 #[model]
 mod model {
     use super::*;
@@ -143,29 +145,12 @@ mod model {
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::id::model::ChainId")]
     pub struct ChainId(Box<str>);
     impl ChainId {
         fn parse(value: &str) -> Result<Self, ParseError> {
-            if value.is_empty() {
-                return Err(ParseError::new("`ChainId` must not be empty"));
-            }
-            if value.len() > MAX_CHAIN_ID_BYTES {
-                return Err(ParseError::new(
-                    "`ChainId` exceeds the 128-byte ASCII limit",
-                ));
-            }
-            let bytes = value.as_bytes();
-            if !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-                || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-                || bytes.iter().any(|byte| {
-                    !byte.is_ascii_alphanumeric() && !matches!(byte, b'.' | b'_' | b':' | b'-')
-                })
-            {
-                return Err(ParseError::new(
-                    "`ChainId` must be exact ASCII text beginning and ending with an \
-                     alphanumeric byte and containing only alphanumerics, `.`, `_`, `:`, or `-`",
-                ));
-            }
+            iroha_primitives::chain_id::validate_chain_id(value).map_err(ParseError::new)?;
             Ok(Self(value.into()))
         }
         pub(super) fn decode_text_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
@@ -334,6 +319,8 @@ impl<'a> DecodeFromSlice<'a> for NetworkId {
 }
 /// Validation-aware decoder for the text field inside the structural V1
 /// `ChainId` tuple-newtype representation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::id::ChainIdText")]
 struct ChainIdText(ChainId);
 impl norito::core::NoritoSerialize for ChainIdText {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -365,7 +352,8 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ChainIdText {
 }
 /// Mirrors the single-field structural layout originally assigned to
 /// `ChainId`, while delegating its inner field to the validating decoder.
-#[derive(Encode, Decode)]
+#[derive(Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::id::ChainIdWire")]
 struct ChainIdWire(ChainIdText);
 impl<'a> norito::core::NoritoDeserialize<'a> for ChainId {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {

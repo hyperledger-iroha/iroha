@@ -19,7 +19,7 @@ use crate::{
         transaction::TransactionEntrypoint,
     },
     http::{Method as HttpMethod, RequestBuilder},
-    http_default::DefaultRequestBuilder,
+    http_default::{DefaultHttpTransport, DefaultRequestBuilder},
 };
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
@@ -46,6 +46,7 @@ struct ClientQueryRequestHead {
     key_pair: KeyPair,
     request_timeout: Duration,
     accept_header: &'static str,
+    transport: DefaultHttpTransport,
 }
 impl ClientQueryRequestHead {
     #[cfg(test)]
@@ -58,6 +59,7 @@ impl ClientQueryRequestHead {
             HttpMethod::POST,
             join_torii_url(&self.torii_url, torii_uri::QUERY),
         )
+        .with_transport(self.transport.clone())
         .headers(self.headers.clone())
         .header("Content-Type", APPLICATION_NORITO)
         // Prefer canonical Norito responses to avoid JSON decoding drift between
@@ -75,6 +77,7 @@ impl ClientQueryRequestHead {
             HttpMethod::POST,
             join_torii_url(&self.torii_url, torii_uri::QUERY),
         )
+        .with_transport(self.transport.clone())
         .headers(self.headers.clone())
         .header("Content-Type", APPLICATION_NORITO)
         .header("Accept", accept)
@@ -91,6 +94,7 @@ impl ClientQueryRequestHead {
             !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("content-type")
         });
         DefaultRequestBuilder::new(HttpMethod::POST, join_torii_url(&self.torii_url, path))
+            .with_transport(self.transport.clone())
             .headers(headers)
             .header("Content-Type", APPLICATION_NORITO)
             .header("Accept", APPLICATION_NORITO)
@@ -217,7 +221,7 @@ where
         builder
             .build()
             .map_err(QueryError::from)
-            .and_then(|request| request.send().map_err(QueryError::from))
+            .and_then(|request| request.send_blocking().map_err(QueryError::from))
     })
 }
 /// Send a signed query exactly once and decode its response.
@@ -395,6 +399,31 @@ mod tests {
             NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
                 iroha_crypto::Hash::prehashed([1; iroha_crypto::Hash::LENGTH]),
             ));
+        let transport = DefaultHttpTransport::mock(Arc::new(move |snapshot| {
+            let accept = snapshot
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(_, value)| value.as_str())
+                .expect("accept header");
+            assert_eq!(accept, APPLICATION_NORITO);
+            let signed = SignedQuery::decode_all_versioned(&snapshot.body)
+                .expect("decode signed query request");
+            assert_eq!(signed.payload.network_id, network_id);
+            assert!(signed.payload.creation_time_ms > 0);
+            assert_eq!(
+                signed.payload.time_to_live_ms,
+                NonZeroU64::new(
+                    crate::config::DEFAULT_QUERY_TIME_TO_LIVE
+                        .as_millis()
+                        .try_into()
+                        .expect("default query TTL fits u64"),
+                )
+                .expect("default query TTL is nonzero")
+            );
+            assert_ne!(signed.payload.nonce, [0_u8; 32]);
+            Ok(http::Response::new(Vec::new()))
+        }));
         let head = ClientQueryRequestHead {
             torii_url: Url::parse("http://127.0.0.1:8080").expect("url"),
             headers: HashMap::new(),
@@ -403,6 +432,7 @@ mod tests {
             key_pair: checked_random_keypair(),
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             accept_header: APPLICATION_NORITO,
+            transport,
         };
         let req = head
             .assemble(QueryRequest::Singular(
@@ -411,36 +441,7 @@ mod tests {
             .expect("sign query request")
             .build()
             .expect("request build");
-        crate::http_default::with_send_hook(
-            Arc::new(move |snapshot| {
-                let accept = snapshot
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
-                    .map(|(_, value)| value.as_str())
-                    .expect("accept header");
-                assert_eq!(accept, APPLICATION_NORITO);
-                let signed = SignedQuery::decode_all_versioned(&snapshot.body)
-                    .expect("decode signed query request");
-                assert_eq!(signed.payload.network_id, network_id);
-                assert!(signed.payload.creation_time_ms > 0);
-                assert_eq!(
-                    signed.payload.time_to_live_ms,
-                    NonZeroU64::new(
-                        crate::config::DEFAULT_QUERY_TIME_TO_LIVE
-                            .as_millis()
-                            .try_into()
-                            .expect("default query TTL fits u64"),
-                    )
-                    .expect("default query TTL is nonzero")
-                );
-                assert_ne!(signed.payload.nonce, [0_u8; 32]);
-                Ok(http::Response::new(Vec::new()))
-            }),
-            || {
-                let _ = req.send();
-            },
-        );
+        let _ = req.send_blocking();
     }
     #[test]
     fn validate_fetch_size_rejects_over_max() {
@@ -602,6 +603,7 @@ impl Client {
                 HttpMethod::POST,
                 join_torii_url(&self.torii_url, torii_uri::QUERY),
             )
+            .with_transport(self.http_transport.clone())
             .headers(self.headers.clone())
             .header("Content-Type", APPLICATION_NORITO)
             .header("Accept", self.wire_format_preference.accept_header())
@@ -624,6 +626,7 @@ impl Client {
             key_pair: self.key_pair.clone(),
             request_timeout: self.torii_request_timeout,
             accept_header: self.wire_format_preference.accept_header(),
+            transport: self.http_transport.clone(),
         }
     }
     /// Execute a singular query and return the result
@@ -676,24 +679,27 @@ impl Client {
 mod query_errors_handling {
     use super::*;
     use crate::{
-        client::{APPLICATION_NORITO, DataModelCompatibility, DataModelCompatibilityError},
+        client::{
+            APPLICATION_NORITO, CompatibilityProbeCoordinator, DataModelCompatibility,
+            DataModelCompatibilityError,
+        },
         data_model::ValidationFail,
         http::StatusCode as HttpStatusCode,
-        http_default::{RequestSnapshot, with_send_hook},
+        http_default::{DefaultHttpTransport, RequestSnapshot},
     };
     use http::Response;
-    use iroha_config::parameters::actual::SorafsRolloutPhase;
     use iroha_data_model::{
         ChainId,
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse, SignedQuery,
         },
     };
+    use iroha_service_model::soranet::AnonymityPolicy;
+    use iroha_service_model::soranet::RolloutPhase;
     use iroha_test_samples::gen_account_in;
     use iroha_version::codec::DecodeVersioned as _;
     use norito::codec::{Decode, Encode};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
-    use sorafs_orchestrator::AnonymityPolicy;
     use std::{
         collections::HashMap,
         num::NonZeroU64,
@@ -779,12 +785,13 @@ mod query_errors_handling {
                     .body(vec![0xFF])
                     .expect("malformed response"))
             },
-            || {
+            |mock_transport| {
                 let make_request = || {
                     Ok(DefaultRequestBuilder::new(
                         HttpMethod::POST,
                         Url::parse("http://localhost:8080/query").expect("query URL"),
                     )
+                    .with_transport(mock_transport.clone())
                     .body(vec![0xA5]))
                 };
                 send_once_and_decode(make_request, decode_query_response)
@@ -934,7 +941,7 @@ mod query_errors_handling {
     #[test]
     fn query_request_head_sets_accept_header() {
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let head = ClientQueryRequestHead {
+        let mut head = ClientQueryRequestHead {
             torii_url: Url::parse("http://localhost:8080").expect("torii url"),
             headers: HashMap::new(),
             network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
@@ -944,6 +951,7 @@ mod query_errors_handling {
             key_pair,
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             accept_header: APPLICATION_NORITO,
+            transport: DefaultHttpTransport::new(),
         };
         let cursor = ForwardCursor {
             query: "cursor".into(),
@@ -959,18 +967,19 @@ mod query_errors_handling {
                 assert_accept_header(&snapshot, APPLICATION_NORITO);
                 Ok(ok_empty_response())
             },
-            move || {
+            move |mock_transport| {
+                head.transport = mock_transport;
                 head.assemble(query_request)
                     .expect("sign query request")
                     .build()
                     .expect("request")
-                    .send()
+                    .send_blocking()
                     .expect("send");
             },
         );
         assert!(
             observed.load(Ordering::Relaxed),
-            "send hook was not triggered"
+            "injected transport was not invoked"
         );
     }
     #[test]
@@ -990,8 +999,12 @@ mod query_errors_handling {
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
-            rollout_phase: SorafsRolloutPhase::Default,
-            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
+            rollout_phase: RolloutPhase::Default,
+            data_model_compatibility: Arc::new(Mutex::new(
+                DataModelCompatibility::SubmitCompatible,
+            )),
+            compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
+            http_transport: DefaultHttpTransport::new(),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
@@ -1016,7 +1029,11 @@ mod query_errors_handling {
                     .body(encoded_response.clone())
                     .expect("response"))
             },
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 let response = client.execute_signed_query_raw(&[]).expect("execute query");
                 assert!(matches!(response, QueryResponse::Iterable(_)));
             },
@@ -1043,8 +1060,10 @@ mod query_errors_handling {
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
-            rollout_phase: SorafsRolloutPhase::Default,
+            rollout_phase: RolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+            compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
+            http_transport: DefaultHttpTransport::new(),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
         let query_seen = Arc::new(AtomicBool::new(false));
@@ -1065,7 +1084,11 @@ mod query_errors_handling {
                 }
                 path => Err(eyre!("unexpected request path: {path}")),
             },
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 let err = client
                     .execute_signed_query_raw(&[])
                     .expect_err("compatibility mismatch must fail");
@@ -1111,8 +1134,10 @@ mod query_errors_handling {
                 add_transaction_nonce: false,
                 alias_cache_policy: sample_alias_policy(),
                 default_anonymity_policy: AnonymityPolicy::GuardPq,
-                rollout_phase: SorafsRolloutPhase::Default,
+                rollout_phase: RolloutPhase::Default,
                 data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+                compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
+                http_transport: DefaultHttpTransport::new(),
                 wire_format_preference: crate::client::WireFormatPreference::default(),
             };
             let request_paths = Arc::new(Mutex::new(Vec::new()));
@@ -1130,7 +1155,11 @@ mod query_errors_handling {
                         .body(b"capabilities unavailable".to_vec())
                         .expect("capabilities response"))
                 },
-                || {
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+
                     let error = client
                         .execute_signed_query_raw(&[])
                         .expect_err("unavailable capabilities must reject query");
@@ -1175,8 +1204,12 @@ mod query_errors_handling {
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
-            rollout_phase: SorafsRolloutPhase::Default,
-            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
+            rollout_phase: RolloutPhase::Default,
+            data_model_compatibility: Arc::new(Mutex::new(
+                DataModelCompatibility::SubmitCompatible,
+            )),
+            compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
+            http_transport: DefaultHttpTransport::new(),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         }
     }
@@ -1316,7 +1349,12 @@ mod query_errors_handling {
                     .body(encoded.clone())
                     .expect("transaction-details response"))
             },
-            || client.get_successful_transaction_details(entrypoint_hash),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_successful_transaction_details(entrypoint_hash)
+            },
         )
         .expect("exact transaction-details lookup");
         assert_eq!(actual, details);
@@ -1334,7 +1372,12 @@ mod query_errors_handling {
                     .body(encoded.clone())
                     .expect("rejected transaction-details response"))
             },
-            || client.get_transaction_details(entrypoint_hash),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_transaction_details(entrypoint_hash)
+            },
         )
         .expect("authenticated rejected transaction-details lookup");
         assert_eq!(actual, details);
@@ -1361,7 +1404,12 @@ mod query_errors_handling {
                     .body(encoded.clone())
                     .expect("rejected transaction-details response"))
             },
-            || client.get_successful_transaction_details(entrypoint_hash),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_successful_transaction_details(entrypoint_hash)
+            },
         )
         .expect_err("success-only transaction reader must reject a committed failure");
         assert!(
@@ -1385,7 +1433,12 @@ mod query_errors_handling {
                     .body(trailing.clone())
                     .expect("trailing response"))
             },
-            || client.get_successful_transaction_details(entrypoint_hash),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_successful_transaction_details(entrypoint_hash)
+            },
         )
         .expect_err("trailing bytes must be rejected");
         assert!(error.to_string().contains("canonical Norito"));
@@ -1400,7 +1453,12 @@ mod query_errors_handling {
                     .body(encoded.clone())
                     .expect("wrong-media response"))
             },
-            || client.get_successful_transaction_details(entrypoint_hash),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_successful_transaction_details(entrypoint_hash)
+            },
         )
         .expect_err("non-Norito success must be rejected");
         assert!(error.to_string().contains("invalid content-type"));
@@ -1419,16 +1477,21 @@ mod query_errors_handling {
                     .body(encoded.clone())
                     .expect("mismatched result response"))
             },
-            || client.get_successful_transaction_details(entrypoint_hash),
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_successful_transaction_details(entrypoint_hash)
+            },
         )
         .expect_err("result hash mismatch must be rejected");
         assert!(error.to_string().contains("entrypoint/result hash"));
     }
     fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,
-        f: impl FnOnce() -> R,
+        f: impl FnOnce(DefaultHttpTransport) -> R,
     ) -> R {
-        with_send_hook(Arc::new(responder), f)
+        f(DefaultHttpTransport::mock(Arc::new(responder)))
     }
     fn ok_empty_response() -> Response<Vec<u8>> {
         Response::builder()

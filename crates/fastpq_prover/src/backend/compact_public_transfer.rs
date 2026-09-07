@@ -145,7 +145,7 @@ pub(super) fn encode_context(
         });
     }
     let semantics = match prepared.semantics() {
-        ProofSemantics::TransferStateTransition => 0,
+        ProofSemantics::StateTransition => 0,
         ProofSemantics::AxtTransferClaim => 1,
         ProofSemantics::AxtOpaqueEffect => {
             return Err(invariant(
@@ -272,7 +272,8 @@ mod tests {
         .into_iter()
         .map(|(account, before, after)| {
             StateTransition::new(
-                format!("asset/{}/{account}", delta.asset_definition).into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(&delta.asset_definition, account)
+                    .unwrap(),
                 before.to_le_bytes().to_vec(),
                 after.to_le_bytes().to_vec(),
                 OperationKind::Transfer,
@@ -326,12 +327,7 @@ mod tests {
     fn typed_boundary_derives_exact_private_relation_from_path_free_claims() {
         for amount in [0, 17, 100] {
             let (rows, claims, inputs) = fixture(amount);
-            let prepared = prepare(
-                &rows,
-                &claims,
-                inputs,
-                ProofSemantics::TransferStateTransition,
-            );
+            let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
             let air = PublicTransferAir::new(&prepared, &expected(&prepared)).unwrap();
             let statements = prepared.compact_statements(&[]).unwrap();
             let raw = CompactTransferAir::new(&statements[0], None).unwrap();
@@ -352,12 +348,7 @@ mod tests {
     #[test]
     fn every_expected_public_io_field_is_checked_before_acceptance() {
         let (rows, claims, inputs) = fixture(17);
-        let prepared = prepare(
-            &rows,
-            &claims,
-            inputs,
-            ProofSemantics::TransferStateTransition,
-        );
+        let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
         let original = expected(&prepared);
         for field in 0..7 {
             let mut changed = original;
@@ -386,12 +377,7 @@ mod tests {
     #[test]
     fn caller_inputs_original_claims_and_selected_semantics_all_bind_the_transcript() {
         let (rows, mut claims, inputs) = fixture(17);
-        let prepared = prepare(
-            &rows,
-            &claims,
-            inputs,
-            ProofSemantics::TransferStateTransition,
-        );
+        let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
         let baseline = PublicTransferAir::new(&prepared, &expected(&prepared)).unwrap();
         for field in 0..6 {
             let mut changed = inputs;
@@ -404,12 +390,7 @@ mod tests {
                 5 => changed.tx_set_hash[31] ^= 1 << 7,
                 _ => unreachable!(),
             }
-            let changed = prepare(
-                &rows,
-                &claims,
-                changed,
-                ProofSemantics::TransferStateTransition,
-            );
+            let changed = prepare(&rows, &claims, changed, ProofSemantics::StateTransition);
             let air = PublicTransferAir::new(&changed, &expected(&changed)).unwrap();
             assert_ne!(
                 air.statement_bytes(),
@@ -427,12 +408,7 @@ mod tests {
         drop(axt);
         drop(prepared);
         claims[0].authority_digest = Hash::new(b"another exact authority claim");
-        let changed = prepare(
-            &rows,
-            &claims,
-            inputs,
-            ProofSemantics::TransferStateTransition,
-        );
+        let changed = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
         assert_ne!(
             PublicTransferAir::new(&changed, &expected(&changed))
                 .unwrap()
@@ -444,7 +420,7 @@ mod tests {
             &other_rows,
             &other_claims,
             other_inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
         );
         assert_ne!(
             PublicTransferAir::new(&changed, &expected(&changed))
@@ -458,18 +434,13 @@ mod tests {
     fn exact_capacity_rejects_empty_and_multiple_deltas() {
         let (_, _, mut inputs) = fixture(0);
         inputs.new_root = inputs.old_root;
-        let empty = prepare(&[], &[], inputs, ProofSemantics::TransferStateTransition);
+        let empty = prepare(&[], &[], inputs, ProofSemantics::StateTransition);
         assert!(PublicTransferAir::new(&empty, &expected(&empty)).is_err());
         let (mut rows, mut claims, inputs) = fixture(0);
         rows.extend(rows.clone());
         rows.sort_by(|a, b| a.key.cmp(&b.key));
         claims.extend(claims.clone());
-        let multiple = prepare(
-            &rows,
-            &claims,
-            inputs,
-            ProofSemantics::TransferStateTransition,
-        );
+        let multiple = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
         assert_eq!(multiple.pairs().len(), 2);
         assert!(PublicTransferAir::new(&multiple, &expected(&multiple)).is_err());
         assert!(check_limit("test", 1, 1).is_ok());
@@ -514,7 +485,7 @@ mod tests {
         }
         for amount in [0, 17, 100] {
             for (semantics, tag) in [
-                (ProofSemantics::TransferStateTransition, 0),
+                (ProofSemantics::StateTransition, 0),
                 (ProofSemantics::AxtTransferClaim, 1),
             ] {
                 let (rows, claims, inputs) = fixture(amount);
@@ -564,12 +535,7 @@ mod tests {
     #[test]
     fn typed_context_encoding_is_canonical_and_restores_ambient_layout() {
         let (rows, claims, inputs) = fixture(17);
-        let prepared = prepare(
-            &rows,
-            &claims,
-            inputs,
-            ProofSemantics::TransferStateTransition,
-        );
+        let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
         let public_io = expected(&prepared);
         let expected = PublicTransferAir::new(&prepared, &public_io).unwrap();
         for flags in
@@ -617,12 +583,7 @@ mod tests {
             transfer::attach_transfer_smt_witnesses(&mut transcripts).unwrap();
         inputs.old_root = old_root;
         inputs.new_root = new_root;
-        let prepared = prepare(
-            &rows,
-            &claims,
-            inputs,
-            ProofSemantics::TransferStateTransition,
-        );
+        let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
         let statements = prepared.compact_statements(&[]).unwrap();
         let delta = &transcripts[0].deltas[0];
         let paths = [&delta.from_smt_witness, &delta.to_smt_witness];
@@ -760,7 +721,7 @@ mod tests {
             &rows,
             &claims,
             changed_inputs,
-            ProofSemantics::TransferStateTransition,
+            ProofSemantics::StateTransition,
         );
         let changed_air = PublicTransferAir::new(&changed, &expected(&changed)).unwrap();
         assert!(super::super::compact_protocol::verify(&changed_air, &proof, limits).is_err());

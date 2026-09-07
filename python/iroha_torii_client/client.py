@@ -469,6 +469,21 @@ def _canonical_quantity(value: Any, context: str) -> str:
     return value
 
 
+def _canonical_numeric(value: Any, context: str) -> str:
+    """Require the exact signed Numeric JSON spelling before integer allocation."""
+
+    if not isinstance(value, str) or len(value) > 156:
+        raise RuntimeError(f"{context} must be a bounded canonical Numeric string")
+    matched = re.fullmatch(r"(-?)(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None or value == "-0":
+        raise RuntimeError(f"{context} must be a canonical signed Numeric")
+    fraction = matched.group(3) or ""
+    mantissa = int(matched.group(1) + matched.group(2) + fraction)
+    if not -(1 << 511) <= mantissa <= _QUANTITY_MAX_MANTISSA:
+        raise RuntimeError(f"{context} Numeric exceeds the signed 512-bit domain")
+    return value
+
+
 def _fee_quote_quantity_parts(value: str) -> Tuple[int, int]:
     """Return one already-canonical Quantity as an exact mantissa/scale pair."""
 
@@ -5575,6 +5590,48 @@ class _SumeragiV2StatusParser:
         ]
 
     @classmethod
+    def _settlement_receipts(cls, value: Any, *, context: str) -> List[Dict[str, Any]]:
+        receipts: List[Dict[str, Any]] = []
+        for index, receipt_value in enumerate(cls._array(value, context)):
+            receipt_context = f"{context}[{index}]"
+            receipt = cls._exact_mapping(
+                receipt_value,
+                receipt_context,
+                {
+                    "source_id",
+                    "local_amount",
+                    "xor_due",
+                    "xor_after_haircut",
+                    "xor_variance",
+                    "timestamp_ms",
+                },
+            )
+            receipts.append(
+                {
+                    "source_id": cls._byte32(
+                        receipt.get("source_id"), f"{receipt_context}.source_id"
+                    ),
+                    "local_amount": cls._quantity(
+                        receipt.get("local_amount"),
+                        f"{receipt_context}.local_amount",
+                    ),
+                    "xor_due": cls._quantity(receipt.get("xor_due"), f"{receipt_context}.xor_due"),
+                    "xor_after_haircut": cls._quantity(
+                        receipt.get("xor_after_haircut"),
+                        f"{receipt_context}.xor_after_haircut",
+                    ),
+                    "xor_variance": cls._quantity(
+                        receipt.get("xor_variance"),
+                        f"{receipt_context}.xor_variance",
+                    ),
+                    "timestamp_ms": cls._unsigned(
+                        receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"
+                    ),
+                }
+            )
+        return receipts
+
+    @classmethod
     def _settlement(cls, value: Any, *, context: str) -> Dict[str, Any]:
         record = cls._exact_mapping(
             value,
@@ -5607,42 +5664,7 @@ class _SumeragiV2StatusParser:
         dataspace_id = cls._unsigned(
             record.get("dataspace_id"), f"{context}.dataspace_id"
         )
-        receipts: List[Dict[str, Any]] = []
-        for index, receipt_value in enumerate(
-            cls._array(record.get("receipts"), f"{context}.receipts")
-        ):
-            receipt_context = f"{context}.receipts[{index}]"
-            receipt = cls._exact_mapping(
-                receipt_value,
-                receipt_context,
-                {
-                    "source_id",
-                    "local_amount",
-                    "xor_due",
-                    "xor_after_haircut",
-                    "xor_variance",
-                    "timestamp_ms",
-                },
-            )
-            receipts.append(
-                {
-                    "source_id": cls._byte32(receipt.get("source_id"), f"{receipt_context}.source_id"),
-                    "local_amount": cls._quantity(
-                        receipt.get("local_amount"),
-                        f"{receipt_context}.local_amount",
-                    ),
-                    "xor_due": cls._quantity(receipt.get("xor_due"), f"{receipt_context}.xor_due"),
-                    "xor_after_haircut": cls._quantity(
-                        receipt.get("xor_after_haircut"),
-                        f"{receipt_context}.xor_after_haircut",
-                    ),
-                    "xor_variance": cls._quantity(
-                        receipt.get("xor_variance"),
-                        f"{receipt_context}.xor_variance",
-                    ),
-                    "timestamp_ms": cls._unsigned(receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"),
-                }
-            )
+        receipts = cls._settlement_receipts(record.get("receipts"), context=f"{context}.receipts")
         swap_value = record.get("swap_metadata")
         if swap_value is None:
             swap_metadata = None
@@ -5680,7 +5702,7 @@ class _SumeragiV2StatusParser:
                     ),
                     "state": None,
                 },
-                "twap_local_per_xor": cls._non_empty_string(
+                "twap_local_per_xor": _canonical_numeric(
                     swap.get("twap_local_per_xor"),
                     f"{swap_context}.twap_local_per_xor",
                 ),

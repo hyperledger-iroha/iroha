@@ -3,7 +3,6 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use iroha_config::client_api::ConfigGetDTO;
 use iroha_core::{
     kiso::KisoHandle,
     smartcontracts::isi::vpn::vpn_lease_custody_account_id,
@@ -36,6 +35,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
+use iroha_torii_shared::configuration::Configuration;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
@@ -590,7 +590,7 @@ fn default_tunnel_addresses() -> Vec<String> {
         .collect()
 }
 fn build_profile_at(
-    dto: &ConfigGetDTO,
+    dto: &Configuration,
     trust: Option<&VpnRelayTrust>,
     operator_signer_available: bool,
     current_ms: u64,

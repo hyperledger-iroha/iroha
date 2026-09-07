@@ -610,17 +610,17 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
+        "fn prepare_recovered_decision_fetch_from_selected_cut(",
         "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
         "PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence",
-        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+        "queue-owned recovered Decision Fetch selected family must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-        "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-        "true",
-        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "crate::sumeragi::v2_effects::v2_ingress_head_can_drain(",
+        "admit_without_exact_drain_preflight(",
+        "queue-owned recovered Decision Fetch live driver must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/mod.rs",
@@ -758,16 +758,16 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "fn run_lifecycle_active_height(",
-        "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some()) {",
-        "if !ready_to_finish || producer_turn.is_some() {",
-        "runner lifecycle finalization preflight must preserve exact production order",
+        "if ready_proposal_sign_preempts_producer =>",
+        "if false =>",
+        "post-settlement ordinary-runtime cut",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "fn run_lifecycle_active_height(",
-        "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);",
-        "let finalization_ready = ready_to_finish;",
-        "runner lifecycle finalization preflight must preserve exact production order",
+        "terminal_finalization_cut = Some(cut);",
+        "drop(cut);",
+        "post-settlement ordinary-runtime cut",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
@@ -1163,16 +1163,16 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-        "pub(super) fn capture_next_ingress_turn_cut(",
+        "fn capture_next_ingress_turn_cut_at(",
         "let service_guard = self.service_lock.lock();",
         "let service_guard = self.state.lock();",
         "queue-owned fair winner capture",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-        "pub(super) fn capture_next_ingress_turn_cut(",
+        "fn capture_next_ingress_turn_cut_at(",
         "select_fair_v2_ingress_candidate(",
-        "select_next_admissible_ordinal(",
+        "select_unreviewed_ingress_candidate(",
         "queue-owned fair winner capture",
     ),
     (
@@ -1729,7 +1729,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-        "pub(in crate::sumeragi) fn prepare_apply<'a>(",
+        "pub(in crate::sumeragi) fn prepare_apply<'a>(\n        self,\n        adapter: &'a mut super::SumeragiV2Adapter,\n        predecessor: &AdapterEffect,",
         "validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
         "validate_pending.project_validate_apply_successor_for_mutation(predecessor, &apply_effect)",
         "pending-Kura marker-owned direct Validate-to-Apply preview",
@@ -1757,17 +1757,17 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-        "fn prepare_apply<'a>(",
-        "DirectValidationSucceededPreparation::Apply(prepared)",
-        "DirectValidationSucceededPreparation::Sign(prepared)",
-        "sealed pending-Kura ValidationCompleted Apply preview",
+        "pub(in crate::sumeragi) fn prepare_apply<'a>(\n        self,\n        adapter: &'a mut super::SumeragiV2Adapter,\n    ) -> Result<PreparedReleasedLifecycleValidatedApplyV1<'a>",
+        "prepared._adapter.pending_live_decision_apply.take()",
+        "prepared._adapter.pending_live_decision_apply.as_ref()",
+        "released lifecycle marker-owned direct Validate-to-Apply preview",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-        "fn prepare_apply<'a>(",
-        "project_validate_apply_successor(predecessor, &apply_effect)",
-        "project_store_validate_successor(predecessor, &apply_effect)",
-        "sealed pending-Kura ValidationCompleted Apply preview",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn run_pending_active_height(",
+        "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;",
+        "let _ = receiver;",
+        "pending-Kura finalization must close ingress and finitely drain terminal recovery",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -3894,3 +3894,61 @@ def test_borrow_bound_outer_ingress_reordering_fails_closed(tmp_path: Path) -> N
         "serialized advance_executor turn before the single ingress owner" in error
         for error in errors
     ), errors
+
+
+def test_recovered_fetch_canonical_selector_owner_gates_accept_current_source() -> None:
+    module = load_checker()
+    prefix = ROOT_DIR / "crates/iroha_core/src/sumeragi"
+    sources = [
+        (prefix / name).read_text(encoding="utf-8")
+        for name in (
+            "v2_lifecycle_selector.rs", "v2_lifecycle_ingress_position.rs",
+            "v2_lifecycle_turn_driver.rs",
+        )
+    ]
+    assert module._recovered_fetch_canonical_selector_owner_errors(*sources) == []
+
+
+@pytest.mark.parametrize(
+    ("source_index", "owner"),
+    (
+        (0, "classify_selected_certified_response_priority"),
+        (0, "prepare_recovered_decision_fetch_from_selected_cut"),
+        (1, "capture_next_ingress_turn_cut"),
+        (1, "narrow_to_lifecycle"),
+        (2, "drive_ingress_turn"),
+        (0, "prepare_next_recovered_decision_fetch_ingress_selector"),
+    ),
+)
+def test_recovered_fetch_canonical_selector_owner_gates_reject_mutations(
+    source_index: int, owner: str,
+) -> None:
+    module = load_checker()
+    prefix = ROOT_DIR / "crates/iroha_core/src/sumeragi"
+    sources = [
+        (prefix / name).read_text(encoding="utf-8")
+        for name in (
+            "v2_lifecycle_selector.rs", "v2_lifecycle_ingress_position.rs",
+            "v2_lifecycle_turn_driver.rs",
+        )
+    ]
+    assert module._recovered_fetch_canonical_selector_owner_errors(*sources) == []
+    source = sources[source_index]
+    items = module.rust_items(source, owner)
+    if owner == "drive_ingress_turn":
+        items = tuple(item for item in items if item.brace_context == (
+            ("impl", "LaunchedProductionLifecycleV1"),
+        ))
+    assert len(items) == 1
+    item_start = source.index(items[0].source)
+    declaration = source.index("fn " + owner, item_start)
+    declaration_start = source.rfind("\n", 0, declaration) + 1
+    if owner == "prepare_next_recovered_decision_fetch_ingress_selector":
+        gate = source.rfind("#[cfg(test)]", 0, declaration_start)
+        assert gate >= 0
+        assert source[gate:declaration_start].strip() == "#[cfg(test)]"
+        sources[source_index] = source[:gate] + source[gate:].replace("#[cfg(test)]", "", 1)
+    else:
+        sources[source_index] = source[:declaration_start] + "    #[cfg(test)]\n" + source[declaration_start:]
+    errors = module._recovered_fetch_canonical_selector_owner_errors(*sources)
+    assert errors, owner

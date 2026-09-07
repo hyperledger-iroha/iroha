@@ -1244,7 +1244,8 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             "historical ingress routing",
             historical_ingress,
             (
-                "block_sync_server.serve_historical_body( kura, request, &sender, local_key )",
+                "HistoricalBodyServeTask::from_bound_ingress( request, sender, authenticated_via, reply_routes, ingress_ownership, )",
+                "task.and_then(|task| block_sync_server.try_enqueue_historical_body(task))",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
             ),
@@ -1253,7 +1254,7 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             ordinary_consumer_path,
             "historical ingress routing omits production refinement tokens when either reviewed route changes",
             historical_ingress,
-            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
+            "block_sync_server.try_enqueue_historical_body(task)",
             1,
         )
     status_path, status_source = load(
@@ -2469,25 +2470,30 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 ),
             )
     if lifecycle_selector_source:
-        recovered_fetch_next_selector = _require_rust_item(
+        recovered_fetch_selected_family = _require_rust_item(
             lifecycle_selector_path,
             lifecycle_selector_source,
-            "prepare_next_recovered_decision_fetch_ingress_selector",
+            "prepare_recovered_decision_fetch_from_selected_cut",
             errors,
         )
-        if recovered_fetch_next_selector is not None:
+        if recovered_fetch_selected_family is not None:
             require_order(
                 lifecycle_selector_path,
-                "queue-owned recovered Decision Fetch selector",
-                recovered_fetch_next_selector.source,
+                "queue-owned recovered Decision Fetch selected family",
+                recovered_fetch_selected_family.source,
                 (
-                    "self.lifecycle_terminal_subject()",
-                    "capture_next_lifecycle_queue_cut(",
-                    "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-                    "self.capture_lifecycle_ingress_selector(cut)",
+                    "let selected_ordinal = cut.selected_identity().physical_admission_ordinal()",
+                    "let selected_request_hash = cut.selector_occurrences()",
+                    "occurrence.physical_admission_ordinal() == selected_ordinal",
+                    "Some(response.request_hash)",
+                    "self.capture_lifecycle_ingress_selector_for_response_family(",
+                    "Some(selected_request_hash)",
                     "prepared.queue_witness.selected_disposition()",
                     "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
                     ".selected_claimed_response_family()",
+                    "family.candidate.recovered()",
+                    "LifecycleIngressSelectorError::CandidateRevalidationDrift",
+                    "Ok(prepared)",
                 ),
             )
         ownership_exact = _require_rust_item(

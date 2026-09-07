@@ -3,9 +3,8 @@ use super::{
     ExternalSoftwareSignerBillingStatementAdapterV1, ExternalSoftwareSignerEvidenceViewerAdapterV1,
     ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerPopIssuerAdapterV1,
     ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
-    SoftwareSignerClientV1, SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1,
-    SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1, SoftwareSignerServiceV1,
-    SoftwareSignerWrappingKeyV1,
+    SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, SoftwareSignerClientV1,
+    SoftwareSignerProvisioningV1, SoftwareSignerServiceV1, SoftwareSignerWrappingKeyV1,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_torii::sorafs::{PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _};
@@ -22,9 +21,9 @@ use std::{
 };
 const TEST_WRAP_KEY: [u8; 32] = [0xD1; 32];
 fn direct_signer(
-    role: SoftwareSignerRoleV1,
-    purpose_binding: SoftwareSignerPurposeBindingV1,
-    algorithm: SoftwareSignerKeyAlgorithmV1,
+    role: SignerRoleV1,
+    purpose_binding: SignerPurposeBindingV1,
+    algorithm: SignerKeyAlgorithmV1,
 ) -> (tempfile::TempDir, Arc<SoftwareSignerServiceV1>) {
     let parent = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
         .expect("secure temporary parent");
@@ -32,15 +31,15 @@ fn direct_signer(
         .expect("secure temporary parent permissions");
     let service_uid = rustix::process::geteuid().as_raw();
     let role_name = match role {
-        SoftwareSignerRoleV1::GovernanceDag => "governance-dag",
-        SoftwareSignerRoleV1::PotrProvider => "potr",
-        SoftwareSignerRoleV1::BillingStatement => "billing",
-        SoftwareSignerRoleV1::EvidenceViewer => "evidence-viewer",
-        SoftwareSignerRoleV1::StreamToken => "stream-token",
-        SoftwareSignerRoleV1::PopCredentials => "pop-credentials",
+        SignerRoleV1::GovernanceDag => "governance-dag",
+        SignerRoleV1::PotrProvider => "potr",
+        SignerRoleV1::BillingStatement => "billing",
+        SignerRoleV1::EvidenceViewer => "evidence-viewer",
+        SignerRoleV1::StreamToken => "stream-token",
+        SignerRoleV1::PopCredentials => "pop-credentials",
         _ => panic!("unsupported direct adapter fixture role"),
     };
-    let instance = if role == SoftwareSignerRoleV1::PotrProvider {
+    let instance = if role == SignerRoleV1::PotrProvider {
         "provider-primary"
     } else {
         "primary"
@@ -133,11 +132,11 @@ fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindi
 fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     let peer = b"12D3KooWPhaseOneGovernancePublisher".to_vec();
     let (_parent, governance_service) = direct_signer(
-        SoftwareSignerRoleV1::GovernanceDag,
-        SoftwareSignerPurposeBindingV1::GovernanceDag {
+        SignerRoleV1::GovernanceDag,
+        SignerPurposeBindingV1::GovernanceDag {
             publisher_peer_id: peer.clone(),
         },
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     assert_eq!(
         ExternalSoftwareSignerGovernanceDagAdapterV1::try_new(
@@ -182,12 +181,12 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     let signer_id = [0x41; 32];
     let provider_id = [0x42; 32];
     let (_parent, potr_service) = direct_signer(
-        SoftwareSignerRoleV1::PotrProvider,
-        SoftwareSignerPurposeBindingV1::PotrProvider {
+        SignerRoleV1::PotrProvider,
+        SignerPurposeBindingV1::PotrProvider {
             signer_id,
             provider_id,
         },
-        SoftwareSignerKeyAlgorithmV1::MlDsa,
+        SignerKeyAlgorithmV1::MlDsa,
     );
     assert_eq!(
         ExternalSoftwareSignerPotrProviderAdapterV1::try_new(
@@ -213,11 +212,11 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     assert!(potr.sign(&unsigned_potr_payload([0x44; 32])).is_err());
     let billing_id = "billing-signer-primary".to_owned();
     let (_parent, billing_service) = direct_signer(
-        SoftwareSignerRoleV1::BillingStatement,
-        SoftwareSignerPurposeBindingV1::BillingStatement {
+        SignerRoleV1::BillingStatement,
+        SignerPurposeBindingV1::BillingStatement {
             signer_id: billing_id.clone(),
         },
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     assert_eq!(
         ExternalSoftwareSignerBillingStatementAdapterV1::try_new(
@@ -235,9 +234,9 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     .sign_digest([0x51; 32])
     .expect("sign governed billing digest");
     let (_parent, evidence_service) = direct_signer(
-        SoftwareSignerRoleV1::EvidenceViewer,
-        SoftwareSignerPurposeBindingV1::EvidenceViewer,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::EvidenceViewer,
+        SignerPurposeBindingV1::EvidenceViewer,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let evidence =
         ExternalSoftwareSignerEvidenceViewerAdapterV1::try_new(direct_client(&evidence_service))
@@ -277,9 +276,9 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
         "digest-only evidence bytes must not substitute for a checkpoint anchor"
     );
     let (_parent, stream_service) = direct_signer(
-        SoftwareSignerRoleV1::StreamToken,
-        SoftwareSignerPurposeBindingV1::StreamToken,
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerRoleV1::StreamToken,
+        SignerPurposeBindingV1::StreamToken,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     let stream =
         ExternalSoftwareSignerStreamTokenAdapterV1::try_new(direct_client(&stream_service))
@@ -306,11 +305,11 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     assert!(stream.sign(&malformed_stream_payload).is_err());
     let issuer_id = "pop-issuer-primary".to_owned();
     let (_parent, pop_service) = direct_signer(
-        SoftwareSignerRoleV1::PopCredentials,
-        SoftwareSignerPurposeBindingV1::PopCredentials {
+        SignerRoleV1::PopCredentials,
+        SignerPurposeBindingV1::PopCredentials {
             issuer_id: issuer_id.clone(),
         },
-        SoftwareSignerKeyAlgorithmV1::Ed25519,
+        SignerKeyAlgorithmV1::Ed25519,
     );
     assert_eq!(
         ExternalSoftwareSignerPopIssuerAdapterV1::try_new(

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   machOSigningIndependentSHA256,
@@ -190,6 +193,107 @@ variantTest("getNativeBinding rejects a checksum-valid dirty-source artifact", a
     __resetNativeStateForTests();
   }
 });
+
+for (const scenario of [
+  { name: "Electron", electron: true, timeout: false },
+  { name: "Electron timeout", electron: true, timeout: true },
+  { name: "Node", electron: false, timeout: false },
+]) {
+  variantTest(`dirty-source verification uses a bounded subprocess (${scenario.name})`, async (t) => {
+    __resetNativeStateForTests();
+    const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+    const previousNodeOptions = process.env.NODE_OPTIONS;
+    const previousRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+    const previousElectron = Object.getOwnPropertyDescriptor(process.versions, "electron");
+    const verifier = t.mock.method(childProcess, "execFileSync", () => {
+      if (scenario.timeout) {
+        throw Object.assign(new Error("verification timed out"), { code: "ETIMEDOUT" });
+      }
+      return Buffer.alloc(0);
+    });
+    syncBuiltinESMExports();
+    try {
+      if (scenario.electron) {
+        Object.defineProperty(process.versions, "electron", {
+          configurable: true,
+          value: "40.0.0",
+        });
+      } else {
+        delete process.versions.electron;
+      }
+      process.env.NODE_OPTIONS = "--require=untrusted-parent-hook";
+      process.env.ELECTRON_RUN_AS_NODE = "0";
+      await withTempDir(async (dir) => {
+        const contents = Buffer.from("checksum-valid-but-not-loadable-native-stub");
+        await fs.writeFile(path.join(dir, "iroha_js_host.node"), contents);
+        await fs.writeFile(
+          path.join(dir, "iroha_js_host.checksums.json"),
+          JSON.stringify({
+            entries: {
+              [`${process.platform}-${process.arch}`]: checksumEntry(sha256(contents), {
+                cargo_profile: "debug",
+                source_tree_clean: false,
+              }),
+            },
+          }),
+        );
+        process.env.IROHA_JS_NATIVE_DIR = dir;
+        assert.throws(
+          () => getNativeBinding(),
+          (error) => {
+            assert.equal(error.code, "ERR_IROHA_NATIVE_BINDING");
+            assert.equal(
+              error.nativeStatus,
+              scenario.timeout ? "source_provenance_error" : "load_error",
+              "only successful provenance verification may reach native loading",
+            );
+            return true;
+          },
+        );
+
+        assert.equal(verifier.mock.callCount(), 1);
+        const [executable, args, options] = verifier.mock.calls[0].arguments;
+        const sdkRoot = fileURLToPath(new URL("../", import.meta.url));
+        assert.equal(executable, process.execPath);
+        assert.deepEqual(args, [
+          path.join(sdkRoot, "scripts", "read-native-build-source-state.mjs"),
+          "--verify",
+          path.resolve(sdkRoot, "..", ".."),
+          JSON.stringify({
+            cargoProfile: "debug",
+            sourceGitRevision: SOURCE_PROVENANCE.source_git_revision,
+            sourceTreeClean: false,
+            sourceTreeSha256: SOURCE_PROVENANCE.source_tree_sha256,
+          }),
+        ]);
+        assert.equal(options.timeout, 15_000);
+        assert.equal(options.maxBuffer, 16 * 1024);
+        assert.equal(options.env.IROHA_JS_NATIVE_DIR, dir);
+        assert.equal(options.env.NODE_OPTIONS, "");
+        assert.equal(options.env.ELECTRON_RUN_AS_NODE, scenario.electron ? "1" : "0");
+        assert.equal(process.env.NODE_OPTIONS, "--require=untrusted-parent-hook");
+        assert.equal(process.env.ELECTRON_RUN_AS_NODE, "0");
+      });
+    } finally {
+      verifier.mock.restore();
+      syncBuiltinESMExports();
+      for (const [key, value] of [
+        ["IROHA_JS_NATIVE_DIR", previousNativeDir],
+        ["NODE_OPTIONS", previousNodeOptions],
+        ["ELECTRON_RUN_AS_NODE", previousRunAsNode],
+      ]) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      if (previousElectron) {
+        Object.defineProperty(process.versions, "electron", previousElectron);
+      } else {
+        delete process.versions.electron;
+      }
+      __resetNativeStateForTests();
+    }
+  });
+}
 
 variantTest("checksum-only entries are rejected without V3 source provenance", async () => {
   __resetNativeStateForTests();

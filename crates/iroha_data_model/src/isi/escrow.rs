@@ -1,6 +1,7 @@
 use super::*;
 isi! {
     /// Open a ledger-managed numeric asset escrow.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::OpenAssetEscrow")]
     pub struct OpenAssetEscrow {
         /// Caller-selected escrow identifier.
         pub escrow_id: crate::escrow::EscrowId,
@@ -46,6 +47,7 @@ impl OpenAssetEscrow {
 }
 isi! {
     /// Accept an open asset escrow as its buyer.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::AcceptAssetEscrow")]
     pub struct AcceptAssetEscrow {
         /// Escrow to accept.
         pub escrow_id: crate::escrow::EscrowId,
@@ -60,6 +62,7 @@ impl AcceptAssetEscrow {
 }
 isi! {
     /// Mark an accepted asset escrow as paid off-chain.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::MarkEscrowPaymentSent")]
     pub struct MarkEscrowPaymentSent {
         /// Escrow whose payment has been sent.
         pub escrow_id: crate::escrow::EscrowId,
@@ -74,6 +77,7 @@ impl MarkEscrowPaymentSent {
 }
 isi! {
     /// Release a paid escrow to its accepted buyer.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::ReleaseAssetEscrow")]
     pub struct ReleaseAssetEscrow {
         /// Escrow to release.
         pub escrow_id: crate::escrow::EscrowId,
@@ -88,6 +92,7 @@ impl ReleaseAssetEscrow {
 }
 isi! {
     /// Cancel an open or accepted escrow before payment is marked.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::CancelAssetEscrow")]
     pub struct CancelAssetEscrow {
         /// Escrow to cancel.
         pub escrow_id: crate::escrow::EscrowId,
@@ -102,6 +107,7 @@ impl CancelAssetEscrow {
 }
 isi! {
     /// Open a dispute for court moderation.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::OpenEscrowDispute")]
     pub struct OpenEscrowDispute {
         /// Escrow to dispute.
         pub escrow_id: crate::escrow::EscrowId,
@@ -133,6 +139,7 @@ impl OpenEscrowDispute {
 }
 isi! {
     /// Resolve a disputed escrow by splitting funds between buyer and seller.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::ResolveEscrowDispute")]
     pub struct ResolveEscrowDispute {
         /// Escrow to resolve.
         pub escrow_id: crate::escrow::EscrowId,
@@ -178,6 +185,7 @@ impl ResolveEscrowDispute {
 }
 isi! {
     /// Open a generic ledger-managed asset lock.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::OpenAssetLock")]
     pub struct OpenAssetLock {
         /// Caller-selected lock identifier.
         pub escrow_id: crate::escrow::EscrowId,
@@ -245,6 +253,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::escrow::OpenConditionalEscrow")]
     pub struct OpenConditionalEscrow {
         /// Caller-selected escrow identifier.
         pub escrow_id: crate::escrow::EscrowId,
@@ -312,6 +321,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::escrow::AttestEscrowCondition")]
     pub struct AttestEscrowCondition {
         /// Conditional escrow to update.
         pub escrow_id: crate::escrow::EscrowId,
@@ -346,6 +356,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::escrow::ExpireConditionalEscrow")]
     pub struct ExpireConditionalEscrow {
         /// Conditional escrow to expire.
         pub escrow_id: crate::escrow::EscrowId,
@@ -360,6 +371,7 @@ impl ExpireConditionalEscrow {
 }
 isi! {
     /// Draw down funds from an active generic asset lock.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::DrawdownAssetLock")]
     pub struct DrawdownAssetLock {
         /// Lock to draw down.
         pub escrow_id: crate::escrow::EscrowId,
@@ -393,6 +405,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::escrow::CancelAssetLock")]
     pub struct CancelAssetLock {
         /// Lock to cancel.
         pub escrow_id: crate::escrow::EscrowId,
@@ -419,6 +432,7 @@ impl CancelAssetLock {
 }
 isi! {
     /// Expire a generic asset lock whose deadline has passed.
+    #[norito_schema(name = "iroha_data_model::isi::escrow::ExpireAssetLock")]
     pub struct ExpireAssetLock {
         /// Lock to expire.
         pub escrow_id: crate::escrow::EscrowId,

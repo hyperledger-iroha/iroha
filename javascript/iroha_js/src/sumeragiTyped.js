@@ -924,6 +924,47 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   });
 }
 
+function parseSumeragiLaneSettlementReceipt(receipt, context) {
+  const receiptRecord = assertExactSumeragiRecord(
+    receipt,
+    [
+      "source_id",
+      "local_amount",
+      "xor_due",
+      "xor_after_haircut",
+      "xor_variance",
+      "timestamp_ms",
+    ],
+    context,
+  );
+  return {
+    source_id: parseSumeragiByte32(
+      receiptRecord.source_id,
+      `${context}.source_id`,
+    ),
+    local_amount: requireCanonicalQuantity(
+      receiptRecord.local_amount,
+      `${context}.local_amount`,
+    ),
+    xor_due: requireCanonicalQuantity(
+      receiptRecord.xor_due,
+      `${context}.xor_due`,
+    ),
+    xor_after_haircut: requireCanonicalQuantity(
+      receiptRecord.xor_after_haircut,
+      `${context}.xor_after_haircut`,
+    ),
+    xor_variance: requireCanonicalQuantity(
+      receiptRecord.xor_variance,
+      `${context}.xor_variance`,
+    ),
+    timestamp_ms: parseSumeragiUnsigned(
+      receiptRecord.timestamp_ms,
+      `${context}.timestamp_ms`,
+    ),
+  };
+}
+
 function parseSumeragiNativeAmxLeg(value, context) {
   const record = assertExactSumeragiRecord(
     value,
@@ -1216,7 +1257,7 @@ function parseLaneSettlementCommitments(payload) {
           ["Tier1", "Tier2", "Tier3"],
           `status.lane_settlement_commitments[${index}].swap_metadata.liquidity_profile`,
         ),
-        twap_local_per_xor: requireNonEmptyString(
+        twap_local_per_xor: requireCanonicalNumeric(
           metadata.twap_local_per_xor,
           `status.lane_settlement_commitments[${index}].swap_metadata.twap_local_per_xor`,
         ),
@@ -1235,46 +1276,9 @@ function parseLaneSettlementCommitments(payload) {
         `status.lane_settlement_commitments[${index}].receipts must be an array`,
       );
     }
-    const receipts = receiptsRecord.map((receipt, receiptIndex) => {
-      const receiptRecord = assertExactSumeragiRecord(
-        receipt,
-        [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms",
-        ],
-        `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
-      );
-      return {
-        source_id: parseSumeragiByte32(
-          receiptRecord.source_id,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].source_id`,
-        ),
-        local_amount: requireCanonicalQuantity(
-          receiptRecord.local_amount,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].local_amount`,
-        ),
-        xor_due: requireCanonicalQuantity(
-          receiptRecord.xor_due,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_due`,
-        ),
-        xor_after_haircut: requireCanonicalQuantity(
-          receiptRecord.xor_after_haircut,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_after_haircut`,
-        ),
-        xor_variance: requireCanonicalQuantity(
-          receiptRecord.xor_variance,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_variance`,
-        ),
-        timestamp_ms: parseSumeragiUnsigned(
-          receiptRecord.timestamp_ms,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].timestamp_ms`,
-        ),
-      };
-    });
+    const receipts = receiptsRecord.map((receipt, receiptIndex) =>
+      parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${receiptIndex}]`),
+    );
     const nexusFeeReceipts = Object.freeze(
       assertSumeragiArrayBound(
         record.nexus_fee_receipts,
@@ -3802,6 +3806,26 @@ function requireCanonicalQuantity(value, name) {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
       `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+      name,
+    );
+  }
+}
+
+function requireCanonicalNumeric(value, name) {
+  if (typeof value !== "string" || value.length > 156) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a bounded canonical Numeric string`,
+      name,
+    );
+  }
+  try {
+    return NumericV1.decodeDecimalJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical signed Numeric (${error.code})`,
       name,
     );
   }

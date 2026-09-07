@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from scripts.tests.sorafs_release_contract_support import release_module, required_release_kinds
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -119,11 +121,8 @@ def test_stream_token_docs_use_the_runtime_signer_hard_cut() -> None:
     chunk_range = read("specs/sorafs_gateway_chunk_range.md")
     handbook = read("specs/sorafs_gateway_deployment_handbook.md")
     playbook = read("specs/sorafs_gateway_operator_playbook.md")
-    roadmap = read("roadmap.md")
-    status = read("status.md")
-    active = "\n".join((protocol, chunk_range, handbook, playbook, roadmap))
+    active = "\n".join((protocol, chunk_range, handbook, playbook))
     normalized_active = " ".join(active.split())
-    normalized_status = " ".join(status.split())
 
     for stale in (
         "SORAFS_STREAM_TOKENS_ENABLED",
@@ -137,43 +136,31 @@ def test_stream_token_docs_use_the_runtime_signer_hard_cut() -> None:
         "only when issuance is disabled in node TOML",
         "No signing-seed file, key path, or environment enablement is accepted",
         "There is no environment-variable enablement or signing-seed path",
-        "The former file-seed loader, environment enablement, standard-launcher "
-        "node-key derivation, and internal seed-signing API are deleted",
     ):
         assert marker in normalized_active
-    for marker in (
-        "Historical record: the Torii stream-token key-file parser",
-        "removed by the V1 hard cut",
-        "it has no file-key or environment fallback",
-    ):
-        assert marker in normalized_status
+    configuration = read("crates/iroha_config/src/parameters/actual.rs")
+    token_config = re.search(r"pub struct SorafsTokenConfig \{(.*?)\n\}", configuration, re.DOTALL)
+    assert token_config is not None
+    fields = set(re.findall(r"pub ([a-z_]+):", token_config.group(1)))
+    assert {"signer_handle", "signer_public_key", "signer_revision", "signer_policy_digest"} <= fields
+    assert fields.isdisjoint({"signing_key_path", "token_signing_sk", "signing_seed"})
 
 
-def test_roadmap_does_not_preserve_retired_gateway_policy_tooling() -> None:
-    roadmap = read("roadmap.md")
-
-    for stale in (
-        "SoraFS gateway denylist",
-        "gateway-denylist",
-        "local denylist",
-        "denylist_entry_count",
-        "denylist_entries",
-        "denylist-entry",
-        "--allow-missing-removals",
-        "feed-promotion",
-        "valid_bundle_digests",
-        "appeal-override",
-    ):
-        assert stale not in roadmap
-    for marker in (
-        "`catalog_promotion`",
-        "`catalog_digest_hex`",
-        "`valid_catalog_digests`",
-        "`min_catalog_entries`",
-        "`min_catalog_changes`",
-        "`gateway_compliance_denied`",
-    ):
-        assert marker in roadmap
+def test_gateway_release_contract_uses_catalog_authority() -> None:
+    checker = release_module("check_sorafs_gateway_compliance_rollout_evidence")
+    contract = release_module("sorafs_production_readiness_contract")
+    assert "catalog_promotion" in required_release_kinds("gateway_compliance")
+    assert {"catalog_entries", "catalog_changes", "catalog_signatures_verified"} <= set(
+        checker.EVIDENCE_REQUIRED_FIELDS["catalog_promotion"]
+    )
+    assert (
+        contract.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS["valid_catalog_digests"]
+        == "catalog_digest_hex"
+    )
+    assert {"min_catalog_entries", "min_catalog_changes"} <= checker.ValidationOptions.__dataclass_fields__.keys()
+    for kind, fields in checker.EVIDENCE_REQUIRED_FIELDS.items():
+        assert kind not in {"feed-promotion", "appeal-override"}
+        assert set(fields).isdisjoint({"denylist_entry_count", "denylist_entries", "valid_bundle_digests"})
 
 
 def test_future_dated_seaglass_reports_are_not_readiness_evidence() -> None:

@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake2::{Blake2bVar, digest::VariableOutput};
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 #[cfg(test)]
 use iroha_data_model::isi::frame_instruction_payload;
 use iroha_data_model::{
@@ -15,11 +15,12 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{
-        Instruction, InstructionBox, InstructionRegistry, Register, decode_instruction_from_pair,
-        framed_instruction_payload,
+        Instruction, InstructionBox, InstructionRegistry, Register, RegisterPeerWithPop,
+        decode_instruction_from_pair, framed_instruction_payload,
     },
     metadata::Metadata,
     name::Name,
+    peer::PeerId,
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
@@ -868,6 +869,11 @@ const SEMANTIC_INSTRUCTION_SOURCES: &[SemanticInstructionSource] = &[
         slot: InstructionSourceSlot::Instructions(0),
         wire_name: "iroha.register",
     },
+    SemanticInstructionSource {
+        fixture_name: "register_peer_with_pop_demo",
+        slot: InstructionSourceSlot::Instructions(0),
+        wire_name: "iroha.register",
+    },
 ];
 struct Fixture {
     name: String,
@@ -1412,6 +1418,22 @@ fn semantic_register_asset_definition() -> Result<Register<AssetDefinition>> {
         None,
     )))
 }
+fn semantic_register_peer_with_pop() -> Result<RegisterPeerWithPop> {
+    // Preserve the published demo's BLS peer and PoP while constructing the
+    // current four-field registration from its semantic source.
+    let public_key_bytes = hex::decode(
+        "ac5b394734cb93ddfcdf5ac499e0940a20b39a3573c4f04cba2619c5071da6de43fddf6001d87868fa06651bfd46d9d7",
+    )
+    .context("invalid code-owned register_peer_with_pop public key bytes")?;
+    let public_key = PublicKey::from_bytes(Algorithm::BlsNormal, &public_key_bytes)
+        .context("invalid code-owned register_peer_with_pop public key")?;
+    let pop = hex::decode(concat!(
+        "acca373bb1c936c5631c3b183f2ca882cb369ffadabe600f1bacddb18c0bd62958756afb659eb7e52af2ea7ffb61e683",
+        "04d649b904dcecce8fdba3451412ad76c02b18e5a42b860c55c73340935a3ad42b85e757e55f90cf62d9df7bee9f13e1",
+    ))
+    .context("invalid code-owned register_peer_with_pop proof bytes")?;
+    Ok(RegisterPeerWithPop::new(PeerId::new(public_key), pop))
+}
 fn build_fixture_instruction(
     fixture_name: &str,
     slot: InstructionSourceSlot,
@@ -1428,7 +1450,13 @@ fn build_fixture_instruction(
                 raw.wire_name
             );
         }
-        return Ok(semantic_register_asset_definition()?.into());
+        return match source.fixture_name {
+            "mixed_executable_batch" | "register_asset_definition" => {
+                Ok(semantic_register_asset_definition()?.into())
+            }
+            "register_peer_with_pop_demo" => Ok(semantic_register_peer_with_pop()?.into()),
+            _ => bail!("fixture '{fixture_name}' has no semantic instruction constructor"),
+        };
     }
     if SEMANTIC_INSTRUCTION_SOURCES
         .iter()
@@ -3416,7 +3444,7 @@ mod tests {
         assert!(!object.contains_key("confidential_policy"));
     }
     #[test]
-    fn register_asset_definition_semantic_owner_table_is_exact() {
+    fn register_semantic_owner_table_is_exact() {
         assert_eq!(
             SEMANTIC_INSTRUCTION_SOURCES,
             &[
@@ -3435,10 +3463,14 @@ mod tests {
                     slot: InstructionSourceSlot::Instructions(0),
                     wire_name: "iroha.register",
                 },
+                SemanticInstructionSource {
+                    fixture_name: "register_peer_with_pop_demo",
+                    slot: InstructionSourceSlot::Instructions(0),
+                    wire_name: "iroha.register",
+                },
             ]
         );
         for fixture_name in [
-            "register_peer_with_pop_demo",
             "register_role_demo",
             "register_nft_demo",
             "register_time_trigger_demo",
@@ -3487,6 +3519,49 @@ mod tests {
             decode_instruction_from_pair("iroha.register", &framed).expect("decode instruction");
         assert_eq!(Instruction::id(&*decoded), type_name);
         assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+    #[test]
+    fn register_peer_with_pop_fixture_source_is_current_and_semantic() {
+        let register = semantic_register_peer_with_pop().expect("semantic peer source");
+        assert_eq!(register.peer.public_key().algorithm(), Algorithm::BlsNormal);
+        assert_eq!(register.pop.len(), 96);
+        iroha_crypto::bls_normal_pop_verify(register.peer.public_key(), &register.pop)
+            .expect("published peer and proof-of-possession agree");
+        assert_eq!(register.activation_at, None);
+        assert_eq!(register.expiry_at, None);
+        let instruction: InstructionBox = register.into();
+        let (wire_name, payload) =
+            framed_instruction_payload(&instruction).expect("frame semantic peer");
+        assert_eq!(wire_name, "iroha.register");
+        let decoded = decode_instruction_from_pair(wire_name, &payload)
+            .expect("current peer registration decodes without trailing fields");
+        assert_eq!(decoded, instruction);
+    }
+    #[test]
+    fn register_peer_with_pop_semantic_source_rejects_wrong_wire_or_ordinal() {
+        let exact = [(InstructionSourceSlot::Instructions(0), "iroha.register")];
+        validate_semantic_instruction_observations("register_peer_with_pop_demo", &exact)
+            .expect("exact peer source identity");
+        for malformed in [
+            Vec::new(),
+            vec![(InstructionSourceSlot::Instructions(0), "iroha.transfer")],
+            vec![(InstructionSourceSlot::Instructions(1), "iroha.register")],
+            vec![
+                (InstructionSourceSlot::Instructions(0), "iroha.register"),
+                (InstructionSourceSlot::Instructions(1), "iroha.register"),
+            ],
+        ] {
+            let error = validate_semantic_instruction_observations(
+                "register_peer_with_pop_demo",
+                &malformed,
+            )
+            .expect_err("peer semantic source shape must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("semantic instruction shape mismatch")
+            );
+        }
     }
     #[test]
     fn fixture_export_rejects_type_name_fallback() {

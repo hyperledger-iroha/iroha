@@ -30,7 +30,7 @@ profile. It validates every base configuration, then the compiled
 required `--bind-validator-config-dir`, atomically binds each peer to the
 complete first-release Inrou backend: one
 PortableVM with exact CPU, memory, writable-storage, and egress budgets plus a
-separate 10 GiB immutable guest-image materialization bound. It
+separate 1600 MiB immutable guest-image materialization bound. It
 starts the peers and waits for all four nodes to become ready, which also proves
 that each daemon passed the artifact-free Inrou startup-boundary probe. That
 probe exercises the production machine type and host CPU under KVM, private
@@ -73,6 +73,35 @@ Provision the four canonical same-host identity slots before running it:
 - `iroha-inrou-1`, uid/gid `70001`
 - `iroha-inrou-2`, uid/gid `70002`
 - `iroha-inrou-3`, uid/gid `70003`
+
+The first-release Taira profile is shared by Kagami, Inrou staging and the
+runtime launcher. Each validator permits one Inrou replica with 750 millicores
+and 512 MiB guest RAM, plus mandatory 250-millicore/256-MiB VMM overhead.
+Hydration and prepared-runtime caches each have capacity one. The canonical
+canary has a 1536 MiB root volume, 16 MiB temporary filesystem and 64 MiB app-data
+volume; its durable state is bounded to 1024 bytes. The verified Debian asset
+helper must normalize the freshly extracted ext4 filesystem to exactly 1536 MiB.
+It uses official e2fsprogs on a private unmounted copy, checks the filesystem before
+and after resizing, and verifies its actual block count before truncating the file.
+No forced resize or unnormalized fallback is accepted. The pinned kernel and initrd
+plus normalized rootfs total 1,651,772,096 bytes, within the 1600 MiB immutable image
+ceiling; staging still checks the actual prepared bytes. Official HTTPS checksum consistency and the
+independently reviewed repository archive digest remain mandatory. A failed preparation removes the stale
+`env.sh` success entry point and does not publish the failed normalized copy.
+Each validator has a 1 GiB Nexus disk budget and an explicit 256 MiB encoded WSV
+budget. The startup probe derives matching QEMU and cgroup geometry from the
+selected host CPU/RAM ceiling, including VMM overhead.
+
+The signed validator units must bound each validator process to 1000 millicores
+and 2 GiB RAM separately from its Inrou worker. Four validators and workers plus
+1000 millicores/2 GiB for the guest OS require 9 CPUs and 13 GiB RAM; a 16 GiB
+Linux guest leaves 3 GiB additional guest headroom. These are allocation bounds,
+not performance qualification or a physical RAM reservation. Full disk budgeting
+must include all four root volumes, all four immutable image copies, all writable
+and Nexus caps (16.25 GiB plus 320 MiB combined), guest OS, signed release/upload
+artifacts, preparation copies, staging and filesystem overhead. The 12 GB packaging VM cannot contain that full allocation. Expand and
+qualify the actual guest only through the reviewed deployment procedure; never
+use compressed size or sparse current usage as the permitted full growth budget.
 
 Public-reset V1 supports exactly one Linux/AArch64 host running all four
 validators and the edge. Inventory admission rejects a dedicated edge or any
@@ -124,8 +153,7 @@ canonical absolute `--qemu`, `--setpriv`, and `--ldd` paths; this Taira AArch64
 posture uses the defaults.
 
 The daemon startup boundary additionally requires direct root-custodied
-`/usr/bin/qemu-img`, root-custodied `mke2fs` at `/usr/sbin/mke2fs` or
-`/sbin/mke2fs`, one root-custodied `iptables` executable at
+`/usr/bin/qemu-img`, one root-custodied `iptables` executable at
 `/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or `/bin/iptables`,
 `/dev/kvm` with API version 12, and unified cgroup v2 with the `cpu`, `io`,
 `memory`, and `pids` controllers available. Kernel namespace, QEMU user-network
@@ -134,23 +162,30 @@ exercised by the bounded startup probe; `up` fails closed if any is unavailable.
 This artifact-free probe does not boot a guest or verify the workload loopback
 bridge.
 
-New non-root Inrou lease volumes use the first-release canonical ext4 profile:
-their byte budgets must be positive multiples of 128 MiB. The daemon ignores
-host `mke2fs.conf` policy, supplies the complete format geometry and feature
-set explicitly, derives a stable UUID from the service revision, volume kind,
-storage class, and authoritative generation, and validates that exact
-superblock contract before publishing or reusing a disk.
+The daemon creates non-root Inrou lease disks at the admitted exact byte length
+and binds them to the service placement and authoritative generation. On first
+initialization, the guest checks the device and filesystem signature, formats a
+blank device as ext4 with the expected deterministic UUID, and verifies its mount
+identity and hardened options. The current runtime does not impose a 128 MiB
+volume multiple or a host-side fixed ext4 feature profile. The selected 64 MiB
+app-data volume must pass actual guest format, write and restart qualification.
 
 Every successful run must prove a real guest launch, four placements, and the
 public route. Prepare verified AArch64 assets, generate the exact deploy
 workspace with the same-revision compiled CLI, and pass that workspace to the
 devnet:
 
-The asset preparer requires `gpgv` or `gpg` plus a trusted Debian archive or
-cloud-image keyring. Install `debian-archive-keyring`, set
-`DEBIAN_ARCHIVE_KEYRING`, or pass `--debian-keyring`; a missing
-`SHA512SUMS.sign` is fatal, and the archive must match both the authenticated
-Debian sums and the repository-pinned SHA512.
+The asset preparer uses the fixed official HTTPS URL for the repository-pinned
+Debian build. It permits only the observed single HTTPS redirect to
+`laotzu.ftp.acc.umu.se` at the identical path; source overrides, other mirror routes,
+credentials, query/fragment changes and redirect loops are rejected. The repository
+SHA512 archive pin is the authority: the official `SHA512SUMS` must contain exactly one
+matching entry, and the downloaded archive must match the same pin before any
+extraction. Debian's current cloud-image pipeline does not publish detached
+signatures; no GPG keyring or signature fallback is used. See the
+[official cloud-image verification guidance](https://cloud.debian.org/images/cloud/)
+and [Debian's signing clarification](https://lists.debian.org/debian-cloud/2022/08/msg00010.html).
+The independently signed Taira release and owner authorization remain required.
 
 ```bash
 TAIRA_RUST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
@@ -348,10 +383,13 @@ learned from the envelope being authenticated.
 
 `iroha taira public-reset preflight` performs local fail-closed admission;
 `iroha taira public-reset apply` is the live mutating operation. Apply requires
-explicit owner-private, runtime-only authorization, SSH, and canary inputs. It
-is permitted only after the identical artifact closure passes the disposable
-four-validator corridor and each admitted host already has the trusted compiled
-dispatcher and reset guard provisioned independently of the candidate. Never
+explicit owner-private, runtime-only authorization, SSH, and canary inputs. Each
+admitted host must already have the trusted compiled dispatcher and reset guard
+provisioned independently of the candidate. The public coordinator requires the
+actual cohort's exact durable Inrou preseed qualifications before startup, then
+runs public canary and restart proofs. The disposable `local-release` devnet is a
+separate development test command; it is not public-reset admission evidence or
+a prerequisite to a fresh public reset. Never
 persist those inputs in the repository, let the candidate bootstrap its own
 host authority, or introduce a Python alias or parallel V1 schema.
 

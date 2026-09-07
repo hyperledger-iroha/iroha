@@ -10,6 +10,7 @@ import {
 import { NetworkId as SourceNetworkId } from "../src/networkId.js";
 import {
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
+  parseSumeragiDiagnosticsPayload as parseSourceDiagnostics,
 } from "../src/sumeragiTyped.js";
 import {
   verifyBlockMerkleProof as sourceVerifyBlockMerkleProof,
@@ -29,6 +30,7 @@ const { NetworkId: DistNetworkId } = await import(
 );
 const {
   __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
+  parseSumeragiDiagnosticsPayload: parseDistDiagnostics,
 } = await import(new URL("./sumeragiTyped.js", distToriiClientUrl));
 const {
   verifyBlockMerkleProof: distVerifyBlockMerkleProof,
@@ -525,6 +527,115 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
     );
   }
   validateApplicationEvidence(fixtureDocument);
+});
+
+test("grouped Native AMX v2 requires canonical swap metadata", () => {
+  const limit = 1n << 511n;
+  const maximum = String(limit - 1n);
+  const minimumMagnitude = String(limit);
+  const metadata = {
+    epsilon_bps: 65535,
+    twap_window_seconds: 4294967295,
+    liquidity_profile: { profile: "Tier2", state: null },
+    twap_local_per_xor: "1.25",
+    volatility_class: { bucket: "Elevated", state: null },
+  };
+  const positives = [
+    "0", "1.25", "-1.25", maximum, `-${minimumMagnitude}`,
+    `${maximum.slice(0, -28)}.${maximum.slice(-28)}`,
+    `-${minimumMagnitude.slice(0, -28)}.${minimumMagnitude.slice(-28)}`,
+  ];
+  const invalidNumerics = [
+    null, true, 1, 1.25, {}, "", " ", " 1", "1 ", "+1", "01", "-0",
+    "1.0", "1.", ".5", "1e3", "NaN", "Infinity", "١", "1".repeat(157),
+    "0.00000000000000000000000000001", String(limit), String(-limit - 1n),
+  ];
+  const invalidMetadata = invalidNumerics.map((value) => ({
+    ...metadata, twap_local_per_xor: value,
+  }));
+  for (const [field, value] of [
+    ["epsilon_bps", -1], ["epsilon_bps", 65536], ["epsilon_bps", true],
+    ["epsilon_bps", 1.25], ["twap_window_seconds", -1],
+    ["twap_window_seconds", 4294967296], ["twap_window_seconds", "300"],
+    ["twap_window_seconds", 1.25], ["liquidity_profile", "Tier2"],
+    ["liquidity_profile", { profile: "Tier4", state: null }],
+    ["liquidity_profile", { profile: "Tier2", state: {} }],
+    ["liquidity_profile", { profile: "Tier2" }],
+    ["volatility_class", "Elevated"],
+    ["volatility_class", { bucket: "Unknown", state: null }],
+    ["volatility_class", { bucket: "Elevated", state: false }],
+    ["volatility_class", { bucket: "Elevated", state: null, extra: 0 }],
+  ]) {
+    invalidMetadata.push({ ...metadata, [field]: value });
+  }
+  for (const field of Object.keys(metadata)) {
+    const missing = clone(metadata);
+    delete missing[field];
+    invalidMetadata.push(missing);
+  }
+  invalidMetadata.push({ ...metadata, extra: null }, [], "metadata");
+  for (const [implementation, parse] of [
+    ["source", parseSourceDiagnostics], ["dist", parseDistDiagnostics],
+  ]) {
+    for (const numeric of positives) {
+      const input = clone(fixtureDocument.golden.expected_diagnostics);
+      input.lane_settlement_commitments[0].swap_metadata = {
+        ...metadata, twap_local_per_xor: numeric,
+      };
+      const parsed = parse(input).lane_settlement_commitments[0].swap_metadata;
+      assert.equal(parsed.twap_local_per_xor, numeric, implementation);
+      assert.equal(parsed.epsilon_bps, 65535, implementation);
+      assert.equal(parsed.twap_window_seconds, 4294967295, implementation);
+    }
+    for (const invalid of invalidMetadata) {
+      const input = clone(fixtureDocument.golden.expected_diagnostics);
+      input.lane_settlement_commitments[0].swap_metadata = invalid;
+      assert.throws(
+        () => parse(input),
+        (error) => (error instanceof TypeError || error instanceof RangeError)
+          && error.message.includes("swap_metadata"),
+        implementation,
+      );
+    }
+  }
+});
+
+test("grouped Native AMX v2 owns immutable checked participant settlements", () => {
+  for (const [implementation, parse, helpers] of [
+    ["source", parseSourceDiagnostics, sourceNativeAmxTestHelpers],
+    ["dist", parseDistDiagnostics, distNativeAmxTestHelpers],
+  ]) {
+    const input = clone(fixtureDocument.golden.expected_diagnostics);
+    const inputSettlement = input.lane_settlement_commitments[0]
+      .native_amx_receipts[0].legs[0].participant_settlement;
+    const expected = clone(inputSettlement);
+    const leg = parse(input).lane_settlement_commitments[0]
+      .native_amx_receipts[0].legs[0];
+    const settlement = leg.participant_settlement;
+    const checkedHash = leg.participant_settlement_hash;
+    assert.equal(helpers.computeParticipantSettlementHash(settlement), checkedHash);
+    assert.equal(Object.hasOwn(settlement, "native_amx_receipts"), false, implementation);
+
+    inputSettlement.source_ids[0] = "FF".repeat(32);
+    inputSettlement.source_ids.pop();
+    inputSettlement.native_amx_receipts = [{}];
+    inputSettlement.authority_context_height = 0;
+    assert.deepEqual(JSON.parse(JSON.stringify(settlement)), expected, implementation);
+
+    for (const mutate of [
+      () => { settlement.authority_context_height = 0; },
+      () => { settlement.source_ids = []; },
+      () => { settlement.source_ids[0] = settlement.source_ids[1]; },
+      () => { settlement.source_ids.pop(); },
+      () => { settlement.native_amx_receipts = [{}]; },
+    ]) {
+      assert.throws(mutate, TypeError, implementation);
+    }
+    assert.deepEqual(JSON.parse(JSON.stringify(settlement)), expected, implementation);
+    assert.equal(helpers.computeParticipantSettlementHash(settlement), checkedHash);
+    assert.equal(leg.prepare_qc.body.participant_settlement_commitment, checkedHash);
+    assert.equal(leg.commit_qc.body.participant_settlement_commitment, checkedHash);
+  }
 });
 
 test("grouped Native AMX v2 exposes mixed-role anchor deferral", async () => {

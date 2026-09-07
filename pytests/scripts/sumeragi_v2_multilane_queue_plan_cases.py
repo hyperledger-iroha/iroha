@@ -207,10 +207,115 @@ def validate_queue_plan_pending_membership_fixture(
     tmp_path: Path, module, models: list[dict]
 ) -> tuple[str, ...]:
     errors: list[str] = []
-    module._validate_queue_plan_pending_membership_contract(
-        tmp_path, models, errors
-    )
+    with module._reviewed_rust_source_cache():
+        module._validate_queue_plan_pending_membership_contract(
+            tmp_path, models, errors
+        )
     return tuple(errors)
+
+
+def test_queue_plan_pending_membership_ledger_accepts_all_current_owners() -> None:
+    module = load_checker()
+    errors: list[str] = []
+    assert module._validate_queue_plan_pending_membership_model_bindings(
+        canonical_models(), errors
+    )
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("mutation", (None, "network-owner", "removed-finalizer"))
+def test_queue_plan_startup_model_requires_current_source_declarations(
+    tmp_path: Path, mutation: str | None
+) -> None:
+    """Startup ledger rows resolve directly without token translation or deletion."""
+    module = load_checker()
+    model = next(
+        model for model in canonical_models()
+        if model["module"] == module.QUEUE_PLAN_STARTUP_REPLAY_MODULE
+    )
+    model["production_symbols"] = [
+        binding for binding in model["production_symbols"]
+        if binding["symbol"] == "Iroha::start_with_runtime_deps"
+    ]
+    assert len(model["production_symbols"]) == 1
+    binding = model["production_symbols"][0]
+    copy_reviewed_rust_source_fixture(tmp_path, module, binding["path"])
+    if mutation == "network-owner":
+        current = "IrohaNetwork::start_with_crypto_and_initial_authorities("
+        obsolete = "IrohaNetwork::start_with_crypto_and_initial_trusted_sources("
+        binding["required_tokens"][binding["required_tokens"].index(current)] = obsolete
+    elif mutation == "removed-finalizer":
+        obsolete = "finalize_plan_journal_startup_recovery()"
+        binding["required_tokens"].append(obsolete)
+    errors: list[str] = []
+    module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors)
+    if mutation is None:
+        assert errors == [], errors
+    else:
+        assert len(errors) == 1, errors
+        assert obsolete in errors[0] and "missing source-binding token" in errors[0]
+
+
+@pytest.mark.parametrize("mutation", ("missing", "duplicate", "weakened"))
+@pytest.mark.parametrize(
+    "symbol",
+    (
+        'QueuePlanPendingSignedAliasMemberV1',
+        'QueuePlanSignedAliasTerminalV1',
+        'decode_exact_queue_plan_pending_signed_alias_member_marker',
+        'decode_exact_queue_plan_signed_alias_terminal_marker',
+        'prevalidate_queue_plan_pending_route_rosters',
+        'queue_plan_binding_application_evidence_in_view',
+        'queue_plan_binding_application_state',
+        'queue_plan_binding_application_state_in_storage',
+        'queue_plan_pending_exact_route_member_state_after_roster_prevalidation',
+        'queue_plan_pending_exact_route_member_state_in_storage',
+        'queue_plan_pending_signed_alias_member_from_obligation',
+        'queue_plan_pending_signed_alias_member_marker_key',
+        'queue_plan_pending_signed_alias_member_marker_payload',
+        'queue_plan_pending_signed_alias_member_marker_prefix',
+        'queue_plan_pending_signed_alias_members_from_storage',
+        'queue_plan_registry_owner_application_state_in_view',
+        'queue_plan_signed_alias_terminal_marker_key',
+        'queue_plan_signed_alias_terminal_marker_key_from_claim',
+        'queue_plan_signed_alias_terminal_marker_payload',
+        'queue_plan_terminal_signed_alias_member_from_obligation',
+        'require_queue_plan_pending_signed_alias_member_marker',
+        'resolve_queue_plan_pending_obligation_after_roster_prevalidation',
+        'resolve_queue_plan_pending_obligation_by_signed_alias_in_storage',
+        'resolve_queue_plan_pending_obligation_in_storage',
+        'resolve_queue_plan_pending_obligations_from_block',
+        'resolve_required_queue_plan_pending_obligations',
+        'stage_queue_plan_pending_obligation_marker_in_storage',
+    ),
+)
+def test_queue_plan_pending_membership_ledger_rejects_replay_owner_drift(
+    symbol: str, mutation: str
+) -> None:
+    """Every replay-terminal owner needs one exact, non-weakened ledger row."""
+    module = load_checker()
+    models = canonical_models()
+    model = next(
+        model for model in models
+        if model["module"] == module.QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE
+    )
+    rows = model["production_symbols"]
+    matches = [row for row in rows if row["symbol"] == symbol]
+    assert len(matches) == 1
+    row = matches[0]
+    if mutation == "missing":
+        rows.remove(row)
+        expected_error = "exactly once, found 0"
+    elif mutation == "duplicate":
+        rows.append(copy.deepcopy(row))
+        expected_error = "exactly once, found 2"
+    else:
+        row["required_tokens"].pop()
+        expected_error = "route-membership tokens changed"
+    errors: list[str] = []
+    assert module._validate_queue_plan_pending_membership_model_bindings(models, errors)
+    assert len(errors) == 1, errors
+    assert symbol in errors[0] and expected_error in errors[0], errors
 
 
 def test_queue_plan_pending_membership_contract_accepts_current_production(
@@ -768,14 +873,11 @@ def test_queue_plan_pending_membership_contract_rejects_stale_cleanup_drift(
     module = load_checker()
     models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
     path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
-    replace_once(
+    replace_once_after(
         path,
-        "                    QueuePlanAdmissionApplicationState::PendingStale => {\n"
-        "                        PendingQueuePlanAdmissionDisposition::Stale\n"
-        "                    }",
-        "                    QueuePlanAdmissionApplicationState::PendingStale => {\n"
-        "                        PendingQueuePlanAdmissionDisposition::Exact\n"
-        "                    }",
+        "fn classify_pending_queue_plan_admission_in_view(",
+        "PendingQueuePlanAdmissionDisposition::Stale",
+        "PendingQueuePlanAdmissionDisposition::ExactPending",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
@@ -784,6 +886,92 @@ def test_queue_plan_pending_membership_contract_rejects_stale_cleanup_drift(
         "classify_pending_queue_plan_admission" in error
         and "PendingQueuePlanAdmissionDisposition::Stale" in error
         for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "symbol", "old", "new"),
+    [
+        (
+            "crates/iroha_core/src/state.rs",
+            "persist_classified_queue_plan_admission",
+            "self.queue_plan_admission_persistence_lock.lock()",
+            "()",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "persist_classified_queue_plan_admission",
+            "existing.certificate.binding == incoming.certificate.binding",
+            "true",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "persist_classified_queue_plan_admission",
+            "one_ahead != Some(actual_durable_height)",
+            "false",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "persist_classified_queue_plan_admission",
+            "Instant::now() >= *deadline",
+            "false",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "classify_pending_queue_plan_admission_in_view",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
+        ),
+    ],
+    ids=("serialize-writers", "exact-logical-binding", "one-ahead-only",
+         "bounded-reconciliation", "applied-is-terminal"),
+)
+def test_queue_plan_pending_membership_contract_rejects_persistence_guard_drift(
+    tmp_path: Path, relative: str, symbol: str, old: str, new: str
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    replace_once_after(tmp_path / relative, f"fn {symbol}(", old, new)
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(symbol in error and old in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "symbol", "earlier", "later"),
+    [
+        (
+            "crates/iroha_core/src/state.rs",
+            "persist_classified_queue_plan_admission",
+            "let state_commit = self.state_commit_lock.lock();",
+            "let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+            "if actual_durable_height != expected_durable_height",
+            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "persist_queue_plan_admission_certificate",
+            "snapshot.body = durable_certificate;",
+            "disseminate_queue_plan_admission_publication(",
+        ),
+    ],
+    ids=("state-fence-before-classification", "height-check-before-write",
+         "durable-body-before-publication"),
+)
+def test_queue_plan_pending_membership_contract_rejects_persistence_order_drift(
+    tmp_path: Path, relative: str, symbol: str, earlier: str, later: str
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    swap_ordered_once_after(
+        tmp_path / relative, f"fn {symbol}(", earlier, later
+    )
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(
+        "ordered QueuePlan" in error and symbol in error for error in errors
     ), errors
 
 

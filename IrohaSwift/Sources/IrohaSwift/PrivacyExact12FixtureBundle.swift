@@ -165,6 +165,18 @@ public enum PrivacyExact12FixtureCodecV1 {
     private static let transactionPayloadAlignment = 8
     private static let statementSchemaName = "iroha.privacy.statement.v1"
     private static let envelopeSchemaName = "iroha.privacy.proof-envelope.v1"
+    private static let proofWireMagic = Data([0x49, 0x52, 0x48, 0x5a, 0x4b, 0x31, 0xa5, 0x5a])
+    private static let catalogCommitment: Data = {
+        let words: [UInt64] = [
+            0x7c30_a004_39f1_37e0, 0x6b40_fb5c_d815_db00, 0x49a9_4401_d272_97d7,
+            0x2e34_8ea7_fdf3_f0de, 0xfabf_bf7c_7865_7f74, 0xffbb_e269_c311_4fc9,
+        ]
+        var bytes = Data()
+        for word in words {
+            appendUInt64LE(word, to: &bytes)
+        }
+        return bytes
+    }()
     private static let instructionSchemaName =
         "iroha_data_model::isi::privacy::SubmitPrivacyProofV1"
     private static let transactionPayloadSchemaName =
@@ -670,15 +682,25 @@ public enum PrivacyExact12FixtureCodecV1 {
     ) throws {
         var reader = Exact12Reader(payload)
         var fields: [Data] = []
-        fields.reserveCapacity(11)
-        for index in 0..<11 {
+        fields.reserveCapacity(13)
+        for index in 0..<13 {
             fields.append(
                 try reader.readField(maximum: maximumEnvelopeBytes, label: "envelope field \(index)")
             )
         }
         try reader.requireFinished(label: "proof envelope")
-        guard fields[0].count == 4,
-              try readUInt32LE(fields[0], at: 0, label: "envelope protocol")
+        guard fields[0] == proofWireMagic else {
+            throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
+                row: rowIndex, field: "final V1 wire marker"
+            )
+        }
+        guard fields[1] == catalogCommitment else {
+            throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
+                row: rowIndex, field: "Exact12 catalog commitment"
+            )
+        }
+        guard fields[2].count == 4,
+              try readUInt32LE(fields[2], at: 0, label: "envelope protocol")
                 == expectedProtocolTag else {
             throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
                 row: rowIndex,
@@ -693,8 +715,8 @@ public enum PrivacyExact12FixtureCodecV1 {
             )
         }
         let expectedTags = [
-            (1, "proof system", protocolId.expectedProofSystem.rawValue),
-            (2, "engine", protocolId.expectedEngine.rawValue),
+            (3, "proof system", protocolId.expectedProofSystem.rawValue),
+            (4, "engine", protocolId.expectedEngine.rawValue),
         ]
         for (index, label, expectedTag) in expectedTags {
             guard fields[index].count == 4,
@@ -705,7 +727,7 @@ public enum PrivacyExact12FixtureCodecV1 {
                 )
             }
         }
-        for index in 3...7 {
+        for index in 5...9 {
             let digestField = fields[index]
             guard digestField.count == 33,
                   digestField.first == 32,
@@ -716,7 +738,7 @@ public enum PrivacyExact12FixtureCodecV1 {
                 )
             }
         }
-        let statementDigest = fields[8]
+        let statementDigest = fields[10]
         guard statementDigest.count == 33, statementDigest.first == 32 else {
             throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
                 row: rowIndex,
@@ -730,20 +752,20 @@ public enum PrivacyExact12FixtureCodecV1 {
                 field: "envelope statement digest normalization"
             )
         }
-        if let expectedStatementPayload, fields[9] != expectedStatementPayload {
+        if let expectedStatementPayload, fields[11] != expectedStatementPayload {
             throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
                 row: rowIndex,
                 field: "envelope-to-statement"
             )
         }
         try validateTaggedEnum(
-            fields[9],
+            fields[11],
             expectedTag: expectedProtocolTag,
             rowIndex: rowIndex,
             field: "envelope statement protocol"
         )
         try validateTaggedEnum(
-            fields[10],
+            fields[12],
             expectedTag: expectedProtocolTag,
             rowIndex: rowIndex,
             field: "envelope proof protocol"

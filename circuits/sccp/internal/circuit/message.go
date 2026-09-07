@@ -500,6 +500,29 @@ func (c *MessageCircuit) constrainAnchor(api frontend.API) error {
 	if err := assertBytesEqual(api, c.Anchor.RosterCommitment[:], roster[:]); err != nil {
 		return err
 	}
+	// A retained anchor authorizes later blocks under its epoch roster. At
+	// the checkpoint height itself, it authenticates one exact block, context,
+	// and finality artifact, just as on the epoch-boundary authorization path.
+	sameCheckpoint := api.IsZero(api.Sub(c.Anchor.CheckpointHeight, c.Finality.Height))
+	byteAPI, err := uints.NewBytes(api)
+	if err != nil {
+		return err
+	}
+	for _, pair := range [][2][]uints.U8{
+		{c.Anchor.CheckpointBlockHash[:], c.Finality.BlockHeaderHash[:]},
+		{c.Anchor.CheckpointContextID[:], c.Finality.HeightContextID[:]},
+		{c.Anchor.CheckpointFinalityArtifactHash[:], c.Finality.FinalityArtifactHash[:]},
+	} {
+		for index := range pair[0] {
+			api.AssertIsEqual(
+				api.Mul(
+					sameCheckpoint,
+					api.Sub(byteAPI.Value(pair[0][index]), byteAPI.Value(pair[1][index])),
+				),
+				0,
+			)
+		}
+	}
 	return nil
 }
 

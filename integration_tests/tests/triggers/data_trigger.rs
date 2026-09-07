@@ -2,7 +2,7 @@
 //! Data-trigger execution and rollback scenarios.
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{client, data_model::prelude::*};
+use iroha::{blocking, data_model::prelude::*};
 use iroha_data_model::nexus::DataSpaceId;
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -39,8 +39,8 @@ where
     }
     Ok(())
 }
-fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Quantity> {
-    let assets = client.query(FindAssets::new()).execute_all()?;
+fn asset_value(client: &blocking::Client, asset_id: &AssetId) -> Result<Quantity> {
+    let assets = client.client().query(FindAssets::new()).execute_all()?;
     let asset = assets
         .into_iter()
         .find(|asset| asset.id() == asset_id)
@@ -48,7 +48,7 @@ fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Quantity> 
     Ok(asset.value().clone())
 }
 fn wait_for_asset_value(
-    client: &client::Client,
+    client: &blocking::Client,
     asset_id: &AssetId,
     expected: &Quantity,
     context: &str,
@@ -101,7 +101,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             let client = test_client.clone();
             let alias_domain = alias_domain.clone();
             move || -> Result<()> {
-                client.submit_blocking(
+                client.submit(
                     Grant::account_permission(
                         Permission::from(CanManageAccountAlias {
                             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -110,7 +110,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
                     ),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )?;
-                client.submit_blocking(
+                client.submit(
                     Grant::account_permission(
                         Permission::from(CanManageAccountAlias {
                             scope: AccountAliasPermissionScope::Domain(alias_domain),
@@ -136,7 +136,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         spawn_blocking({
             let client = test_client.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     register_trigger,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -156,7 +156,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         spawn_blocking({
             let client = test_client.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     register_trigger,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -172,7 +172,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         spawn_blocking({
             let client = test_client.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     setup_alias,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -194,11 +194,11 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
         let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
-        let setup_neverland = domain_setup_instruction(&neverland, &test_client.account)?;
+        let setup_neverland = domain_setup_instruction(&neverland, &test_client.client().account)?;
         spawn_blocking({
             let client = test_client.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     setup_neverland,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -269,7 +269,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         spawn_blocking({
             let client = client.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     scope_trigger,
                     FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -281,7 +281,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             let client = client.clone();
             let unrelated_marker = unrelated_marker.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     SetKeyValue::account(
                         ALICE_ID.clone(),
                         unrelated_marker,
@@ -294,7 +294,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         .await??;
         let account = spawn_blocking({
             let client = client.clone();
-            move || client.query_single(FindAccountById::new(ALICE_ID.clone()))
+            move || client.client().query_single(FindAccountById::new(ALICE_ID.clone()))
         })
         .await??;
         assert!(
@@ -303,7 +303,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         );
         let active = spawn_blocking({
             let client = client.clone();
-            move || client.query(FindActiveTriggerIds).execute_all()
+            move || client.client().query(FindActiveTriggerIds).execute_all()
         })
         .await??;
         assert!(active.contains(&scope_trigger_id));
@@ -312,7 +312,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             let client = client.clone();
             let rose = rose.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     Mint::asset_quantity(1_u32, rose),
                     FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -321,7 +321,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         .await??;
         let account = spawn_blocking({
             let client = client.clone();
-            move || client.query_single(FindAccountById::new(ALICE_ID.clone()))
+            move || client.client().query_single(FindAccountById::new(ALICE_ID.clone()))
         })
         .await??;
         assert_eq!(
@@ -331,7 +331,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         );
         let active = spawn_blocking({
             let client = client.clone();
-            move || client.query(FindActiveTriggerIds).execute_all()
+            move || client.client().query(FindActiveTriggerIds).execute_all()
         })
         .await??;
         assert!(
@@ -361,8 +361,11 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             consume_then_fail_id.clone(),
             Action::new(
                 [
-                    RemoveKeyValue::account(ALICE_ID.clone(), ordering_witness.clone()).into(),
-                    Register::domain(Domain::new(wonderland.clone())).into(),
+                    InstructionBox::from(RemoveKeyValue::account(
+                        ALICE_ID.clone(),
+                        ordering_witness.clone(),
+                    )),
+                    InstructionBox::from(Register::domain(Domain::new(wonderland.clone()))),
                 ],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
@@ -373,7 +376,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         spawn_blocking({
             let client = client.clone();
             move || {
-                client.submit_all_blocking(
+                client.submit_all(
                     [create_witness, consume_then_fail],
                     FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -391,7 +394,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             let client = client.clone();
             let rose = rose.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     Mint::asset_quantity(1_u32, rose),
                     FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -416,13 +419,13 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         );
         let account = spawn_blocking({
             let client = client.clone();
-            move || client.query_single(FindAccountById::new(ALICE_ID.clone()))
+            move || client.client().query_single(FindAccountById::new(ALICE_ID.clone()))
         })
         .await??;
         assert!(account.metadata().get(&ordering_witness).is_none());
         let active = spawn_blocking({
             let client = client.clone();
-            move || client.query(FindActiveTriggerIds).execute_all()
+            move || client.client().query(FindActiveTriggerIds).execute_all()
         })
         .await??;
         assert!(
@@ -460,7 +463,7 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
     run_or_skip(stringify!(cat_depth_and_mouse_depth), || async {
         let mut parameters = spawn_blocking({
             let client = test_client.clone();
-            move || client.query_single(FindParameters)
+            move || client.client().query_single(FindParameters)
         })
         .await??;
         let base_depth = parameters.smart_contract().execution_depth();
@@ -471,7 +474,7 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
         spawn_blocking({
             let client = test_client.clone();
             move || {
-                client.submit_blocking(
+                client.submit(
                     SetParameter::new(Parameter::SmartContract(
                         iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(
                             new_depth,
@@ -484,7 +487,7 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
         .await??;
         parameters = spawn_blocking({
             let client = test_client.clone();
-            move || client.query_single(FindParameters)
+            move || client.client().query_single(FindParameters)
         })
         .await??;
         assert_eq!(new_depth, parameters.smart_contract().execution_depth());

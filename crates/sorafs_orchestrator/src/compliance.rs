@@ -9,7 +9,7 @@
 //! The compliance helpers now surface operator attestation artefacts alongside an auditable
 //! checklist so governance tooling can confirm why a SoraNet transport was overridden and which
 //! assurances were provided by each operator.
-use iroha_core::prelude::Hash;
+use iroha_crypto::Hash;
 use std::collections::BTreeSet;
 /// Decision emitted after evaluating the compliance policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

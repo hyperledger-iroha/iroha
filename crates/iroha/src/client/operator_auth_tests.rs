@@ -61,7 +61,12 @@ fn operator_endpoint_requires_a_signing_key_before_dispatch() {
                 .body(Vec::new())
                 .expect("response build"),
         ),
-        || client.get_config(),
+        |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.get_config()
+        },
     )
     .expect_err("operator endpoint must reject a missing local signer");
     assert!(
@@ -75,36 +80,20 @@ fn operator_endpoint_requires_a_signing_key_before_dispatch() {
     );
 }
 #[test]
-fn proof_retention_requires_a_signing_key_before_dispatch() {
-    let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+fn operator_context_is_independent_of_account_authority() {
     let mut client = client_with_base_url(base_url());
-    client.operator_key_pair = None;
-    let error = with_mock_http(
-        respond_with(
-            &snapshots,
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Vec::new())
-                .expect("response build"),
-        ),
-        || client.get_proof_retention_status(),
-    )
-    .expect_err("proof-retention read must reject a missing local signer");
-    assert!(
-        error
-            .to_string()
-            .contains("operator signing key is required")
-    );
-    assert!(
-        snapshots.lock().expect("lock snapshots").is_empty(),
-        "missing operator credentials must fail before transport"
-    );
+    client.account =
+        iroha_data_model::account::AccountId::new(checked_random_keypair().public_key().clone());
+    let operator = client
+        .operator_client(checked_random_keypair())
+        .expect("operator binding must not depend on account credentials");
+    assert_eq!(operator.network_id(), &client.network_id);
 }
-#[test]
-fn proof_retention_uses_one_exact_signed_empty_body_get() {
+#[tokio::test]
+async fn proof_retention_uses_one_exact_signed_empty_body_get() {
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-    let mut client = client_with_base_url(base_url());
-    client.set_operator_key_pair(checked_random_keypair());
+    let client = client_with_base_url(base_url());
+    let operator_key = checked_random_keypair();
     let error = with_mock_http(
         respond_with(
             &snapshots,
@@ -113,8 +102,18 @@ fn proof_retention_uses_one_exact_signed_empty_body_get() {
                 .body(Vec::new())
                 .expect("response build"),
         ),
-        || client.get_proof_retention_status(),
+        |mock_transport| async move {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client
+                .operator_client(operator_key)
+                .expect("valid operator context")
+                .get_proof_retention_status()
+                .await
+        },
     )
+    .await
     .expect_err("mocked unauthorized response must fail");
     assert!(error.to_string().contains("proof retention"));
     let snapshots = snapshots.lock().expect("lock snapshots");

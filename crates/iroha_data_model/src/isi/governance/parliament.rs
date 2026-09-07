@@ -43,6 +43,10 @@ pub const MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::CreateParliamentGovernanceAttemptV1"
+)]
 pub struct CreateParliamentGovernanceAttemptV1 {
     /// Exact typed proposal whose fingerprint is shared by every retry.
     pub proposal: ProposalKind,
@@ -98,6 +102,8 @@ impl seal::Instruction for CreateParliamentGovernanceAttemptV1 {}
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentEscalateRiskV1")]
 pub struct ParliamentEscalateRiskV1 {
     /// Strictly nondecreasing policy-derived risk tier.
     pub target: RiskTierV1,
@@ -109,6 +115,10 @@ pub struct ParliamentEscalateRiskV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentSortitionRequestRegistrationV1"
 )]
 pub struct ParliamentSortitionRequestRegistrationV1 {
     /// Zero-based retry sequence for this body election.
@@ -131,6 +141,10 @@ pub struct ParliamentSortitionRequestRegistrationV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterSortitionRequestV1"
+)]
 pub struct ParliamentRegisterSortitionRequestV1 {
     /// Canonically body-ordered requests sharing one candidate snapshot and pulse slot.
     pub requests: Vec<ParliamentSortitionRequestRegistrationV1>,
@@ -142,6 +156,10 @@ pub struct ParliamentRegisterSortitionRequestV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentConsumeSortitionPulseBatchV1"
 )]
 pub struct ParliamentConsumeSortitionPulseBatchV1 {
     /// Strictly ordered complete request identifiers for the pulse slot.
@@ -161,6 +179,10 @@ pub struct ParliamentConsumeSortitionPulseBatchV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentBeginInvitationAcceptanceV1"
+)]
 pub struct ParliamentBeginInvitationAcceptanceV1 {
     /// Election attempt whose finalized-pulse draw completed.
     pub election_attempt_id: BodyElectionAttemptId,
@@ -172,6 +194,10 @@ pub struct ParliamentBeginInvitationAcceptanceV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentFailBodyElectionNoRosterV1"
 )]
 pub struct ParliamentFailBodyElectionNoRosterV1 {
     /// Election attempt that failed.
@@ -189,6 +215,10 @@ pub struct ParliamentFailBodyElectionNoRosterV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentInvitationDecisionV1"
+)]
 pub enum ParliamentInvitationDecisionV1 {
     /// Accept the offered Parliament assignment.
     #[codec(index = 0)]
@@ -204,6 +234,10 @@ pub enum ParliamentInvitationDecisionV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentRecordInvitationResponseV1"
 )]
 pub struct ParliamentRecordInvitationResponseV1 {
     /// Election attempt whose ranked invitation is being answered.
@@ -224,6 +258,8 @@ pub struct ParliamentRecordInvitationResponseV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentSealBodyRosterV1")]
 pub struct ParliamentSealBodyRosterV1 {
     /// Election whose ranked, authority-bound responses determine the roster.
     ///
@@ -239,6 +275,10 @@ pub struct ParliamentSealBodyRosterV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentAdvanceBodyPhaseV1"
+)]
 pub struct ParliamentAdvanceBodyPhaseV1 {
     /// Body instance being advanced.
     pub body_instance_id: BodyInstanceId,
@@ -252,6 +292,10 @@ pub struct ParliamentAdvanceBodyPhaseV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentRecordAttemptAbsenceV1"
 )]
 pub struct ParliamentRecordAttemptAbsenceV1 {
     /// Body instance whose transaction-authority member declares their own absence.
@@ -269,6 +313,10 @@ pub struct ParliamentRecordAttemptAbsenceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentEndorsePublicFindingV1"
+)]
 pub struct ParliamentEndorsePublicFindingV1 {
     /// Body instance contributing the finding.
     pub body_instance_id: BodyInstanceId,
@@ -283,6 +331,10 @@ pub struct ParliamentEndorsePublicFindingV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentFailPublicFindingNoResultV1"
+)]
 pub struct ParliamentFailPublicFindingNoResultV1 {
     /// Public body whose frozen endorsement deadline has elapsed.
     pub body_instance_id: BodyInstanceId,
@@ -294,6 +346,10 @@ pub struct ParliamentFailPublicFindingNoResultV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterBallotAttemptV1"
 )]
 pub struct ParliamentRegisterBallotAttemptV1 {
     /// Binding body instance receiving the private ballot.
@@ -323,6 +379,10 @@ pub struct ParliamentRegisterBallotAttemptV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterBallotParticipantV1"
+)]
 pub struct ParliamentRegisterBallotParticipantV1 {
     /// Ballot attempt accepting the authenticated member registration.
     pub ballot_attempt_id: BallotAttemptId,
@@ -336,6 +396,10 @@ pub struct ParliamentRegisterBallotParticipantV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentCloseBallotRegistrationV1"
 )]
 pub struct ParliamentCloseBallotRegistrationV1 {
     /// Ballot attempt whose registration closes.
@@ -352,6 +416,10 @@ pub struct ParliamentCloseBallotRegistrationV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentRecordBallotDropoutV1"
+)]
 pub struct ParliamentRecordBallotDropoutV1 {
     /// Ballot attempt from which the authenticated member withdraws.
     pub ballot_attempt_id: BallotAttemptId,
@@ -363,6 +431,10 @@ pub struct ParliamentRecordBallotDropoutV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentFreezeBallotSurvivorsV1"
 )]
 pub struct ParliamentFreezeBallotSurvivorsV1 {
     /// Ballot attempt whose survivor set becomes immutable.
@@ -379,6 +451,10 @@ pub struct ParliamentFreezeBallotSurvivorsV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentFreezeTimedOvnCorpusV1"
 )]
 pub struct ParliamentFreezeTimedOvnCorpusV1 {
     /// Ballot attempt whose next contiguous corpus chunk is appended.
@@ -401,6 +477,10 @@ pub struct ParliamentFreezeTimedOvnCorpusV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentBeginBallotOpeningBatchV1"
+)]
 pub struct ParliamentBeginBallotOpeningBatchV1 {
     /// Strictly ordered complete ballot attempts for the release slot.
     pub ballot_attempt_ids: Vec<BallotAttemptId>,
@@ -419,6 +499,10 @@ pub struct ParliamentBeginBallotOpeningBatchV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentFailBallotNoResultV1"
+)]
 pub struct ParliamentFailBallotNoResultV1 {
     /// Ballot attempt that failed.
     pub ballot_attempt_id: BallotAttemptId,
@@ -434,6 +518,10 @@ pub struct ParliamentFailBallotNoResultV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentTleFinalReleaseSignatureV1"
 )]
 pub struct ParliamentTleFinalReleaseSignatureV1 {
     /// Long-lived TLE key session producing the final signature.
@@ -451,6 +539,10 @@ pub struct ParliamentTleFinalReleaseSignatureV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentFinalizeOpenedBallotV1"
+)]
 pub struct ParliamentFinalizeOpenedBallotV1 {
     /// Ballot attempt whose complete survivor aggregate is opened.
     pub ballot_attempt_id: BallotAttemptId,
@@ -465,6 +557,10 @@ pub struct ParliamentFinalizeOpenedBallotV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticSupersededV1"
+)]
 pub struct ParliamentAutomaticSupersededV1 {
     /// Different committed head observed when execution became due.
     pub observed_head: GovernanceExpectedHeadV1,
@@ -476,6 +572,10 @@ pub struct ParliamentAutomaticSupersededV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticExecutionFailedV1"
 )]
 pub struct ParliamentAutomaticExecutionFailedV1 {
     /// Exact certified effect preimage hash.
@@ -499,6 +599,10 @@ pub struct ParliamentAutomaticExecutionFailedV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticExecutionOutcomeV1"
 )]
 pub enum ParliamentAutomaticExecutionOutcomeV1 {
     /// The exact certified effect enacted successfully.
@@ -529,6 +633,10 @@ pub enum ParliamentAutomaticExecutionOutcomeV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentLifecycleTransitionV1"
 )]
 pub enum ParliamentLifecycleTransitionV1 {
     /// Escalate the attempt's risk tier before Policy Jury sortition is frozen.
@@ -621,6 +729,10 @@ pub enum ParliamentLifecycleTransitionV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::ParliamentLifecycleTransitionKindV1"
+)]
 pub enum ParliamentLifecycleTransitionKindV1 {
     /// Risk escalation.
     #[codec(index = 0)]
@@ -1127,6 +1239,10 @@ impl ParliamentAutomaticExecutionOutcomeV1 {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::parliament::SubmitParliamentLifecycleTransitionV1"
 )]
 pub struct SubmitParliamentLifecycleTransitionV1 {
     /// Attempt whose reducer must consume the transition.
@@ -2201,3 +2317,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_parliament_schema_tests;

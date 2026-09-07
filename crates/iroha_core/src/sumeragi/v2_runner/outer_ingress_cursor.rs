@@ -139,8 +139,8 @@ impl LifecycleRunnerRankSnapshot {
 /// guarded lifecycle planner a real runner-reach debt instead of a
 /// caller-supplied zero. It remains private and never mints SchedulerInputs by
 /// itself.
-// TODO: Call the owner transaction while this cursor is borrowed at the live
-// Ingress turn, together with the consuming owner-to-worker body-store launch.
+// The activated height driver consumes the current-turn borrow through
+// `drive_ingress_turn`; launch has already moved the exact body store into its worker.
 #[derive(Debug)]
 struct OuterIngressTurns {
     context_id: wire::HeightContextId,

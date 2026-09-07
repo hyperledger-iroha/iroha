@@ -184,7 +184,7 @@ pub const SCCP_DOMAIN_BSC: u32 = 2;
 /// SCCP protocol domain assigned to TON networks.
 pub const SCCP_DOMAIN_TON: u32 = 4;
 /// SCCP protocol domain assigned to TRON networks.
-pub const SCCP_DOMAIN_TRON: u32 = 3;
+pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public TAIRA chain label retained as SCCP deployment metadata.
 pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Canonical public TAIRA genesis hash bound into TAIRA-origin SCCP finality proofs.
@@ -218,18 +218,18 @@ pub const SCCP_FINALIZE_FROM_TAIRA_ABI_V1: &str =
 /// Keccak-256 selector for [`SCCP_FINALIZE_FROM_TAIRA_ABI_V1`].
 pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x7f, 0x4f, 0x9e, 0x5d];
 /// Printable ASCII or an exact canonical I105 account identifier.
-pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 0;
+pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 1;
 /// Raw nonzero 20-byte EVM account address.
-pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 1;
+pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 2;
 /// Raw nonzero TRON account including its mandatory `0x41` network prefix.
-pub const SCCP_CODEC_TRON_ADDRESS21: u8 = 2;
+pub const SCCP_CODEC_TRON_ADDRESS21: u8 = 5;
 /// Raw TON account: signed big-endian `i32` workchain followed by a nonzero
 /// 32-byte account id.
 ///
 /// V1 value-moving routes require workchain `0`; friendly/base64 flags and
 /// checksums are presentation-only and are never admitted as alternate wire
 /// encodings.
-pub const SCCP_CODEC_TON_ACCOUNT36: u8 = 3;
+pub const SCCP_CODEC_TON_ACCOUNT36: u8 = 7;
 /// Maximum byte length of one canonical textual SCCP wire value.
 pub const SCCP_MAX_CANONICAL_TEXT_BYTES_V1: usize = 256;
 /// Closed list of external protocol domains implemented by SCCP V1.
@@ -714,7 +714,7 @@ pub enum SccpPayloadV1 {
     Transfer(TransferPayloadV1),
 }
 impl SccpPayloadV1 {
-    const TRANSFER_DISCRIMINANT: u8 = 0;
+    const TRANSFER_DISCRIMINANT: u8 = 2;
 }
 /// Failure to encode a value in the canonical SCCP V1 payload layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2572,7 +2572,7 @@ fn abi_padded_bytes(value: &[u8]) -> Vec<u8> {
 pub fn encode_sccp_solidity_replay_witness_v1(
     witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<Vec<u8>> {
-    if witness.expected_shard_root == [0; 32] || witness.validate().is_err() {
+    if witness.validate().is_err() {
         return None;
     }
     let sibling_count = witness.siblings.len();
@@ -2637,8 +2637,7 @@ pub fn decode_sccp_solidity_replay_witness_v1(encoded: &[u8]) -> Option<SccpSpar
         sibling_bitmap,
         siblings,
     };
-    (witness.expected_shard_root != [0; 32]
-        && witness.validate().is_ok()
+    (witness.validate().is_ok()
         && encode_sccp_solidity_replay_witness_v1(&witness).as_deref() == Some(encoded))
     .then_some(witness)
 }
@@ -4311,7 +4310,7 @@ fn append_ton_replay_witness_cells_v1(
     cells: &mut Vec<TonBocCellV1>,
     witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<usize> {
-    if witness.expected_shard_root == [0; 32] || witness.validate().is_err() {
+    if witness.validate().is_err() {
         return None;
     }
     let root_index = cells.len();
@@ -5810,10 +5809,78 @@ mod canonical_payload_encoding_tests {
         let payload = SccpPayloadV1::Transfer(transfer);
         let payload_bytes =
             canonical_sccp_payload_bytes(&payload).expect("bounded SCCP payload must encode");
+        assert_eq!(payload_bytes.first(), Some(&2));
         assert_eq!(
             decode_canonical_sccp_payload_bytes(&payload_bytes),
             Some(payload)
         );
+        let mut retired_payload_tag = payload_bytes;
+        retired_payload_tag[0] = 0;
+        assert!(decode_canonical_sccp_payload_bytes(&retired_payload_tag).is_none());
+    }
+    #[test]
+    fn canonical_namespace_ids_reject_compacted_aliases() {
+        assert_eq!(SCCP_DOMAIN_SORA, 0);
+        assert_eq!(SCCP_DOMAIN_ETH, 1);
+        assert_eq!(SCCP_DOMAIN_BSC, 2);
+        assert_eq!(SCCP_DOMAIN_TON, 4);
+        assert_eq!(SCCP_DOMAIN_TRON, 5);
+        assert!(!is_supported_domain(3));
+
+        assert_eq!(SCCP_CODEC_CANONICAL_TEXT, 1);
+        assert_eq!(SCCP_CODEC_EVM_ADDRESS20, 2);
+        assert_eq!(SCCP_CODEC_TRON_ADDRESS21, 5);
+        assert_eq!(SCCP_CODEC_TON_ACCOUNT36, 7);
+        for retired_or_unassigned in [0, 3, 4, 6] {
+            assert!(!is_supported_codec(retired_or_unassigned));
+            assert!(
+                decode_sccp_normalized_codec_value(retired_or_unassigned, b"route-v1").is_none()
+            );
+        }
+
+        let lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::SoraTaira,
+            target: SccpNetworkV1::EthereumMainnet,
+        };
+        let context = SccpOutboundMessageContextV1::new(lane, [0x11; 32], [0x22; 32])
+            .expect("distinct governed commitment roles");
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Transfer,
+            context,
+            message_id: [0x33; 32],
+            payload_hash: [0x44; 32],
+        };
+        let encoded = canonical_commitment_bytes(&commitment);
+        assert_eq!(encoded.get(1), Some(&5));
+        assert_eq!(
+            decode_canonical_commitment_bytes(&encoded),
+            Some(commitment)
+        );
+        let mut retired_hub_kind = encoded;
+        retired_hub_kind[1] = 0;
+        assert!(decode_canonical_commitment_bytes(&retired_hub_kind).is_none());
+    }
+
+    #[test]
+    fn replay_witness_codecs_preserve_the_zero_root_hash() {
+        let witness = SccpSparseMerkleWitnessV1 {
+            expected_shard_root: [0; 32],
+            ..SccpSparseMerkleWitnessV1::empty_shard()
+        };
+        let solidity = encode_sccp_solidity_replay_witness_v1(&witness)
+            .expect("zero is a valid full-width shard-root hash");
+        assert_eq!(
+            decode_sccp_solidity_replay_witness_v1(&solidity),
+            Some(witness.clone())
+        );
+
+        let mut ton_cells = Vec::new();
+        assert_eq!(
+            append_ton_replay_witness_cells_v1(&mut ton_cells, &witness),
+            Some(0)
+        );
+        assert_eq!(&ton_cells[0].data[..32], &[0_u8; 32]);
     }
     #[test]
     fn canonical_payload_field_length_accepts_exact_u32_boundary() {
@@ -6029,7 +6096,7 @@ pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
     push_u8(
         &mut out,
         match commitment.kind {
-            SccpHubMessageKind::Transfer => 0,
+            SccpHubMessageKind::Transfer => 5,
         },
     );
     push_u8(
@@ -6051,7 +6118,7 @@ pub fn decode_canonical_commitment_bytes(bytes: &[u8]) -> Option<SccpHubCommitme
     let mut cursor = PayloadCursor::new(bytes);
     let version = cursor.take_u8()?;
     let kind = match cursor.take_u8()? {
-        0 => SccpHubMessageKind::Transfer,
+        5 => SccpHubMessageKind::Transfer,
         _ => return None,
     };
     let source = sccp_network_from_tag_v1(cursor.take_u8()?)?;
@@ -6725,6 +6792,9 @@ mod tests {
                 source_network: SccpNetworkV1::SoraTaira,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+                epoch: 1,
+                epoch_end_height: 10,
+                roster_commitment: [0x78; 32],
                 checkpoint_height: 5,
                 checkpoint_block_hash: [0x73; 32],
                 checkpoint_context_id: [0x74; 32],
@@ -8182,6 +8252,7 @@ mod tests {
         ));
         let anchor_roles = [
             ("chain id", base.sora_finality_anchor.chain_id_hash),
+            ("roster", base.sora_finality_anchor.roster_commitment),
             (
                 "checkpoint block",
                 base.sora_finality_anchor.checkpoint_block_hash,
@@ -8225,6 +8296,7 @@ mod tests {
             ("public signal schema", semantic_commitments[2]),
         ];
         let anchor_roles = [
+            "roster",
             "checkpoint block",
             "checkpoint context",
             "finality artifact",
@@ -8233,9 +8305,10 @@ mod tests {
             for (semantic_role, semantic_hash) in semantic_roles {
                 let mut candidate = base.clone();
                 match anchor_role_index {
-                    0 => candidate.sora_finality_anchor.checkpoint_block_hash = semantic_hash,
-                    1 => candidate.sora_finality_anchor.checkpoint_context_id = semantic_hash,
-                    2 => {
+                    0 => candidate.sora_finality_anchor.roster_commitment = semantic_hash,
+                    1 => candidate.sora_finality_anchor.checkpoint_block_hash = semantic_hash,
+                    2 => candidate.sora_finality_anchor.checkpoint_context_id = semantic_hash,
+                    3 => {
                         candidate
                             .sora_finality_anchor
                             .checkpoint_finality_artifact_hash = semantic_hash;
@@ -8455,7 +8528,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("27da5c364f20fdee0bdd8cd84bb01908d88f40d9eb5171f9dec8b330f604258d")
+            hex32("50faee41147745888794c789a954c2506194abbc779266e7dc7e46700350d252")
         );
         let request = &fixture().request;
         let signals = sccp_groth16_bn254_public_signal_words(
@@ -8564,6 +8637,15 @@ mod tests {
         });
         assert_request_mutation_rejected(|candidate| {
             candidate.sora_finality_anchor.chain_id_hash[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.epoch += 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.epoch_end_height += 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.roster_commitment[0] ^= 1;
         });
         assert_request_mutation_rejected(|candidate| {
             candidate.sora_finality_anchor.checkpoint_height += 1;

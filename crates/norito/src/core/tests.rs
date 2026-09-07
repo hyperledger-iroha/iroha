@@ -155,16 +155,16 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
 }
 #[test]
 fn owned_value_decode_depth_guard_is_bounded_and_restores() {
-    let guards = (0..MAX_OWNED_VALUE_DECODE_DEPTH)
+    let guards = (0..MAX_VALUE_NESTING_DEPTH)
         .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within codec limit"))
         .collect::<Vec<_>>();
     assert!(matches!(
         OwnedValueDecodeDepthGuard::enter(),
         Err(Error::NestingDepthExceeded {
             depth,
-            limit: MAX_OWNED_VALUE_DECODE_DEPTH,
+            limit: MAX_VALUE_NESTING_DEPTH,
             context: "owned Norito value",
-        }) if depth == MAX_OWNED_VALUE_DECODE_DEPTH + 1
+        }) if depth == MAX_VALUE_NESTING_DEPTH + 1
     ));
     drop(guards);
     OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore decode depth");
@@ -569,6 +569,87 @@ fn decode_vec_u8_from_slice_serial_reports_prefix_used() {
     reset_decode_state();
 }
 #[test]
+fn decode_generic_u8_sequence_preserves_element_lengths_and_prefix_boundary() {
+    reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
+    let value = [3_u8, 5, 8, 13];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    for byte in value {
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.push(byte);
+    }
+    let sequence_len = bytes.len();
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) = decode_element_sequence_from_slice_serial::<u8>(&bytes)
+        .expect("decode generic byte element sequence");
+    assert_eq!(decoded, value);
+    assert_eq!(used, sequence_len);
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&bytes[..sequence_len]),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
+#[test]
+fn generic_sequence_decode_charges_count_once_and_has_an_exact_allocation_boundary() {
+    reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
+    let value = [3_u16, 5, 8, 13];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    for element in value {
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&element.to_le_bytes());
+    }
+
+    let permissive = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        usize::MAX,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let (decoded, usage) = with_decode_limits_measured(permissive, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    });
+    assert_eq!(decoded.expect("decode measured generic sequence").0, value);
+    assert_eq!(usage.total_elements(), value.len());
+    let allocation_bytes = usage.total_allocated_bytes();
+    assert!(allocation_bytes > 0);
+
+    let exact = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        allocation_bytes,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let decoded = with_decode_limits(exact, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    })
+    .expect("the measured allocation budget must be sufficient");
+    assert_eq!(decoded.0, value);
+
+    let one_byte_short = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        allocation_bytes - 1,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let error = with_decode_limits(one_byte_short, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    })
+    .expect_err("one byte less than the measured allocation must fail");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == allocation_bytes as u64 && limit == (allocation_bytes - 1) as u64
+    ));
+    reset_decode_state();
+}
+#[test]
 fn decode_vec_u8_from_slice_reports_prefix_used() {
     reset_decode_state();
     let value = vec![3_u8, 5, 8, 13];
@@ -938,19 +1019,6 @@ impl NoritoSerialize for HostileGrowingSecondPass {
         Ok(())
     }
 }
-struct HostileBadExactLen;
-impl NoritoSerialize for HostileBadExactLen {
-    fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&[0x11])?;
-        for _ in 0..HOSTILE_GROWTH_WRITES {
-            writer.write_all(&[0x22; HOSTILE_GROWTH_CHUNK_BYTES])?;
-        }
-        Ok(())
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        Some(1)
-    }
-}
 #[test]
 fn decode_field_canonical_ignores_bad_encoded_len_exact() {
     let value = BadExactLen(0xAABBCCDD);
@@ -1116,34 +1184,6 @@ fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
     assert_eq!(out, [0x11]);
     assert_eq!(out.capacity(), initial_capacity);
 }
-#[test]
-fn write_len_prefixed_exact_caps_an_incorrect_exact_implementation() {
-    let mut out = Vec::with_capacity(32);
-    let initial_capacity = out.capacity();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
-    let error = {
-        let mut encoder = Encoder::for_buffer(&mut out);
-        write_len_prefixed_exact(&mut encoder, &HostileBadExactLen, &mut tmp)
-            .expect_err("incorrect exact length must fail")
-    };
-    assert!(matches!(error, Error::LengthMismatch));
-    let (declared, header_bytes) = read_len_from_slice(&out).expect("declared exact length");
-    assert_eq!(declared, 1);
-    assert_eq!(&out[header_bytes..], &[0x11]);
-    assert_eq!(out.capacity(), initial_capacity);
-}
-#[test]
-fn write_len_prefixed_exact_matches_buffered_output() {
-    let value = vec![1u64, 2, 3, 5, 8, 13];
-    let mut buffered = Vec::new();
-    let mut exact = Vec::new();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
-    let mut buffered_encoder = Encoder::for_buffer(&mut buffered);
-    write_len_prefixed(&mut buffered_encoder, &value, &mut tmp).expect("write buffered");
-    let mut exact_encoder = Encoder::for_buffer(&mut exact);
-    write_len_prefixed_exact(&mut exact_encoder, &value, &mut tmp).expect("write exact");
-    assert_eq!(exact, buffered);
-}
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
 struct BadExactWrapper {
     inner: BadExactLen,
@@ -1153,16 +1193,51 @@ enum BadExactEnum {
     One(BadExactLen),
 }
 #[test]
-fn derived_struct_rejects_incorrect_exact_field_length() {
+fn derived_struct_ignores_untrusted_exact_field_length() {
     let value = BadExactWrapper {
         inner: BadExactLen(0xAABBCCDD),
     };
-    assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
+    let frame = to_bytes(&value).expect("counted encoding ignores the untrusted length oracle");
+    let archived = from_bytes::<BadExactWrapper>(&frame).expect("validate counted struct frame");
+    let decoded = BadExactWrapper::try_deserialize(archived).expect("decode counted struct");
+    assert_eq!(decoded, value);
 }
 #[test]
-fn derived_enum_rejects_incorrect_exact_field_length() {
+fn derived_enum_ignores_untrusted_exact_field_length() {
     let value = BadExactEnum::One(BadExactLen(0x11223344));
-    assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
+    let frame = to_bytes(&value).expect("counted encoding ignores the untrusted length oracle");
+    let archived = from_bytes::<BadExactEnum>(&frame).expect("validate counted enum frame");
+    let decoded = BadExactEnum::try_deserialize(archived).expect("decode counted enum");
+    assert_eq!(decoded, value);
+}
+
+#[derive(crate::Encode)]
+struct RecursiveEncodeNode {
+    children: Vec<Self>,
+}
+
+#[test]
+fn recursive_encode_fails_before_exhausting_the_native_stack() {
+    let mut value = RecursiveEncodeNode {
+        children: Vec::new(),
+    };
+    for _ in 0..=MAX_VALUE_NESTING_DEPTH {
+        value = RecursiveEncodeNode {
+            children: vec![value],
+        };
+    }
+    assert!(
+        value.encoded_len_exact().is_none(),
+        "recursive length oracles must stop at the canonical nesting ceiling"
+    );
+    assert!(matches!(
+        to_bytes(&value),
+        Err(Error::NestingDepthExceeded {
+            depth,
+            limit: MAX_VALUE_NESTING_DEPTH,
+            context: "encode budget",
+        }) if depth == MAX_VALUE_NESTING_DEPTH + 1
+    ));
 }
 #[test]
 fn truncated_derived_enum_tag_is_a_length_error() {
@@ -1939,6 +2014,76 @@ fn array_and_tuple_serialization_use_compact_element_lengths() {
     assert_eq!(tuple_bytes, [1, 5, 1, 7]);
     assert_eq!(tuple.encoded_len_hint(), Some(tuple_bytes.len()));
     assert_eq!(tuple.encoded_len_exact(), Some(tuple_bytes.len()));
+    reset_decode_state();
+}
+#[test]
+fn tuple_serialization_preserves_explicit_flags_in_nested_containers() {
+    type NestedTuple = (Vec<Vec<u16>>, Vec<String>);
+
+    fn serialize(value: &dyn NoritoSerialize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        serialize_to_buffer(value, &mut bytes).expect("serialize nested tuple fixture");
+        bytes
+    }
+
+    let value: NestedTuple = (
+        vec![vec![0x0102, 0x0304], vec![0x0506]],
+        vec![String::from("alpha"), String::from("beta")],
+    );
+
+    reset_decode_state();
+    let default_payload = serialize(&value);
+    reset_decode_state();
+    let explicit_default_payload = {
+        let _guard = DecodeFlagsGuard::enter(default_encode_flags());
+        serialize(&value)
+    };
+    assert_eq!(
+        default_payload, explicit_default_payload,
+        "an absent layout override must retain the canonical default bytes"
+    );
+
+    for flags in [
+        0,
+        header_flags::PACKED_SEQ,
+        header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT,
+        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT,
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+    ] {
+        reset_decode_state();
+        let (tuple_payload, expected_payload) = {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            assert_eq!(tuple_serialization_flags(), flags);
+
+            let first = serialize(&value.0);
+            let second = serialize(&value.1);
+            let tuple_payload = serialize(&value);
+            assert_eq!(value.encoded_len_hint(), Some(tuple_payload.len()));
+            assert_eq!(value.encoded_len_exact(), Some(tuple_payload.len()));
+
+            let mut expected = Vec::new();
+            write_len_to_vec_with_flags(&mut expected, first.len() as u64, flags);
+            expected.extend_from_slice(&first);
+            write_len_to_vec_with_flags(&mut expected, second.len() as u64, flags);
+            expected.extend_from_slice(&second);
+            (tuple_payload, expected)
+        };
+        assert_eq!(
+            tuple_payload, expected_payload,
+            "tuple fields changed the explicit nested layout for flags 0x{flags:02x}"
+        );
+
+        let frame = frame_bare_with_header_flags::<NestedTuple>(&tuple_payload, flags)
+            .expect("frame nested tuple with its explicit flags");
+        let archived = from_bytes::<NestedTuple>(&frame)
+            .expect("validate nested tuple frame with its explicit flags");
+        let decoded = NestedTuple::try_deserialize(archived)
+            .expect("decode nested tuple with its explicit flags");
+        assert_eq!(decoded, value, "roundtrip changed flags 0x{flags:02x}");
+    }
     reset_decode_state();
 }
 #[test]

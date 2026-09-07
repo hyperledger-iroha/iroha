@@ -99,17 +99,30 @@ def test_bounded_python_validator_finishes_naturally_before_timeout_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_writer_module()
-    monkeypatch.setattr(module, "_REPLAY_TIMEOUT_SECONDS", 0)
     sentinel = tmp_path / "validator-natural-completion"
     sentinel.write_text("pending", encoding="utf-8")
+    (tmp_path / "validator_dependency.py").write_text("VALUE = 17\n", encoding="utf-8")
     checker = tmp_path / "validator.py"
     checker.write_text(
         "import time\n"
+        "import validator_dependency\n"
+        "assert validator_dependency.VALUE == 17\n"
         "from pathlib import Path\n"
         "time.sleep(0.05)\n"
         f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')\n",
         encoding="utf-8",
     )
+
+    status, _, _ = module._run_bounded_python_validator(
+        checker,
+        [],
+        cwd=tmp_path,
+        environment={"PATH": os.defpath},
+        name="fixture Python validator",
+    )
+    assert status == 0
+    assert not (tmp_path / "__pycache__").exists()
+    monkeypatch.setattr(module, "_REPLAY_TIMEOUT_SECONDS", 0)
 
     with pytest.raises(module.ReceiptError, match="exceeded its timeout"):
         module._run_bounded_python_validator(

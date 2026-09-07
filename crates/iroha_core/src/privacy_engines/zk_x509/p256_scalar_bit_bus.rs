@@ -25,7 +25,7 @@ use super::{
     p256_window_air::{P256WindowAirErrorV1, P256WindowScalarV1, P256WindowTraceV1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable descriptor for the aggregate-only first-release scalar-bit copy bus.
@@ -1702,6 +1702,7 @@ fn map_window_error_v1(error: P256WindowAirErrorV1) -> P256ScalarBitBusErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
     use crate::privacy_engines::zk_x509::{
         credential_pre_aux::{
             ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,

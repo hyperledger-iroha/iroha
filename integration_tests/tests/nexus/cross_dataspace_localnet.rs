@@ -5,7 +5,7 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::{StreamExt, future::try_join_all};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::HashOf,
     data_model::{
         Level, NetworkId, ValidationFail,
@@ -673,8 +673,8 @@ impl std::ops::Deref for SumeragiObservation {
 }
 fn sumeragi_observation(client: &Client) -> Result<SumeragiObservation> {
     Ok(SumeragiObservation {
-        canonical: client.get_sumeragi_status()?,
-        diagnostics: client.get_sumeragi_diagnostics()?,
+        canonical: client.client().get_sumeragi_status()?,
+        diagnostics: client.client().get_sumeragi_diagnostics()?,
     })
 }
 fn wait_for_height(
@@ -853,7 +853,10 @@ fn wait_for_lane_peers_commit_qc_at_least(
     ))
 }
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
-    match client.query_single(FindAssetById::new(asset_id.clone())) {
+    match client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
         Ok(asset) => Ok(asset.value().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
@@ -899,15 +902,16 @@ fn submit_wait_tick(
     timeout_duration: Duration,
     last_error: &mut Option<String>,
 ) {
-    let mut tick_client = tick_submitter.clone();
-    tick_client.torii_request_timeout =
-        tick_client
-            .torii_request_timeout
-            .min(bounded_observer_request_timeout(
-                started,
-                timeout_duration,
-                1,
-            ));
+    let tick_client = integration_tests::sync::rebind_blocking_client(tick_submitter, |client| {
+        client.torii_request_timeout =
+            client
+                .torii_request_timeout
+                .min(bounded_observer_request_timeout(
+                    started,
+                    timeout_duration,
+                    1,
+                ));
+    });
     let message = format!("{context} tick {poll_count}");
     if let Err(err) = tick_client.submit(
         Log::new(Level::INFO, message),
@@ -974,7 +978,7 @@ fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
-    for (name, value) in &client.headers {
+    for (name, value) in &client.client().headers {
         request = request.header(name, value);
     }
     request
@@ -984,7 +988,7 @@ async fn torii_json_get(
     path_segments: &[String],
     query_pairs: &[(String, String)],
 ) -> Result<RoutedJsonGetResponse> {
-    let mut url = client.torii_url.clone();
+    let mut url = client.client().torii_url.clone();
     let torii_url_literal = url.to_string();
     {
         let mut segments = url
@@ -1517,15 +1521,19 @@ fn lane_domain_progress_observations(
         .into_iter()
         .enumerate()
         .filter_map(|(position, index)| {
-            let mut client = network.peers()[index].client();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        OBSERVER_QUERY_TIMEOUT_CAP,
-                        request_count.saturating_sub(position),
-                    ));
+            let client = integration_tests::sync::rebind_blocking_client(
+                &network.peers()[index].client(),
+                |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                OBSERVER_QUERY_TIMEOUT_CAP,
+                                request_count.saturating_sub(position),
+                            ));
+                },
+            );
             match sumeragi_observation(&client) {
                 Ok(status) => latest_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
@@ -1549,15 +1557,19 @@ fn lane_domain_application_observations(
         .into_iter()
         .enumerate()
         .filter_map(|(position, index)| {
-            let mut client = network.peers()[index].client();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        OBSERVER_QUERY_TIMEOUT_CAP,
-                        request_count.saturating_sub(position),
-                    ));
+            let client = integration_tests::sync::rebind_blocking_client(
+                &network.peers()[index].client(),
+                |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                OBSERVER_QUERY_TIMEOUT_CAP,
+                                request_count.saturating_sub(position),
+                            ));
+                },
+            );
             match sumeragi_observation(&client) {
                 Ok(status) => applied_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
@@ -1580,13 +1592,17 @@ fn raw_lane_domain_observation_summaries(
         .into_iter()
         .enumerate()
         .map(|(position, index)| {
-            let mut client = network.peers()[index].client();
-            client.torii_request_timeout = client.torii_request_timeout.min(
-                bounded_observer_request_timeout(
-                    started,
-                    OBSERVER_QUERY_TIMEOUT_CAP,
-                    request_count.saturating_sub(position),
-                ),
+            let client = integration_tests::sync::rebind_blocking_client(
+                &network.peers()[index].client(),
+                |client| {
+                    client.torii_request_timeout = client.torii_request_timeout.min(
+                        bounded_observer_request_timeout(
+                            started,
+                            OBSERVER_QUERY_TIMEOUT_CAP,
+                            request_count.saturating_sub(position),
+                        ),
+                    );
+                },
             );
             match sumeragi_observation(&client) {
                 Ok(status) => {
@@ -1678,16 +1694,20 @@ fn lane_payload_ownership_progress_observations(
         .into_iter()
         .enumerate()
         .filter_map(|(position, index)| {
-            let mut client = network.peers()[index].client();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        OBSERVER_QUERY_TIMEOUT_CAP,
-                        request_count.saturating_sub(position),
-                    ));
-            match client.get_sumeragi_diagnostics() {
+            let client = integration_tests::sync::rebind_blocking_client(
+                &network.peers()[index].client(),
+                |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                OBSERVER_QUERY_TIMEOUT_CAP,
+                                request_count.saturating_sub(position),
+                            ));
+                },
+            );
+            match client.client().get_sumeragi_diagnostics() {
                 Ok(status) => {
                     latest_lane_payload_ownership_progress(&status, lane_id, dataspace_id)
                 }
@@ -2067,20 +2087,29 @@ async fn wait_for_route_probe_approval(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<DataspaceCommitmentObservation> {
-    let transaction = submitter.build_transaction(
-        [instruction],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let hash = transaction.hash();
     let started = Instant::now();
     let submit_height = submitter
+        .client()
         .get_sumeragi_status()
         .map_err(|err| eyre!(err))?
         .last_committed_height;
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        submitter
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -2145,6 +2174,7 @@ async fn wait_for_route_probe_approval(
         (height, true)
     } else {
         let fallback_height = submitter
+            .client()
             .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
             .last_committed_height
@@ -2166,7 +2196,9 @@ async fn submit_transaction_with_route_observation(
     let hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        submitter
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -2257,15 +2289,17 @@ fn wait_for_expected_balances_with_timeout(
         let mut all_match = true;
         let expectation_count = expectations.len();
         for (index, expectation) in expectations.iter().enumerate() {
-            let mut client = expectation.client.clone();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        timeout_duration,
-                        expectation_count.saturating_sub(index),
-                    ));
+            let client =
+                integration_tests::sync::rebind_blocking_client(&expectation.client, |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                timeout_duration,
+                                expectation_count.saturating_sub(index),
+                            ));
+                });
             let observed = match asset_balance_variants(&client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
@@ -2333,15 +2367,16 @@ fn wait_for_expected_balances_across_clients_with_tick_submitters_timeout(
             let mut expectation_matches = false;
             let mut observed_for_expectation = Vec::with_capacity(expectation.clients.len());
             for (client_index, client) in expectation.clients.iter().enumerate() {
-                let mut client = client.clone();
-                client.torii_request_timeout =
-                    client
-                        .torii_request_timeout
-                        .min(bounded_observer_request_timeout(
-                            started,
-                            timeout_duration,
-                            remaining_request_slots,
-                        ));
+                let client = integration_tests::sync::rebind_blocking_client(client, |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                timeout_duration,
+                                remaining_request_slots,
+                            ));
+                });
                 remaining_request_slots = remaining_request_slots.saturating_sub(1);
                 match asset_balance_variants(&client, expectation.asset_id) {
                     Ok(observed) => {
@@ -2418,15 +2453,17 @@ fn wait_for_expected_balances_with_tick_submitters_timeout(
         let mut all_match = true;
         let expectation_count = expectations.len();
         for (index, expectation) in expectations.iter().enumerate() {
-            let mut client = expectation.client.clone();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        timeout_duration,
-                        expectation_count.saturating_sub(index),
-                    ));
+            let client =
+                integration_tests::sync::rebind_blocking_client(&expectation.client, |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                timeout_duration,
+                                expectation_count.saturating_sub(index),
+                            ));
+                });
             let observed = match asset_balance_variants(&client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
@@ -2453,16 +2490,19 @@ fn wait_for_expected_balances_with_tick_submitters_timeout(
         .iter()
         .enumerate()
         .map(|(index, expectation)| {
-            let mut client = expectation.client.clone();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        timeout_duration,
-                        expectations.len().saturating_sub(index),
-                    ));
+            let client =
+                integration_tests::sync::rebind_blocking_client(&expectation.client, |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                timeout_duration,
+                                expectations.len().saturating_sub(index),
+                            ));
+                });
             let matches = client
+                .client()
                 .query(FindAssets::new())
                 .execute_all()
                 .map(|assets: Vec<Asset>| {
@@ -2516,16 +2556,19 @@ fn wait_for_account_permissions_across_clients(
         let mut saw_success = false;
         let clients = clients_factory();
         let client_count = clients.len();
-        for (index, mut client) in clients.into_iter().enumerate() {
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        PERMISSION_VISIBILITY_WAIT_TIMEOUT,
-                        client_count.saturating_sub(index),
-                    ));
+        for (index, client) in clients.into_iter().enumerate() {
+            let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+                client.torii_request_timeout =
+                    client
+                        .torii_request_timeout
+                        .min(bounded_observer_request_timeout(
+                            started,
+                            PERMISSION_VISIBILITY_WAIT_TIMEOUT,
+                            client_count.saturating_sub(index),
+                        ));
+            });
             match client
+                .client()
                 .query(FindPermissionsByAccountId::new(account_id.clone()))
                 .execute_all()
             {
@@ -2616,7 +2659,7 @@ fn wait_for_active_lane_validators(
     let mut last_active = BTreeSet::new();
     let mut last_error = None::<String>;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_public_lane_validators(lane_id) {
+        match client.client().get_public_lane_validators(lane_id) {
             Ok(snapshot) => {
                 let (total, active) = lane_validator_snapshot(&snapshot, context)?;
                 last_total = total;
@@ -2650,10 +2693,11 @@ fn leader_or_highest_height_peer_index(
     if peers.is_empty() {
         return 0;
     }
-    if let Ok(status) = status_client.get_sumeragi_status() {
+    if let Ok(status) = status_client.client().get_sumeragi_status() {
         if let Ok(index) = usize::try_from(status.leader) {
             if index < peers.len() {
                 let leader_height = peers[index]
+                    .client()
                     .client()
                     .get_sumeragi_status()
                     .map(|status| status.last_committed_height)
@@ -2669,6 +2713,7 @@ fn leader_or_highest_height_peer_index(
         .enumerate()
         .fold((0usize, 0u64), |best, (index, peer)| {
             let observed_height = peer
+                .client()
                 .client()
                 .get_sumeragi_status()
                 .map(|status| status.last_committed_height)
@@ -2707,12 +2752,14 @@ fn lane_bounded_peer_indices(
         return vec![leader_or_highest_height_peer_index(network, status_client)];
     }
     let leader_index = status_client
+        .client()
         .get_sumeragi_status()
         .ok()
         .and_then(|status| usize::try_from(status.leader).ok());
     let mut ranked = (start..end)
         .map(|index| {
             let observed_height = peers[index]
+                .client()
                 .client()
                 .get_sumeragi_status()
                 .map(|status| status.last_committed_height)
@@ -2838,6 +2885,7 @@ fn query_committed_tx_outcome(
         ..Default::default()
     };
     client
+        .client()
         .query(FindTransactions::new())
         .filter(CompoundPredicate::from_filters(filters))
         .with_pagination(Pagination::new(Some(one), 0))
@@ -2865,15 +2913,17 @@ fn wait_for_committed_tx_outcome_across_clients(
         let quorum_required = commit_quorum_from_len(client_count).max(1);
         let mut observed_outcomes = Vec::new();
         last_observed.clear();
-        for (index, mut client) in clients.into_iter().enumerate() {
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        timeout_duration,
-                        client_count.saturating_sub(index),
-                    ));
+        for (index, client) in clients.into_iter().enumerate() {
+            let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+                client.torii_request_timeout =
+                    client
+                        .torii_request_timeout
+                        .min(bounded_observer_request_timeout(
+                            started,
+                            timeout_duration,
+                            client_count.saturating_sub(index),
+                        ));
+            });
             match query_committed_tx_outcome(&client, &entry_hash) {
                 Ok(Some(outcome)) => {
                     last_observed.push(format!("{outcome:?}"));
@@ -2950,8 +3000,10 @@ fn submit_transaction_across_clients(
         !clients.is_empty(),
         "{context}: no clients available for transaction submission"
     );
-    for mut client in clients {
-        client.torii_request_timeout = client.torii_request_timeout.min(request_timeout);
+    for client in clients {
+        let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+            client.torii_request_timeout = client.torii_request_timeout.min(request_timeout);
+        });
         match client.submit_transaction(transaction) {
             Ok(hash) => return Ok(hash),
             Err(err) => {
@@ -2993,11 +3045,17 @@ fn grant_exact_dvp_consents_across_clients(
             ))
         })
         .collect::<Vec<_>>();
-    let transaction = builder.build_transaction(
-        grants,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = builder.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                grants,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let entrypoint_hash = transaction.hash_as_entrypoint();
     submit_transaction_across_clients(
         || clients_factory(),
@@ -3023,6 +3081,7 @@ fn entrypoint_occurrences(
     );
     let mut occurrences = vec![0usize; entrypoint_hashes.len()];
     for block in client
+        .client()
         .query(FindBlocks)
         .execute_all()
         .wrap_err_with(|| format!("{context}: query canonical blocks"))?
@@ -3062,15 +3121,17 @@ fn wait_for_entrypoints_committed_once_on_all_peers(
         last_observed.clear();
         let mut converged_peers = 0usize;
         for (peer_index, peer) in network.peers().iter().enumerate() {
-            let mut client = peer.client();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        LANE_PROGRESS_WAIT_TIMEOUT,
-                        network.peers().len().saturating_sub(peer_index),
-                    ));
+            let client =
+                integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                LANE_PROGRESS_WAIT_TIMEOUT,
+                                network.peers().len().saturating_sub(peer_index),
+                            ));
+                });
             match entrypoint_occurrences(
                 &client,
                 entrypoint_hashes,
@@ -3221,16 +3282,18 @@ fn wait_for_durable_native_participant_evidence_after(
         let mut rows = Vec::with_capacity(network.peers().len());
         last_observed.clear();
         for (peer_index, peer) in network.peers().iter().enumerate() {
-            let mut client = peer.client();
-            client.torii_request_timeout =
-                client
-                    .torii_request_timeout
-                    .min(bounded_observer_request_timeout(
-                        started,
-                        LANE_PROGRESS_WAIT_TIMEOUT,
-                        network.peers().len().saturating_sub(peer_index),
-                    ));
-            match client.get_sumeragi_diagnostics() {
+            let client =
+                integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                    client.torii_request_timeout =
+                        client
+                            .torii_request_timeout
+                            .min(bounded_observer_request_timeout(
+                                started,
+                                LANE_PROGRESS_WAIT_TIMEOUT,
+                                network.peers().len().saturating_sub(peer_index),
+                            ));
+                });
+            match client.client().get_sumeragi_diagnostics() {
                 Ok(diagnostics) => match durable_native_participant_row(
                     &diagnostics,
                     lane_id,
@@ -3446,8 +3509,8 @@ fn wait_for_autoscale_baseline(network: &sandbox::SerializedNetwork, context: &s
         for (index, peer) in network.peers().iter().enumerate() {
             let client = peer.client();
             match (
-                client.get_sumeragi_status(),
-                client.get_sumeragi_diagnostics(),
+                client.client().get_sumeragi_status(),
+                client.client().get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     if let Err(err) = status.validate() {
@@ -3924,8 +3987,8 @@ fn wait_for_autoscale_expansion(
         for (index, peer) in network.peers().iter().enumerate() {
             let client = peer.client();
             match (
-                client.get_sumeragi_status(),
-                client.get_sumeragi_diagnostics(),
+                client.client().get_sumeragi_status(),
+                client.client().get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     let governance_rows = diagnostics
@@ -4071,8 +4134,8 @@ fn wait_for_recreated_autoscale_lane_ready(
         let mut endpoints_ready = true;
         for (index, peer) in network.peers().iter().enumerate() {
             match (
-                peer.client().get_sumeragi_status(),
-                peer.client().get_sumeragi_diagnostics(),
+                peer.client().client().get_sumeragi_status(),
+                peer.client().client().get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     let governance = diagnostics
@@ -4130,14 +4193,23 @@ fn build_default_route_transaction_for_autoscale_lane(
 ) -> Result<SignedTransaction> {
     (0_u64..4_096)
         .find_map(|nonce| {
-            let transaction = client.build_transaction(
-                [Log::new(
-                    Level::INFO,
-                    format!("g13p-autoscale-autonomous-{cycle}-{nonce}"),
-                )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
+            let transaction = {
+                let account = client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [Log::new(
+                            Level::INFO,
+                            format!("g13p-autoscale-autonomous-{cycle}-{nonce}"),
+                        )],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             let hash = HashOf::new(transaction.payload());
             let mut shard = [0_u8; core::mem::size_of::<u64>()];
             shard.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
@@ -4255,7 +4327,7 @@ fn wait_for_active_autoscale_diagnostics_convergence(
         let mut identities = BTreeSet::new();
         let mut ready = true;
         for (index, peer) in network.peers().iter().enumerate() {
-            match peer.client().get_sumeragi_diagnostics() {
+            match peer.client().client().get_sumeragi_diagnostics() {
                 Ok(diagnostics) => {
                     let rows = diagnostics
                         .committed_lane_blocks
@@ -4491,11 +4563,12 @@ async fn fetch_autoscale_bridge_finality_proof(
 ) -> Result<BridgeFinalityProof> {
     let client = peer.client();
     let url = client
+        .client()
         .torii_url
         .join(&format!("v1/bridge/finality/{height}"))
         .wrap_err("construct autoscale carrier-finality URL")?;
     let request = reqwest::Client::builder()
-        .timeout(client.torii_request_timeout)
+        .timeout(client.client().torii_request_timeout)
         .build()
         .wrap_err("build autoscale carrier-finality HTTP client")?
         .get(url)
@@ -4544,7 +4617,7 @@ fn exact_autoscale_carrier_height_context(
     let first = proofs
         .first()
         .ok_or_else(|| eyre!("autoscale carrier-height proof set is empty"))?;
-    let network_id = network.client().network_id;
+    let network_id = network.client().client().network_id;
     verify_bridge_finality_proof(first, &network_id)
         .wrap_err("first autoscale carrier finality proof is invalid")?;
     ensure!(
@@ -4713,7 +4786,7 @@ fn validate_autoscale_retirement_evidence(
     };
     let intent = &certificate.body.intent;
     let final_frontier = &certificate.body.final_frontier;
-    let network_id = network.client().network_id;
+    let network_id = network.client().client().network_id;
     validate_autoscale_drain_certificate(&network_id, certificate)?;
     let carrier_context =
         exact_autoscale_carrier_height_context(runtime, network, entry.merge_qc.carrier_height)?;
@@ -4841,8 +4914,8 @@ fn wait_for_autoscale_retirement(
         let mut diagnostics_retired = true;
         for (index, peer) in network.peers().iter().enumerate() {
             match (
-                peer.client().get_sumeragi_status(),
-                peer.client().get_sumeragi_diagnostics(),
+                peer.client().client().get_sumeragi_status(),
+                peer.client().client().get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     let lane_blocks = diagnostics
@@ -5585,6 +5658,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             "ds2 lane validator activation",
         )?;
         let lane_sync_height = alice
+            .client()
             .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
             .last_committed_height;
@@ -6038,16 +6112,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         DataSpaceId::new(NEXUS_ID_U64),
     );
     let build_setup_grants_tx = |client: &Client| {
-        client.build_transaction(
-            vec![InstructionBox::from(Grant::account_permission(
-                CanTransferAssetWithDefinition {
-                    asset_definition: ds1_asset_def.clone(),
-                },
-                BOB_ID.clone(),
-            ))],
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
+        {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    vec![InstructionBox::from(Grant::account_permission(
+                        CanTransferAssetWithDefinition {
+                            asset_definition: ds1_asset_def.clone(),
+                        },
+                        BOB_ID.clone(),
+                    ))],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction")
     };
     let (
         setup_grants_tx,
@@ -6059,14 +6139,17 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let setup_grants_tx = build_setup_grants_tx(&submitter);
         let nexus_pre_barrier_height = nexus_alice_submitter
+            .client()
             .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
             .last_committed_height;
         let ds1_pre_barrier_height = alice_on_ds1
+            .client()
             .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
             .last_committed_height;
         let ds2_pre_barrier_height = alice_on_ds2
+            .client()
             .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
             .last_committed_height;
@@ -6106,6 +6189,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     ALICE_KEYPAIR.private_key(),
                     authoritative_lane_index,
                 )
+                .client()
                 .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
                 .last_committed_height
@@ -6176,6 +6260,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 setup_grants_authoritative_lane_index,
             );
             let retry_pre_barrier_height = authoritative_submitter
+                .client()
                 .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
                 .last_committed_height;
@@ -6381,14 +6466,24 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         let (successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
             let pre_barrier_height = submitter
+                .client()
                 .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
                 .last_committed_height;
-            let successful_swap_tx = submitter.build_transaction(
-                [InstructionBox::from(successful_swap)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
+            let successful_swap_tx = {
+                let account = submitter.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [InstructionBox::from(successful_swap)],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
             let route_observation = rt.block_on(submit_transaction_with_route_observation(
                 &submitter,
@@ -6667,14 +6762,23 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     &ALICE_ID,
                     &format!("work unit {iteration}: bilateral settlement consent"),
                 )?;
-                let paired_swap_tx = soak_submitter.build_transaction(
-                    vec![
-                        InstructionBox::from(forward_swap),
-                        InstructionBox::from(reverse_swap),
-                    ],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                );
+                let paired_swap_tx = {
+                    let account = soak_submitter.account_client();
+                    account
+                        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                            vec![
+                                InstructionBox::from(forward_swap),
+                                InstructionBox::from(reverse_swap),
+                            ],
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(),
+                                None,
+                            ),
+                            Metadata::default(),
+                        ))
+                        .and_then(|payload| account.sign_transaction(payload))
+                }
+                .expect("build integration-test transaction");
                 let paired_swap_entry_hash = paired_swap_tx.hash_as_entrypoint();
                 submit_transaction_across_clients(
                     || {
@@ -6746,24 +6850,42 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     BOB_KEYPAIR.private_key(),
                     DS2_LANE_INDEX,
                 );
-                let ds1_autonomous_tx = ds1_submitter.build_transaction(
-                    [Transfer::asset_quantity(
-                        alice_ds1_asset.clone(),
-                        1_u32,
-                        BOB_ID.clone(),
-                    )],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                );
-                let ds2_autonomous_tx = ds2_submitter.build_transaction(
-                    [Transfer::asset_quantity(
-                        bob_ds2_asset.clone(),
-                        1_u32,
-                        ALICE_ID.clone(),
-                    )],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                );
+                let ds1_autonomous_tx = {
+                    let account = ds1_submitter.account_client();
+                    account
+                        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                            [Transfer::asset_quantity(
+                                alice_ds1_asset.clone(),
+                                1_u32,
+                                BOB_ID.clone(),
+                            )],
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(),
+                                None,
+                            ),
+                            Metadata::default(),
+                        ))
+                        .and_then(|payload| account.sign_transaction(payload))
+                }
+                .expect("build integration-test transaction");
+                let ds2_autonomous_tx = {
+                    let account = ds2_submitter.account_client();
+                    account
+                        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                            [Transfer::asset_quantity(
+                                bob_ds2_asset.clone(),
+                                1_u32,
+                                ALICE_ID.clone(),
+                            )],
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(),
+                                None,
+                            ),
+                            Metadata::default(),
+                        ))
+                        .and_then(|payload| account.sign_transaction(payload))
+                }
+                .expect("build integration-test transaction");
                 let ds1_entry_hash = ds1_autonomous_tx.hash_as_entrypoint();
                 let ds2_entry_hash = ds2_autonomous_tx.hash_as_entrypoint();
                 let ds1_clients = lane_targeted_clients_for_lane(
@@ -7014,11 +7136,20 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 &format!("rollback attempt {attempt}: counterparty consent"),
             )?;
             let (submitter, _) = current_nexus_clients();
-            let failing_swap_tx = submitter.build_transaction(
-                [InstructionBox::from(failing_swap)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
+            let failing_swap_tx = {
+                let account = submitter.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [InstructionBox::from(failing_swap)],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             let entry_hash = failing_swap_tx.hash_as_entrypoint();
             last_attempt_entry_hash = Some(entry_hash.clone());
             if let Err(err) = submit_transaction_across_clients(

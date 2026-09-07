@@ -112,7 +112,7 @@ where
     let response = builder
         .build()
         .wrap_err("failed to build authenticated Musubi query")?
-        .send()
+        .send_blocking()
         .wrap_err("authenticated Musubi query transport failed")?;
     match response.status() {
         StatusCode::OK => norito::json::from_slice(response.body())

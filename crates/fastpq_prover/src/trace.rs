@@ -36,7 +36,7 @@ use std::sync::Mutex;
 #[cfg(feature = "fastpq-gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, OnceLock, RwLock},
 };
 /// Goldilocks modulus used by the FASTPQ AIR.
@@ -53,6 +53,10 @@ pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 6;
 pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize = 512;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
+/// Domain tag binding role, permission, and epoch into one permission-tree leaf.
+const PERMISSION_HASH_DOMAIN: &[u8] = b"fastpq:v1:permission-leaf";
+/// Canonical binary key prefix for permission-tree membership transitions.
+const PERMISSION_KEY_PREFIX: &[u8] = b"permission/";
 /// Domain tag used for column hashes.
 #[cfg(test)]
 const TRACE_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
@@ -198,7 +202,8 @@ fn clone_observer<T: ?Sized>(
         }
     }
 }
-fn notify_poseidon_pipeline_observer(
+// Native V1 CPU proving also reports its resolved Poseidon execution policy.
+pub(crate) fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
     backend: Option<backend::GpuBackend>,
@@ -365,6 +370,7 @@ pub struct TraceColumn {
     pub values: Vec<u64>,
 }
 /// Column digest set containing leaf hashes plus an optional precomputed first level.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 #[derive(Clone, Debug)]
 #[cfg(any(test, feature = "fastpq-gpu"))]
 pub struct ColumnDigests {
@@ -384,13 +390,11 @@ impl ColumnDigests {
     }
     /// Borrow the leaf hashes.
     #[must_use]
-    #[cfg(any(test, all(feature = "dev-tools", feature = "fastpq-gpu")))]
     pub fn leaves(&self) -> &[u64] {
         &self.leaves
     }
     /// Borrow the precomputed first-level parent hashes, when available.
     #[must_use]
-    #[cfg(any(test, all(feature = "dev-tools", feature = "fastpq-gpu")))]
     pub fn first_level_parents(&self) -> Option<&[u64]> {
         self.first_level_parents.as_deref()
     }
@@ -409,8 +413,19 @@ struct RowData {
     value_new_limbs: Vec<u64>,
     value_old_len: u64,
     value_new_len: u64,
+    asset_limbs: Vec<u64>,
     delta: u64,
+    running_asset_delta: u64,
+    supply_counter: u64,
+    metadata_hash_limbs: [u64; METADATA_COMMITMENT_LIMBS],
+    perm_hash: u64,
+    permission_membership_before: u64,
+    permission_membership_after: u64,
+    permission_non_membership_before: u64,
+    permission_non_membership_after: u64,
     selectors: Selectors,
+    dsid: u64,
+    slot: u64,
 }
 /// Transfer-only SMT projection retained only when a batch contains transfers.
 struct TransferRowData {
@@ -435,18 +450,38 @@ impl Default for TransferRowData {
 struct Selectors {
     active: u64,
     transfer: u64,
+    mint: u64,
+    burn: u64,
+    role_grant: u64,
+    role_revoke: u64,
     meta_set: u64,
+    perm: u64,
 }
 impl RowData {
-    fn padding() -> Self {
+    fn padding(
+        metadata_hash_limbs: [u64; METADATA_COMMITMENT_LIMBS],
+        dsid: u64,
+        slot: u64,
+    ) -> Self {
         Self {
             key_limbs: Vec::new(),
             value_old_limbs: Vec::new(),
             value_new_limbs: Vec::new(),
             value_old_len: 0,
             value_new_len: 0,
+            asset_limbs: Vec::new(),
             delta: 0,
+            running_asset_delta: 0,
+            supply_counter: 0,
+            metadata_hash_limbs,
+            perm_hash: 0,
+            permission_membership_before: 0,
+            permission_membership_after: 0,
+            permission_non_membership_before: 0,
+            permission_non_membership_after: 0,
             selectors: Selectors::default(),
+            dsid,
+            slot,
         }
     }
 }
@@ -583,8 +618,18 @@ pub struct RowUsage {
     pub total_rows: usize,
     /// Rows tagged with `OperationKind::Transfer`.
     pub transfer_rows: usize,
+    /// Rows tagged with `OperationKind::Mint`.
+    pub mint_rows: usize,
+    /// Rows tagged with `OperationKind::Burn`.
+    pub burn_rows: usize,
+    /// Rows tagged with `OperationKind::RoleGrant`.
+    pub role_grant_rows: usize,
+    /// Rows tagged with `OperationKind::RoleRevoke`.
+    pub role_revoke_rows: usize,
     /// Rows tagged with `OperationKind::MetaSet`.
     pub meta_set_rows: usize,
+    /// Rows carrying a canonical permission transition encoding.
+    pub permission_rows: usize,
 }
 impl RowUsage {
     fn from_rows(rows: &[RowData], real_rows: usize) -> Self {
@@ -595,17 +640,42 @@ impl RowUsage {
                 .take(real_rows)
                 .filter(|row| row.selectors.transfer == 1)
                 .count(),
+            mint_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.mint == 1)
+                .count(),
+            burn_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.burn == 1)
+                .count(),
+            role_grant_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.role_grant == 1)
+                .count(),
+            role_revoke_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.role_revoke == 1)
+                .count(),
             meta_set_rows: rows
                 .iter()
                 .take(real_rows)
                 .filter(|row| row.selectors.meta_set == 1)
+                .count(),
+            permission_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.perm == 1)
                 .count(),
         }
     }
     /// Rows tagged with anything other than transfers.
     #[must_use]
     pub fn non_transfer_rows(&self) -> usize {
-        self.meta_set_rows
+        self.total_rows.saturating_sub(self.transfer_rows)
     }
 }
 fn populate_merkle_columns(
@@ -648,7 +718,8 @@ fn hash_to_field(hash: &Hash) -> u64 {
 /// # Errors
 ///
 /// Returns [`Error`] when the row or schema dimensions exceed supported bounds,
-/// or when transfer encodings, asset keys, or transcripts are malformed.
+/// or when numeric encodings, asset keys, mint/burn direction, permission
+/// transitions, or transfer transcripts are malformed.
 #[allow(clippy::too_many_lines)]
 pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let n_rows = batch.transitions.len();
@@ -671,37 +742,123 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     // unique canonical Goldilocks representative expected by every backend.
     let slot_value = canonical.public_inputs.slot % GOLDILOCKS_MODULUS;
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
+    let mut running_per_asset: HashMap<Vec<u8>, i128> = HashMap::new();
+    let mut supply_counters: HashMap<Vec<u8>, i128> = HashMap::new();
     let mut transfer_rows = canonical
         .transitions
         .iter()
         .any(|transition| matches!(&transition.operation, crate::OperationKind::Transfer))
         .then(|| Vec::with_capacity(canonical.transitions.len()));
     for (transition, binding) in canonical.transitions.iter().zip(transfer_bindings) {
-        let selectors = match &transition.operation {
+        let mut selectors = Selectors {
+            active: 1,
+            ..Selectors::default()
+        };
+        let (
+            asset_id_bytes,
+            perm_hash,
+            permission_membership_before,
+            permission_membership_after,
+            permission_non_membership_before,
+            permission_non_membership_after,
+        ) = match &transition.operation {
             crate::OperationKind::Transfer => {
-                canonical_asset_id_bytes(&transition.key)?;
-                Selectors {
-                    active: 1,
-                    transfer: 1,
-                    meta_set: 0,
-                }
+                selectors.transfer = 1;
+                (extract_canonical_asset_id(&transition.key)?, 0, 0, 0, 0, 0)
             }
-            crate::OperationKind::MetaSet => Selectors {
-                active: 1,
-                transfer: 0,
-                meta_set: 1,
-            },
+            crate::OperationKind::Mint => {
+                selectors.mint = 1;
+                (extract_canonical_asset_id(&transition.key)?, 0, 0, 0, 0, 0)
+            }
+            crate::OperationKind::Burn => {
+                selectors.burn = 1;
+                (extract_canonical_asset_id(&transition.key)?, 0, 0, 0, 0, 0)
+            }
+            crate::OperationKind::RoleGrant {
+                role_id,
+                permission_id,
+                epoch,
+            } => {
+                let permission = validate_permission_transition(
+                    transition,
+                    role_id,
+                    permission_id,
+                    *epoch,
+                    true,
+                )?;
+                selectors.perm = 1;
+                selectors.role_grant = 1;
+                (Vec::new(), permission, 0, 1, 1, 0)
+            }
+            crate::OperationKind::RoleRevoke {
+                role_id,
+                permission_id,
+                epoch,
+            } => {
+                let permission = validate_permission_transition(
+                    transition,
+                    role_id,
+                    permission_id,
+                    *epoch,
+                    false,
+                )?;
+                selectors.perm = 1;
+                selectors.role_revoke = 1;
+                (Vec::new(), permission, 1, 0, 0, 1)
+            }
+            crate::OperationKind::MetaSet => {
+                selectors.meta_set = 1;
+                (Vec::new(), 0, 0, 0, 0, 0)
+            }
         };
         let key_limbs = pack_bytes(&transition.key).limbs;
         let value_old_limbs = pack_bytes(&transition.pre_value).limbs;
         let value_new_limbs = pack_bytes(&transition.post_value).limbs;
-        let (delta, pre_value_u64, post_value_u64) = if selectors.transfer == 1 {
+        let asset_limbs = pack_bytes(&asset_id_bytes).limbs;
+        let numeric_values = selectors.transfer == 1 || selectors.mint == 1 || selectors.burn == 1;
+        let (delta_signed, pre_value_u64, post_value_u64) = if numeric_values {
             let pre_value_u64 = decode_u64_le(&transition.pre_value)?;
             let post_value_u64 = decode_u64_le(&transition.post_value)?;
-            let delta = i128::from(post_value_u64) - i128::from(pre_value_u64);
-            (field_from_i128(delta), pre_value_u64, post_value_u64)
+            match &transition.operation {
+                crate::OperationKind::Mint if post_value_u64 <= pre_value_u64 => {
+                    return Err(Error::InvalidAssetValueChange { operation: "mint" });
+                }
+                crate::OperationKind::Burn if post_value_u64 >= pre_value_u64 => {
+                    return Err(Error::InvalidAssetValueChange { operation: "burn" });
+                }
+                _ => {}
+            }
+            let delta_signed = i128::from(post_value_u64) - i128::from(pre_value_u64);
+            if selectors.transfer != 1 {
+                ensure_signed_field_bound(delta_signed, "delta")?;
+            }
+            (delta_signed, pre_value_u64, post_value_u64)
         } else {
             (0, 0, 0)
+        };
+        let running_previous = running_per_asset.get(&asset_id_bytes).copied().unwrap_or(0);
+        let running_next = if numeric_values {
+            let next = if selectors.transfer == 1 {
+                running_previous
+                    .checked_add(delta_signed)
+                    .ok_or(Error::TransferNumericBounds {
+                        field: "running_asset_delta",
+                    })?
+            } else {
+                checked_accumulate_delta(running_previous, delta_signed, "running_asset_delta")?
+            };
+            running_per_asset.insert(asset_id_bytes.clone(), next);
+            next
+        } else {
+            0
+        };
+        let supply_previous = supply_counters.get(&asset_id_bytes).copied().unwrap_or(0);
+        let supply_next = if selectors.mint == 1 || selectors.burn == 1 {
+            let next = checked_accumulate_delta(supply_previous, delta_signed, "supply_counter")?;
+            supply_counters.insert(asset_id_bytes.clone(), next);
+            next
+        } else {
+            supply_previous
         };
         let row = RowData {
             key_limbs,
@@ -717,8 +874,19 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
                     length: transition.post_value.len(),
                 }
             })?,
-            delta,
+            asset_limbs,
+            delta: field_from_i128(delta_signed),
+            running_asset_delta: field_from_i128(running_next),
+            supply_counter: field_from_i128(supply_next),
+            metadata_hash_limbs,
+            perm_hash,
+            permission_membership_before,
+            permission_membership_after,
+            permission_non_membership_before,
+            permission_non_membership_after,
             selectors,
+            dsid: dsid_hash,
+            slot: slot_value,
         };
         rows.push(row);
         if let Some(projection) = transfer_rows.as_mut() {
@@ -742,10 +910,18 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
             projection.push(transfer_row);
         }
     }
+    for (asset_id, running_delta) in &running_per_asset {
+        let supply_delta = supply_counters.get(asset_id).copied().unwrap_or(0);
+        if *running_delta != supply_delta {
+            return Err(Error::TransferInvariant {
+                details: "per-asset balance delta does not equal the mint/burn supply delta".into(),
+            });
+        }
+    }
     debug_assert_eq!(rows.len(), n_rows);
     let row_usage = RowUsage::from_rows(&rows, n_rows);
     while rows.len() < padded_len {
-        rows.push(RowData::padding());
+        rows.push(RowData::padding(metadata_hash_limbs, dsid_hash, slot_value));
         if let Some(projection) = transfer_rows.as_mut() {
             projection.push(TransferRowData::default());
         }
@@ -765,10 +941,26 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         .map(|row| row.value_new_limbs.len())
         .max()
         .unwrap_or_default();
+    let max_asset_limbs = rows
+        .iter()
+        .map(|row| row.asset_limbs.len())
+        .max()
+        .unwrap_or_default();
     let mut columns = vec![
         TraceColumn::new("s_active", rows.iter().map(|row| row.selectors.active)),
         TraceColumn::new("s_transfer", rows.iter().map(|row| row.selectors.transfer)),
+        TraceColumn::new("s_mint", rows.iter().map(|row| row.selectors.mint)),
+        TraceColumn::new("s_burn", rows.iter().map(|row| row.selectors.burn)),
+        TraceColumn::new(
+            "s_role_grant",
+            rows.iter().map(|row| row.selectors.role_grant),
+        ),
+        TraceColumn::new(
+            "s_role_revoke",
+            rows.iter().map(|row| row.selectors.role_revoke),
+        ),
         TraceColumn::new("s_meta_set", rows.iter().map(|row| row.selectors.meta_set)),
+        TraceColumn::new("s_perm", rows.iter().map(|row| row.selectors.perm)),
         TraceColumn::new("value_old_len", rows.iter().map(|row| row.value_old_len)),
         TraceColumn::new("value_new_len", rows.iter().map(|row| row.value_new_len)),
     ];
@@ -793,21 +985,50 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
                 .map(|row| row.value_new_limbs.get(idx).copied().unwrap_or(0)),
         ));
     }
+    for idx in 0..max_asset_limbs {
+        columns.push(TraceColumn::new(
+            format!("asset_id_limb_{idx}"),
+            rows.iter()
+                .map(|row| row.asset_limbs.get(idx).copied().unwrap_or(0)),
+        ));
+    }
     columns.push(TraceColumn::new("delta", rows.iter().map(|row| row.delta)));
+    columns.push(TraceColumn::new(
+        "running_asset_delta",
+        rows.iter().map(|row| row.running_asset_delta),
+    ));
     for limb in 0..METADATA_COMMITMENT_LIMBS {
         columns.push(TraceColumn::new(
             format!("metadata_hash_limb_{limb}"),
-            std::iter::repeat_n(metadata_hash_limbs[limb], rows.len()),
+            rows.iter().map(|row| row.metadata_hash_limbs[limb]),
         ));
     }
     columns.push(TraceColumn::new(
-        "dsid",
-        std::iter::repeat_n(dsid_hash, rows.len()),
+        "supply_counter",
+        rows.iter().map(|row| row.supply_counter),
     ));
     columns.push(TraceColumn::new(
-        "slot",
-        std::iter::repeat_n(slot_value, rows.len()),
+        "perm_hash",
+        rows.iter().map(|row| row.perm_hash),
     ));
+    columns.push(TraceColumn::new(
+        "permission_membership_before",
+        rows.iter().map(|row| row.permission_membership_before),
+    ));
+    columns.push(TraceColumn::new(
+        "permission_membership_after",
+        rows.iter().map(|row| row.permission_membership_after),
+    ));
+    columns.push(TraceColumn::new(
+        "permission_non_membership_before",
+        rows.iter().map(|row| row.permission_non_membership_before),
+    ));
+    columns.push(TraceColumn::new(
+        "permission_non_membership_after",
+        rows.iter().map(|row| row.permission_non_membership_after),
+    ));
+    columns.push(TraceColumn::new("dsid", rows.iter().map(|row| row.dsid)));
+    columns.push(TraceColumn::new("slot", rows.iter().map(|row| row.slot)));
     if let Some(transfer_rows) = &transfer_rows {
         for (column, name) in transfer_integer_air::auxiliary_column_names()
             .into_iter()
@@ -853,6 +1074,7 @@ struct TraceSchemaLimbWidths {
     key: usize,
     old_value: usize,
     new_value: usize,
+    asset: usize,
     has_transfer: bool,
 }
 fn packed_limb_len(byte_len: usize) -> usize {
@@ -863,12 +1085,23 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
         key: 0,
         old_value: 0,
         new_value: 0,
+        asset: 0,
         has_transfer: false,
     };
     for transition in &batch.transitions {
-        if matches!(transition.operation, crate::OperationKind::Transfer) {
-            widths.has_transfer = true;
-            canonical_asset_id_bytes(&transition.key)?;
+        let asset_len = match &transition.operation {
+            crate::OperationKind::MetaSet
+            | crate::OperationKind::RoleGrant { .. }
+            | crate::OperationKind::RoleRevoke { .. } => 0,
+            crate::OperationKind::Transfer
+            | crate::OperationKind::Mint
+            | crate::OperationKind::Burn => {
+                widths.has_transfer |=
+                    matches!(&transition.operation, crate::OperationKind::Transfer);
+                canonical_asset_id_bytes(&transition.key)?.len()
+            }
+        };
+        if matches!(&transition.operation, crate::OperationKind::Transfer) {
             decode_u64_le(&transition.pre_value)?;
             decode_u64_le(&transition.post_value)?;
         }
@@ -879,15 +1112,16 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
         widths.new_value = widths
             .new_value
             .max(packed_limb_len(transition.post_value.len()));
+        widths.asset = widths.asset.max(packed_limb_len(asset_len));
     }
     Ok(widths)
 }
 /// Return the number of columns in the canonical FASTPQ layout without allocating column names.
 pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
-    const SELECTOR_COLUMNS: usize = 3;
+    const SELECTOR_COLUMNS: usize = 8;
+    const DELTA_COLUMNS: usize = 2;
+    const TRAILING_COLUMNS: usize = 8;
     const VALUE_LENGTH_COLUMNS: usize = 2;
-    const DELTA_COLUMNS: usize = 1;
-    const TRAILING_COLUMNS: usize = 2;
     let widths = trace_schema_limb_widths(batch)?;
     let fixed_columns = SELECTOR_COLUMNS
         + VALUE_LENGTH_COLUMNS
@@ -899,7 +1133,7 @@ pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
         } else {
             0
         };
-    Ok(fixed_columns + widths.key + widths.old_value + widths.new_value)
+    Ok(fixed_columns + widths.key + widths.old_value + widths.new_value + widths.asset)
 }
 /// Enforce a caller-selected trace schema width before materialising columns.
 pub(crate) fn ensure_trace_schema_limit(
@@ -921,14 +1155,18 @@ pub(crate) fn ensure_trace_schema_limit(
 /// # Errors
 ///
 /// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
-/// `asset/<asset-id>/<account>` key shape, or [`Error::InvalidAssetValueLength`]
-/// when a transfer balance does not contain exactly eight bytes.
+/// `FastpqBalanceKeyV1` Norito frame.
 pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let widths = trace_schema_limb_widths(batch)?;
     let mut columns = [
         "s_active",
         "s_transfer",
+        "s_mint",
+        "s_burn",
+        "s_role_grant",
+        "s_role_revoke",
         "s_meta_set",
+        "s_perm",
         "value_old_len",
         "value_new_len",
     ]
@@ -938,9 +1176,27 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<Stri
     columns.extend((0..widths.key).map(|idx| format!("key_limb_{idx}")));
     columns.extend((0..widths.old_value).map(|idx| format!("value_old_limb_{idx}")));
     columns.extend((0..widths.new_value).map(|idx| format!("value_new_limb_{idx}")));
-    columns.push("delta".to_owned());
+    columns.extend((0..widths.asset).map(|idx| format!("asset_id_limb_{idx}")));
+    columns.extend(
+        ["delta", "running_asset_delta"]
+            .into_iter()
+            .map(str::to_owned),
+    );
     columns.extend((0..METADATA_COMMITMENT_LIMBS).map(|limb| format!("metadata_hash_limb_{limb}")));
-    columns.extend(["dsid", "slot"].into_iter().map(str::to_owned));
+    columns.extend(
+        [
+            "supply_counter",
+            "perm_hash",
+            "permission_membership_before",
+            "permission_membership_after",
+            "permission_non_membership_before",
+            "permission_non_membership_after",
+            "dsid",
+            "slot",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
     if widths.has_transfer {
         columns.extend(transfer_integer_air::auxiliary_column_names());
         for level in 0..SMT_HEIGHT {
@@ -1015,6 +1271,64 @@ fn extract_transfer_witnesses(
         &public_inputs.old_root,
         &public_inputs.new_root,
     )
+}
+/// Derive the canonical field hash for a permission-tree leaf.
+///
+/// # Errors
+///
+/// Returns [`Error::ValueWidth`] if the typed hash domain cannot be represented
+/// by the canonical field-packing format.
+pub(crate) fn permission_hash(
+    role_id: &[u8; 32],
+    permission_id: &[u8; 32],
+    epoch: u64,
+) -> Result<u64> {
+    let mut payload = Vec::with_capacity(32 + 32 + 8);
+    payload.extend_from_slice(role_id);
+    payload.extend_from_slice(permission_id);
+    payload.extend_from_slice(&epoch.to_le_bytes());
+    hash_with_domain(PERMISSION_HASH_DOMAIN, &payload)
+}
+/// Build the exact binary permission-tree key for one role/permission tuple.
+#[must_use]
+pub(crate) fn permission_transition_key(role_id: &[u8; 32], permission_id: &[u8; 32]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(PERMISSION_KEY_PREFIX.len() + 32 + 1 + 32);
+    key.extend_from_slice(PERMISSION_KEY_PREFIX);
+    key.extend_from_slice(role_id);
+    key.push(b'/');
+    key.extend_from_slice(permission_id);
+    key
+}
+fn validate_permission_transition(
+    transition: &StateTransition,
+    role_id: &[u8; 32],
+    permission_id: &[u8; 32],
+    epoch: u64,
+    is_grant: bool,
+) -> Result<u64> {
+    let permission = permission_hash(role_id, permission_id, epoch)?;
+    if transition.key != permission_transition_key(role_id, permission_id) {
+        return Err(Error::TransferInvariant {
+            details: "permission transition key does not bind its role and permission IDs".into(),
+        });
+    }
+    let membership_leaf = permission.to_le_bytes();
+    let has_canonical_membership = if is_grant {
+        transition.pre_value.is_empty() && transition.post_value == membership_leaf
+    } else {
+        transition.pre_value == membership_leaf && transition.post_value.is_empty()
+    };
+    if !has_canonical_membership {
+        return Err(Error::TransferInvariant {
+            details: if is_grant {
+                "role grant must transition from an empty non-membership leaf to its exact permission hash"
+            } else {
+                "role revoke must transition from its exact permission hash to an empty non-membership leaf"
+            }
+            .into(),
+        });
+    }
+    Ok(permission)
 }
 fn hash_with_domain(domain: &[u8], payload: &[u8]) -> Result<u64> {
     let domain_packed = pack_bytes(domain);
@@ -1558,18 +1872,13 @@ pub fn hash_columns_gpu_with_first_level(
     });
     Some(ColumnDigests::new(leaves, Some(parents)))
 }
-fn canonical_asset_id_bytes(key: &[u8]) -> Result<&[u8]> {
-    let rest = key.strip_prefix(b"asset/").ok_or(Error::InvalidAssetKey)?;
-    let separator = rest
-        .iter()
-        .position(|&byte| byte == b'/')
-        .ok_or(Error::InvalidAssetKey)?;
-    let (asset_id, account_with_separator) = rest.split_at(separator);
-    let account = &account_with_separator[1..];
-    if asset_id.is_empty() || account.is_empty() || account.contains(&b'/') {
-        return Err(Error::InvalidAssetKey);
-    }
-    Ok(asset_id)
+fn canonical_asset_id_bytes(key: &[u8]) -> Result<[u8; 16]> {
+    let identity: iroha_data_model::fastpq::FastpqBalanceKeyV1 =
+        norito::decode_canonical(key).map_err(|_| Error::InvalidAssetKey)?;
+    Ok(identity.asset_definition.aid_bytes())
+}
+fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
+    Ok(canonical_asset_id_bytes(key)?.to_vec())
 }
 fn decode_u64_le(bytes: &[u8]) -> Result<u64> {
     if bytes.len() != core::mem::size_of::<u64>() {
@@ -1583,6 +1892,20 @@ fn decode_u64_le(bytes: &[u8]) -> Result<u64> {
             .expect("numeric asset value has exact width"),
     ))
 }
+fn ensure_signed_field_bound(value: i128, field: &'static str) -> Result<()> {
+    let modulus = i128::from(GOLDILOCKS_MODULUS);
+    if value <= -modulus || value >= modulus {
+        return Err(Error::TransferNumericBounds { field });
+    }
+    Ok(())
+}
+fn checked_accumulate_delta(current: i128, delta: i128, field: &'static str) -> Result<i128> {
+    let next = current
+        .checked_add(delta)
+        .ok_or(Error::TransferNumericBounds { field })?;
+    ensure_signed_field_bound(next, field)?;
+    Ok(next)
+}
 fn field_from_i128(value: i128) -> u64 {
     let modulus = i128::from(GOLDILOCKS_MODULUS);
     let mut reduced = value % modulus;
@@ -1592,6 +1915,9 @@ fn field_from_i128(value: i128) -> u64 {
     u64::try_from(reduced).expect("canonical reduction fits u64")
 }
 /// Compute column hashes for a trace suitable for Poseidon Merkle commitment.
+///
+/// This scalar digest pipeline is a test reference; production commitments use
+/// the six-lane digests in [`crate::digest`].
 ///
 /// # Errors
 ///
@@ -1823,6 +2149,7 @@ fn merkle_root_with_first_level_using(
     current[0]
 }
 /// Compute the traditional Merkle root using scalar-equivalent Poseidon hashes.
+/// This helper supports tests and developer benchmarks.
 #[cfg(any(test, feature = "dev-tools"))]
 pub fn merkle_root(leaves: &[u64]) -> u64 {
     merkle_root_with_first_level(leaves, None)
@@ -1834,7 +2161,6 @@ fn compute_merkle_level(input: &[u64]) -> Vec<u64> {
 }
 #[cfg(test)]
 fn compute_merkle_level_with_mode(input: &[u64], mode: ExecutionMode) -> Vec<u64> {
-    #[cfg(test)]
     notify_trace_merkle_mode_observer(mode);
     let pairs = merkle_pairs(input);
     hash_trace_merkle_pairs_with_mode(&pairs, mode)
@@ -2157,6 +2483,21 @@ mod tests {
         assert!(empty_layer.leaves().is_empty());
         assert_eq!(empty_layer.first_level_parents(), Some([].as_slice()));
     }
+    fn sample_balance_key(label: &str) -> Vec<u8> {
+        let asset = iroha_data_model::asset::id::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let account = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(
+                label.as_bytes().to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .into_parts()
+            .0,
+        );
+        iroha_data_model::fastpq::transfer_balance_key(&asset, &account).unwrap()
+    }
     fn sample_batch() -> TransitionBatch {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
@@ -2171,6 +2512,46 @@ mod tests {
         for transition in sample_transitions(&transcript) {
             batch.push(transition);
         }
+        batch.push(StateTransition::new(
+            sample_balance_key("mint-target"),
+            20_u64.to_le_bytes().to_vec(),
+            40_u64.to_le_bytes().to_vec(),
+            OperationKind::Mint,
+        ));
+        batch.push(StateTransition::new(
+            sample_balance_key("burn-source"),
+            60_u64.to_le_bytes().to_vec(),
+            50_u64.to_le_bytes().to_vec(),
+            OperationKind::Burn,
+        ));
+        let grant_role = [0x31; 32];
+        let grant_permission = [0x41; 32];
+        let grant_hash = permission_hash(&grant_role, &grant_permission, 7)
+            .expect("canonical grant permission hash");
+        batch.push(StateTransition::new(
+            permission_transition_key(&grant_role, &grant_permission),
+            Vec::new(),
+            grant_hash.to_le_bytes().to_vec(),
+            OperationKind::RoleGrant {
+                role_id: grant_role,
+                permission_id: grant_permission,
+                epoch: 7,
+            },
+        ));
+        let revoke_role = [0x32; 32];
+        let revoke_permission = [0x42; 32];
+        let revoke_hash = permission_hash(&revoke_role, &revoke_permission, 8)
+            .expect("canonical revoke permission hash");
+        batch.push(StateTransition::new(
+            permission_transition_key(&revoke_role, &revoke_permission),
+            revoke_hash.to_le_bytes().to_vec(),
+            Vec::new(),
+            OperationKind::RoleRevoke {
+                role_id: revoke_role,
+                permission_id: revoke_permission,
+                epoch: 8,
+            },
+        ));
         batch.push(StateTransition::new(
             b"metadata/trace-fixture".to_vec(),
             b"old".to_vec(),
@@ -2329,9 +2710,91 @@ mod tests {
         );
     }
     #[test]
+    fn build_trace_enforces_strict_mint_and_burn_direction() {
+        for (operation, before, after) in [
+            (OperationKind::Mint, 4_u64, 5_u64),
+            (OperationKind::Burn, 5_u64, 4_u64),
+        ] {
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+            batch.push(StateTransition::new(
+                sample_balance_key("alice"),
+                before.to_le_bytes().to_vec(),
+                after.to_le_bytes().to_vec(),
+                operation,
+            ));
+            build_trace(&batch).expect("correctly directed asset operation");
+        }
+
+        for (operation, before, after, expected_operation) in [
+            (OperationKind::Mint, 5_u64, 4_u64, "mint"),
+            (OperationKind::Mint, 5_u64, 5_u64, "mint"),
+            (OperationKind::Burn, 4_u64, 5_u64, "burn"),
+            (OperationKind::Burn, 5_u64, 5_u64, "burn"),
+        ] {
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+            batch.push(StateTransition::new(
+                sample_balance_key("alice"),
+                before.to_le_bytes().to_vec(),
+                after.to_le_bytes().to_vec(),
+                operation,
+            ));
+            let error = build_trace(&batch).expect_err("wrong-direction asset operation");
+            assert!(matches!(
+                error,
+                Error::InvalidAssetValueChange { operation } if operation == expected_operation
+            ));
+        }
+    }
+    #[test]
+    fn numeric_delta_and_counters_are_canonical_and_bounded() {
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        batch.push(StateTransition::new(
+            sample_balance_key("alice"),
+            4_u64.to_le_bytes().to_vec(),
+            9_u64.to_le_bytes().to_vec(),
+            OperationKind::Mint,
+        ));
+        let trace = build_trace(&batch).expect("bounded mint trace");
+        for column in ["delta", "running_asset_delta", "supply_counter"] {
+            assert_eq!(
+                trace
+                    .columns
+                    .iter()
+                    .find(|candidate| candidate.name == column)
+                    .expect("numeric counter column")
+                    .values[0],
+                5,
+                "{column} must carry the exact supply increase"
+            );
+        }
+
+        let mut oversized =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        oversized.push(StateTransition::new(
+            sample_balance_key("alice"),
+            0_u64.to_le_bytes().to_vec(),
+            u64::MAX.to_le_bytes().to_vec(),
+            OperationKind::Mint,
+        ));
+        assert!(matches!(
+            build_trace(&oversized),
+            Err(Error::TransferNumericBounds { field: "delta" })
+        ));
+        assert!(ensure_signed_field_bound(i128::from(GOLDILOCKS_MODULUS) - 1, "delta").is_ok());
+        assert!(ensure_signed_field_bound(i128::from(GOLDILOCKS_MODULUS), "delta").is_err());
+        assert!(
+            checked_accumulate_delta(i128::from(GOLDILOCKS_MODULUS) - 1, 1, "supply_counter")
+                .is_err()
+        );
+    }
+    #[test]
     fn build_trace_rejects_noncanonical_asset_operation_keys() {
         for key in [
             b"xor/alice".as_slice(),
+            b"asset/xor/alice".as_slice(),
             b"asset//alice".as_slice(),
             b"asset/xor".as_slice(),
             b"asset/xor/".as_slice(),
@@ -2343,7 +2806,7 @@ mod tests {
                 key.to_vec(),
                 4_u64.to_le_bytes().to_vec(),
                 5_u64.to_le_bytes().to_vec(),
-                OperationKind::Transfer,
+                OperationKind::Mint,
             ));
             assert!(matches!(build_trace(&batch), Err(Error::InvalidAssetKey)));
         }
@@ -2362,10 +2825,10 @@ mod tests {
                     (4_u64.to_le_bytes().to_vec(), vec![0; length])
                 };
                 batch.push(StateTransition::new(
-                    b"asset/xor/alice".to_vec(),
+                    sample_balance_key("alice"),
                     pre_value,
                     post_value,
-                    OperationKind::Transfer,
+                    OperationKind::Mint,
                 ));
                 assert!(matches!(
                     build_trace(&batch),
@@ -2373,6 +2836,100 @@ mod tests {
                 ));
             }
         }
+    }
+    #[test]
+    fn permission_hash_binds_role_permission_and_epoch() {
+        let role = [0x11; 32];
+        let permission = [0x22; 32];
+        let baseline = permission_hash(&role, &permission, 7).expect("permission hash");
+        assert_ne!(
+            baseline,
+            permission_hash(&[0x12; 32], &permission, 7).expect("role-separated hash")
+        );
+        assert_ne!(
+            baseline,
+            permission_hash(&role, &[0x23; 32], 7).expect("permission-separated hash")
+        );
+        assert_ne!(
+            baseline,
+            permission_hash(&role, &permission, 8).expect("epoch-separated hash")
+        );
+    }
+    #[test]
+    fn permission_rows_enforce_membership_and_non_membership_transitions() {
+        let role = [0x31; 32];
+        let permission = [0x41; 32];
+        let epoch = 7;
+        let leaf = permission_hash(&role, &permission, epoch)
+            .expect("permission hash")
+            .to_le_bytes()
+            .to_vec();
+        let key = permission_transition_key(&role, &permission);
+        for (operation, pre_value, post_value, expected_membership) in [
+            (
+                OperationKind::RoleGrant {
+                    role_id: role,
+                    permission_id: permission,
+                    epoch,
+                },
+                Vec::new(),
+                leaf.clone(),
+                [0, 1, 1, 0],
+            ),
+            (
+                OperationKind::RoleRevoke {
+                    role_id: role,
+                    permission_id: permission,
+                    epoch,
+                },
+                leaf.clone(),
+                Vec::new(),
+                [1, 0, 0, 1],
+            ),
+        ] {
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+            batch.push(StateTransition::new(
+                key.clone(),
+                pre_value,
+                post_value,
+                operation,
+            ));
+            let trace = build_trace(&batch).expect("canonical permission membership transition");
+            for (column, expected) in [
+                ("permission_membership_before", expected_membership[0]),
+                ("permission_membership_after", expected_membership[1]),
+                ("permission_non_membership_before", expected_membership[2]),
+                ("permission_non_membership_after", expected_membership[3]),
+            ] {
+                assert_eq!(
+                    trace
+                        .columns
+                        .iter()
+                        .find(|candidate| candidate.name == column)
+                        .expect("permission state column")
+                        .values[0],
+                    expected
+                );
+            }
+        }
+
+        let mut malformed =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        malformed.push(StateTransition::new(
+            key,
+            vec![0],
+            leaf,
+            OperationKind::RoleGrant {
+                role_id: role,
+                permission_id: permission,
+                epoch,
+            },
+        ));
+        assert!(matches!(
+            build_trace(&malformed),
+            Err(Error::TransferInvariant { details }) if details.contains("role grant")
+        ));
     }
     #[test]
     fn metadata_commitment_uses_full_width_canonical_limbs() {
@@ -3260,7 +3817,7 @@ mod tests {
         let expected = transfer::transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect("witness extraction");
         assert_eq!(trace.transfer_witnesses, expected);
-        let proof_index = transfer::index_row_proofs(&expected);
+        let proof_index = transfer::index_row_proofs(&expected).expect("proof index");
         let mut canonical = batch.clone();
         canonical.sort();
         for (row, transition) in canonical.transitions.iter().enumerate() {
@@ -3309,7 +3866,7 @@ mod tests {
             authority_digest: witnesses[0].authority_digest,
             deltas: vec![first, later],
         }];
-        let mut proof_index = transfer::index_row_proofs(&inputs);
+        let mut proof_index = transfer::index_row_proofs(&inputs).expect("proof index");
         let sender_transition = sample_transitions(&transcript)
             .into_iter()
             .next()
@@ -3568,8 +4125,11 @@ mod tests {
                 delta,
                 &transcript.batch_hash,
             ));
-            let sender_key =
-                format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
+            let sender_key = iroha_data_model::fastpq::transfer_balance_key(
+                &delta.asset_definition,
+                &delta.from_account,
+            )
+            .unwrap();
             let (old_root, new_root) = transcript_roots(&transcript);
             let mut batch = TransitionBatch::new(
                 "fastpq-state-transition-stark-v1",
@@ -3765,8 +4325,13 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build");
         assert_eq!(trace.row_usage.total_rows, trace.rows);
         assert_eq!(trace.row_usage.transfer_rows, 2);
+        assert_eq!(trace.row_usage.mint_rows, 1);
+        assert_eq!(trace.row_usage.burn_rows, 1);
+        assert_eq!(trace.row_usage.role_grant_rows, 1);
+        assert_eq!(trace.row_usage.role_revoke_rows, 1);
         assert_eq!(trace.row_usage.meta_set_rows, 1);
-        assert_eq!(trace.row_usage.non_transfer_rows(), 1);
+        assert_eq!(trace.row_usage.permission_rows, 2);
+        assert_eq!(trace.row_usage.non_transfer_rows(), 5);
     }
     fn batch_with_transfer_metadata() -> (TransitionBatch, TransferTranscript) {
         let transcript = sample_transfer_transcript();
@@ -3816,10 +4381,16 @@ mod tests {
     }
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
         let scale = delta.normalized_scale();
-        let sender_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
-        let receiver_key =
-            format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes();
+        let sender_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.from_account,
+        )
+        .expect("canonical balance key");
+        let receiver_key = iroha_data_model::fastpq::transfer_balance_key(
+            &delta.asset_definition,
+            &delta.to_account,
+        )
+        .expect("canonical balance key");
         let (from, to) = transfer::build_transfer_smt_witness_pair(
             &sender_key,
             numeric_to_u64(&delta.from_balance_before, scale),
@@ -3849,13 +4420,21 @@ mod tests {
             .iter()
             .flat_map(|delta| {
                 let sender = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.from_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.from_balance_before),
                     numeric_to_bytes(&delta.from_balance_after),
                     OperationKind::Transfer,
                 );
                 let receiver = StateTransition::new(
-                    format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                    iroha_data_model::fastpq::transfer_balance_key(
+                        &delta.asset_definition,
+                        &delta.to_account,
+                    )
+                    .expect("canonical balance key"),
                     numeric_to_bytes(&delta.to_balance_before),
                     numeric_to_bytes(&delta.to_balance_after),
                     OperationKind::Transfer,

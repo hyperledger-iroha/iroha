@@ -1,0 +1,55 @@
+[package]
+name = "iroha_storage_client"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+description = "Authenticated archive and data-availability storage workflows for Iroha clients."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["tls-rustls-native-roots", "gost", "sm"]
+gost = ["iroha/gost", "iroha_crypto/gost"]
+sm = ["iroha/sm", "iroha_crypto/sm"]
+tls-native = ["iroha/tls-native", "reqwest/native-tls"]
+tls-native-vendored = ["iroha/tls-native-vendored", "reqwest/native-tls-vendored"]
+tls-rustls-native-roots = ["iroha/tls-rustls-native-roots", "reqwest/rustls-tls-native-roots"]
+tls-rustls-webpki-roots = ["iroha/tls-rustls-webpki-roots", "reqwest/rustls-tls-webpki-roots"]
+
+[dependencies]
+base64 = { workspace = true }
+blake3 = { workspace = true }
+eyre = { workspace = true }
+hex = { workspace = true }
+iroha = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http"] }
+iroha_primitives = { workspace = true }
+iroha_service_model = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_manifest = { workspace = true }
+sorafs_orchestrator = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
+toml = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[test]]
+name = "musubi_archive_fetch_memory"
+path = "tests/musubi_archive_fetch_memory.rs"

@@ -112,26 +112,26 @@ fn native_amx_signing_guard_reopens_same_height_without_losing_claims() {
 }
 #[test]
 fn unsafe_native_amx_signing_journal_latches_consensus_fail_stop() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let mut request = native_request(&adapter, &keys);
-    // Prepare bodies remain volatile behind the durable owned-view marker.
-    // Commit owns the record whose disappearance this test corrupts.
-    request.body.phase = NativeAmxPhase::Commit;
-    adapter
-        .sign_native_request_once(&request, 0)
-        .expect("seed one durable signing decision");
-    adapter.local_native_claims.clear();
-    adapter
-        .native_signing_guard
-        .as_ref()
-        .expect("validator has durable guard")
-        .remove_one_record_for_test();
-    assert!(adapter.sign_native_request_once(&request, 0).is_none());
-    assert!(adapter.output_guard.restart_required());
-    assert!(
-        adapter.sign_native_request_once(&request, 0).is_none(),
-        "a poisoned process must never sign again"
-    );
+    for phase in [NativeAmxPhase::Prepare, NativeAmxPhase::Commit] {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let mut request = native_request(&adapter, &keys);
+        request.body.phase = phase;
+        adapter
+            .sign_native_request_once(&request, 0)
+            .expect("seed durable signing evidence for the phase");
+        adapter.local_native_claims.clear();
+        adapter
+            .native_signing_guard
+            .as_ref()
+            .expect("validator has durable guard")
+            .remove_one_retained_journal_file_for_test();
+        assert!(adapter.sign_native_request_once(&request, 0).is_none());
+        assert!(adapter.output_guard.restart_required());
+        assert!(
+            adapter.sign_native_request_once(&request, 0).is_none(),
+            "a poisoned process must never sign again after losing {phase:?} evidence"
+        );
+    }
 }
 include!("v2_lane_work_effect_queue.rs");
 #[test]

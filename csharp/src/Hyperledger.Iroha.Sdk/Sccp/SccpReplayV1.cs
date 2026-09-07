@@ -17,9 +17,9 @@ public enum SccpReplayBoundaryV1 : byte
     TonMasterMint = 0x32,
     TonMasterBurn = 0x33,
     TonWalletMintCredit = 0x34,
-    TonWalletBurnDebit = 0x35,
-    TonWalletRefundDebit = 0x36,
-    TonWalletRefundCredit = 0x37,
+    TonWalletBurnAuthorization = 0x35,
+    TonWalletBurnLock = 0x36,
+    TonWalletBurnRefund = 0x37,
 }
 
 /// <summary>Canonical contract identity committed by one replay domain.</summary>
@@ -91,13 +91,14 @@ public sealed class SccpSparseMerkleWitnessV1
         IEnumerable<byte[]> siblings)
     {
         ArgumentNullException.ThrowIfNull(siblings);
-        ExpectedShardRoot = SccpReplayV1.Exact(expectedShardRoot, 32, "expected shard root");
+        ExpectedShardRoot = SccpReplayV1.Exact(
+            expectedShardRoot, 32, "expected shard root", nonzero: false);
         PriorRecordDigest = SccpReplayV1.Exact(
             priorRecordDigest, 32, "prior record digest", nonzero: false);
         SiblingBitmap = SccpReplayV1.Exact(
             siblingBitmap, 32, "sibling bitmap", nonzero: false);
         Siblings = siblings.Select((value, index) =>
-            SccpReplayV1.Exact(value, 32, $"sibling[{index}]")).ToArray();
+            SccpReplayV1.Exact(value, 32, $"sibling[{index}]", nonzero: false)).ToArray();
     }
 
     internal byte[] ExpectedShardRoot { get; }
@@ -148,7 +149,12 @@ public static class SccpReplayV1
         SccpReplayActorV1 actor)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        if (!IsProduction(source) || !IsProduction(target) || routeRevision == 0)
+        if (!Enum.IsDefined(typeof(SccpNetworkV1), source)
+            || !Enum.IsDefined(typeof(SccpNetworkV1), target)
+            || !Enum.IsDefined(typeof(SccpReplayBoundaryV1), boundary)
+            || !IsProduction(source)
+            || !IsProduction(target)
+            || routeRevision == 0)
         {
             throw new ArgumentException("Replay domains require production networks and a nonzero revision.");
         }
@@ -194,6 +200,10 @@ public static class SccpReplayV1
         {
             throw new ArgumentException("Replay amount must be a positive u128.", nameof(amountScale9));
         }
+        if (principal.Kind != PrincipalKindForBoundary(operation))
+        {
+            throw new ArgumentException("Replay operation and principal kind are inconsistent.");
+        }
         var principalDigest = Hash(
             Magic,
             [3, principal.Kind],
@@ -203,7 +213,7 @@ public static class SccpReplayV1
             Magic,
             [4, (byte)operation],
             Exact(auxiliaryIdentitySha256, 32, "auxiliary identity SHA-256"));
-        return Hash(
+        var digest = Hash(
             Magic,
             [2, (byte)operation],
             Exact(replayId, 32, "replay id"),
@@ -211,6 +221,11 @@ public static class SccpReplayV1
             UnsignedBigEndian(amountScale9),
             principalDigest,
             auxiliaryDigest);
+        if (IsZero(digest))
+        {
+            throw new ArgumentException("Occupied replay record digest must be nonzero.");
+        }
+        return digest;
     }
 
     /// <summary>Return all 249 canonical empty hashes in leaf-up order.</summary>
@@ -227,11 +242,11 @@ public static class SccpReplayV1
     /// <summary>Strictly reconstruct a compressed membership or non-membership witness.</summary>
     public static SccpReplayWitnessRootV1 RootFromWitness(
         ReadOnlySpan<byte> keyValue,
-        byte[]? recordDigest,
+        ReadOnlySpan<byte> recordDigest,
         SccpSparseMerkleWitnessV1 witness)
     {
         ArgumentNullException.ThrowIfNull(witness);
-        var key = Exact(keyValue, 32, "replay key");
+        var key = Exact(keyValue, 32, "replay key", nonzero: false);
         if (witness.SiblingBitmap[0] != 0)
         {
             throw new ArgumentException("Witness bitmap has reserved high bits.");
@@ -243,24 +258,14 @@ public static class SccpReplayV1
         }
 
         var empty = EmptyHashes();
-        byte[] current;
-        if (recordDigest is null)
+        var digest = Exact(recordDigest, 32, "record digest", nonzero: false);
+        if (!digest.AsSpan().SequenceEqual(witness.PriorRecordDigest))
         {
-            if (!IsZero(witness.PriorRecordDigest))
-            {
-                throw new ArgumentException("Non-membership witness has an occupied digest.");
-            }
-            current = empty[0];
+            throw new ArgumentException("Witness record digest does not match.");
         }
-        else
-        {
-            var digest = Exact(recordDigest, 32, "record digest");
-            if (!digest.AsSpan().SequenceEqual(witness.PriorRecordDigest))
-            {
-                throw new ArgumentException("Membership witness record digest does not match.");
-            }
-            current = Hash(Magic, [0x11], key, digest);
-        }
+        var current = IsZero(digest)
+            ? empty[0]
+            : Hash(Magic, [0x11], key, digest);
 
         var supplied = 0;
         for (var level = 0; level < Depth; level++)
@@ -279,6 +284,23 @@ public static class SccpReplayV1
                 : Parent(level, current, sibling);
         }
         return new SccpReplayWitnessRootV1(current, witness.ExpectedShardRoot, key[0]);
+    }
+
+    /// <summary>Verify a replay witness against the caller's exact current shard root.</summary>
+    public static SccpReplayWitnessRootV1 VerifyAgainstCurrentRoot(
+        ReadOnlySpan<byte> keyValue,
+        ReadOnlySpan<byte> recordDigest,
+        SccpSparseMerkleWitnessV1 witness,
+        ReadOnlySpan<byte> currentRootValue)
+    {
+        var currentRoot = Exact(currentRootValue, 32, "current shard root", nonzero: false);
+        var reconstructed = RootFromWitness(keyValue, recordDigest, witness);
+        if (!reconstructed.ExpectedRoot.AsSpan().SequenceEqual(currentRoot)
+            || !reconstructed.Root.AsSpan().SequenceEqual(currentRoot))
+        {
+            throw new ArgumentException("Replay witness does not match the current shard root.");
+        }
+        return reconstructed;
     }
 
     internal static byte[] CanonicalSoraAccountId(ReadOnlySpan<byte> canonicalAccountId)
@@ -336,6 +358,25 @@ public static class SccpReplayV1
         return result;
     }
 
+    private static byte PrincipalKindForBoundary(SccpReplayBoundaryV1 boundary) => boundary switch
+    {
+        SccpReplayBoundaryV1.SoraOutboundLock or
+        SccpReplayBoundaryV1.SoraInboundRelease => 0,
+        SccpReplayBoundaryV1.EvmSourceBurn or
+        SccpReplayBoundaryV1.EvmDestinationMint => 1,
+        SccpReplayBoundaryV1.TronSourceBurn or
+        SccpReplayBoundaryV1.TronDestinationMint => 2,
+        SccpReplayBoundaryV1.TonBridgeInboundMint or
+        SccpReplayBoundaryV1.TonBridgeOutboundBurn or
+        SccpReplayBoundaryV1.TonMasterMint or
+        SccpReplayBoundaryV1.TonMasterBurn or
+        SccpReplayBoundaryV1.TonWalletMintCredit or
+        SccpReplayBoundaryV1.TonWalletBurnAuthorization or
+        SccpReplayBoundaryV1.TonWalletBurnLock or
+        SccpReplayBoundaryV1.TonWalletBurnRefund => 3,
+        _ => throw new ArgumentOutOfRangeException(nameof(boundary)),
+    };
+
     private static bool ValidDirection(
         SccpNetworkV1 source,
         SccpNetworkV1 target,
@@ -356,13 +397,13 @@ public static class SccpReplayV1
             source == SccpNetworkV1.SoraTaira && target == SccpNetworkV1.TronMainnet && actorKind == 2,
         SccpReplayBoundaryV1.TonBridgeInboundMint or
         SccpReplayBoundaryV1.TonMasterMint or
-        SccpReplayBoundaryV1.TonWalletMintCredit or
-        SccpReplayBoundaryV1.TonWalletRefundDebit or
-        SccpReplayBoundaryV1.TonWalletRefundCredit =>
+        SccpReplayBoundaryV1.TonWalletMintCredit =>
             source == SccpNetworkV1.SoraTaira && target == SccpNetworkV1.TonMainnet && actorKind == 3,
         SccpReplayBoundaryV1.TonBridgeOutboundBurn or
         SccpReplayBoundaryV1.TonMasterBurn or
-        SccpReplayBoundaryV1.TonWalletBurnDebit =>
+        SccpReplayBoundaryV1.TonWalletBurnAuthorization or
+        SccpReplayBoundaryV1.TonWalletBurnLock or
+        SccpReplayBoundaryV1.TonWalletBurnRefund =>
             source == SccpNetworkV1.TonMainnet && target == SccpNetworkV1.SoraTaira && actorKind == 3,
         _ => false,
     };

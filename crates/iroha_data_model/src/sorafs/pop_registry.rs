@@ -43,6 +43,8 @@ pub const POP_REGISTRY_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-p
 /// Governance-controlled issuer identity and bounded admission policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopIssuerPolicyV1")]
 pub struct PopIssuerPolicyV1 {
     /// Schema version; must equal [`POP_ISSUER_POLICY_VERSION_V1`].
     pub version: u16,
@@ -226,6 +228,8 @@ pub enum PopIssuerPolicyValidationError {
 /// Payload-free issuer commitment to one private signed credential.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentV1")]
 pub struct PopCredentialCommitmentV1 {
     /// Domain-separated BLAKE3-256 commitment to exact canonical signed credential bytes.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -293,6 +297,8 @@ pub enum PopCredentialCommitmentValidationError {
 /// Atomic first-release credential commitment, root, and revocation snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentBatchV1")]
 pub struct PopCredentialCommitmentBatchV1 {
     /// Schema version.
     pub version: u16,
@@ -419,6 +425,8 @@ pub enum PopCredentialCommitmentBatchValidationError {
 /// Activated issuer policy with ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopIssuerPolicyRecordV1")]
 pub struct PopIssuerPolicyRecordV1 {
     /// Active policy.
     pub policy: PopIssuerPolicyV1,
@@ -438,6 +446,8 @@ pub struct PopIssuerPolicyRecordV1 {
 /// Durable payload-free credential commitment record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentRecordV1")]
 pub struct PopCredentialCommitmentRecordV1 {
     /// Issuer commitment body.
     pub commitment: PopCredentialCommitmentV1,
@@ -457,6 +467,8 @@ pub struct PopCredentialCommitmentRecordV1 {
 /// Authoritative signed commitment-root publication record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCommitmentRootRecordV1")]
 pub struct PopCommitmentRootRecordV1 {
     /// Root digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -484,6 +496,8 @@ pub struct PopCommitmentRootRecordV1 {
 /// Authoritative signed revocation-list publication record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRevocationPublicationRecordV1")]
 pub struct PopRevocationPublicationRecordV1 {
     /// Monotonic list version.
     pub list_version: u64,
@@ -518,6 +532,8 @@ pub struct PopRevocationPublicationRecordV1 {
     feature = "json",
     norito(tag = "reason", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryRevocationReasonV1")]
 pub enum PopRegistryRevocationReasonV1 {
     /// Credential was rotated.
     Rotated,
@@ -533,6 +549,8 @@ pub enum PopRegistryRevocationReasonV1 {
 /// Durable payload-free revocation record keyed by nonce commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRevocationRecordV1")]
 pub struct PopRevocationRecordV1 {
     /// Domain-separated revocation-nonce commitment.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -569,6 +587,8 @@ pub struct PopRevocationRecordV1 {
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryAuditEventKindV1")]
 pub enum PopRegistryAuditEventKindV1 {
     /// Issuer policy was activated or rotated.
     PolicyActivated,
@@ -591,6 +611,8 @@ impl PopRegistryAuditEventKindV1 {
 /// One link in the deterministic registry audit chain.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryAuditDigestRecordV1")]
 pub struct PopRegistryAuditDigestRecordV1 {
     /// Monotonic event sequence beginning at one.
     pub sequence: u64,
@@ -616,6 +638,8 @@ pub struct PopRegistryAuditDigestRecordV1 {
 /// Constant-time authoritative registry counters and active anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryStatusV1")]
 pub struct PopRegistryStatusV1 {
     /// Active commitment root, absent before the first issuer batch.
     #[cfg_attr(
@@ -836,3 +860,6 @@ mod tests {
         assert_canonical_norito_round_trip(&record);
     }
 }
+
+#[cfg(test)]
+mod captured_pop_registry_schema_tests;

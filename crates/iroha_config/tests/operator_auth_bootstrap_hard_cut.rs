@@ -29,7 +29,8 @@ fn retired_operator_bearer_mode_fields_are_rejected() {
             .expect_err("retired operator bearer mode must be unknown");
         let report = format!("{error:?}");
         assert!(
-            report.contains(&format!("unknown parameter: `torii.operator_auth.{field}`")),
+            report.contains("unknown parameter")
+                && report.contains(&format!("`torii.operator_auth.{field}`")),
             "unexpected retired-field diagnostic: {report}"
         );
     }

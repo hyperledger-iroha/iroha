@@ -47,6 +47,8 @@ mod model {
     #[debug("{name}${domain}")]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft::model::NftId")]
     pub struct NftId {
         /// Domain id.
         pub domain: DomainId,
@@ -66,12 +68,15 @@ mod model {
         IntoSchema,
         RegistrableBuilder,
     )]
+    #[registrable_builder(schema_name = "iroha_data_model::nft::model::NewNft")]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[display("{id}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft::model::Nft")]
     pub struct Nft {
         /// An Identification of the [`Nft`].
         pub id: NftId,
@@ -99,6 +104,8 @@ pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
     )
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nft::NftData")]
 pub struct NftData {
     /// Content of the [`Nft`], as a key-value store.
     pub content: Metadata,
@@ -181,6 +188,25 @@ mod json_tests {
 mod tests {
     use super::*;
     use crate::{Name, domain::prelude::DomainId};
+
+    #[test]
+    fn registration_builder_schema_identity_matches_capture() {
+        // Controlled pre-declaration report: be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd.
+        let nominal = "iroha_data_model::nft::model::NewNft";
+        let expected: [u8; 16] = hex::decode("d01008409996af58b242fdd93cbb9d17")
+            .expect("captured schema hash")
+            .try_into()
+            .expect("16-byte hash");
+        assert_eq!(<NewNft as norito::NoritoSchema>::nominal_name(), nominal);
+        assert_eq!(<NewNft as norito::NoritoSchema>::frame_name(), nominal);
+        assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
+        assert_eq!(<NewNft as norito::NoritoSerialize>::schema_hash(), expected);
+        assert_eq!(
+            <NewNft as norito::NoritoDeserialize>::schema_hash(),
+            expected
+        );
+    }
+
     #[test]
     fn bare_domain_literal_defaults_to_universal_dataspace() {
         let id: NftId = "mona_lisa$art".parse().expect("valid nft id");

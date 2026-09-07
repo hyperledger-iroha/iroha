@@ -56,6 +56,8 @@ const VRF_OUTPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:output";
     norito::derive::JsonDeserialize,
 )]
 #[norito(tag = "variant", content = "proof")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::vrf::VrfProof")]
 pub enum VrfProof {
     /// Signature in G1 (48 bytes) — corresponds to `Small`/`sig_in_G1` variant.
     #[norito(rename = "bls_small_g1")]
@@ -75,7 +77,9 @@ pub enum VrfProof {
     norito::Decode,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_crypto::vrf::VrfOutput")]
 pub struct VrfOutput(pub [u8; 32]);
 /// VRF proof construction error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -738,3 +742,6 @@ mod tests {
         assert_eq!(output[31] & 1, 0);
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

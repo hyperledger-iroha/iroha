@@ -1964,12 +1964,14 @@ mod tests {
         }
         let source = crate::bridge_source();
         for symbol in [
-            "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
-            "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
-            "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
         ] {
-            assert!(source.contains(symbol));
+            let declaration = format!("pub extern \"system\" fn {symbol}(");
+            assert_eq!(source.matches(&declaration).count(), 1);
         }
+        assert!(!source.contains("Java_pg_bpng_digitalkina_"));
         let retired_identity: String = "1VinJeroCevitaNenilffO".chars().rev().collect();
         assert!(!source.contains(&retired_identity));
     }

@@ -178,6 +178,8 @@ struct ProgramExecutionContext<'a> {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::BfvRamEncryptedInputMode")]
 pub enum BfvRamEncryptedInputMode {
     /// Evaluators consume the submitted BFV envelope directly and never
     /// canonicalize it through resolver-side decryption.
@@ -185,7 +187,20 @@ pub enum BfvRamEncryptedInputMode {
 }
 /// Public RAM-FHE execution profile for the programmed BFV backend.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::BfvRamProgramProfile")]
 pub struct BfvRamProgramProfile {
     /// Stable profile version understood by the current evaluator.
     pub profile_version: u8,
@@ -204,6 +219,8 @@ pub struct BfvRamProgramProfile {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::RamLfeVerificationMode")]
 pub enum RamLfeVerificationMode {
     /// Canonical payload bytes are signed by the configured resolver key.
     Signed,
@@ -212,7 +229,8 @@ pub enum RamLfeVerificationMode {
 }
 /// Public proof-verifier metadata published by proof-carrying RAM-LFE policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::RamLfeProofVerifierMetadata")]
 pub struct RamLfeProofVerifierMetadata {
     /// Proof backend identifier understood by higher-layer verifiers.
     pub proof_backend: String,
@@ -227,6 +245,8 @@ pub struct RamLfeProofVerifierMetadata {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(tag = "op", content = "args", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::HiddenRamFheInstruction")]
 pub enum HiddenRamFheInstruction {
     /// Load one encrypted input byte slot into a register.
     LoadInput(u16, u16),
@@ -253,7 +273,8 @@ pub enum HiddenRamFheInstruction {
 }
 /// Canonical hidden program executed by the programmed BFV backend.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::HiddenRamFheProgram")]
 pub struct HiddenRamFheProgram {
     /// Stable program format version.
     pub version: u8,
@@ -283,7 +304,8 @@ impl HiddenRamFheProgram {
 }
 /// Public parameter bundle published by programmed BFV policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::BfvProgrammedPublicParameters")]
 pub struct BfvProgrammedPublicParameters {
     /// BFV envelope parameters used to encrypt identifier bytes.
     pub encryption: BfvIdentifierPublicParameters,
@@ -309,7 +331,20 @@ pub struct BfvProgrammedPublicParameters {
     pub proof_verifier: Option<RamLfeProofVerifierMetadata>,
 }
 /// Supported RAM-LFE backends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::RamLfeBackend")]
 pub enum RamLfeBackend {
     /// HKDF-SHA3-512 commitment-bound PRF evaluator.
     HkdfSha3_512PrfV1,
@@ -357,7 +392,10 @@ impl json::JsonDeserialize for RamLfeBackend {
 }
 /// Public commitment to a hidden identifier-derivation policy.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::PolicyCommitment")]
 pub struct PolicyCommitment {
     /// Backend used to evaluate the hidden policy.
     pub backend: RamLfeBackend,
@@ -369,7 +407,10 @@ pub struct PolicyCommitment {
 }
 /// Client request submitted to a RAM-LFE evaluator.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::ClientRequest")]
 pub struct ClientRequest {
     /// Backend-specific request payload.
     pub normalized_input: Vec<u8>,
@@ -379,7 +420,10 @@ pub struct ClientRequest {
 }
 /// Deterministic RAM-LFE evaluation output.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::EvalResponse")]
 pub struct EvalResponse {
     /// Plaintext output bytes produced by the hidden engine.
     pub output: Vec<u8>,
@@ -1971,9 +2015,20 @@ mod tests {
             ],
         };
         validate_hidden_ram_fhe_program(&program).expect("profile-wide program shape validates");
-        let (public_parameters, _, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+        let (mut public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(
+                &params,
+                RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+                secret,
+                associated_data,
+            )
+            .expect("derive BFV public parameters");
+        let input_err = validate_hidden_program_input_slots(&program, 1)
+            .expect_err("input slot two must exceed a one-byte envelope");
+        assert!(input_err.to_string().contains("max_input_bytes 1"));
+        // Smaller envelopes are malformed in V1; construct valid keys before
+        // mutating the public metadata to exercise constructor admission.
+        public_parameters.max_input_bytes = 1;
         let err = try_bfv_programmed_public_parameters_with_program(
             public_parameters,
             BfvEvaluationKeyBundle {
@@ -2003,9 +2058,13 @@ mod tests {
                 HiddenRamFheInstruction::Output(0),
             ],
         };
-        let (public_parameters, _, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
+            &params,
+            RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+            secret,
+            associated_data,
+        )
+        .expect("derive BFV public parameters");
         let err = try_bfv_programmed_public_parameters_with_program(
             public_parameters,
             BfvEvaluationKeyBundle {
@@ -2039,9 +2098,20 @@ mod tests {
             ],
         };
         validate_hidden_ram_fhe_program(&program).expect("profile-wide program shape validates");
-        let (public_parameters, _, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+        let (mut public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(
+                &params,
+                RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+                secret,
+                associated_data,
+            )
+            .expect("derive BFV public parameters");
+        let input_err = validate_hidden_program_input_slots(&program, 1)
+            .expect_err("input slot two must exceed a one-byte envelope");
+        assert!(input_err.to_string().contains("max_input_bytes 1"));
+        // Smaller envelopes are malformed in V1; construct valid keys before
+        // mutating the public metadata to exercise constructor admission.
+        public_parameters.max_input_bytes = 1;
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
@@ -2093,7 +2163,8 @@ mod tests {
         let err = decode_bfv_programmed_public_parameters(&encoded)
             .expect_err("oversized programmed envelope capacity must be rejected");
         assert!(
-            err.to_string().contains("max_input_bytes must be at most"),
+            err.to_string()
+                .contains("max_input_bytes must be exactly 63"),
             "unexpected error: {err}"
         );
     }
@@ -2639,8 +2710,13 @@ mod tests {
         };
         validate_hidden_ram_fhe_program(&program).expect("select program validates");
         let (public_parameters, secret_key, relinearization_key) =
-            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
-                .expect("derive BFV public parameters");
+            derive_identifier_key_material_from_seed(
+                &params,
+                RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+                secret,
+                associated_data,
+            )
+            .expect("derive BFV public parameters");
         let programmed = try_bfv_programmed_public_parameters_with_program(
             public_parameters.clone(),
             BfvEvaluationKeyBundle {
@@ -2791,3 +2867,6 @@ mod tests {
         assert_ne!(left.receipt_hash, right.receipt_hash);
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

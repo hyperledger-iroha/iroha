@@ -1761,6 +1761,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",

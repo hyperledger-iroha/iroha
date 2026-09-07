@@ -1,0 +1,3433 @@
+[
+  {
+    "bare_hex": "05636166c3a9",
+    "case": "name/nfc",
+    "deserialize_hash": "b73a6bf4d29e5b67bc7360d7dc5ea5b9",
+    "frame_hex": "4e5254300000b73a6bf4d29e5b67bc7360d7dc5ea5b9000600000000000000e4903fec6b62477b0205636166c3a9",
+    "json": "\"café\"",
+    "nominal": "iroha_data_model::name::model::Name",
+    "schema": {
+      "Name": "String",
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ConstString",
+        "name": "String"
+      },
+      {
+        "id": "Name",
+        "name": "Name"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "Name",
+    "schema_type_name": "Name",
+    "serialize_hash": "b73a6bf4d29e5b67bc7360d7dc5ea5b9",
+    "storage_key_json": "\"café\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "name/nfc/option-none",
+    "deserialize_hash": "13cc4f8d2d378144d25462b802aa926a",
+    "frame_hex": "4e525430000013cc4f8d2d378144d25462b802aa926a000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::name::model::Name>",
+    "serialize_hash": "13cc4f8d2d378144d25462b802aa926a"
+  },
+  {
+    "bare_hex": "010605636166c3a9",
+    "case": "name/nfc/option-some",
+    "deserialize_hash": "13cc4f8d2d378144d25462b802aa926a",
+    "frame_hex": "4e525430000013cc4f8d2d378144d25462b802aa926a0008000000000000003288d967a482c58802010605636166c3a9",
+    "nominal": "core::option::Option<iroha_data_model::name::model::Name>",
+    "serialize_hash": "13cc4f8d2d378144d25462b802aa926a"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "name/nfc/vec-empty",
+    "deserialize_hash": "e4157056c854eb2ac883de86632f2bb8",
+    "frame_hex": "4e5254300000e4157056c854eb2ac883de86632f2bb8000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::name::model::Name>",
+    "serialize_hash": "e4157056c854eb2ac883de86632f2bb8"
+  },
+  {
+    "bare_hex": "01000000000000000605636166c3a9",
+    "case": "name/nfc/vec-one",
+    "deserialize_hash": "e4157056c854eb2ac883de86632f2bb8",
+    "frame_hex": "4e5254300000e4157056c854eb2ac883de86632f2bb8000f00000000000000c0e277008b42a52b0201000000000000000605636166c3a9",
+    "nominal": "alloc::vec::Vec<iroha_data_model::name::model::Name>",
+    "serialize_hash": "e4157056c854eb2ac883de86632f2bb8"
+  },
+  {
+    "bare_hex": "1a84a2ed0d867d7eb3033841be1a5968a85e3b74efd0f982a9452b2ab76e4bf1",
+    "case": "name/nfc/hash-of",
+    "deserialize_hash": "160a9e790a1273c925d67718d742cdd4",
+    "frame_hex": "4e5254300000160a9e790a1273c925d67718d742cdd4002000000000000000bc1c01043c2f633a001a84a2ed0d867d7eb3033841be1a5968a85e3b74efd0f982a9452b2ab76e4bf1",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::name::model::Name>",
+    "serialize_hash": "160a9e790a1273c925d67718d742cdd4"
+  },
+  {
+    "bare_hex": "4000000000000000019501b3016e0174011201b901410121011401c001ff013b011d010701d301d8015d01220165010101e7015f010e01f5012301a7011201730179015001d801f1018a01c201b1019e013e0198018001f301de0138017801e801ef01d0014601b601710106012201e601bb01c7015501b8018e01c4016701c501b401440174010b",
+    "case": "name/nfc/signature-of",
+    "deserialize_hash": "78d0af0afbf135056c7ab2047a326faa",
+    "frame_hex": "4e525430000078d0af0afbf135056c7ab2047a326faa008800000000000000f6d1f23e78517409024000000000000000019501b3016e0174011201b901410121011401c001ff013b011d010701d301d8015d01220165010101e7015f010e01f5012301a7011201730179015001d801f1018a01c201b1019e013e0198018001f301de0138017801e801ef01d0014601b601710106012201e601bb01c7015501b8018e01c4016701c501b401440174010b",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::name::model::Name>",
+    "serialize_hash": "78d0af0afbf135056c7ab2047a326faa"
+  },
+  {
+    "bare_hex": "1073746f72652f30303131323261616262",
+    "case": "state-path",
+    "deserialize_hash": "fe6e03efc4490c1fa46d8100ceef899d",
+    "frame_hex": "4e5254300000fe6e03efc4490c1fa46d8100ceef899d001100000000000000578fffca21ce2835021073746f72652f30303131323261616262",
+    "json": "\"store/001122aabb\"",
+    "nominal": "iroha_data_model::state_path::model::StatePath",
+    "schema": {
+      "StatePath": "String",
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ConstString",
+        "name": "String"
+      },
+      {
+        "id": "StatePath",
+        "name": "StatePath"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "StatePath",
+    "schema_type_name": "StatePath",
+    "serialize_hash": "fe6e03efc4490c1fa46d8100ceef899d",
+    "storage_key_json": "\"store/001122aabb\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "state-path/option-none",
+    "deserialize_hash": "1ea4d9d3689f6c8fb38c74706472b62d",
+    "frame_hex": "4e52543000001ea4d9d3689f6c8fb38c74706472b62d000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::state_path::model::StatePath>",
+    "serialize_hash": "1ea4d9d3689f6c8fb38c74706472b62d"
+  },
+  {
+    "bare_hex": "01111073746f72652f30303131323261616262",
+    "case": "state-path/option-some",
+    "deserialize_hash": "1ea4d9d3689f6c8fb38c74706472b62d",
+    "frame_hex": "4e52543000001ea4d9d3689f6c8fb38c74706472b62d0013000000000000005adb0d1d5a1fbaa20201111073746f72652f30303131323261616262",
+    "nominal": "core::option::Option<iroha_data_model::state_path::model::StatePath>",
+    "serialize_hash": "1ea4d9d3689f6c8fb38c74706472b62d"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "state-path/vec-empty",
+    "deserialize_hash": "7aac04f8ccce9bdca94a075dab5ed94e",
+    "frame_hex": "4e52543000007aac04f8ccce9bdca94a075dab5ed94e000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::state_path::model::StatePath>",
+    "serialize_hash": "7aac04f8ccce9bdca94a075dab5ed94e"
+  },
+  {
+    "bare_hex": "0100000000000000111073746f72652f30303131323261616262",
+    "case": "state-path/vec-one",
+    "deserialize_hash": "7aac04f8ccce9bdca94a075dab5ed94e",
+    "frame_hex": "4e52543000007aac04f8ccce9bdca94a075dab5ed94e001a00000000000000b88728e0f01a3ad7020100000000000000111073746f72652f30303131323261616262",
+    "nominal": "alloc::vec::Vec<iroha_data_model::state_path::model::StatePath>",
+    "serialize_hash": "7aac04f8ccce9bdca94a075dab5ed94e"
+  },
+  {
+    "bare_hex": "232e60c15d1212cfbc439da755c2fdecd0c6dafd8027d3523fa1ede4eb92b68f",
+    "case": "state-path/hash-of",
+    "deserialize_hash": "3fe139ed60d27b300bc52dd992876e22",
+    "frame_hex": "4e52543000003fe139ed60d27b300bc52dd992876e220020000000000000003d423362cb5b01f200232e60c15d1212cfbc439da755c2fdecd0c6dafd8027d3523fa1ede4eb92b68f",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::state_path::model::StatePath>",
+    "serialize_hash": "3fe139ed60d27b300bc52dd992876e22"
+  },
+  {
+    "bare_hex": "4000000000000000015c01af01d0017f01e40170013101a0017101df017d011a0113011a01c301350170010001de01fd019e01ab01f00157010a010e015c01c001b701ad015701d301f001bb012f012e01bd0124010b01f501aa01ed01e90145014001f101570104013e010c01c301310113011801330119013e014101fc01c5018801600111010e",
+    "case": "state-path/signature-of",
+    "deserialize_hash": "05fadfbc63553b0ff4625a621232ea33",
+    "frame_hex": "4e525430000005fadfbc63553b0ff4625a621232ea33008800000000000000f624a9d8596af7b0024000000000000000015c01af01d0017f01e40170013101a0017101df017d011a0113011a01c301350170010001de01fd019e01ab01f00157010a010e015c01c001b701ad015701d301f001bb012f012e01bd0124010b01f501aa01ed01e90145014001f101570104013e010c01c301310113011801330119013e014101fc01c5018801600111010e",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::state_path::model::StatePath>",
+    "serialize_hash": "05fadfbc63553b0ff4625a621232ea33"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "metadata/empty",
+    "deserialize_hash": "f14337a7e8a052f2a15246e58a4b5d77",
+    "frame_hex": "4e5254300000f14337a7e8a052f2a15246e58a4b5d77000800000000000000c0ca824265736ab6000000000000000000",
+    "json": "{}",
+    "nominal": "iroha_data_model::metadata::model::Metadata",
+    "schema": {
+      "Json": "String",
+      "Metadata": "SortedMap<Name, Json>",
+      "Name": "String",
+      "SortedMap<Name, Json>": {
+        "Map": {
+          "key": "Name",
+          "value": "Json"
+        }
+      },
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ConstString",
+        "name": "String"
+      },
+      {
+        "id": "Json",
+        "name": "Json"
+      },
+      {
+        "id": "Metadata",
+        "name": "Metadata"
+      },
+      {
+        "id": "Name",
+        "name": "Name"
+      },
+      {
+        "id": "SortedMap<Name, Json>",
+        "name": "SortedMap<Name, Json>"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "Metadata",
+    "schema_type_name": "Metadata",
+    "serialize_hash": "f14337a7e8a052f2a15246e58a4b5d77"
+  },
+  {
+    "bare_hex": "00",
+    "case": "metadata/empty/option-none",
+    "deserialize_hash": "3f24d37a29539c313bb7228843e448af",
+    "frame_hex": "4e52543000003f24d37a29539c313bb7228843e448af000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3f24d37a29539c313bb7228843e448af"
+  },
+  {
+    "bare_hex": "01080000000000000000",
+    "case": "metadata/empty/option-some",
+    "deserialize_hash": "3f24d37a29539c313bb7228843e448af",
+    "frame_hex": "4e52543000003f24d37a29539c313bb7228843e448af000a00000000000000da2d7465b3dd37a80201080000000000000000",
+    "nominal": "core::option::Option<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3f24d37a29539c313bb7228843e448af"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "metadata/empty/vec-empty",
+    "deserialize_hash": "3ff84468b9a8d502b2ba44f3603dd135",
+    "frame_hex": "4e52543000003ff84468b9a8d502b2ba44f3603dd135000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3ff84468b9a8d502b2ba44f3603dd135"
+  },
+  {
+    "bare_hex": "0100000000000000080000000000000000",
+    "case": "metadata/empty/vec-one",
+    "deserialize_hash": "3ff84468b9a8d502b2ba44f3603dd135",
+    "frame_hex": "4e52543000003ff84468b9a8d502b2ba44f3603dd135001100000000000000fff88519cd4767ec020100000000000000080000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3ff84468b9a8d502b2ba44f3603dd135"
+  },
+  {
+    "bare_hex": "81e47a19e6b29b0a65b9591762ce5143ed30d0261e5d24a3201752506b20f15d",
+    "case": "metadata/empty/hash-of",
+    "deserialize_hash": "43b3ee223d6be0211dcbcd5b0b01638b",
+    "frame_hex": "4e525430000043b3ee223d6be0211dcbcd5b0b01638b0020000000000000002a6d9ff67e5f43fd0081e47a19e6b29b0a65b9591762ce5143ed30d0261e5d24a3201752506b20f15d",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "43b3ee223d6be0211dcbcd5b0b01638b"
+  },
+  {
+    "bare_hex": "4000000000000000011301e9016b0160017b014201d8015e01080117015c011101db01f601fa01bc01ad010201fd011f01f5012f01f4013f01bb015e018f014a012801d6015d011d013501f701cc01db01cf01a001be0142010f01b301e801a001ce018d018e0148011a0184013201f60159012f017b0120014e01fc018b01c5011e019a01630102",
+    "case": "metadata/empty/signature-of",
+    "deserialize_hash": "cdabc7d1a08320d2049f473a176e23a1",
+    "frame_hex": "4e5254300000cdabc7d1a08320d2049f473a176e23a10088000000000000000b2f2b3763de4d43024000000000000000011301e9016b0160017b014201d8015e01080117015c011101db01f601fa01bc01ad010201fd011f01f5012f01f4013f01bb015e018f014a012801d6015d011d013501f701cc01db01cf01a001be0142010f01b301e801a001ce018d018e0148011a0184013201f60159012f017b0120014e01fc018b01c5011e019a01630102",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "cdabc7d1a08320d2049f473a176e23a1"
+  },
+  {
+    "bare_hex": "0200000000000000110605616c7068610908072276616c756522220605636166c3a91a19187b22636f756e74223a372c227265616479223a747275657d",
+    "case": "metadata/ordered",
+    "deserialize_hash": "f14337a7e8a052f2a15246e58a4b5d77",
+    "frame_hex": "4e5254300000f14337a7e8a052f2a15246e58a4b5d77003d000000000000005ee818e679aa37ea020200000000000000110605616c7068610908072276616c756522220605636166c3a91a19187b22636f756e74223a372c227265616479223a747275657d",
+    "json": "{\"alpha\":\"value\",\"café\":{\"count\":7,\"ready\":true}}",
+    "nominal": "iroha_data_model::metadata::model::Metadata",
+    "schema": {
+      "Json": "String",
+      "Metadata": "SortedMap<Name, Json>",
+      "Name": "String",
+      "SortedMap<Name, Json>": {
+        "Map": {
+          "key": "Name",
+          "value": "Json"
+        }
+      },
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ConstString",
+        "name": "String"
+      },
+      {
+        "id": "Json",
+        "name": "Json"
+      },
+      {
+        "id": "Metadata",
+        "name": "Metadata"
+      },
+      {
+        "id": "Name",
+        "name": "Name"
+      },
+      {
+        "id": "SortedMap<Name, Json>",
+        "name": "SortedMap<Name, Json>"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "Metadata",
+    "schema_type_name": "Metadata",
+    "serialize_hash": "f14337a7e8a052f2a15246e58a4b5d77"
+  },
+  {
+    "bare_hex": "00",
+    "case": "metadata/ordered/option-none",
+    "deserialize_hash": "3f24d37a29539c313bb7228843e448af",
+    "frame_hex": "4e52543000003f24d37a29539c313bb7228843e448af000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3f24d37a29539c313bb7228843e448af"
+  },
+  {
+    "bare_hex": "013d0200000000000000110605616c7068610908072276616c756522220605636166c3a91a19187b22636f756e74223a372c227265616479223a747275657d",
+    "case": "metadata/ordered/option-some",
+    "deserialize_hash": "3f24d37a29539c313bb7228843e448af",
+    "frame_hex": "4e52543000003f24d37a29539c313bb7228843e448af003f000000000000007876b3930d153c2a02013d0200000000000000110605616c7068610908072276616c756522220605636166c3a91a19187b22636f756e74223a372c227265616479223a747275657d",
+    "nominal": "core::option::Option<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3f24d37a29539c313bb7228843e448af"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "metadata/ordered/vec-empty",
+    "deserialize_hash": "3ff84468b9a8d502b2ba44f3603dd135",
+    "frame_hex": "4e52543000003ff84468b9a8d502b2ba44f3603dd135000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3ff84468b9a8d502b2ba44f3603dd135"
+  },
+  {
+    "bare_hex": "01000000000000003d0200000000000000110605616c7068610908072276616c756522220605636166c3a91a19187b22636f756e74223a372c227265616479223a747275657d",
+    "case": "metadata/ordered/vec-one",
+    "deserialize_hash": "3ff84468b9a8d502b2ba44f3603dd135",
+    "frame_hex": "4e52543000003ff84468b9a8d502b2ba44f3603dd135004600000000000000f5e44e5ea03b25900201000000000000003d0200000000000000110605616c7068610908072276616c756522220605636166c3a91a19187b22636f756e74223a372c227265616479223a747275657d",
+    "nominal": "alloc::vec::Vec<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "3ff84468b9a8d502b2ba44f3603dd135"
+  },
+  {
+    "bare_hex": "b3c261fc015783b7f03202f9d69fbda8e89630ed99d01e4704d2c38b46f585ab",
+    "case": "metadata/ordered/hash-of",
+    "deserialize_hash": "43b3ee223d6be0211dcbcd5b0b01638b",
+    "frame_hex": "4e525430000043b3ee223d6be0211dcbcd5b0b01638b00200000000000000071cbdb15c212084900b3c261fc015783b7f03202f9d69fbda8e89630ed99d01e4704d2c38b46f585ab",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "43b3ee223d6be0211dcbcd5b0b01638b"
+  },
+  {
+    "bare_hex": "4000000000000000010b01f801d801e1010e01d901fb017201aa0116018d01660150013e01c901e90193015201b001c7010c015a012a017a017d01af01f801d8014e01d101e6013201250195018d018b012001df01e501e0014f011b017901c801de015001f9010b01ac012601c201f401e20192013801dd01880149016d01ce019201c9019b0104",
+    "case": "metadata/ordered/signature-of",
+    "deserialize_hash": "cdabc7d1a08320d2049f473a176e23a1",
+    "frame_hex": "4e5254300000cdabc7d1a08320d2049f473a176e23a10088000000000000009933acaf3dcb81b0024000000000000000010b01f801d801e1010e01d901fb017201aa0116018d01660150013e01c901e90193015201b001c7010c015a012a017a017d01af01f801d8014e01d101e6013201250195018d018b012001df01e501e0014f011b017901c801de015001f9010b01ac012601c201f401e20192013801dd01880149016d01ce019201c9019b0104",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::metadata::model::Metadata>",
+    "serialize_hash": "cdabc7d1a08320d2049f473a176e23a1"
+  },
+  {
+    "bare_hex": "0f0e626173652d666978747572652d31",
+    "case": "chain",
+    "deserialize_hash": "4148e55b568f703a5f17c68dfef7c710",
+    "frame_hex": "4e52543000004148e55b568f703a5f17c68dfef7c710001000000000000000589793d4333cb316020f0e626173652d666978747572652d31",
+    "json": "\"base-fixture-1\"",
+    "nominal": "iroha_data_model::id::model::ChainId",
+    "schema": {
+      "ChainId": "String",
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ChainId",
+        "name": "ChainId"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "ChainId",
+    "schema_type_name": "ChainId",
+    "serialize_hash": "4148e55b568f703a5f17c68dfef7c710"
+  },
+  {
+    "bare_hex": "00",
+    "case": "chain/option-none",
+    "deserialize_hash": "700c844a639c07bc4f372ced43f84125",
+    "frame_hex": "4e5254300000700c844a639c07bc4f372ced43f84125000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::id::model::ChainId>",
+    "serialize_hash": "700c844a639c07bc4f372ced43f84125"
+  },
+  {
+    "bare_hex": "01100f0e626173652d666978747572652d31",
+    "case": "chain/option-some",
+    "deserialize_hash": "700c844a639c07bc4f372ced43f84125",
+    "frame_hex": "4e5254300000700c844a639c07bc4f372ced43f84125001200000000000000f327b1405d6918420201100f0e626173652d666978747572652d31",
+    "nominal": "core::option::Option<iroha_data_model::id::model::ChainId>",
+    "serialize_hash": "700c844a639c07bc4f372ced43f84125"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "chain/vec-empty",
+    "deserialize_hash": "bb01c95f11c51e0af2de04594c8e6f06",
+    "frame_hex": "4e5254300000bb01c95f11c51e0af2de04594c8e6f06000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::id::model::ChainId>",
+    "serialize_hash": "bb01c95f11c51e0af2de04594c8e6f06"
+  },
+  {
+    "bare_hex": "0100000000000000100f0e626173652d666978747572652d31",
+    "case": "chain/vec-one",
+    "deserialize_hash": "bb01c95f11c51e0af2de04594c8e6f06",
+    "frame_hex": "4e5254300000bb01c95f11c51e0af2de04594c8e6f060019000000000000005021d1637ecf7233020100000000000000100f0e626173652d666978747572652d31",
+    "nominal": "alloc::vec::Vec<iroha_data_model::id::model::ChainId>",
+    "serialize_hash": "bb01c95f11c51e0af2de04594c8e6f06"
+  },
+  {
+    "bare_hex": "30a400c5e2dd4e9e716856dc1c77e19fdf2a3b2e5f4a4552d216d67731a9c599",
+    "case": "chain/hash-of",
+    "deserialize_hash": "22e0f221aca6eae6b4041aea487389fa",
+    "frame_hex": "4e525430000022e0f221aca6eae6b4041aea487389fa0020000000000000002e7979eedb45c4d70030a400c5e2dd4e9e716856dc1c77e19fdf2a3b2e5f4a4552d216d67731a9c599",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::id::model::ChainId>",
+    "serialize_hash": "22e0f221aca6eae6b4041aea487389fa"
+  },
+  {
+    "bare_hex": "400000000000000001b0019d01ce019401e7015301b6011f0146015101050178015801f801c60148014b01fa017d014e01f201bc011e01bc01e80146015d015b018101fe01b00154015d01f1012301550129017b01fa019601c7015e01dc014f01b9014001d3013a0140010101cb012801270186012701a801da018101aa019a018101f701c9010d",
+    "case": "chain/signature-of",
+    "deserialize_hash": "e7750716598180caf47f54f5c5de401a",
+    "frame_hex": "4e5254300000e7750716598180caf47f54f5c5de401a0088000000000000009cbc2dae56ab712e02400000000000000001b0019d01ce019401e7015301b6011f0146015101050178015801f801c60148014b01fa017d014e01f201bc011e01bc01e80146015d015b018101fe01b00154015d01f1012301550129017b01fa019601c7015e01dc014f01b9014001d3013a0140010101cb012801270186012701a801da018101aa019a018101f701c9010d",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::id::model::ChainId>",
+    "serialize_hash": "e7750716598180caf47f54f5c5de401a"
+  },
+  {
+    "bare_hex": "000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "account/single",
+    "deserialize_hash": "60e81473aed0a1276f1c5776d0f69c38",
+    "frame_hex": "4e525430000060e81473aed0a1276f1c5776d0f69c38004f00000000000000ca62eb8bc185dd4a02000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "json": "\"testuﾛ1Pﾚ5Sg5ﾁﾘELWUfd58ﾂQjcKVﾙﾈ9vM9L2EKﾓﾘﾍ2ﾂｴﾗH71S3C\"",
+    "nominal": "iroha_data_model::account::model::AccountId",
+    "schema": {
+      "AccountController": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Single",
+            "type": "PublicKey"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Multisig",
+            "type": "MultisigPolicy"
+          }
+        ]
+      },
+      "AccountId": {
+        "Struct": [
+          {
+            "name": "controller",
+            "type": "AccountController"
+          }
+        ]
+      },
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AccountController",
+        "name": "AccountController"
+      },
+      {
+        "id": "AccountId",
+        "name": "AccountId"
+      },
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AccountId",
+    "schema_type_name": "AccountId",
+    "serialize_hash": "60e81473aed0a1276f1c5776d0f69c38",
+    "storage_key_json": "\"testuﾛ1Pﾚ5Sg5ﾁﾘELWUfd58ﾂQjcKVﾙﾈ9vM9L2EKﾓﾘﾍ2ﾂｴﾗH71S3C\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "account/single/option-none",
+    "deserialize_hash": "a316a0433cccf8646ec0015d0b2d17a7",
+    "frame_hex": "4e5254300000a316a0433cccf8646ec0015d0b2d17a7000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "a316a0433cccf8646ec0015d0b2d17a7"
+  },
+  {
+    "bare_hex": "014f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "account/single/option-some",
+    "deserialize_hash": "a316a0433cccf8646ec0015d0b2d17a7",
+    "frame_hex": "4e5254300000a316a0433cccf8646ec0015d0b2d17a7005100000000000000f1209cb630af4cc302014f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "nominal": "core::option::Option<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "a316a0433cccf8646ec0015d0b2d17a7"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "account/single/vec-empty",
+    "deserialize_hash": "33676b8e5ec849d12fa83cc716d26a72",
+    "frame_hex": "4e525430000033676b8e5ec849d12fa83cc716d26a72000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "33676b8e5ec849d12fa83cc716d26a72"
+  },
+  {
+    "bare_hex": "01000000000000004f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "account/single/vec-one",
+    "deserialize_hash": "33676b8e5ec849d12fa83cc716d26a72",
+    "frame_hex": "4e525430000033676b8e5ec849d12fa83cc716d26a7200580000000000000018267d8feb2d439b0201000000000000004f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "33676b8e5ec849d12fa83cc716d26a72"
+  },
+  {
+    "bare_hex": "769c3bc3c6060baa30c25e40e3de8d2fa04502f32e2a14507f389a64f294df85",
+    "case": "account/single/hash-of",
+    "deserialize_hash": "5ab04c2863b1c6a49774b11fec856738",
+    "frame_hex": "4e52543000005ab04c2863b1c6a49774b11fec856738002000000000000000d5cc56100138c9e800769c3bc3c6060baa30c25e40e3de8d2fa04502f32e2a14507f389a64f294df85",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "5ab04c2863b1c6a49774b11fec856738"
+  },
+  {
+    "bare_hex": "40000000000000000174016b01850121013d01b6016901ee014101fb018c01550158019201c4013201c50168018f01dd0153018e010d01db0196018b01d801bf0131013701ff012701f4014701e1013701fe012701ea01f4016401d601b7018401100158012701f7010b016501a601d801fc01d901ef01b101780187018f01d10190012301a30106",
+    "case": "account/single/signature-of",
+    "deserialize_hash": "34f11016c495707663d7f5d0f71b86a0",
+    "frame_hex": "4e525430000034f11016c495707663d7f5d0f71b86a000880000000000000039747f37d8f0171e0240000000000000000174016b01850121013d01b6016901ee014101fb018c01550158019201c4013201c50168018f01dd0153018e010d01db0196018b01d801bf0131013701ff012701f4014701e1013701fe012701ea01f4016401d601b7018401100158012701f7010b016501a601d801fc01d901ef01b101780187018f01d10190012301a30106",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "34f11016c495707663d7f5d0f71b86a0"
+  },
+  {
+    "bare_hex": "01000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "account/multisig",
+    "deserialize_hash": "60e81473aed0a1276f1c5776d0f69c38",
+    "frame_hex": "4e525430000060e81473aed0a1276f1c5776d0f69c3800b300000000000000106c552b0a032edc0201000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "json": "\"testmYXkｿuDｦMﾆHJﾚｻbｻｸ7b5wnﾒｷﾏﾅｾﾈEｷPｿ4ｼyNｾｻ3ﾘrﾗxﾚaﾏyｵNTｾｱﾄtｻdﾚkHｽEｸRｴｶCｿ1ｲhﾄEqﾐ3xXHﾋsBk5ﾔﾋｿﾍwfKﾇﾃﾇﾉJｾA3D32A\"",
+    "nominal": "iroha_data_model::account::model::AccountId",
+    "schema": {
+      "AccountController": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Single",
+            "type": "PublicKey"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Multisig",
+            "type": "MultisigPolicy"
+          }
+        ]
+      },
+      "AccountId": {
+        "Struct": [
+          {
+            "name": "controller",
+            "type": "AccountController"
+          }
+        ]
+      },
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AccountController",
+        "name": "AccountController"
+      },
+      {
+        "id": "AccountId",
+        "name": "AccountId"
+      },
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AccountId",
+    "schema_type_name": "AccountId",
+    "serialize_hash": "60e81473aed0a1276f1c5776d0f69c38",
+    "storage_key_json": "\"testmYXkｿuDｦMﾆHJﾚｻbｻｸ7b5wnﾒｷﾏﾅｾﾈEｷPｿ4ｼyNｾｻ3ﾘrﾗxﾚaﾏyｵNTｾｱﾄtｻdﾚkHｽEｸRｴｶCｿ1ｲhﾄEqﾐ3xXHﾋsBk5ﾔﾋｿﾍwfKﾇﾃﾇﾉJｾA3D32A\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "account/multisig/option-none",
+    "deserialize_hash": "a316a0433cccf8646ec0015d0b2d17a7",
+    "frame_hex": "4e5254300000a316a0433cccf8646ec0015d0b2d17a7000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "a316a0433cccf8646ec0015d0b2d17a7"
+  },
+  {
+    "bare_hex": "01b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "account/multisig/option-some",
+    "deserialize_hash": "a316a0433cccf8646ec0015d0b2d17a7",
+    "frame_hex": "4e5254300000a316a0433cccf8646ec0015d0b2d17a700b600000000000000824ae9ec83664d640201b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "core::option::Option<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "a316a0433cccf8646ec0015d0b2d17a7"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "account/multisig/vec-empty",
+    "deserialize_hash": "33676b8e5ec849d12fa83cc716d26a72",
+    "frame_hex": "4e525430000033676b8e5ec849d12fa83cc716d26a72000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "33676b8e5ec849d12fa83cc716d26a72"
+  },
+  {
+    "bare_hex": "0100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "account/multisig/vec-one",
+    "deserialize_hash": "33676b8e5ec849d12fa83cc716d26a72",
+    "frame_hex": "4e525430000033676b8e5ec849d12fa83cc716d26a7200bd000000000000004aa88d729a035686020100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "33676b8e5ec849d12fa83cc716d26a72"
+  },
+  {
+    "bare_hex": "1a97a37b0d4de2d7e123a8d4f32094e487083cce3fc6ca1aa447393b36726c47",
+    "case": "account/multisig/hash-of",
+    "deserialize_hash": "5ab04c2863b1c6a49774b11fec856738",
+    "frame_hex": "4e52543000005ab04c2863b1c6a49774b11fec8567380020000000000000002e915eab9a51a0b4001a97a37b0d4de2d7e123a8d4f32094e487083cce3fc6ca1aa447393b36726c47",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "5ab04c2863b1c6a49774b11fec856738"
+  },
+  {
+    "bare_hex": "400000000000000001780171014c01650174012e014401d80121018e015e0166011401ab015601c501fe0186012a0100018c01ba015d0106016d0112017401fc01ff016301fa01c801d901eb018a01ac01830122013101da0126010601f101f6014a010001ba011a01f4012d012d0154011a019301150186011d01d6018101eb01e9017801ba0106",
+    "case": "account/multisig/signature-of",
+    "deserialize_hash": "34f11016c495707663d7f5d0f71b86a0",
+    "frame_hex": "4e525430000034f11016c495707663d7f5d0f71b86a0008800000000000000e549d3be5c4c3a3502400000000000000001780171014c01650174012e014401d80121018e015e0166011401ab015601c501fe0186012a0100018c01ba015d0106016d0112017401fc01ff016301fa01c801d901eb018a01ac01830122013101da0126010601f101f6014a010001ba011a01f4012d012d0154011a019301150186011d01d6018101eb01e9017801ba0106",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::model::AccountId>",
+    "serialize_hash": "34f11016c495707663d7f5d0f71b86a0"
+  },
+  {
+    "bare_hex": "000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "controller/single",
+    "deserialize_hash": "b571a66ddb6651e0acd855f0289b139e",
+    "frame_hex": "4e5254300000b571a66ddb6651e0acd855f0289b139e004f00000000000000ca62eb8bc185dd4a02000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "json": "{\"kind\":\"Single\",\"payload\":\"ed0120C168292026FB43C14710B1D1964F75B44DD35CDBEF0F8654985BADA778FCBCE8\"}",
+    "nominal": "iroha_data_model::account::controller::AccountController",
+    "schema": {
+      "AccountController": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Single",
+            "type": "PublicKey"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Multisig",
+            "type": "MultisigPolicy"
+          }
+        ]
+      },
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AccountController",
+        "name": "AccountController"
+      },
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AccountController",
+    "schema_type_name": "AccountController",
+    "serialize_hash": "b571a66ddb6651e0acd855f0289b139e"
+  },
+  {
+    "bare_hex": "00",
+    "case": "controller/single/option-none",
+    "deserialize_hash": "fda2075acb3b713973b885d111b69469",
+    "frame_hex": "4e5254300000fda2075acb3b713973b885d111b69469000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fda2075acb3b713973b885d111b69469"
+  },
+  {
+    "bare_hex": "014f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "controller/single/option-some",
+    "deserialize_hash": "fda2075acb3b713973b885d111b69469",
+    "frame_hex": "4e5254300000fda2075acb3b713973b885d111b69469005100000000000000f1209cb630af4cc302014f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fda2075acb3b713973b885d111b69469"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "controller/single/vec-empty",
+    "deserialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb",
+    "frame_hex": "4e5254300000fc8c6da26f5ab4fbbf91bf12d0776ecb000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb"
+  },
+  {
+    "bare_hex": "01000000000000004f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "controller/single/vec-one",
+    "deserialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb",
+    "frame_hex": "4e5254300000fc8c6da26f5ab4fbbf91bf12d0776ecb00580000000000000018267d8feb2d439b0201000000000000004f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb"
+  },
+  {
+    "bare_hex": "769c3bc3c6060baa30c25e40e3de8d2fa04502f32e2a14507f389a64f294df85",
+    "case": "controller/single/hash-of",
+    "deserialize_hash": "d588911fe5baf777b988e645b0b941e1",
+    "frame_hex": "4e5254300000d588911fe5baf777b988e645b0b941e1002000000000000000d5cc56100138c9e800769c3bc3c6060baa30c25e40e3de8d2fa04502f32e2a14507f389a64f294df85",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "d588911fe5baf777b988e645b0b941e1"
+  },
+  {
+    "bare_hex": "40000000000000000174016b01850121013d01b6016901ee014101fb018c01550158019201c4013201c50168018f01dd0153018e010d01db0196018b01d801bf0131013701ff012701f4014701e1013701fe012701ea01f4016401d601b7018401100158012701f7010b016501a601d801fc01d901ef01b101780187018f01d10190012301a30106",
+    "case": "controller/single/signature-of",
+    "deserialize_hash": "8eeafe140d1e44065fcdabadd039cdb7",
+    "frame_hex": "4e52543000008eeafe140d1e44065fcdabadd039cdb700880000000000000039747f37d8f0171e0240000000000000000174016b01850121013d01b6016901ee014101fb018c01550158019201c4013201c50168018f01dd0153018e010d01db0196018b01d801bf0131013701ff012701f4014701e1013701fe012701ea01f4016401d601b7018401100158012701f7010b016501a601d801fc01d901ef01b101780187018f01d10190012301a30106",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "8eeafe140d1e44065fcdabadd039cdb7"
+  },
+  {
+    "bare_hex": "01000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "controller/multisig",
+    "deserialize_hash": "b571a66ddb6651e0acd855f0289b139e",
+    "frame_hex": "4e5254300000b571a66ddb6651e0acd855f0289b139e00b300000000000000106c552b0a032edc0201000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "json": "{\"kind\":\"Multisig\",\"payload\":{\"version\":1,\"threshold\":2,\"members\":[{\"public_key\":\"ed0120B3A12109421891F8509D0B19F0A7E90BED3052D13427BACD5BDC2373CFCE80DC\",\"weight\":1},{\"public_key\":\"ed0120C168292026FB43C14710B1D1964F75B44DD35CDBEF0F8654985BADA778FCBCE8\",\"weight\":2}]}}",
+    "nominal": "iroha_data_model::account::controller::AccountController",
+    "schema": {
+      "AccountController": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Single",
+            "type": "PublicKey"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Multisig",
+            "type": "MultisigPolicy"
+          }
+        ]
+      },
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AccountController",
+        "name": "AccountController"
+      },
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AccountController",
+    "schema_type_name": "AccountController",
+    "serialize_hash": "b571a66ddb6651e0acd855f0289b139e"
+  },
+  {
+    "bare_hex": "00",
+    "case": "controller/multisig/option-none",
+    "deserialize_hash": "fda2075acb3b713973b885d111b69469",
+    "frame_hex": "4e5254300000fda2075acb3b713973b885d111b69469000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fda2075acb3b713973b885d111b69469"
+  },
+  {
+    "bare_hex": "01b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "controller/multisig/option-some",
+    "deserialize_hash": "fda2075acb3b713973b885d111b69469",
+    "frame_hex": "4e5254300000fda2075acb3b713973b885d111b6946900b600000000000000824ae9ec83664d640201b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fda2075acb3b713973b885d111b69469"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "controller/multisig/vec-empty",
+    "deserialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb",
+    "frame_hex": "4e5254300000fc8c6da26f5ab4fbbf91bf12d0776ecb000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb"
+  },
+  {
+    "bare_hex": "0100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "controller/multisig/vec-one",
+    "deserialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb",
+    "frame_hex": "4e5254300000fc8c6da26f5ab4fbbf91bf12d0776ecb00bd000000000000004aa88d729a035686020100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "fc8c6da26f5ab4fbbf91bf12d0776ecb"
+  },
+  {
+    "bare_hex": "1a97a37b0d4de2d7e123a8d4f32094e487083cce3fc6ca1aa447393b36726c47",
+    "case": "controller/multisig/hash-of",
+    "deserialize_hash": "d588911fe5baf777b988e645b0b941e1",
+    "frame_hex": "4e5254300000d588911fe5baf777b988e645b0b941e10020000000000000002e915eab9a51a0b4001a97a37b0d4de2d7e123a8d4f32094e487083cce3fc6ca1aa447393b36726c47",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "d588911fe5baf777b988e645b0b941e1"
+  },
+  {
+    "bare_hex": "400000000000000001780171014c01650174012e014401d80121018e015e0166011401ab015601c501fe0186012a0100018c01ba015d0106016d0112017401fc01ff016301fa01c801d901eb018a01ac01830122013101da0126010601f101f6014a010001ba011a01f4012d012d0154011a019301150186011d01d6018101eb01e9017801ba0106",
+    "case": "controller/multisig/signature-of",
+    "deserialize_hash": "8eeafe140d1e44065fcdabadd039cdb7",
+    "frame_hex": "4e52543000008eeafe140d1e44065fcdabadd039cdb7008800000000000000e549d3be5c4c3a3502400000000000000001780171014c01650174012e014401d80121018e015e0166011401ab015601c501fe0186012a0100018c01ba015d0106016d0112017401fc01ff016301fa01c801d901eb018a01ac01830122013101da0126010601f101f6014a010001ba011a01f4012d012d0154011a019301150186011d01d6018101eb01e9017801ba0106",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::controller::AccountController>",
+    "serialize_hash": "8eeafe140d1e44065fcdabadd039cdb7"
+  },
+  {
+    "bare_hex": "0101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "multisig-policy",
+    "deserialize_hash": "6e8fbc3943cab694084bd8d398e3d769",
+    "frame_hex": "4e52543000006e8fbc3943cab694084bd8d398e3d76900ad000000000000009e6e5b3d313464ca020101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "json": "{\"version\":1,\"threshold\":2,\"members\":[{\"public_key\":\"ed0120B3A12109421891F8509D0B19F0A7E90BED3052D13427BACD5BDC2373CFCE80DC\",\"weight\":1},{\"public_key\":\"ed0120C168292026FB43C14710B1D1964F75B44DD35CDBEF0F8654985BADA778FCBCE8\",\"weight\":2}]}",
+    "nominal": "iroha_data_model::account::controller::MultisigPolicy",
+    "schema": {
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "MultisigPolicy",
+    "schema_type_name": "MultisigPolicy",
+    "serialize_hash": "6e8fbc3943cab694084bd8d398e3d769"
+  },
+  {
+    "bare_hex": "00",
+    "case": "multisig-policy/option-none",
+    "deserialize_hash": "1246da2cdbe309d7d4d02e5a2427e9db",
+    "frame_hex": "4e52543000001246da2cdbe309d7d4d02e5a2427e9db000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::MultisigPolicy>",
+    "serialize_hash": "1246da2cdbe309d7d4d02e5a2427e9db"
+  },
+  {
+    "bare_hex": "01ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "multisig-policy/option-some",
+    "deserialize_hash": "1246da2cdbe309d7d4d02e5a2427e9db",
+    "frame_hex": "4e52543000001246da2cdbe309d7d4d02e5a2427e9db00b00000000000000099780e7c92310df70201ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::MultisigPolicy>",
+    "serialize_hash": "1246da2cdbe309d7d4d02e5a2427e9db"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "multisig-policy/vec-empty",
+    "deserialize_hash": "f21b59c40edf13822d9f4e853262146f",
+    "frame_hex": "4e5254300000f21b59c40edf13822d9f4e853262146f000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::MultisigPolicy>",
+    "serialize_hash": "f21b59c40edf13822d9f4e853262146f"
+  },
+  {
+    "bare_hex": "0100000000000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "multisig-policy/vec-one",
+    "deserialize_hash": "f21b59c40edf13822d9f4e853262146f",
+    "frame_hex": "4e5254300000f21b59c40edf13822d9f4e853262146f00b700000000000000acab301c98c7de9f020100000000000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::MultisigPolicy>",
+    "serialize_hash": "f21b59c40edf13822d9f4e853262146f"
+  },
+  {
+    "bare_hex": "09afd959c8c0a3edf4385c7345672f447521f4ba50264732817a93d89c5e8415",
+    "case": "multisig-policy/hash-of",
+    "deserialize_hash": "75f0ecb2c092bb865a5f8e95f05f1ad2",
+    "frame_hex": "4e525430000075f0ecb2c092bb865a5f8e95f05f1ad200200000000000000064a101561d8384090009afd959c8c0a3edf4385c7345672f447521f4ba50264732817a93d89c5e8415",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::controller::MultisigPolicy>",
+    "serialize_hash": "75f0ecb2c092bb865a5f8e95f05f1ad2"
+  },
+  {
+    "bare_hex": "4000000000000000011f0152017b014601310149017a012f01210160014801a7019401ed01df0140018b0174012f015701f301b201ec013701c301e1011601d0014c01ce019b014a01590106015c01e8011b01f2016a0100015f015a01ac011d0176012c01990100010001c801fc01bd019a014c01ec013101730187019a01b60136018001890105",
+    "case": "multisig-policy/signature-of",
+    "deserialize_hash": "dd103fbc37256243b734a6ae2e7eb544",
+    "frame_hex": "4e5254300000dd103fbc37256243b734a6ae2e7eb5440088000000000000000e51342456d350fe024000000000000000011f0152017b014601310149017a012f01210160014801a7019401ed01df0140018b0174012f015701f301b201ec013701c301e1011601d0014c01ce019b014a01590106015c01e8011b01f2016a0100015f015a01ac011d0176012c01990100010001c801fc01bd019a014c01ec013101730187019a01b60136018001890105",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::controller::MultisigPolicy>",
+    "serialize_hash": "dd103fbc37256243b734a6ae2e7eb544"
+  },
+  {
+    "bare_hex": "4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "multisig-member",
+    "deserialize_hash": "27f767706f57957d2da2f9e79b0c704f",
+    "frame_hex": "4e525430000027f767706f57957d2da2f9e79b0c704f004e0000000000000015b8d7d31e3b1eab024a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "json": "{\"public_key\":\"ed0120C168292026FB43C14710B1D1964F75B44DD35CDBEF0F8654985BADA778FCBCE8\",\"weight\":2}",
+    "nominal": "iroha_data_model::account::controller::MultisigMember",
+    "schema": {
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "MultisigMember",
+    "schema_type_name": "MultisigMember",
+    "serialize_hash": "27f767706f57957d2da2f9e79b0c704f"
+  },
+  {
+    "bare_hex": "00",
+    "case": "multisig-member/option-none",
+    "deserialize_hash": "90f88c3fd485618f930a2a2086967436",
+    "frame_hex": "4e525430000090f88c3fd485618f930a2a2086967436000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::MultisigMember>",
+    "serialize_hash": "90f88c3fd485618f930a2a2086967436"
+  },
+  {
+    "bare_hex": "014e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "multisig-member/option-some",
+    "deserialize_hash": "90f88c3fd485618f930a2a2086967436",
+    "frame_hex": "4e525430000090f88c3fd485618f930a2a2086967436005000000000000000e9cb96eefe62cf0d02014e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "core::option::Option<iroha_data_model::account::controller::MultisigMember>",
+    "serialize_hash": "90f88c3fd485618f930a2a2086967436"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "multisig-member/vec-empty",
+    "deserialize_hash": "c259c83615cc08f6f66acb86b9d7a811",
+    "frame_hex": "4e5254300000c259c83615cc08f6f66acb86b9d7a811000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::MultisigMember>",
+    "serialize_hash": "c259c83615cc08f6f66acb86b9d7a811"
+  },
+  {
+    "bare_hex": "01000000000000004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "case": "multisig-member/vec-one",
+    "deserialize_hash": "c259c83615cc08f6f66acb86b9d7a811",
+    "frame_hex": "4e5254300000c259c83615cc08f6f66acb86b9d7a811005700000000000000ae84b6a4781edfce0201000000000000004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::controller::MultisigMember>",
+    "serialize_hash": "c259c83615cc08f6f66acb86b9d7a811"
+  },
+  {
+    "bare_hex": "07f6bb1d6186feeedbda2d22ee9051288962facb34a64a43d8b5f60cd8bf4a65",
+    "case": "multisig-member/hash-of",
+    "deserialize_hash": "9cb903df69e1a08f566b6b9c2950b36b",
+    "frame_hex": "4e52543000009cb903df69e1a08f566b6b9c2950b36b00200000000000000080bb2f94dc90ac8a0007f6bb1d6186feeedbda2d22ee9051288962facb34a64a43d8b5f60cd8bf4a65",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::controller::MultisigMember>",
+    "serialize_hash": "9cb903df69e1a08f566b6b9c2950b36b"
+  },
+  {
+    "bare_hex": "4000000000000000018501c30106012c01da0153015301ca017901f6015e016001f201f001f60190010001f1019f015401bd01c001d301be017d018e01c601e301d201db01a10108012401b401eb0116011801c301ad019901d70147018301e901a2019701e701250129019401e701360112018001bc014801da018101c6018301460150016b010d",
+    "case": "multisig-member/signature-of",
+    "deserialize_hash": "47dfabed74eaa1b6df6991bc17604e0c",
+    "frame_hex": "4e525430000047dfabed74eaa1b6df6991bc17604e0c008800000000000000c55496ba2dfcfa0e024000000000000000018501c30106012c01da0153015301ca017901f6015e016001f201f001f60190010001f1019f015401bd01c001d301be017d018e01c601e301d201db01a10108012401b401eb0116011801c301ad019901d70147018301e901a2019701e701250129019401e701360112018001bc014801da018101c6018301460150016b010d",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::controller::MultisigMember>",
+    "serialize_hash": "47dfabed74eaa1b6df6991bc17604e0c"
+  },
+  {
+    "bare_hex": "240000000000000002000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "case": "address/single",
+    "deserialize_hash": "4f8dab7e89b01a7acf0d3f29bf070524",
+    "frame_hex": "4e52543000004f8dab7e89b01a7acf0d3f29bf070524002c000000000000004aa4cfcd28b6aadc00240000000000000002000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "json": "\"0x02000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8\"",
+    "nominal": "iroha_data_model::account::address::AccountAddress",
+    "schema": {
+      "AccountAddress": {
+        "Vec": "u8"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "iroha_data_model::account::address::AccountAddress",
+        "name": "AccountAddress"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "iroha_data_model::account::address::AccountAddress",
+    "schema_type_name": "AccountAddress",
+    "serialize_hash": "4f8dab7e89b01a7acf0d3f29bf070524"
+  },
+  {
+    "bare_hex": "00",
+    "case": "address/single/option-none",
+    "deserialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf",
+    "frame_hex": "4e525430000020f8cba1d61b8b25d828f7b2ca131bdf000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf"
+  },
+  {
+    "bare_hex": "012c240000000000000002000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "case": "address/single/option-some",
+    "deserialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf",
+    "frame_hex": "4e525430000020f8cba1d61b8b25d828f7b2ca131bdf002e0000000000000043c953bfe8ff858702012c240000000000000002000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "nominal": "core::option::Option<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "address/single/vec-empty",
+    "deserialize_hash": "64ddbb7489d53be64f5b13cf6845a221",
+    "frame_hex": "4e525430000064ddbb7489d53be64f5b13cf6845a221000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "64ddbb7489d53be64f5b13cf6845a221"
+  },
+  {
+    "bare_hex": "01000000000000002c240000000000000002000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "case": "address/single/vec-one",
+    "deserialize_hash": "64ddbb7489d53be64f5b13cf6845a221",
+    "frame_hex": "4e525430000064ddbb7489d53be64f5b13cf6845a221003500000000000000cb1370842a86b4f30201000000000000002c240000000000000002000120c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "64ddbb7489d53be64f5b13cf6845a221"
+  },
+  {
+    "bare_hex": "18fce870d3e21119e06685e07e72ab967cac92da1457a84cbebdbd9b49d79da3",
+    "case": "address/single/hash-of",
+    "deserialize_hash": "63b5354f50bfe5de86c2cb60895dbb38",
+    "frame_hex": "4e525430000063b5354f50bfe5de86c2cb60895dbb380020000000000000009a39d46f726acfc00018fce870d3e21119e06685e07e72ab967cac92da1457a84cbebdbd9b49d79da3",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "63b5354f50bfe5de86c2cb60895dbb38"
+  },
+  {
+    "bare_hex": "400000000000000001aa01c6018b0150018a01df01840187018b01c8014e01b8019f0182018b019c01fa01bc012f01dd01e70133018a01a00161011601cb01c6015a010201e7013f01ef011601a801e00101014001360140016b01df011701aa017101d301fe01a301f0012101f8014e01ee0103011101fd01ac01b301ee013a01ab01b7017c0107",
+    "case": "address/single/signature-of",
+    "deserialize_hash": "fd31b45ab9341095c05e6445eb9100a6",
+    "frame_hex": "4e5254300000fd31b45ab9341095c05e6445eb9100a6008800000000000000401636b853434b3702400000000000000001aa01c6018b0150018a01df01840187018b01c8014e01b8019f0182018b019c01fa01bc012f01dd01e70133018a01a00161011601cb01c6015a010201e7013f01ef011601a801e00101014001360140016b01df011701aa017101d301fe01a301f0012101f8014e01ee0103011101fd01ac01b301ee013a01ab01b7017c0107",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "fd31b45ab9341095c05e6445eb9100a6"
+  },
+  {
+    "bare_hex": "51000000000000000a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "case": "address/multisig",
+    "deserialize_hash": "4f8dab7e89b01a7acf0d3f29bf070524",
+    "frame_hex": "4e52543000004f8dab7e89b01a7acf0d3f29bf07052400590000000000000057dd430990e174560051000000000000000a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "json": "\"0x0a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8\"",
+    "nominal": "iroha_data_model::account::address::AccountAddress",
+    "schema": {
+      "AccountAddress": {
+        "Vec": "u8"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "iroha_data_model::account::address::AccountAddress",
+        "name": "AccountAddress"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "iroha_data_model::account::address::AccountAddress",
+    "schema_type_name": "AccountAddress",
+    "serialize_hash": "4f8dab7e89b01a7acf0d3f29bf070524"
+  },
+  {
+    "bare_hex": "00",
+    "case": "address/multisig/option-none",
+    "deserialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf",
+    "frame_hex": "4e525430000020f8cba1d61b8b25d828f7b2ca131bdf000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf"
+  },
+  {
+    "bare_hex": "015951000000000000000a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "case": "address/multisig/option-some",
+    "deserialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf",
+    "frame_hex": "4e525430000020f8cba1d61b8b25d828f7b2ca131bdf005b000000000000003eb88baa5f241cc702015951000000000000000a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "nominal": "core::option::Option<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "20f8cba1d61b8b25d828f7b2ca131bdf"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "address/multisig/vec-empty",
+    "deserialize_hash": "64ddbb7489d53be64f5b13cf6845a221",
+    "frame_hex": "4e525430000064ddbb7489d53be64f5b13cf6845a221000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "64ddbb7489d53be64f5b13cf6845a221"
+  },
+  {
+    "bare_hex": "01000000000000005951000000000000000a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "case": "address/multisig/vec-one",
+    "deserialize_hash": "64ddbb7489d53be64f5b13cf6845a221",
+    "frame_hex": "4e525430000064ddbb7489d53be64f5b13cf6845a2210062000000000000009a4d14cf4233644b0201000000000000005951000000000000000a0101000200020100010020b3a12109421891f8509d0b19f0a7e90bed3052d13427bacd5bdc2373cfce80dc0100020020c168292026fb43c14710b1d1964f75b44dd35cdbef0f8654985bada778fcbce8",
+    "nominal": "alloc::vec::Vec<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "64ddbb7489d53be64f5b13cf6845a221"
+  },
+  {
+    "bare_hex": "0e4ac55d53c7d18314b2177286e49b2751fec44592f9838ffbdae893a3c1bc17",
+    "case": "address/multisig/hash-of",
+    "deserialize_hash": "63b5354f50bfe5de86c2cb60895dbb38",
+    "frame_hex": "4e525430000063b5354f50bfe5de86c2cb60895dbb38002000000000000000d47cdeae28f2a6fb000e4ac55d53c7d18314b2177286e49b2751fec44592f9838ffbdae893a3c1bc17",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "63b5354f50bfe5de86c2cb60895dbb38"
+  },
+  {
+    "bare_hex": "400000000000000001be019e01b00160012d010b010c019001ec010e0182016801c201cf01ef0132012501e4011e010301240100010a010c019b019301ac01720114017101d001c901e00155015c01c401e2017201ec01760191013d01930174013f013e0185010301c40154012501c2011b01f701d001720121017f01c801f201a501d901da0108",
+    "case": "address/multisig/signature-of",
+    "deserialize_hash": "fd31b45ab9341095c05e6445eb9100a6",
+    "frame_hex": "4e5254300000fd31b45ab9341095c05e6445eb9100a6008800000000000000f022fd512d7f53e102400000000000000001be019e01b00160012d010b010c019001ec010e0182016801c201cf01ef0132012501e4011e010301240100010a010c019b019301ac01720114017101d001c901e00155015c01c401e2017201ec01760191013d01930174013f013e0185010301c40154012501c2011b01f701d001720121017f01c801f201a501d901da0108",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::account::address::AccountAddress>",
+    "serialize_hash": "fd31b45ab9341095c05e6445eb9100a6"
+  },
+  {
+    "bare_hex": "08076172636869766507067061796e6574",
+    "case": "domain",
+    "deserialize_hash": "044c225b83d013da67e985809c84abcc",
+    "frame_hex": "4e5254300000044c225b83d013da67e985809c84abcc001100000000000000a114d9f8ff20f9390208076172636869766507067061796e6574",
+    "json": "\"archive.paynet\"",
+    "nominal": "iroha_data_model::domain::model::DomainId",
+    "schema": {
+      "DomainId": {
+        "Struct": [
+          {
+            "name": "name",
+            "type": "Name"
+          },
+          {
+            "name": "dataspace",
+            "type": "Name"
+          }
+        ]
+      },
+      "Name": "String",
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ConstString",
+        "name": "String"
+      },
+      {
+        "id": "DomainId",
+        "name": "DomainId"
+      },
+      {
+        "id": "Name",
+        "name": "Name"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "DomainId",
+    "schema_type_name": "DomainId",
+    "serialize_hash": "044c225b83d013da67e985809c84abcc",
+    "storage_key_json": "\"archive.paynet\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "domain/option-none",
+    "deserialize_hash": "d51f2427bce84a2a59dc414d9b268b5f",
+    "frame_hex": "4e5254300000d51f2427bce84a2a59dc414d9b268b5f000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::domain::model::DomainId>",
+    "serialize_hash": "d51f2427bce84a2a59dc414d9b268b5f"
+  },
+  {
+    "bare_hex": "011108076172636869766507067061796e6574",
+    "case": "domain/option-some",
+    "deserialize_hash": "d51f2427bce84a2a59dc414d9b268b5f",
+    "frame_hex": "4e5254300000d51f2427bce84a2a59dc414d9b268b5f001300000000000000ac402b2f84f16bae02011108076172636869766507067061796e6574",
+    "nominal": "core::option::Option<iroha_data_model::domain::model::DomainId>",
+    "serialize_hash": "d51f2427bce84a2a59dc414d9b268b5f"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "domain/vec-empty",
+    "deserialize_hash": "29a07abf729cffe8e169f7ac0976e918",
+    "frame_hex": "4e525430000029a07abf729cffe8e169f7ac0976e918000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::domain::model::DomainId>",
+    "serialize_hash": "29a07abf729cffe8e169f7ac0976e918"
+  },
+  {
+    "bare_hex": "01000000000000001108076172636869766507067061796e6574",
+    "case": "domain/vec-one",
+    "deserialize_hash": "29a07abf729cffe8e169f7ac0976e918",
+    "frame_hex": "4e525430000029a07abf729cffe8e169f7ac0976e918001a000000000000004e1c0ed22ef4ebdb0201000000000000001108076172636869766507067061796e6574",
+    "nominal": "alloc::vec::Vec<iroha_data_model::domain::model::DomainId>",
+    "serialize_hash": "29a07abf729cffe8e169f7ac0976e918"
+  },
+  {
+    "bare_hex": "fbabb865aa5941e6f002dcff580036e33e7efd3b41b86a33f729887a934c73e5",
+    "case": "domain/hash-of",
+    "deserialize_hash": "0c32ed1d9cb9837233c19bd902269c5a",
+    "frame_hex": "4e52543000000c32ed1d9cb9837233c19bd902269c5a00200000000000000007e71c082d62be8200fbabb865aa5941e6f002dcff580036e33e7efd3b41b86a33f729887a934c73e5",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::domain::model::DomainId>",
+    "serialize_hash": "0c32ed1d9cb9837233c19bd902269c5a"
+  },
+  {
+    "bare_hex": "40000000000000000176012901d2019d01bc01d4015501ad015e0183018a012401610184017b012b012401d601a3019601bc01c101b0013c012e016001e301bd010401950130011401f7012001ef01fd01e701b401f401d801e201890106018e01fd016201590119016d0182015601d601d00161018701c201b0013e015001e001a3014301e7010b",
+    "case": "domain/signature-of",
+    "deserialize_hash": "8901dde08669a73ce8d3daa193c29970",
+    "frame_hex": "4e52543000008901dde08669a73ce8d3daa193c2997000880000000000000083366321b87381d00240000000000000000176012901d2019d01bc01d4015501ad015e0183018a012401610184017b012b012401d601a3019601bc01c101b0013c012e016001e301bd010401950130011401f7012001ef01fd01e701b401f401d801e201890106018e01fd016201590119016d0182015601d601d00161018701c201b0013e015001e001a3014301e7010b",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::domain::model::DomainId>",
+    "serialize_hash": "8901dde08669a73ce8d3daa193c29970"
+  },
+  {
+    "bare_hex": "0136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e1",
+    "case": "asset-definition",
+    "deserialize_hash": "844f4acd5a7d4f3009aa588ba08a320f",
+    "frame_hex": "4e5254300000844f4acd5a7d4f3009aa588ba08a320f002000000000000000a0541493987b48d7020136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e1",
+    "json": "\"5KgdmwFZKnsbF7SwCLEBNtmYU7o8\"",
+    "nominal": "iroha_data_model::asset::id::model::AssetDefinitionId",
+    "schema": {
+      "Array<u8, 16>": {
+        "Array": {
+          "len": 16,
+          "type": "u8"
+        }
+      },
+      "AssetDefinitionId": {
+        "Struct": [
+          {
+            "name": "aid_bytes",
+            "type": "Array<u8, 16>"
+          }
+        ]
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "Array<u8, 16>",
+        "name": "Array<u8, 16>"
+      },
+      {
+        "id": "AssetDefinitionId",
+        "name": "AssetDefinitionId"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AssetDefinitionId",
+    "schema_type_name": "AssetDefinitionId",
+    "serialize_hash": "844f4acd5a7d4f3009aa588ba08a320f",
+    "storage_key_json": "\"5KgdmwFZKnsbF7SwCLEBNtmYU7o8\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "asset-definition/option-none",
+    "deserialize_hash": "adff671a31ef7e95e128ecc17d45ea41",
+    "frame_hex": "4e5254300000adff671a31ef7e95e128ecc17d45ea41000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetDefinitionId>",
+    "serialize_hash": "adff671a31ef7e95e128ecc17d45ea41"
+  },
+  {
+    "bare_hex": "01200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e1",
+    "case": "asset-definition/option-some",
+    "deserialize_hash": "adff671a31ef7e95e128ecc17d45ea41",
+    "frame_hex": "4e5254300000adff671a31ef7e95e128ecc17d45ea410022000000000000005f84fbb0be7e09e10201200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e1",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetDefinitionId>",
+    "serialize_hash": "adff671a31ef7e95e128ecc17d45ea41"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "asset-definition/vec-empty",
+    "deserialize_hash": "3e1a2a2d37fa89b15eee8e6b24b5b871",
+    "frame_hex": "4e52543000003e1a2a2d37fa89b15eee8e6b24b5b871000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetDefinitionId>",
+    "serialize_hash": "3e1a2a2d37fa89b15eee8e6b24b5b871"
+  },
+  {
+    "bare_hex": "0100000000000000200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e1",
+    "case": "asset-definition/vec-one",
+    "deserialize_hash": "3e1a2a2d37fa89b15eee8e6b24b5b871",
+    "frame_hex": "4e52543000003e1a2a2d37fa89b15eee8e6b24b5b871002900000000000000effd80bdcd13656d020100000000000000200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e1",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetDefinitionId>",
+    "serialize_hash": "3e1a2a2d37fa89b15eee8e6b24b5b871"
+  },
+  {
+    "bare_hex": "7308b2896020935dd46aee5fa98ef8dbafdb2b237087aeeaf77df5fa4556be05",
+    "case": "asset-definition/hash-of",
+    "deserialize_hash": "af21a8f455ec715424ff49db392edcc4",
+    "frame_hex": "4e5254300000af21a8f455ec715424ff49db392edcc40020000000000000009bf8ea8e8718ffea007308b2896020935dd46aee5fa98ef8dbafdb2b237087aeeaf77df5fa4556be05",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::asset::id::model::AssetDefinitionId>",
+    "serialize_hash": "af21a8f455ec715424ff49db392edcc4"
+  },
+  {
+    "bare_hex": "40000000000000000164019c01390192018501eb012a019b01630168010d01cc013b013f01b7018f01d901fe015c01e301ca015501ea01f80152012d0128011d01c1019401270102018a013601d40143017b01fd0157018601e901d301b401ca0130015601d801270185019a01ab013b018d01dc016c01ed0111014a01de01dc01cf011f01af0102",
+    "case": "asset-definition/signature-of",
+    "deserialize_hash": "7b1b53e1db7abb72a639ce5118e39b5d",
+    "frame_hex": "4e52543000007b1b53e1db7abb72a639ce5118e39b5d008800000000000000313f37c327c6c9480240000000000000000164019c01390192018501eb012a019b01630168010d01cc013b013f01b7018f01d901fe015c01e301ca015501ea01f80152012d0128011d01c1019401270102018a013601d40143017b01fd0157018601e901d301b401ca0130015601d801270185019a01ab013b018d01dc016c01ed0111014a01de01dc01cf011f01af0102",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::asset::id::model::AssetDefinitionId>",
+    "serialize_hash": "7b1b53e1db7abb72a639ce5118e39b5d"
+  },
+  {
+    "bare_hex": "00000000",
+    "case": "asset-scope/global",
+    "deserialize_hash": "220365ddd176452fdd4dda0ad42ea491",
+    "frame_hex": "4e5254300000220365ddd176452fdd4dda0ad42ea4910004000000000000004b9f1b1e3586a5f40000000000",
+    "json": "{\"kind\":\"Global\",\"content\":null}",
+    "nominal": "iroha_data_model::asset::id::model::AssetBalanceScope",
+    "schema": {
+      "AssetBalanceScope": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Global"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Dataspace",
+            "type": "DataSpaceId"
+          }
+        ]
+      },
+      "DataSpaceId": "u64",
+      "u64": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AssetBalanceScope",
+        "name": "AssetBalanceScope"
+      },
+      {
+        "id": "DataSpaceId",
+        "name": "DataSpaceId"
+      },
+      {
+        "id": "u64",
+        "name": "u64"
+      }
+    ],
+    "schema_type_id": "AssetBalanceScope",
+    "schema_type_name": "AssetBalanceScope",
+    "serialize_hash": "220365ddd176452fdd4dda0ad42ea491"
+  },
+  {
+    "bare_hex": "00",
+    "case": "asset-scope/global/option-none",
+    "deserialize_hash": "4d1a73db434a0bd8a248d1774f6814cd",
+    "frame_hex": "4e52543000004d1a73db434a0bd8a248d1774f6814cd000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "4d1a73db434a0bd8a248d1774f6814cd"
+  },
+  {
+    "bare_hex": "010400000000",
+    "case": "asset-scope/global/option-some",
+    "deserialize_hash": "4d1a73db434a0bd8a248d1774f6814cd",
+    "frame_hex": "4e52543000004d1a73db434a0bd8a248d1774f6814cd000600000000000000052ff8a6278eddd202010400000000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "4d1a73db434a0bd8a248d1774f6814cd"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "asset-scope/global/vec-empty",
+    "deserialize_hash": "186ef135a9e61791e67b089870c08594",
+    "frame_hex": "4e5254300000186ef135a9e61791e67b089870c08594000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "186ef135a9e61791e67b089870c08594"
+  },
+  {
+    "bare_hex": "01000000000000000400000000",
+    "case": "asset-scope/global/vec-one",
+    "deserialize_hash": "186ef135a9e61791e67b089870c08594",
+    "frame_hex": "4e5254300000186ef135a9e61791e67b089870c08594000d00000000000000fe225fcedf0347bf0201000000000000000400000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "186ef135a9e61791e67b089870c08594"
+  },
+  {
+    "bare_hex": "11da6d1f761ddf9bdb4c9d6e5303ebd41f61858d0a5647a1a7bfe089bf921be9",
+    "case": "asset-scope/global/hash-of",
+    "deserialize_hash": "ad60c261905cbced1011201596db60d1",
+    "frame_hex": "4e5254300000ad60c261905cbced1011201596db60d1002000000000000000f8eec7176336e33e0011da6d1f761ddf9bdb4c9d6e5303ebd41f61858d0a5647a1a7bfe089bf921be9",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "ad60c261905cbced1011201596db60d1"
+  },
+  {
+    "bare_hex": "400000000000000001bf01e20185013c014001b601d60152016d014f013e017501a10120019401fc01980154011c01e901860111019401e3017301650176012e015301c701450139018f019c01b7011a01f701d5018401b9019b0128010701c401c8018b01cd01d601990143015d01e3016301540128018401f201f7017b01ec01440113015f0100",
+    "case": "asset-scope/global/signature-of",
+    "deserialize_hash": "ac687ad7364d7d35a72f5fc6af6ddcd7",
+    "frame_hex": "4e5254300000ac687ad7364d7d35a72f5fc6af6ddcd7008800000000000000759dfd85437ea79f02400000000000000001bf01e20185013c014001b601d60152016d014f013e017501a10120019401fc01980154011c01e901860111019401e3017301650176012e015301c701450139018f019c01b7011a01f701d5018401b9019b0128010701c401c8018b01cd01d601990143015d01e3016301540128018401f201f7017b01ec01440113015f0100",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "ac687ad7364d7d35a72f5fc6af6ddcd7"
+  },
+  {
+    "bare_hex": "0100000009080700000000000000",
+    "case": "asset-scope/dataspace",
+    "deserialize_hash": "220365ddd176452fdd4dda0ad42ea491",
+    "frame_hex": "4e5254300000220365ddd176452fdd4dda0ad42ea491000e000000000000006c62216f90666d97020100000009080700000000000000",
+    "json": "{\"kind\":\"Dataspace\",\"content\":7}",
+    "nominal": "iroha_data_model::asset::id::model::AssetBalanceScope",
+    "schema": {
+      "AssetBalanceScope": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Global"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Dataspace",
+            "type": "DataSpaceId"
+          }
+        ]
+      },
+      "DataSpaceId": "u64",
+      "u64": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AssetBalanceScope",
+        "name": "AssetBalanceScope"
+      },
+      {
+        "id": "DataSpaceId",
+        "name": "DataSpaceId"
+      },
+      {
+        "id": "u64",
+        "name": "u64"
+      }
+    ],
+    "schema_type_id": "AssetBalanceScope",
+    "schema_type_name": "AssetBalanceScope",
+    "serialize_hash": "220365ddd176452fdd4dda0ad42ea491"
+  },
+  {
+    "bare_hex": "00",
+    "case": "asset-scope/dataspace/option-none",
+    "deserialize_hash": "4d1a73db434a0bd8a248d1774f6814cd",
+    "frame_hex": "4e52543000004d1a73db434a0bd8a248d1774f6814cd000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "4d1a73db434a0bd8a248d1774f6814cd"
+  },
+  {
+    "bare_hex": "010e0100000009080700000000000000",
+    "case": "asset-scope/dataspace/option-some",
+    "deserialize_hash": "4d1a73db434a0bd8a248d1774f6814cd",
+    "frame_hex": "4e52543000004d1a73db434a0bd8a248d1774f6814cd00100000000000000046237f3bb154520702010e0100000009080700000000000000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "4d1a73db434a0bd8a248d1774f6814cd"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "asset-scope/dataspace/vec-empty",
+    "deserialize_hash": "186ef135a9e61791e67b089870c08594",
+    "frame_hex": "4e5254300000186ef135a9e61791e67b089870c08594000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "186ef135a9e61791e67b089870c08594"
+  },
+  {
+    "bare_hex": "01000000000000000e0100000009080700000000000000",
+    "case": "asset-scope/dataspace/vec-one",
+    "deserialize_hash": "186ef135a9e61791e67b089870c08594",
+    "frame_hex": "4e5254300000186ef135a9e61791e67b089870c085940017000000000000000c87fab626efaa560201000000000000000e0100000009080700000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "186ef135a9e61791e67b089870c08594"
+  },
+  {
+    "bare_hex": "cf5a54829f2ab61fb6e7659b02df73c30a2da2d72c11074e44951bb91bdf1c8d",
+    "case": "asset-scope/dataspace/hash-of",
+    "deserialize_hash": "ad60c261905cbced1011201596db60d1",
+    "frame_hex": "4e5254300000ad60c261905cbced1011201596db60d1002000000000000000377a5e46fa4dda5500cf5a54829f2ab61fb6e7659b02df73c30a2da2d72c11074e44951bb91bdf1c8d",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "ad60c261905cbced1011201596db60d1"
+  },
+  {
+    "bare_hex": "4000000000000000010a014601e501dc01fd013e014401b7011b010c015d016601ff01f301df01f901a401170194013e01e901c5017b019d017701df01ff014601d5010501940107011901af01b001830164013d0132013701e501a201e8016b01a801e30130014d0191011b0133019c012a01a8012b019b016e0171011401660104011901420106",
+    "case": "asset-scope/dataspace/signature-of",
+    "deserialize_hash": "ac687ad7364d7d35a72f5fc6af6ddcd7",
+    "frame_hex": "4e5254300000ac687ad7364d7d35a72f5fc6af6ddcd70088000000000000007c4251c58ed65612024000000000000000010a014601e501dc01fd013e014401b7011b010c015d016601ff01f301df01f901a401170194013e01e901c5017b019d017701df01ff014601d5010501940107011901af01b001830164013d0132013701e501a201e8016b01a801e30130014d0191011b0133019c012a01a8012b019b016e0171011401660104011901420106",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::asset::id::model::AssetBalanceScope>",
+    "serialize_hash": "ac687ad7364d7d35a72f5fc6af6ddcd7"
+  },
+  {
+    "bare_hex": "4f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10400000000",
+    "case": "asset/global",
+    "deserialize_hash": "b9de622a568f518ac1422d7912703900",
+    "frame_hex": "4e5254300000b9de622a568f518ac1422d79127039000076000000000000007a606724396d3600024f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10400000000",
+    "json": "\"5KgdmwFZKnsbF7SwCLEBNtmYU7o8#testuﾛ1Pﾚ5Sg5ﾁﾘELWUfd58ﾂQjcKVﾙﾈ9vM9L2EKﾓﾘﾍ2ﾂｴﾗH71S3C\"",
+    "nominal": "iroha_data_model::asset::id::model::AssetId",
+    "schema": {
+      "AccountController": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Single",
+            "type": "PublicKey"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Multisig",
+            "type": "MultisigPolicy"
+          }
+        ]
+      },
+      "AccountId": {
+        "Struct": [
+          {
+            "name": "controller",
+            "type": "AccountController"
+          }
+        ]
+      },
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "Array<u8, 16>": {
+        "Array": {
+          "len": 16,
+          "type": "u8"
+        }
+      },
+      "AssetBalanceScope": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Global"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Dataspace",
+            "type": "DataSpaceId"
+          }
+        ]
+      },
+      "AssetDefinitionId": {
+        "Struct": [
+          {
+            "name": "aid_bytes",
+            "type": "Array<u8, 16>"
+          }
+        ]
+      },
+      "AssetId": {
+        "Struct": [
+          {
+            "name": "account",
+            "type": "AccountId"
+          },
+          {
+            "name": "definition",
+            "type": "AssetDefinitionId"
+          },
+          {
+            "name": "scope",
+            "type": "AssetBalanceScope"
+          }
+        ]
+      },
+      "DataSpaceId": "u64",
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u64": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AccountController",
+        "name": "AccountController"
+      },
+      {
+        "id": "AccountId",
+        "name": "AccountId"
+      },
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "Array<u8, 16>",
+        "name": "Array<u8, 16>"
+      },
+      {
+        "id": "AssetBalanceScope",
+        "name": "AssetBalanceScope"
+      },
+      {
+        "id": "AssetDefinitionId",
+        "name": "AssetDefinitionId"
+      },
+      {
+        "id": "AssetId",
+        "name": "AssetId"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "DataSpaceId",
+        "name": "DataSpaceId"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u64",
+        "name": "u64"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AssetId",
+    "schema_type_name": "AssetId",
+    "serialize_hash": "b9de622a568f518ac1422d7912703900",
+    "storage_key_json": "\"5KgdmwFZKnsbF7SwCLEBNtmYU7o8#testuﾛ1Pﾚ5Sg5ﾁﾘELWUfd58ﾂQjcKVﾙﾈ9vM9L2EKﾓﾘﾍ2ﾂｴﾗH71S3C\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "asset/global/option-none",
+    "deserialize_hash": "d6937eed24361b42e8ea6e54f05fa36d",
+    "frame_hex": "4e5254300000d6937eed24361b42e8ea6e54f05fa36d000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "d6937eed24361b42e8ea6e54f05fa36d"
+  },
+  {
+    "bare_hex": "01764f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10400000000",
+    "case": "asset/global/option-some",
+    "deserialize_hash": "d6937eed24361b42e8ea6e54f05fa36d",
+    "frame_hex": "4e5254300000d6937eed24361b42e8ea6e54f05fa36d00780000000000000035e0dd1e9dd9c47a0201764f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10400000000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "d6937eed24361b42e8ea6e54f05fa36d"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "asset/global/vec-empty",
+    "deserialize_hash": "f9e4bbecdc105f229910ec969a2899cf",
+    "frame_hex": "4e5254300000f9e4bbecdc105f229910ec969a2899cf000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "f9e4bbecdc105f229910ec969a2899cf"
+  },
+  {
+    "bare_hex": "0100000000000000764f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10400000000",
+    "case": "asset/global/vec-one",
+    "deserialize_hash": "f9e4bbecdc105f229910ec969a2899cf",
+    "frame_hex": "4e5254300000f9e4bbecdc105f229910ec969a2899cf007f000000000000001a4504de2d39c9e4020100000000000000764f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10400000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "f9e4bbecdc105f229910ec969a2899cf"
+  },
+  {
+    "bare_hex": "844832076b777953333fa92f7b6578a661c741aaa168e1315a3edd8ceaf8df97",
+    "case": "asset/global/hash-of",
+    "deserialize_hash": "731797df7fdc6279353bf75169839e42",
+    "frame_hex": "4e5254300000731797df7fdc6279353bf75169839e42002000000000000000328ffd7d7778532f00844832076b777953333fa92f7b6578a661c741aaa168e1315a3edd8ceaf8df97",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "731797df7fdc6279353bf75169839e42"
+  },
+  {
+    "bare_hex": "40000000000000000169015a0188011701eb0188010f01030172014f01e40124018901fc013c0190010701ee0168010c011d0115010a019d01a10130011a01b00175018d014e0121016c012c01af01f201c6018c012b011f016d015401fe019f013e01950105012101b00134013501ab016001b0017b0198010d01f401c2016401ad011901d10109",
+    "case": "asset/global/signature-of",
+    "deserialize_hash": "2e3fc7139cbdc8adce1498505984444e",
+    "frame_hex": "4e52543000002e3fc7139cbdc8adce1498505984444e00880000000000000082d9ae84d1ef15fc0240000000000000000169015a0188011701eb0188010f01030172014f01e40124018901fc013c0190010701ee0168010c011d0115010a019d01a10130011a01b00175018d014e0121016c012c01af01f201c6018c012b011f016d015401fe019f013e01950105012101b00134013501ab016001b0017b0198010d01f401c2016401ad011901d10109",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "2e3fc7139cbdc8adce1498505984444e"
+  },
+  {
+    "bare_hex": "b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10e0100000009080700000000000000",
+    "case": "asset/dataspace",
+    "deserialize_hash": "b9de622a568f518ac1422d7912703900",
+    "frame_hex": "4e5254300000b9de622a568f518ac1422d791270390000e500000000000000422791ee66b4504e02b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10e0100000009080700000000000000",
+    "json": "\"5KgdmwFZKnsbF7SwCLEBNtmYU7o8#testmYXkｿuDｦMﾆHJﾚｻbｻｸ7b5wnﾒｷﾏﾅｾﾈEｷPｿ4ｼyNｾｻ3ﾘrﾗxﾚaﾏyｵNTｾｱﾄtｻdﾚkHｽEｸRｴｶCｿ1ｲhﾄEqﾐ3xXHﾋsBk5ﾔﾋｿﾍwfKﾇﾃﾇﾉJｾA3D32A#dataspace:7\"",
+    "nominal": "iroha_data_model::asset::id::model::AssetId",
+    "schema": {
+      "AccountController": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Single",
+            "type": "PublicKey"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Multisig",
+            "type": "MultisigPolicy"
+          }
+        ]
+      },
+      "AccountId": {
+        "Struct": [
+          {
+            "name": "controller",
+            "type": "AccountController"
+          }
+        ]
+      },
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "Array<u8, 16>": {
+        "Array": {
+          "len": 16,
+          "type": "u8"
+        }
+      },
+      "AssetBalanceScope": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Global"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Dataspace",
+            "type": "DataSpaceId"
+          }
+        ]
+      },
+      "AssetDefinitionId": {
+        "Struct": [
+          {
+            "name": "aid_bytes",
+            "type": "Array<u8, 16>"
+          }
+        ]
+      },
+      "AssetId": {
+        "Struct": [
+          {
+            "name": "account",
+            "type": "AccountId"
+          },
+          {
+            "name": "definition",
+            "type": "AssetDefinitionId"
+          },
+          {
+            "name": "scope",
+            "type": "AssetBalanceScope"
+          }
+        ]
+      },
+      "DataSpaceId": "u64",
+      "MultisigMember": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          },
+          {
+            "name": "weight",
+            "type": "u16"
+          }
+        ]
+      },
+      "MultisigPolicy": {
+        "Struct": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "threshold",
+            "type": "u16"
+          },
+          {
+            "name": "members",
+            "type": "Vec<MultisigMember>"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<MultisigMember>": {
+        "Vec": "MultisigMember"
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u16": {
+        "Int": "FixedWidth"
+      },
+      "u64": {
+        "Int": "FixedWidth"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "AccountController",
+        "name": "AccountController"
+      },
+      {
+        "id": "AccountId",
+        "name": "AccountId"
+      },
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "Array<u8, 16>",
+        "name": "Array<u8, 16>"
+      },
+      {
+        "id": "AssetBalanceScope",
+        "name": "AssetBalanceScope"
+      },
+      {
+        "id": "AssetDefinitionId",
+        "name": "AssetDefinitionId"
+      },
+      {
+        "id": "AssetId",
+        "name": "AssetId"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "DataSpaceId",
+        "name": "DataSpaceId"
+      },
+      {
+        "id": "MultisigMember",
+        "name": "MultisigMember"
+      },
+      {
+        "id": "MultisigPolicy",
+        "name": "MultisigPolicy"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "Vec<MultisigMember>",
+        "name": "Vec<MultisigMember>"
+      },
+      {
+        "id": "u16",
+        "name": "u16"
+      },
+      {
+        "id": "u64",
+        "name": "u64"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "AssetId",
+    "schema_type_name": "AssetId",
+    "serialize_hash": "b9de622a568f518ac1422d7912703900",
+    "storage_key_json": "\"5KgdmwFZKnsbF7SwCLEBNtmYU7o8#testmYXkｿuDｦMﾆHJﾚｻbｻｸ7b5wnﾒｷﾏﾅｾﾈEｷPｿ4ｼyNｾｻ3ﾘrﾗxﾚaﾏyｵNTｾｱﾄtｻdﾚkHｽEｸRｴｶCｿ1ｲhﾄEqﾐ3xXHﾋsBk5ﾔﾋｿﾍwfKﾇﾃﾇﾉJｾA3D32A#dataspace:7\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "asset/dataspace/option-none",
+    "deserialize_hash": "d6937eed24361b42e8ea6e54f05fa36d",
+    "frame_hex": "4e5254300000d6937eed24361b42e8ea6e54f05fa36d000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "d6937eed24361b42e8ea6e54f05fa36d"
+  },
+  {
+    "bare_hex": "01e501b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10e0100000009080700000000000000",
+    "case": "asset/dataspace/option-some",
+    "deserialize_hash": "d6937eed24361b42e8ea6e54f05fa36d",
+    "frame_hex": "4e5254300000d6937eed24361b42e8ea6e54f05fa36d00e8000000000000008acadc55ec5bbd770201e501b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10e0100000009080700000000000000",
+    "nominal": "core::option::Option<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "d6937eed24361b42e8ea6e54f05fa36d"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "asset/dataspace/vec-empty",
+    "deserialize_hash": "f9e4bbecdc105f229910ec969a2899cf",
+    "frame_hex": "4e5254300000f9e4bbecdc105f229910ec969a2899cf000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "f9e4bbecdc105f229910ec969a2899cf"
+  },
+  {
+    "bare_hex": "0100000000000000e501b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10e0100000009080700000000000000",
+    "case": "asset/dataspace/vec-one",
+    "deserialize_hash": "f9e4bbecdc105f229910ec969a2899cf",
+    "frame_hex": "4e5254300000f9e4bbecdc105f229910ec969a2899cf00ef00000000000000f7acf95486c4d2aa020100000000000000e501b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8020200200136013c01bd01e701f401ae014d01f4019f01c801020182011e01a2019301e10e0100000009080700000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "f9e4bbecdc105f229910ec969a2899cf"
+  },
+  {
+    "bare_hex": "454b479dbdb4bc6e373eac930714616ba28ae7590f21241b86baeccb0af4cc03",
+    "case": "asset/dataspace/hash-of",
+    "deserialize_hash": "731797df7fdc6279353bf75169839e42",
+    "frame_hex": "4e5254300000731797df7fdc6279353bf75169839e42002000000000000000a81a3932c52bfc7300454b479dbdb4bc6e373eac930714616ba28ae7590f21241b86baeccb0af4cc03",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "731797df7fdc6279353bf75169839e42"
+  },
+  {
+    "bare_hex": "4000000000000000019e014a01e1019601d801c1010f018a010d01d001f801a2012a0178015601ff016201ea01c5016201290165013001f901ab01e0013001090183017b01e00122014401d00110019d018101f0016501a301e1015901e0010d0104019101c801f4014901660165016901bc01a1019801a2016601d4019001ea019701de01650107",
+    "case": "asset/dataspace/signature-of",
+    "deserialize_hash": "2e3fc7139cbdc8adce1498505984444e",
+    "frame_hex": "4e52543000002e3fc7139cbdc8adce1498505984444e0088000000000000009170a9a78e81340d024000000000000000019e014a01e1019601d801c1010f018a010d01d001f801a2012a0178015601ff016201ea01c5016201290165013001f901ab01e0013001090183017b01e00122014401d00110019d018101f0016501a301e1015901e0010d0104019101c801f4014901660165016901bc01a1019801a2016601d4019001ea019701de01650107",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::asset::id::model::AssetId>",
+    "serialize_hash": "2e3fc7139cbdc8adce1498505984444e"
+  },
+  {
+    "bare_hex": "080700000000000000",
+    "case": "dataspace",
+    "deserialize_hash": "3d41714fe9a3947921daca6132402f7a",
+    "frame_hex": "4e52543000003d41714fe9a3947921daca6132402f7a000900000000000000c5b0dbe4c15a440602080700000000000000",
+    "json": "7",
+    "nominal": "iroha_data_model::nexus::DataSpaceId",
+    "schema": {
+      "DataSpaceId": "u64",
+      "u64": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "DataSpaceId",
+        "name": "DataSpaceId"
+      },
+      {
+        "id": "u64",
+        "name": "u64"
+      }
+    ],
+    "schema_type_id": "DataSpaceId",
+    "schema_type_name": "DataSpaceId",
+    "serialize_hash": "3d41714fe9a3947921daca6132402f7a",
+    "storage_key_json": "\"7\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "dataspace/option-none",
+    "deserialize_hash": "8ffe71e1c9a74615bf9c7f3781ab6b6f",
+    "frame_hex": "4e52543000008ffe71e1c9a74615bf9c7f3781ab6b6f000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::nexus::DataSpaceId>",
+    "serialize_hash": "8ffe71e1c9a74615bf9c7f3781ab6b6f"
+  },
+  {
+    "bare_hex": "0109080700000000000000",
+    "case": "dataspace/option-some",
+    "deserialize_hash": "8ffe71e1c9a74615bf9c7f3781ab6b6f",
+    "frame_hex": "4e52543000008ffe71e1c9a74615bf9c7f3781ab6b6f000b000000000000006058150c5196032b020109080700000000000000",
+    "nominal": "core::option::Option<iroha_data_model::nexus::DataSpaceId>",
+    "serialize_hash": "8ffe71e1c9a74615bf9c7f3781ab6b6f"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "dataspace/vec-empty",
+    "deserialize_hash": "ba43cac159d3af03f9cebdfd897e7df2",
+    "frame_hex": "4e5254300000ba43cac159d3af03f9cebdfd897e7df2000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::nexus::DataSpaceId>",
+    "serialize_hash": "ba43cac159d3af03f9cebdfd897e7df2"
+  },
+  {
+    "bare_hex": "010000000000000009080700000000000000",
+    "case": "dataspace/vec-one",
+    "deserialize_hash": "ba43cac159d3af03f9cebdfd897e7df2",
+    "frame_hex": "4e5254300000ba43cac159d3af03f9cebdfd897e7df20012000000000000007b64272c810b8e1802010000000000000009080700000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::nexus::DataSpaceId>",
+    "serialize_hash": "ba43cac159d3af03f9cebdfd897e7df2"
+  },
+  {
+    "bare_hex": "1986e59735738feeb9d75d10d4be819926d93eb5291230513b6c63701531ec9f",
+    "case": "dataspace/hash-of",
+    "deserialize_hash": "94561d7a081d69ac98c078315d74895e",
+    "frame_hex": "4e525430000094561d7a081d69ac98c078315d74895e0020000000000000007454315da644f667001986e59735738feeb9d75d10d4be819926d93eb5291230513b6c63701531ec9f",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::nexus::DataSpaceId>",
+    "serialize_hash": "94561d7a081d69ac98c078315d74895e"
+  },
+  {
+    "bare_hex": "4000000000000000012f012201c8014f017401a101f101dc0192011501db019d0127017d0112016f0155018e01b7014a016001bc012401b80114019901ba01e401db01ac01e301c10194011f019f017e013101df018f01b101240169012a01dd018101cb0186013f01db018101e801da01030111018501c001b80194011801c5010b0187011d010f",
+    "case": "dataspace/signature-of",
+    "deserialize_hash": "97d5fd073aa7bb4e516824cf5c141329",
+    "frame_hex": "4e525430000097d5fd073aa7bb4e516824cf5c141329008800000000000000e44f14102f95e753024000000000000000012f012201c8014f017401a101f101dc0192011501db019d0127017d0112016f0155018e01b7014a016001bc012401b80114019901ba01e401db01ac01e301c10194011f019f017e013101df018f01b101240169012a01dd018101cb0186013f01db018101e801da01030111018501c001b80194011801c5010b0187011d010f",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::nexus::DataSpaceId>",
+    "serialize_hash": "97d5fd073aa7bb4e516824cf5c141329"
+  },
+  {
+    "bare_hex": "0403000000",
+    "case": "lane",
+    "deserialize_hash": "fcb189b85069a43eeac1c02f1ba7d697",
+    "frame_hex": "4e5254300000fcb189b85069a43eeac1c02f1ba7d697000500000000000000ac9d28e8963eba0f020403000000",
+    "json": "3",
+    "nominal": "iroha_data_model::nexus::LaneId",
+    "schema": {
+      "LaneId": "u32",
+      "u32": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "LaneId",
+        "name": "LaneId"
+      },
+      {
+        "id": "u32",
+        "name": "u32"
+      }
+    ],
+    "schema_type_id": "LaneId",
+    "schema_type_name": "LaneId",
+    "serialize_hash": "fcb189b85069a43eeac1c02f1ba7d697",
+    "storage_key_json": "\"3\""
+  },
+  {
+    "bare_hex": "00",
+    "case": "lane/option-none",
+    "deserialize_hash": "53cd8781115514ead2773d4e5088e80d",
+    "frame_hex": "4e525430000053cd8781115514ead2773d4e5088e80d000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::nexus::LaneId>",
+    "serialize_hash": "53cd8781115514ead2773d4e5088e80d"
+  },
+  {
+    "bare_hex": "01050403000000",
+    "case": "lane/option-some",
+    "deserialize_hash": "53cd8781115514ead2773d4e5088e80d",
+    "frame_hex": "4e525430000053cd8781115514ead2773d4e5088e80d00070000000000000075dc90cbd1ca5b720201050403000000",
+    "nominal": "core::option::Option<iroha_data_model::nexus::LaneId>",
+    "serialize_hash": "53cd8781115514ead2773d4e5088e80d"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "lane/vec-empty",
+    "deserialize_hash": "c1e4502a674cd5387dfb1b97b0536d71",
+    "frame_hex": "4e5254300000c1e4502a674cd5387dfb1b97b0536d71000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::nexus::LaneId>",
+    "serialize_hash": "c1e4502a674cd5387dfb1b97b0536d71"
+  },
+  {
+    "bare_hex": "0100000000000000050403000000",
+    "case": "lane/vec-one",
+    "deserialize_hash": "c1e4502a674cd5387dfb1b97b0536d71",
+    "frame_hex": "4e5254300000c1e4502a674cd5387dfb1b97b0536d71000e00000000000000121a10a8ab324be9020100000000000000050403000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::nexus::LaneId>",
+    "serialize_hash": "c1e4502a674cd5387dfb1b97b0536d71"
+  },
+  {
+    "bare_hex": "3f3d8f9a784e9ef978a0fd02c34126b0ff6fee9596cc9ea654bd9ecacaa93079",
+    "case": "lane/hash-of",
+    "deserialize_hash": "89f5247dd8b9855cd89e6a0ea9b6755f",
+    "frame_hex": "4e525430000089f5247dd8b9855cd89e6a0ea9b6755f00200000000000000090f651cea82ba3fc003f3d8f9a784e9ef978a0fd02c34126b0ff6fee9596cc9ea654bd9ecacaa93079",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::nexus::LaneId>",
+    "serialize_hash": "89f5247dd8b9855cd89e6a0ea9b6755f"
+  },
+  {
+    "bare_hex": "400000000000000001ca012901e901f1018001d8017b010a01e101dd01ff01d001ef01c101e201bf01e301f101570117016101cf0118014b01cc0175019e0109012c0166014901aa011301100101016d018901db01f6017f0162010101e9012801ba016a018d01ae01f2015d0145016201ab015b016401c1010f019401f001cc01e3011601a60103",
+    "case": "lane/signature-of",
+    "deserialize_hash": "1a2d65e207815986c399eef6772ff0c9",
+    "frame_hex": "4e52543000001a2d65e207815986c399eef6772ff0c9008800000000000000770b4218c070887602400000000000000001ca012901e901f1018001d8017b010a01e101dd01ff01d001ef01c101e201bf01e301f101570117016101cf0118014b01cc0175019e0109012c0166014901aa011301100101016d018901db01f6017f0162010101e9012801ba016a018d01ae01f2015d0145016201ab015b016401c1010f019401f001cc01e3011601a60103",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::nexus::LaneId>",
+    "serialize_hash": "1a2d65e207815986c399eef6772ff0c9"
+  },
+  {
+    "bare_hex": "0418000000",
+    "case": "shard",
+    "deserialize_hash": "53947500cf9519ecc6ff97f4b8d4bfbf",
+    "frame_hex": "4e525430000053947500cf9519ecc6ff97f4b8d4bfbf0005000000000000006d72fc124cf8cd8a020418000000",
+    "json": "24",
+    "nominal": "iroha_data_model::nexus::ShardId",
+    "schema": {
+      "ShardId": "u32",
+      "u32": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "ShardId",
+        "name": "ShardId"
+      },
+      {
+        "id": "u32",
+        "name": "u32"
+      }
+    ],
+    "schema_type_id": "ShardId",
+    "schema_type_name": "ShardId",
+    "serialize_hash": "53947500cf9519ecc6ff97f4b8d4bfbf"
+  },
+  {
+    "bare_hex": "00",
+    "case": "shard/option-none",
+    "deserialize_hash": "7f429306210b7e4f8d08b479d472fb85",
+    "frame_hex": "4e52543000007f429306210b7e4f8d08b479d472fb85000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::nexus::ShardId>",
+    "serialize_hash": "7f429306210b7e4f8d08b479d472fb85"
+  },
+  {
+    "bare_hex": "01050418000000",
+    "case": "shard/option-some",
+    "deserialize_hash": "7f429306210b7e4f8d08b479d472fb85",
+    "frame_hex": "4e52543000007f429306210b7e4f8d08b479d472fb85000700000000000000b43344310b0c2cf70201050418000000",
+    "nominal": "core::option::Option<iroha_data_model::nexus::ShardId>",
+    "serialize_hash": "7f429306210b7e4f8d08b479d472fb85"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "shard/vec-empty",
+    "deserialize_hash": "d5800fb491e97305315a03782632a871",
+    "frame_hex": "4e5254300000d5800fb491e97305315a03782632a871000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::nexus::ShardId>",
+    "serialize_hash": "d5800fb491e97305315a03782632a871"
+  },
+  {
+    "bare_hex": "0100000000000000050418000000",
+    "case": "shard/vec-one",
+    "deserialize_hash": "d5800fb491e97305315a03782632a871",
+    "frame_hex": "4e5254300000d5800fb491e97305315a03782632a871000e00000000000000d3f5c45271f43c6c020100000000000000050418000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::nexus::ShardId>",
+    "serialize_hash": "d5800fb491e97305315a03782632a871"
+  },
+  {
+    "bare_hex": "95feb62b9ba7260d0b4ca242c91682372f7821b2cce4d8914b3def5b30de1a9b",
+    "case": "shard/hash-of",
+    "deserialize_hash": "ef4122e9d99de94249ec0b3b65d79a5d",
+    "frame_hex": "4e5254300000ef4122e9d99de94249ec0b3b65d79a5d002000000000000000cdf74f1d5ef100080095feb62b9ba7260d0b4ca242c91682372f7821b2cce4d8914b3def5b30de1a9b",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::nexus::ShardId>",
+    "serialize_hash": "ef4122e9d99de94249ec0b3b65d79a5d"
+  },
+  {
+    "bare_hex": "4000000000000000011401c8015f01780131016f0167018401ce0141019801ef01390130019d01ac010a018b017f01c9019901c801cc01160178011401e001f801a9014901310131011501f4017101e1010301c60124013d01b901e901d001c301cf01f301a3018d01bd01ee017d01240173015a01c50101015401c50159014a01990184010e010f",
+    "case": "shard/signature-of",
+    "deserialize_hash": "efa470f88069d866742886403d9f1a6e",
+    "frame_hex": "4e5254300000efa470f88069d866742886403d9f1a6e008800000000000000110e68befed7d567024000000000000000011401c8015f01780131016f0167018401ce0141019801ef01390130019d01ac010a018b017f01c9019901c801cc01160178011401e001f801a9014901310131011501f4017101e1010301c60124013d01b901e901d001c301cf01f301a3018d01bd01ee017d01240173015a01c50101015401c50159014a01990184010e010f",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::nexus::ShardId>",
+    "serialize_hash": "efa470f88069d866742886403d9f1a6e"
+  },
+  {
+    "bare_hex": "4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "peer",
+    "deserialize_hash": "a66e19db58aa8fe88e6d969b25136675",
+    "frame_hex": "4e5254300000a66e19db58aa8fe88e6d969b25136675004b00000000000000bc818a2694fcdcda024a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "json": "\"ed0120C168292026FB43C14710B1D1964F75B44DD35CDBEF0F8654985BADA778FCBCE8\"",
+    "nominal": "iroha_data_model::peer::model::PeerId",
+    "schema": {
+      "Algorithm": {
+        "Enum": [
+          {
+            "discriminant": 0,
+            "tag": "Ed25519"
+          },
+          {
+            "discriminant": 1,
+            "tag": "Secp256k1"
+          },
+          {
+            "discriminant": 2,
+            "tag": "BlsNormal"
+          },
+          {
+            "discriminant": 3,
+            "tag": "BlsSmall"
+          },
+          {
+            "discriminant": 4,
+            "tag": "MlDsa"
+          },
+          {
+            "discriminant": 5,
+            "tag": "Gost3410_2012_256ParamSetA"
+          },
+          {
+            "discriminant": 6,
+            "tag": "Gost3410_2012_256ParamSetB"
+          },
+          {
+            "discriminant": 7,
+            "tag": "Gost3410_2012_256ParamSetC"
+          },
+          {
+            "discriminant": 8,
+            "tag": "Gost3410_2012_512ParamSetA"
+          },
+          {
+            "discriminant": 9,
+            "tag": "Gost3410_2012_512ParamSetB"
+          },
+          {
+            "discriminant": 10,
+            "tag": "Sm2"
+          }
+        ]
+      },
+      "PeerId": {
+        "Struct": [
+          {
+            "name": "public_key",
+            "type": "PublicKey"
+          }
+        ]
+      },
+      "PublicKey": {
+        "Struct": [
+          {
+            "name": "algorithm",
+            "type": "Algorithm"
+          },
+          {
+            "name": "payload",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Vec<u8>": {
+        "Vec": "u8"
+      },
+      "u8": {
+        "Int": "FixedWidth"
+      }
+    },
+    "schema_identifiers": [
+      {
+        "id": "Algorithm",
+        "name": "Algorithm"
+      },
+      {
+        "id": "ConstVec<u8>",
+        "name": "Vec<u8>"
+      },
+      {
+        "id": "PeerId",
+        "name": "PeerId"
+      },
+      {
+        "id": "PublicKey",
+        "name": "PublicKey"
+      },
+      {
+        "id": "u8",
+        "name": "u8"
+      }
+    ],
+    "schema_type_id": "PeerId",
+    "schema_type_name": "PeerId",
+    "serialize_hash": "a66e19db58aa8fe88e6d969b25136675"
+  },
+  {
+    "bare_hex": "00",
+    "case": "peer/option-none",
+    "deserialize_hash": "ac96ba721b28da7ccb2f00594da59c30",
+    "frame_hex": "4e5254300000ac96ba721b28da7ccb2f00594da59c30000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::peer::model::PeerId>",
+    "serialize_hash": "ac96ba721b28da7ccb2f00594da59c30"
+  },
+  {
+    "bare_hex": "014b4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "peer/option-some",
+    "deserialize_hash": "ac96ba721b28da7ccb2f00594da59c30",
+    "frame_hex": "4e5254300000ac96ba721b28da7ccb2f00594da59c30004d0000000000000011d467820c68865a02014b4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "nominal": "core::option::Option<iroha_data_model::peer::model::PeerId>",
+    "serialize_hash": "ac96ba721b28da7ccb2f00594da59c30"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "peer/vec-empty",
+    "deserialize_hash": "e9a74466f94f2b06d3da92572693eb8a",
+    "frame_hex": "4e5254300000e9a74466f94f2b06d3da92572693eb8a000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::peer::model::PeerId>",
+    "serialize_hash": "e9a74466f94f2b06d3da92572693eb8a"
+  },
+  {
+    "bare_hex": "01000000000000004b4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "case": "peer/vec-one",
+    "deserialize_hash": "e9a74466f94f2b06d3da92572693eb8a",
+    "frame_hex": "4e5254300000e9a74466f94f2b06d3da92572693eb8a005400000000000000a7cd97ec4b648fa10201000000000000004b4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8",
+    "nominal": "alloc::vec::Vec<iroha_data_model::peer::model::PeerId>",
+    "serialize_hash": "e9a74466f94f2b06d3da92572693eb8a"
+  },
+  {
+    "bare_hex": "50f95ecbe571d8ca47fa36dff255482e89078763e6317cc13b07d0ea2d3a500f",
+    "case": "peer/hash-of",
+    "deserialize_hash": "dcb581d568e4a320e0950e0fe9efdc2f",
+    "frame_hex": "4e5254300000dcb581d568e4a320e0950e0fe9efdc2f0020000000000000001ac5eaac56c7b4720050f95ecbe571d8ca47fa36dff255482e89078763e6317cc13b07d0ea2d3a500f",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::peer::model::PeerId>",
+    "serialize_hash": "dcb581d568e4a320e0950e0fe9efdc2f"
+  },
+  {
+    "bare_hex": "4000000000000000019e011c012d01aa019001ed01ed019e016f014201d7011b016901b2014d0146017f019701b8018e01e30152012401da012a015a011a0118013c0196019b011a015301590138013e012601b701aa0185017301d001e5013a019001a601390170019d0158015b0125011b015e010f01e6010901800100012d01d90175010f0101",
+    "case": "peer/signature-of",
+    "deserialize_hash": "eae5b31bbb4fc9145244725f3461a2cc",
+    "frame_hex": "4e5254300000eae5b31bbb4fc9145244725f3461a2cc008800000000000000a50e0268aa683d38024000000000000000019e011c012d01aa019001ed01ed019e016f014201d7011b016901b2014d0146017f019701b8018e01e30152012401da012a015a011a0118013c0196019b011a015301590138013e012601b701aa0185017301d001e5013a019001a601390170019d0158015b0125011b015e010f01e6010901800100012d01d90175010f0101",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::peer::model::PeerId>",
+    "serialize_hash": "eae5b31bbb4fc9145244725f3461a2cc"
+  },
+  {
+    "bare_hex": "02000000000000000605616c7068610908072276616c7565220605636166c3a903020137",
+    "case": "name-json-map",
+    "deserialize_hash": "18c8dd01d76f780a66ce9222480cb1e9",
+    "frame_hex": "4e525430000018c8dd01d76f780a66ce9222480cb1e9002400000000000000843d67e78ed640b80202000000000000000605616c7068610908072276616c7565220605636166c3a903020137",
+    "json": "{\"alpha\":\"value\",\"café\":7}",
+    "nominal": "alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>",
+    "schema": {
+      "Json": "String",
+      "Name": "String",
+      "SortedMap<Name, Json>": {
+        "Map": {
+          "key": "Name",
+          "value": "Json"
+        }
+      },
+      "String": "String"
+    },
+    "schema_identifiers": [
+      {
+        "id": "ConstString",
+        "name": "String"
+      },
+      {
+        "id": "Json",
+        "name": "Json"
+      },
+      {
+        "id": "Name",
+        "name": "Name"
+      },
+      {
+        "id": "SortedMap<Name, Json>",
+        "name": "SortedMap<Name, Json>"
+      },
+      {
+        "id": "String",
+        "name": "String"
+      }
+    ],
+    "schema_type_id": "SortedMap<Name, Json>",
+    "schema_type_name": "SortedMap<Name, Json>",
+    "serialize_hash": "18c8dd01d76f780a66ce9222480cb1e9"
+  },
+  {
+    "bare_hex": "00",
+    "case": "name-json-map/option-none",
+    "deserialize_hash": "551d4136aa17653a8df80ea351e20a8d",
+    "frame_hex": "4e5254300000551d4136aa17653a8df80ea351e20a8d000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>>",
+    "serialize_hash": "551d4136aa17653a8df80ea351e20a8d"
+  },
+  {
+    "bare_hex": "012402000000000000000605616c7068610908072276616c7565220605636166c3a903020137",
+    "case": "name-json-map/option-some",
+    "deserialize_hash": "551d4136aa17653a8df80ea351e20a8d",
+    "frame_hex": "4e5254300000551d4136aa17653a8df80ea351e20a8d00260000000000000084b33d54d682312802012402000000000000000605616c7068610908072276616c7565220605636166c3a903020137",
+    "nominal": "core::option::Option<alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>>",
+    "serialize_hash": "551d4136aa17653a8df80ea351e20a8d"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "name-json-map/vec-empty",
+    "deserialize_hash": "ce20060e7f424444960fb25da4355733",
+    "frame_hex": "4e5254300000ce20060e7f424444960fb25da4355733000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>>",
+    "serialize_hash": "ce20060e7f424444960fb25da4355733"
+  },
+  {
+    "bare_hex": "01000000000000002402000000000000000605616c7068610908072276616c7565220605636166c3a903020137",
+    "case": "name-json-map/vec-one",
+    "deserialize_hash": "ce20060e7f424444960fb25da4355733",
+    "frame_hex": "4e5254300000ce20060e7f424444960fb25da4355733002d0000000000000080da2c5271a7dad00201000000000000002402000000000000000605616c7068610908072276616c7565220605636166c3a903020137",
+    "nominal": "alloc::vec::Vec<alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>>",
+    "serialize_hash": "ce20060e7f424444960fb25da4355733"
+  },
+  {
+    "bare_hex": "33836cc476364ebedcb611bd75208a9187c0c5fe39206e6c3eed78d4d5e86ecf",
+    "case": "name-json-map/hash-of",
+    "deserialize_hash": "510de48ec1a1c2fa2587c394f3d689f3",
+    "frame_hex": "4e5254300000510de48ec1a1c2fa2587c394f3d689f30020000000000000004654e202b17f23270033836cc476364ebedcb611bd75208a9187c0c5fe39206e6c3eed78d4d5e86ecf",
+    "nominal": "iroha_crypto::hash::HashOf<alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>>",
+    "serialize_hash": "510de48ec1a1c2fa2587c394f3d689f3"
+  },
+  {
+    "bare_hex": "4000000000000000017a010501ef0143015a01ba01190109013f013a01fe0131012b012901e0012a014b017a01b701a40130013a015b01e8014701630115019101ce012b014b01f401c301130148016301fe018e01fb011e018001d801e201d901c201750118012f01c701fe01df015d01d0013c018501810136019401db011c01cf010b018b0104",
+    "case": "name-json-map/signature-of",
+    "deserialize_hash": "acf1656b68c859ccea5134bd8a758dd4",
+    "frame_hex": "4e5254300000acf1656b68c859ccea5134bd8a758dd400880000000000000041a9a97020f5c82c024000000000000000017a010501ef0143015a01ba01190109013f013a01fe0131012b012901e0012a014b017a01b701a40130013a015b01e8014701630115019101ce012b014b01f401c301130148016301fe018e01fb011e018001d801e201d901c201750118012f01c701fe01df015d01d0013c018501810136019401db011c01cf010b018b0104",
+    "nominal": "iroha_crypto::signature::SignatureOf<alloc::collections::btree::map::BTreeMap<iroha_data_model::name::model::Name, iroha_primitives::json::Json>>",
+    "serialize_hash": "acf1656b68c859ccea5134bd8a758dd4"
+  },
+  {
+    "bare_hex": "4f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8bd010100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e80202001301111073746f72652f30303131323261616262",
+    "case": "mixed-identities",
+    "deserialize_hash": "db221b2125341b0a624f9cb37931d084",
+    "frame_hex": "4e5254300000db221b2125341b0a624f9cb37931d084002301000000000000f8dfe32475862b0e024f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8bd010100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e80202001301111073746f72652f30303131323261616262",
+    "nominal": "(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)",
+    "serialize_hash": "db221b2125341b0a624f9cb37931d084"
+  },
+  {
+    "bare_hex": "00",
+    "case": "mixed-identities/option-none",
+    "deserialize_hash": "9edb9418011d69cd3914570d0b536a69",
+    "frame_hex": "4e52543000009edb9418011d69cd3914570d0b536a69000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)>",
+    "serialize_hash": "9edb9418011d69cd3914570d0b536a69"
+  },
+  {
+    "bare_hex": "01a3024f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8bd010100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e80202001301111073746f72652f30303131323261616262",
+    "case": "mixed-identities/option-some",
+    "deserialize_hash": "9edb9418011d69cd3914570d0b536a69",
+    "frame_hex": "4e52543000009edb9418011d69cd3914570d0b536a69002601000000000000c6ec5a4c2bcaf1400201a3024f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8bd010100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e80202001301111073746f72652f30303131323261616262",
+    "nominal": "core::option::Option<(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)>",
+    "serialize_hash": "9edb9418011d69cd3914570d0b536a69"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "mixed-identities/vec-empty",
+    "deserialize_hash": "a5b0274e76b7fdef64fef9eac4aec3c0",
+    "frame_hex": "4e5254300000a5b0274e76b7fdef64fef9eac4aec3c0000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)>",
+    "serialize_hash": "a5b0274e76b7fdef64fef9eac4aec3c0"
+  },
+  {
+    "bare_hex": "0100000000000000a3024f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8bd010100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e80202001301111073746f72652f30303131323261616262",
+    "case": "mixed-identities/vec-one",
+    "deserialize_hash": "a5b0274e76b7fdef64fef9eac4aec3c0",
+    "frame_hex": "4e5254300000a5b0274e76b7fdef64fef9eac4aec3c0002d01000000000000b64c73bd9b39708f020100000000000000a3024f000000004a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e8bd010100000000000000b30101000000ad010101020200a60102000000000000004e4a2100000000000000010001b301a10121010901420118019101f80150019d010b011901f001a701e9010b01ed0130015201d10134012701ba01cd015b01dc0123017301cf01ce018001dc0201004e4a2100000000000000010001c1016801290120012601fb014301c10147011001b101d10196014f017501b4014d01d3015c01db01ef010f018601540198015b01ad01a7017801fc01bc01e80202001301111073746f72652f30303131323261616262",
+    "nominal": "alloc::vec::Vec<(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)>",
+    "serialize_hash": "a5b0274e76b7fdef64fef9eac4aec3c0"
+  },
+  {
+    "bare_hex": "90619f16190c92c9780773ea7268a0a5cee3c084757e4e833fe8f6ef1286e969",
+    "case": "mixed-identities/hash-of",
+    "deserialize_hash": "021754bac56ea5f70cf6724aea477f4d",
+    "frame_hex": "4e5254300000021754bac56ea5f70cf6724aea477f4d0020000000000000004d73e99dd5c125d50090619f16190c92c9780773ea7268a0a5cee3c084757e4e833fe8f6ef1286e969",
+    "nominal": "iroha_crypto::hash::HashOf<(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)>",
+    "serialize_hash": "021754bac56ea5f70cf6724aea477f4d"
+  },
+  {
+    "bare_hex": "400000000000000001c1019001b301c401bd0114011101c30195013d01be01440117015e0158019801e501540172014a01530101015a0181017c01d50141017201f101c6013d01ba016201ad015e0122015b01d501dc01fe01ea019e0144014201e80140011d01f30144018e01ef01c001be017c019801a5010e01cb014101ef012a01b101230105",
+    "case": "mixed-identities/signature-of",
+    "deserialize_hash": "57969e4e24e68f323217392f8ddea9e3",
+    "frame_hex": "4e525430000057969e4e24e68f323217392f8ddea9e30088000000000000007b39880cca8b479b02400000000000000001c1019001b301c401bd0114011101c30195013d01be01440117015e0158019801e501540172014a01530101015a0181017c01d50141017201f101c6013d01ba016201ad015e0122015b01d501dc01fe01ea019e0144014201e80140011d01f30144018e01ef01c001be017c019801a5010e01cb014101ef012a01b101230105",
+    "nominal": "iroha_crypto::signature::SignatureOf<(iroha_data_model::account::model::AccountId, alloc::vec::Vec<iroha_data_model::account::model::AccountId>, core::option::Option<iroha_data_model::state_path::model::StatePath>)>",
+    "serialize_hash": "57969e4e24e68f323217392f8ddea9e3"
+  },
+  {
+    "bare_hex": "0e626173652d666978747572652d31",
+    "case": "chain/private-text",
+    "deserialize_hash": "ffb25f3770bd35aff5025bb05df18f6b",
+    "frame_hex": "4e5254300000ffb25f3770bd35aff5025bb05df18f6b000f0000000000000034c21556cfa87f0d020e626173652d666978747572652d31",
+    "nominal": "iroha_data_model::id::ChainIdText",
+    "serialize_hash": "ffb25f3770bd35aff5025bb05df18f6b"
+  },
+  {
+    "bare_hex": "00",
+    "case": "chain/private-text/option-none",
+    "deserialize_hash": "2e6e46dfb349b46775457e67bd01cd0a",
+    "frame_hex": "4e52543000002e6e46dfb349b46775457e67bd01cd0a000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::id::ChainIdText>",
+    "serialize_hash": "2e6e46dfb349b46775457e67bd01cd0a"
+  },
+  {
+    "bare_hex": "010f0e626173652d666978747572652d31",
+    "case": "chain/private-text/option-some",
+    "deserialize_hash": "2e6e46dfb349b46775457e67bd01cd0a",
+    "frame_hex": "4e52543000002e6e46dfb349b46775457e67bd01cd0a0011000000000000003e76404844b0a01502010f0e626173652d666978747572652d31",
+    "nominal": "core::option::Option<iroha_data_model::id::ChainIdText>",
+    "serialize_hash": "2e6e46dfb349b46775457e67bd01cd0a"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "chain/private-text/vec-empty",
+    "deserialize_hash": "42acefd7d1c27891aa775a2bd492eb29",
+    "frame_hex": "4e525430000042acefd7d1c27891aa775a2bd492eb29000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::id::ChainIdText>",
+    "serialize_hash": "42acefd7d1c27891aa775a2bd492eb29"
+  },
+  {
+    "bare_hex": "01000000000000000f0e626173652d666978747572652d31",
+    "case": "chain/private-text/vec-one",
+    "deserialize_hash": "42acefd7d1c27891aa775a2bd492eb29",
+    "frame_hex": "4e525430000042acefd7d1c27891aa775a2bd492eb29001800000000000000066850636bd262720201000000000000000f0e626173652d666978747572652d31",
+    "nominal": "alloc::vec::Vec<iroha_data_model::id::ChainIdText>",
+    "serialize_hash": "42acefd7d1c27891aa775a2bd492eb29"
+  },
+  {
+    "bare_hex": "9355977d92ad71b208983560aaf7c9a77cbd5c7b1a85b2473bf8d9059bf6d7a9",
+    "case": "chain/private-text/hash-of",
+    "deserialize_hash": "8ba98929a0842f701afe5fb318695628",
+    "frame_hex": "4e52543000008ba98929a0842f701afe5fb318695628002000000000000000d9e8d01c06c9ec87009355977d92ad71b208983560aaf7c9a77cbd5c7b1a85b2473bf8d9059bf6d7a9",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::id::ChainIdText>",
+    "serialize_hash": "8ba98929a0842f701afe5fb318695628"
+  },
+  {
+    "bare_hex": "400000000000000001f301ac01ed0116010f019901fd01cc0108012e0151016601f5013d01a5010201b201d5018301ce0189015d01be0198010201cd019a01c40173016301d4019b0150015501c401c0017b0138018f010c01cd01e0016701560119011801a5013001c2011101da018e01d10147017c015a01c101b501c301c101780107016a010a",
+    "case": "chain/private-text/signature-of",
+    "deserialize_hash": "9c4eb82d08506d86bad24c5083abe3d0",
+    "frame_hex": "4e52543000009c4eb82d08506d86bad24c5083abe3d000880000000000000080e554743794693b02400000000000000001f301ac01ed0116010f019901fd01cc0108012e0151016601f5013d01a5010201b201d5018301ce0189015d01be0198010201cd019a01c40173016301d4019b0150015501c401c0017b0138018f010c01cd01e0016701560119011801a5013001c2011101da018e01d10147017c015a01c101b501c301c101780107016a010a",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::id::ChainIdText>",
+    "serialize_hash": "9c4eb82d08506d86bad24c5083abe3d0"
+  },
+  {
+    "bare_hex": "0f0e626173652d666978747572652d31",
+    "case": "chain/private-wire",
+    "deserialize_hash": "118b3d5c9d6be4387cf1f44997ce9708",
+    "frame_hex": "4e5254300000118b3d5c9d6be4387cf1f44997ce9708001000000000000000589793d4333cb316020f0e626173652d666978747572652d31",
+    "nominal": "iroha_data_model::id::ChainIdWire",
+    "serialize_hash": "118b3d5c9d6be4387cf1f44997ce9708"
+  },
+  {
+    "bare_hex": "00",
+    "case": "chain/private-wire/option-none",
+    "deserialize_hash": "d7f54ee2e483b4077a1ab92b5a171dd2",
+    "frame_hex": "4e5254300000d7f54ee2e483b4077a1ab92b5a171dd2000100000000000000593f676473a1ad1f0000",
+    "nominal": "core::option::Option<iroha_data_model::id::ChainIdWire>",
+    "serialize_hash": "d7f54ee2e483b4077a1ab92b5a171dd2"
+  },
+  {
+    "bare_hex": "01100f0e626173652d666978747572652d31",
+    "case": "chain/private-wire/option-some",
+    "deserialize_hash": "d7f54ee2e483b4077a1ab92b5a171dd2",
+    "frame_hex": "4e5254300000d7f54ee2e483b4077a1ab92b5a171dd2001200000000000000f327b1405d6918420201100f0e626173652d666978747572652d31",
+    "nominal": "core::option::Option<iroha_data_model::id::ChainIdWire>",
+    "serialize_hash": "d7f54ee2e483b4077a1ab92b5a171dd2"
+  },
+  {
+    "bare_hex": "0000000000000000",
+    "case": "chain/private-wire/vec-empty",
+    "deserialize_hash": "6f7f1d880ed427e8bb0f808378cc84a4",
+    "frame_hex": "4e52543000006f7f1d880ed427e8bb0f808378cc84a4000800000000000000c0ca824265736ab6000000000000000000",
+    "nominal": "alloc::vec::Vec<iroha_data_model::id::ChainIdWire>",
+    "serialize_hash": "6f7f1d880ed427e8bb0f808378cc84a4"
+  },
+  {
+    "bare_hex": "0100000000000000100f0e626173652d666978747572652d31",
+    "case": "chain/private-wire/vec-one",
+    "deserialize_hash": "6f7f1d880ed427e8bb0f808378cc84a4",
+    "frame_hex": "4e52543000006f7f1d880ed427e8bb0f808378cc84a40019000000000000005021d1637ecf7233020100000000000000100f0e626173652d666978747572652d31",
+    "nominal": "alloc::vec::Vec<iroha_data_model::id::ChainIdWire>",
+    "serialize_hash": "6f7f1d880ed427e8bb0f808378cc84a4"
+  },
+  {
+    "bare_hex": "30a400c5e2dd4e9e716856dc1c77e19fdf2a3b2e5f4a4552d216d67731a9c599",
+    "case": "chain/private-wire/hash-of",
+    "deserialize_hash": "b10e5fd9c88bcefcfbf128f35c15e3c3",
+    "frame_hex": "4e5254300000b10e5fd9c88bcefcfbf128f35c15e3c30020000000000000002e7979eedb45c4d70030a400c5e2dd4e9e716856dc1c77e19fdf2a3b2e5f4a4552d216d67731a9c599",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_data_model::id::ChainIdWire>",
+    "serialize_hash": "b10e5fd9c88bcefcfbf128f35c15e3c3"
+  },
+  {
+    "bare_hex": "400000000000000001b0019d01ce019401e7015301b6011f0146015101050178015801f801c60148014b01fa017d014e01f201bc011e01bc01e80146015d015b018101fe01b00154015d01f1012301550129017b01fa019601c7015e01dc014f01b9014001d3013a0140010101cb012801270186012701a801da018101aa019a018101f701c9010d",
+    "case": "chain/private-wire/signature-of",
+    "deserialize_hash": "acf1e0bcb76b0805c20621fc8325593c",
+    "frame_hex": "4e5254300000acf1e0bcb76b0805c20621fc8325593c0088000000000000009cbc2dae56ab712e02400000000000000001b0019d01ce019401e7015301b6011f0146015101050178015801f801c60148014b01fa017d014e01f201bc011e01bc01e80146015d015b018101fe01b00154015d01f1012301550129017b01fa019601c7015e01dc014f01b9014001d3013a0140010101cb012801270186012701a801da018101aa019a018101f701c9010d",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_data_model::id::ChainIdWire>",
+    "serialize_hash": "acf1e0bcb76b0805c20621fc8325593c"
+  }
+]

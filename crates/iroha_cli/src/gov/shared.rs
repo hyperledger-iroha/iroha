@@ -234,10 +234,10 @@ mod tests {
     }
     #[test]
     fn compute_proposal_id_matches_proposal_kind_fingerprint() {
-        use iroha_test_samples::ALICE_ID;
         use iroha::data_model::governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
         };
+        use iroha_test_samples::ALICE_ID;
         let contract_address: iroha::data_model::smart_contract::ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()

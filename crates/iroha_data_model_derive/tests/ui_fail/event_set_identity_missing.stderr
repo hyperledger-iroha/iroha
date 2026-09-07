@@ -1,0 +1,5 @@
+error: EventSet requires #[event_set(schema_name = "captured child identity")]
+ --> tests/ui_fail/event_set_identity_missing.rs:5:6
+  |
+5 | enum MissingIdentity {
+  |      ^^^^^^^^^^^^^^^

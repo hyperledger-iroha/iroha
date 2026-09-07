@@ -3,11 +3,11 @@ use crate::{
     explorer::ExplorerDurationDto,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
-use iroha_config::client_api::ConfigGetDTO;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
+use iroha_torii_shared::configuration::Configuration;
 use monitor::Metrics as PeerMetricsSnapshot;
 pub use monitor::Update;
 use std::{
@@ -664,8 +664,8 @@ impl PeerConfigDto {
         }
     }
 }
-impl From<&ConfigGetDTO> for PeerConfigSnapshot {
-    fn from(cfg: &ConfigGetDTO) -> Self {
+impl From<&Configuration> for PeerConfigSnapshot {
+    fn from(cfg: &Configuration) -> Self {
         Self {
             public_key: Some(cfg.public_key.clone()),
             queue_capacity: cfg.queue.capacity.get().try_into().ok(),

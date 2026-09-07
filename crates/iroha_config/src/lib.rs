@@ -2,11 +2,11 @@
 pub use iroha_config_base as base;
 use log::LevelFilter;
 use thiserror::Error;
-pub mod client_api;
 pub mod kura;
 pub mod logger;
 pub mod parameters;
 pub mod snapshot;
+mod torii;
 /// Enables verbose tracing of configuration loading.
 ///
 /// This installs a minimal `log` logger that prints only messages originating from modules under

@@ -99,6 +99,9 @@ fn integration_outbound_policy() -> SccpOutboundProofPolicyV1 {
             source_network: SccpNetworkV1::SoraTaira,
             protocol_version: PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+            epoch: 1,
+            epoch_end_height: 10,
+            roster_commitment: [0x78; 32],
             checkpoint_height: 5,
             checkpoint_block_hash: [0x73; 32],
             checkpoint_context_id: [0x74; 32],
@@ -211,7 +214,7 @@ async fn wait_for_route_states(
         let mut converged = true;
         let mut reference = None;
         for (peer_index, peer) in network.peers().iter().enumerate() {
-            match peer.client().get_sccp_registry() {
+            match peer.client().client().get_sccp_registry() {
                 Ok(registry) => {
                     let activations = expected
                         .iter()
@@ -290,7 +293,7 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     let initial_registry = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert!(initial_registry.lanes.is_empty());
     let unauthorized = bob
-        .submit_blocking(
+        .submit(
             register_action(route.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -303,7 +306,7 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     let after_unauthorized = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert_eq!(after_unauthorized, initial_registry);
     let legacy_manager = alice
-        .submit_blocking(
+        .submit(
             register_action(route.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

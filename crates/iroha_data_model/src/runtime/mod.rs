@@ -27,7 +27,9 @@ fn manifest_hash(bytes: &[u8]) -> RuntimeUpgradeId {
     Encode,
     Decode,
     iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeId")]
 pub struct RuntimeUpgradeId(pub [u8; 32]);
 impl RuntimeUpgradeId {
     /// Construct an identifier from canonical manifest bytes.
@@ -43,6 +45,8 @@ impl RuntimeUpgradeId {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeSbomDigest")]
 pub struct RuntimeUpgradeSbomDigest {
     /// Digest algorithm identifier (e.g., `sha256`).
     pub algorithm: String,
@@ -57,6 +61,8 @@ pub struct RuntimeUpgradeSbomDigest {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeManifest")]
 pub struct RuntimeUpgradeManifest {
     /// Human-readable name.
     pub name: String,
@@ -89,6 +95,8 @@ pub struct RuntimeUpgradeManifest {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeManifestSignaturePayload")]
 pub struct RuntimeUpgradeManifestSignaturePayload {
     /// Human-readable name.
     pub name: String,
@@ -178,6 +186,8 @@ impl RuntimeUpgradeManifest {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeRecord")]
 pub struct RuntimeUpgradeRecord {
     /// Canonical manifest payload.
     pub manifest: RuntimeUpgradeManifest,
@@ -189,7 +199,18 @@ pub struct RuntimeUpgradeRecord {
     pub created_height: u64,
 }
 /// Status of a proposed runtime upgrade.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeStatus")]
 pub enum RuntimeUpgradeStatus {
     /// Proposal recorded but not yet activated.
     Proposed,
@@ -205,6 +226,8 @@ pub enum RuntimeUpgradeStatus {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeProvenanceError")]
 pub enum RuntimeUpgradeProvenanceError {
     /// Missing provenance payload when required.
     MissingProvenance,
@@ -548,3 +571,6 @@ mod tests {
         assert!(json::from_json::<RuntimeUpgradeSbomDigest>(&digest_value).is_err());
     }
 }
+
+#[cfg(test)]
+mod captured_runtime_schema_tests;

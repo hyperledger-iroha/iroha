@@ -81,7 +81,7 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
     ]
 
     private static let productionNativeHalo2PastaBackends: Set<String> = [
-        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kaigi-authorization-v1",
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -225,7 +225,7 @@ public enum VerifierBackendCatalogTag: Sendable, Equatable {
 
     private static let productionLabels: Set<String> = [
         "halo2/ipa",
-        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kaigi-authorization-v1",
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",

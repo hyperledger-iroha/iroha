@@ -9,7 +9,7 @@ use eyre::eyre;
 use iroha_config::{
     base::read::ConfigReader,
     parameters::{
-        actual::{self, IsoReferenceData, SorafsRolloutPhase},
+        actual::{self, IsoReferenceData},
         user,
     },
 };
@@ -30,6 +30,7 @@ use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json, nexus::AssetPermissionManifest,
 };
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider,
     test_utils::{TestDataDirGuard, mk_minimal_root_cfg},
@@ -6993,7 +6994,7 @@ where
             let mut markdown_out: Option<PathBuf> = None;
             let mut label: Option<String> = None;
             let mut environment: Option<String> = None;
-            let mut phase = SorafsRolloutPhase::Ramp;
+            let mut phase = RolloutPhase::Ramp;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -7033,7 +7034,7 @@ where
                         let Some(value) = pending.next() else {
                             return Err("expected phase label after --phase".into());
                         };
-                        phase = SorafsRolloutPhase::parse(&value).ok_or_else(|| {
+                        phase = RolloutPhase::parse(&value).ok_or_else(|| {
                             format!("invalid rollout phase `{value}`; expected canary|ramp|default")
                         })?;
                     }
@@ -7103,7 +7104,7 @@ where
             let mut base_dir: Option<PathBuf> = None;
             let mut label: Option<String> = None;
             let mut environment = String::from("production");
-            let mut phase = SorafsRolloutPhase::Ramp;
+            let mut phase = RolloutPhase::Ramp;
             let mut log_path: Option<PathBuf> = None;
             let mut artifacts: Vec<soranet_rollout::ArtifactInput> = Vec::new();
             let mut key_path: Option<PathBuf> = None;
@@ -7133,7 +7134,7 @@ where
                         let Some(value) = pending.next() else {
                             return Err("expected phase label after --phase".into());
                         };
-                        phase = SorafsRolloutPhase::parse(&value).ok_or_else(|| {
+                        phase = RolloutPhase::parse(&value).ok_or_else(|| {
                             format!("invalid rollout phase `{value}`; expected canary|ramp|default")
                         })?;
                     }
@@ -10780,7 +10781,6 @@ fn git_source_provenance(
         return Err("git rev-parse returned an empty HEAD".into());
     }
     let generated_unix_ms = git_head_timestamp_ms(repo_root)?;
-    let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256(repo_root, head)?;
     let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
     let mut status_args = vec![
         OsString::from("status"),
@@ -10790,6 +10790,15 @@ fn git_source_provenance(
     ];
     status_args.extend(pathspecs.iter().cloned());
     let status = git_stdout(repo_root, &status_args)?;
+    let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256_with_pin_source(
+        repo_root,
+        head,
+        if status.is_empty() {
+            OpenApiCargoLockPinSource::Committed
+        } else {
+            OpenApiCargoLockPinSource::WorkingDirtyUnsigned
+        },
+    )?;
     if status.is_empty() {
         return Ok(OpenApiGeneratorProvenance {
             generated_unix_ms,
@@ -10845,9 +10854,26 @@ fn git_source_provenance(
         source_sha256_hex: Some(hex::encode(source_digest.finalize())),
     })
 }
+#[cfg(test)]
 fn git_openapi_generator_input_tree_sha256(
     repo_root: &Path,
     commit: &str,
+) -> Result<String, Box<dyn Error>> {
+    git_openapi_generator_input_tree_sha256_with_pin_source(
+        repo_root,
+        commit,
+        OpenApiCargoLockPinSource::Committed,
+    )
+}
+#[derive(Clone, Copy)]
+enum OpenApiCargoLockPinSource {
+    Committed,
+    WorkingDirtyUnsigned,
+}
+fn git_openapi_generator_input_tree_sha256_with_pin_source(
+    repo_root: &Path,
+    commit: &str,
+    pin_source: OpenApiCargoLockPinSource,
 ) -> Result<String, Box<dyn Error>> {
     if !is_lower_hex_digest(commit, 20) {
         return Err(
@@ -10943,7 +10969,12 @@ fn git_openapi_generator_input_tree_sha256(
         None => return Err(format!("OpenAPI Cargo.lock is missing at commit {commit}").into()),
     }
     let cargo_lock_blob_oid = cargo_lock_blob_oid.ok_or("OpenAPI Cargo.lock blob is missing")?;
-    let pin = read_git_openapi_cargo_lock_pin(repo_root, commit)?;
+    let pin = match pin_source {
+        OpenApiCargoLockPinSource::Committed => read_git_openapi_cargo_lock_pin(repo_root, commit)?,
+        OpenApiCargoLockPinSource::WorkingDirtyUnsigned => {
+            read_working_openapi_cargo_lock_pin(repo_root)?
+        }
+    };
     let tracked_input =
         read_openapi_generator_tracked_input(repo_root, commit, &cargo_lock_blob_oid, &pin)?;
     Ok(openapi_generator_input_closure_sha256(
@@ -11078,6 +11109,24 @@ fn read_git_openapi_cargo_lock_pin(
         );
     }
     parse_openapi_cargo_lock_pin(&committed_pin)
+}
+fn read_working_openapi_cargo_lock_pin(
+    repo_root: &Path,
+) -> Result<OpenApiCargoLockPinV1, Box<dyn Error>> {
+    let path = repo_root.join(OPENAPI_CARGO_LOCK_PIN_PATH);
+    let working_pin = read_openapi_input_stable_with_policy(
+        &path,
+        "working OpenAPI Cargo.lock pin",
+        OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
+        true,
+        true,
+    )?;
+    if working_pin != OPENAPI_CARGO_LOCK_PIN {
+        return Err(
+            "working OpenAPI Cargo.lock pin differs from the pin compiled into xtask".into(),
+        );
+    }
+    parse_openapi_cargo_lock_pin(&working_pin)
 }
 fn read_openapi_generator_tracked_input(
     repo_root: &Path,
@@ -12742,6 +12791,50 @@ mod openapi_tests {
         assert_ne!(
             untracked_two.source_sha256_hex, untracked_one.source_sha256_hex,
             "untracked non-output contents must be provenance-bound"
+        );
+    }
+    #[test]
+    fn dirty_unsigned_provenance_accepts_only_a_compiled_pin_repair_for_the_committed_lock() {
+        let fixture = tempdir().expect("pin-repair tempdir");
+        initialize_git_fixture(fixture.path());
+        let pin_path = fixture.path().join(OPENAPI_CARGO_LOCK_PIN_PATH);
+        let stale_pin = format!(
+            "{OPENAPI_CARGO_LOCK_PIN_SCHEMA}\nbytes=1\nsha256_hex={}\n",
+            "11".repeat(32)
+        );
+        fs::write(&pin_path, stale_pin).expect("write stale committed pin");
+        git_stdout(fixture.path(), &["add", "--", OPENAPI_CARGO_LOCK_PIN_PATH])
+            .expect("stage stale pin");
+        git_stdout(
+            fixture.path(),
+            &[
+                "-c",
+                "user.name=OpenAPI Test",
+                "-c",
+                "user.email=openapi-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "stale pin",
+            ],
+        )
+        .expect("commit stale pin");
+        fs::write(&pin_path, OPENAPI_CARGO_LOCK_PIN).expect("restore compiled working pin");
+
+        let provenance = git_source_provenance(fixture.path(), &[])
+            .expect("dirty unsigned provenance with an exact compiled pin repair");
+        assert!(provenance.dirty);
+        assert_eq!(provenance.commit, None);
+        assert!(provenance.source_sha256_hex.is_some());
+
+        fs::write(&pin_path, b"not-the-compiled-pin\n").expect("substitute working pin");
+        let error = git_source_provenance(fixture.path(), &[])
+            .expect_err("an uncompiled working pin substitution must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("differs from the pin compiled into xtask"),
+            "unexpected working-pin substitution error: {error}"
         );
     }
     include!("tests/openapi_tracked_lock.rs");

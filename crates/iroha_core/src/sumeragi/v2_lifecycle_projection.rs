@@ -942,67 +942,6 @@ impl super::ProductionLifecycleOwnerV1 {
     }
 }
 impl super::ProductionLifecycleOwnerV1 {
-    /// Persist and publish one exact completed Certified-Serve terminal.
-    ///
-    /// The terminal receipt is created inside this owner from its retained
-    /// payload store and its exact retained body-store instance. No receipt,
-    /// payload id, candidate, ordinal, digest, or replay parts enter this API.
-    #[cfg(any(not(test), feature = "bls"))]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first-release owner-to-worker terminal completion handoff is not wired yet"
-        )
-    )]
-    pub(in crate::sumeragi) fn settle_certified_serve_completed(
-        &mut self,
-        lease: super::TurnLease,
-        authenticated: &AuthenticatedCertifiedBodyRequest,
-        durable_body: &DurableBodyReceipt,
-        response: &wire::CertifiedBodyResponse,
-    ) -> Result<(), CertifiedServeTerminalSettlementErrorV1> {
-        self.preflight_certified_serve_terminal(&lease, authenticated)?;
-        // TODO: After the owner-to-worker launch consumes `body_store`, replace
-        // this unlaunched-owner completion seam with one worker-authenticated
-        // completion capability bound to the retained store-instance seal.
-        let Some(body_store) = self.body_store.as_ref() else {
-            return Err(CertifiedServeTerminalSettlementErrorV1::prepublication(
-                CertifiedServeTerminalSettlementFailureV1::BodyStoreUnavailable,
-                lease,
-            ));
-        };
-        let receipt = match self.payload_store.persist_completed_with_exact_body(
-            authenticated,
-            durable_body,
-            body_store,
-            response,
-        ) {
-            Ok(receipt) => receipt,
-            Err(CertifiedServeTerminalPersistenceError::InputRejected(_)) => {
-                return Err(CertifiedServeTerminalSettlementErrorV1::prepublication(
-                    CertifiedServeTerminalSettlementFailureV1::PayloadStore,
-                    lease,
-                ));
-            }
-            Err(
-                CertifiedServeTerminalPersistenceError::StoreInvariant(_)
-                | CertifiedServeTerminalPersistenceError::PublicationAmbiguous(_),
-            ) => {
-                return Err(self.certified_serve_terminal_restart(
-                    CertifiedServeTerminalSettlementFailureV1::PayloadStore,
-                    lease,
-                    None,
-                    None,
-                ));
-            }
-        };
-        self.publish_certified_serve_terminal(
-            lease,
-            authenticated,
-            DurableCertifiedServeTerminalPublicationV1::Completed(receipt),
-        )
-    }
     /// Persist and publish a completed Certified-Serve returned by the launched
     /// I/O worker.
     ///

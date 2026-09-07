@@ -9,7 +9,8 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, TransactionWaitOptions},
+    blocking::Client,
+    client::{FeeQuoteRequest, TransactionWaitOptions},
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
         Level, NetworkId,
@@ -485,6 +486,7 @@ fn validate_committed_da_status(status: &SumeragiV2Status, expected_height: u64)
 }
 fn fetch_v2_status(client: Client) -> Result<SumeragiV2Status> {
     client
+        .client()
         .get_sumeragi_status()
         .wrap_err("fetch canonical Sumeragi v2 status")
 }
@@ -495,6 +497,7 @@ async fn wait_for_bridge_finality_proof(
     timeout: Duration,
 ) -> Result<BridgeFinalityProof> {
     let url = client
+        .client()
         .torii_url
         .join(&format!("v1/bridge/finality/{height}"))
         .wrap_err("construct bridge-finality URL")?;
@@ -972,6 +975,7 @@ fn validate_exact_applied_payload_carrier(
         "peer status CommitQC does not authenticate a height-{expected_height} decision at or after held view {held_view}"
     );
     let pipeline_status = client
+        .client()
         .get_transaction_status_response_local(submitted_hash)
         .wrap_err("query exact local DA transaction status")?
         .ok_or_else(|| eyre!("peer omitted exact local DA transaction status"))?;
@@ -1111,12 +1115,17 @@ async fn wait_for_applied_v2_height(
         let mut all_applied = true;
         let status_fetches = network.peers().iter().map(|peer| {
             let mnemonic = peer.mnemonic().to_owned();
-            let mut client = peer.client();
-            client.torii_request_timeout = remaining;
+            let client =
+                integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                    client.torii_request_timeout = remaining
+                });
             async move {
-                let status = tokio::task::spawn_blocking(move || client.get_sumeragi_status())
-                    .await
-                    .wrap_err_with(|| format!("join applied-height status fetch for {mnemonic}"))?;
+                let status =
+                    tokio::task::spawn_blocking(move || client.client().get_sumeragi_status())
+                        .await
+                        .wrap_err_with(|| {
+                            format!("join applied-height status fetch for {mnemonic}")
+                        })?;
                 Ok::<_, eyre::Report>((mnemonic, status))
             }
         });
@@ -1177,8 +1186,10 @@ async fn wait_for_exact_round_leader(
         let mut statuses = Vec::with_capacity(network.peers().len());
         let status_fetches = network.peers().iter().map(|peer| {
             let mnemonic = peer.mnemonic().to_owned();
-            let mut client = peer.client();
-            client.torii_request_timeout = remaining;
+            let client =
+                integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                    client.torii_request_timeout = remaining
+                });
             async move {
                 let status = tokio::task::spawn_blocking(move || fetch_v2_status(client))
                     .await
@@ -1262,11 +1273,11 @@ fn is_route_unavailable_submission(error: &eyre::Report) -> bool {
     error.to_string().contains("reject code: route_unavailable")
 }
 async fn submit_prepared_with_route_retry(
-    mut client: Client,
+    client: Client,
     transaction: SignedTransaction,
     timeout: Duration,
 ) -> Result<HashOf<SignedTransaction>> {
-    let prepared = Client::prepare_transaction_payload(&transaction);
+    let prepared = iroha::client::PreparedTransactionPayload::from_transaction(&transaction);
     let deadline = Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1274,11 +1285,15 @@ async fn submit_prepared_with_route_retry(
             !remaining.is_zero(),
             "authoritative lane route did not become available within the {timeout:?} submission budget"
         );
-        client.torii_request_timeout = remaining;
+        let attempt_client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+            client.torii_request_timeout = remaining;
+        });
         let attempt = prepared.clone();
         let result = tokio::time::timeout(
             remaining,
-            client.submit_prepared_transaction_payload_async(&attempt),
+            attempt_client
+                .account_client()
+                .submit_prepared_transaction_payload(&attempt),
         )
         .await
         .wrap_err_with(|| {
@@ -1323,13 +1338,17 @@ async fn wait_for_exact_local_queue_replication(
             .enumerate()
             .map(|(peer_index, peer)| {
                 let mnemonic = peer.mnemonic().to_owned();
-                let mut client = peer.client();
-                client.torii_request_timeout = request_timeout;
+                let client =
+                    integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                        client.torii_request_timeout = request_timeout
+                    });
                 let hash = submitted_hash;
                 async move {
                     let result = tokio::task::spawn_blocking(move || {
-                        let blocks = client.get_status()?.blocks;
-                        let pipeline = client.get_transaction_status_response_local(hash)?;
+                        let blocks = client.client().get_status()?.blocks;
+                        let pipeline = client
+                            .client()
+                            .get_transaction_status_response_local(hash)?;
                         Ok::<_, eyre::Report>((blocks, pipeline))
                     })
                     .await
@@ -1640,7 +1659,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .await?;
 
         let client = network.client();
-        let admission_height = client.get_status()?.blocks.saturating_add(1);
+        let admission_height = client.client().get_status()?.blocks.saturating_add(1);
         ensure!(
             admission_height == PACKET_LOSS_ADMISSION_HEIGHT,
             "packet-loss admission expected active height {PACKET_LOSS_ADMISSION_HEIGHT}, but the network opened {admission_height}"
@@ -1652,15 +1671,27 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         );
         let prepare_client = client.clone();
         let transaction = tokio::task::spawn_blocking(move || {
-            let payload = prepare_client.try_build_transaction_payload(
-                vec![Log::new(
-                    Level::INFO,
-                    "P".repeat(PACKET_LOSS_PAYLOAD_BYTES),
-                )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
+            let mut payload = prepare_client.account_client().prepare_transaction(
+                iroha::client::AccountTransactionDraft::new(
+                    vec![Log::new(
+                        Level::INFO,
+                        "P".repeat(PACKET_LOSS_PAYLOAD_BYTES),
+                    )],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ),
             )?;
-            prepare_client.quote_and_sign_transaction_payload(payload)
+            let quote = prepare_client.quote_fees(FeeQuoteRequest::AccountSignature {
+                payload: &payload,
+            })?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "packet-loss fee quote changed the selected payer, sponsor revision, or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            Ok::<_, eyre::Report>(prepare_client.account_client().sign_transaction(payload)?)
         })
         .await
         .wrap_err("join packet-loss payload preparation")??;
@@ -1885,7 +1916,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         );
         for peer in &peers {
             ensure!(
-                peer.client().get_status()?.blocks < expected_height,
+                peer.client().client().get_status()?.blocks < expected_height,
                 "{} committed before the three-of-six RS16 loss was healed",
                 peer.mnemonic()
             );
@@ -2116,7 +2147,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         );
         for peer in &peers {
             ensure!(
-                peer.client().get_status()?.blocks < expected_height,
+                peer.client().client().get_status()?.blocks < expected_height,
                 "{} committed before the held body evidence capture fence was healed",
                 peer.mnemonic()
             );

@@ -12,6 +12,38 @@ private const val CALL_NAME_KEY = "call_name"
 /** Shared helpers for flattening Kaigi instruction payloads to argument maps. */
 object KaigiInstructionUtils {
 
+    internal fun requireAuthorizationArtifacts(
+        commitment: KaigiAuthorizationScalarV1?, nullifier: KaigiAuthorizationScalarV1?,
+        rosterRoot: String?, proof: String?,
+    ) {
+        val count = listOf(commitment, nullifier, rosterRoot, proof).count { it != null }
+        require(count == 0 || count == 4) { "Kaigi authorization fields must be all present or all omitted" }
+        proof?.let(::requireProofV1)
+    }
+
+    internal fun requireUsageArtifacts(commitment: KaigiAuthorizationScalarV1?, proof: String?) {
+        require((commitment == null) == (proof == null)) { "Kaigi usage commitment and proof must be both present or both omitted" }
+        proof?.let(::requireProofV1)
+    }
+
+    private fun requireProofV1(value: String) {
+        require(value.length <= (64 * 1024 * 1024 / 3 + 1) * 4) { "Kaigi proof exceeds the V1 byte limit" }
+        requireBase64(value, "proof", 64 * 1024 * 1024)
+    }
+
+    internal fun canonicalRosterRoot(value: String): String {
+        require(value == value.trim() && value.isNotEmpty()) { "roster root must be exact" }
+        val bytes = if (value.matches(Regex("[0-9a-fA-F]{64}"))) {
+            ByteArray(32) { value.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        } else {
+            HashLiteral.decode(value).also {
+                require(HashLiteral.canonicalize(it) == value) { "roster root must be a canonical Hash literal" }
+            }
+        }
+        require((bytes.last().toInt() and 1) == 1) { "roster root must carry the Hash marker bit" }
+        return HashLiteral.canonicalize(bytes)
+    }
+
     /** Maximum number of relay hops accepted by the Kaigi V1 manifest format. */
     const val KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: Int = 8
 

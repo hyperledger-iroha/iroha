@@ -56,6 +56,8 @@ fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> Hash {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayEnvelope")]
 pub struct LaneRelayEnvelope {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -103,6 +105,8 @@ pub struct LaneRelayEnvelope {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneFinalityStatement")]
 pub struct LaneFinalityStatement {
     /// Statement format version.
     pub version: u8,
@@ -137,6 +141,8 @@ pub struct LaneFinalityStatement {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneFinalityAuthorityV1")]
 pub struct LaneFinalityAuthorityV1 {
     /// Authority format version; exactly one in the first release.
     pub version: u8,
@@ -177,6 +183,8 @@ impl Ord for LaneFinalityStatement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "status", content = "state")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayFastpqMaterialStatus")]
 pub enum LaneRelayFastpqMaterialStatus {
     /// The relay carries no structurally valid `FastPQ` metadata.
     Missing,
@@ -199,6 +207,8 @@ impl Ord for LaneRelayEnvelope {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayEnvelopeRef")]
 pub struct LaneRelayEnvelopeRef {
     /// Numeric dataspace identifier.
     pub dataspace_id: DataSpaceId,
@@ -226,6 +236,8 @@ impl LaneRelayEnvelopeRef {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::VerifiedLaneRelayRecord")]
 pub struct VerifiedLaneRelayRecord {
     /// Canonical relay reference used by business flows.
     pub relay_ref: LaneRelayEnvelopeRef,
@@ -256,6 +268,8 @@ pub struct VerifiedLaneRelayRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::VerifiedFeeSponsorVaultAllocation")]
 pub struct VerifiedFeeSponsorVaultAllocation {
     /// Exact sponsor program authorized to consume the allocation.
     pub program_id: FeeSponsorProgramId,
@@ -292,18 +306,22 @@ pub struct VerifiedFeeSponsorVaultAllocation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneFastpqProofMaterial")]
 pub struct LaneFastpqProofMaterial {
     /// Deterministic digest of the proof payload.
     pub proof_digest: Hash,
     /// Block height where the proof was verified.
     pub verified_at_height: u64,
 }
-#[derive(Clone, Debug, Encode)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayFastpqClaim")]
 struct LaneRelayFastpqClaim {
     version: u8,
     lane_finality_statement_hash: Hash,
 }
-#[derive(Clone, Debug, Encode)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayMergeHint")]
 struct LaneRelayMergeHint {
     version: u8,
     lane_id: LaneId,
@@ -346,6 +364,8 @@ pub fn lane_relay_fastpq_claim_digest(
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::FeeSponsorVaultAllocationClaim")]
 pub struct FeeSponsorVaultAllocationClaim {
     /// Exact sponsor program authorized to spend the allocation.
     pub program_id: FeeSponsorProgramId,
@@ -366,7 +386,8 @@ pub struct FeeSponsorVaultAllocationClaim {
     /// Globally unique proof-bound spend lease identifier.
     pub lease_id: Hash,
 }
-#[derive(Clone, Debug, Encode)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::FeeSponsorVaultSourceStateCommitment")]
 struct FeeSponsorVaultSourceStateCommitment {
     version: u8,
     program_id: FeeSponsorProgramId,
@@ -441,6 +462,8 @@ pub fn fee_sponsor_vault_policy_commitment(manifest_root: &[u8; 32]) -> Hash {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayEvidenceBundle")]
 pub struct LaneRelayEvidenceBundle {
     /// Lane relay envelope that triggered the failure.
     pub envelope: LaneRelayEnvelope,
@@ -455,6 +478,8 @@ pub struct LaneRelayEvidenceBundle {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayEmergencyValidatorSet")]
 pub struct LaneRelayEmergencyValidatorSet {
     /// Live consensus peers temporarily allowed to fill missing lane-relay committee slots.
     pub peers: Vec<PeerId>,
@@ -2389,3 +2414,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_relay_schema_tests;

@@ -695,7 +695,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "99e0b382c1c4960ffed95f34dc3cd347d5a225df6a8d85d1caf2ae1429cc0ef2"
+        "fe65c02642f1eba64e6ad356e12eaf4120c7ac42bb389d10cb7a14b609de2705"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -2005,7 +2005,6 @@ def _sdk_dependency_material() -> tuple[bytes, bytes, bytes, bytes, dict[str, by
             "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
             "79n14ral3mx1ozqr3csh2u872/gradle-9.3.0-bin.zip.ok"
         ): b"",
-        "gradle/java-gradle-wrapper.properties": wrapper,
         "gradle/kotlin-gradle-wrapper.properties": wrapper,
         "node/node_modules/.package-lock.json": installed_lock,
         "node/node_modules/fixture/index.js": b"export const fixture = true;\n",
@@ -2189,7 +2188,6 @@ def _sdk_source_manifest_fixture(git_path: Path, git_sha256: str) -> bytes:
                 "gradle_user_home_inventory": source_inventory(
                     "gradle/gradle-user-home"
                 ),
-                "java_wrapper_properties_sha256": hashlib.sha256(wrapper).hexdigest(),
                 "kotlin_wrapper_properties_sha256": hashlib.sha256(wrapper).hexdigest(),
                 "version": "9.3.0",
                 "wrapper_cache_key": "79n14ral3mx1ozqr3csh2u872",
@@ -2307,7 +2305,6 @@ def make_sdk_dependency_evidence(
                 "wrapper_cache_key": "79n14ral3mx1ozqr3csh2u872",
                 "version": "9.3.0",
                 "wrapper_properties_sha256": {
-                    "java": hashlib.sha256(wrapper).hexdigest(),
                     "kotlin": hashlib.sha256(wrapper).hexdigest(),
                 },
             },
@@ -2347,6 +2344,67 @@ def make_sdk_dependency_evidence(
         "sdk_dependency_input_inventory": input_inventory,
         "sdk_dependency_final_work_inventory": final_inventory,
     }
+
+
+@pytest.mark.parametrize("mutation", ("obsolete_java_wrapper", "missing_kotlin_wrapper"))
+def test_sdk_receipt_binding_requires_only_canonical_kotlin_wrapper(
+    tmp_path: Path, mutation: str,
+) -> None:
+    module = load_writer_module()
+    evidence = make_sdk_dependency_evidence(
+        tmp_path, source_manifest_sha256="0" * 64,
+    )
+    inventory = json.loads(evidence["sdk_dependency_input_inventory"].read_bytes())
+    records = {record["path"]: record for record in inventory["records"]}
+    bindings = module._sdk_binding_contract(inventory["bindings"], records)
+    wrappers = bindings["gradle"]["wrapper_properties_sha256"]
+    assert set(wrappers) == {"kotlin"}
+    if mutation == "obsolete_java_wrapper":
+        wrappers["java"] = wrappers["kotlin"]
+    else:
+        del wrappers["kotlin"]
+    with pytest.raises(module.ReceiptError, match="SDK Gradle wrapper digests"):
+        module._sdk_binding_contract(bindings, records)
+
+
+@pytest.mark.parametrize(
+    ("registered_test", "unrelated_symbol"),
+    (
+        (
+            "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+            "queue::replica_disposition",
+        ),
+        (
+            "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+            "queue::tests_helper::replica_disposition",
+        ),
+        (
+            "native_amx::participant_application_role_tests::participant_application_role_classifies_exact_routes_and_incarnations",
+            "native_amx::participant_application_role",
+        ),
+        (
+            "native_amx::participant_application_role_tests::participant_application_role_classifies_exact_routes_and_incarnations",
+            "native_amx::participant_application_role_tests_helper::classifies_routes",
+        ),
+    ),
+)
+def test_production_inventory_requires_exact_owned_test_modules(
+    tmp_path: Path, registered_test: str, unrelated_symbol: str,
+) -> None:
+    module = load_writer_module()
+    tests = module._canonical_production_tests(ROOT_DIR)
+    assert len(tests) == module._PRODUCTION_TEST_COUNT == 881
+    assert tests.count(registered_test) == 1
+    runner = ROOT_DIR / "scripts/run_sumeragi_v2_release_gates.sh"
+    source = runner.read_text(encoding="utf-8")
+    assert source.count(registered_test) == 1
+    candidate_runner = tmp_path / "scripts/run_sumeragi_v2_release_gates.sh"
+    candidate_runner.parent.mkdir()
+    candidate_runner.write_text(
+        source.replace(registered_test, unrelated_symbol), encoding="utf-8",
+    )
+    with pytest.raises(module.ReceiptError, match="production inventory is not exactly"):
+        module._canonical_production_tests(tmp_path)
 
 
 def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
@@ -4778,6 +4836,11 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
         (workspace_manifest, multilane_manifest, "header is not the exact pinned profile"),
         (multilane_manifest, workspace_manifest, "header is not the exact pinned profile"),
         ("result_count\t6", "result_count\t5", "header is not the exact pinned profile"),
+        (
+            "multilane_autonomous_reservation_carrier_fixed.cfg\t12\tNoError",
+            "multilane_autonomous_reservation_carrier_fixed.cfg\t10\tNoError",
+            "is not exact source-bound NoError evidence",
+        ),
         ("result\tinflight-first-release-layout\t", "result\tinflight-first-release-refinement\t", "is not exact source-bound NoError evidence"),
     )
     module = load_writer_module()

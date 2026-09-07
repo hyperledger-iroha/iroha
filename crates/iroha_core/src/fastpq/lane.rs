@@ -316,7 +316,7 @@ fn preflight_prover_modes(
         mode,
         poseidon_mode,
         preflight_execution_gpu_backend,
-        fastpq_prover::preflight_poseidon_gpu_backend,
+        fastpq_prover::preflight_native_v1_gpu_backend,
         fastpq_prover::preflight_bn254_poseidon_word_batches,
     )
 }
@@ -1208,6 +1208,26 @@ mod tests {
             rebound[0].public_inputs.new_root, batches[0].public_inputs.new_root,
             "transfer SMT roots remain transcript-bound"
         );
+        let mut missing = job;
+        missing.context.tx_set_hash = None;
+        assert!(matches!(
+            batches_for_job(&missing),
+            Err(TranscriptBatchError::MissingTransactionSetCommitment)
+        ));
+        missing.context.tx_set_hash = Some([0; 32]);
+        assert!(matches!(
+            batches_for_job(&missing),
+            Err(TranscriptBatchError::MissingTransactionSetCommitment)
+        ));
+        missing.context.tx_set_hash = None;
+        missing.witness.fastpq_transcripts.clear();
+        assert!(
+            matches!(
+                batches_for_job(&missing),
+                Err(TranscriptBatchError::MissingTransactionSetCommitment)
+            ),
+            "precomputed proof-only batches cannot supply their own transaction-set authority"
+        );
     }
     #[test]
     fn entry_hash_for_batch_accepts_matching_bundle_and_metadata() {
@@ -1538,6 +1558,14 @@ mod tests {
     }
 }
 fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
+    if (!job.witness.fastpq_batches.is_empty() || !job.witness.fastpq_transcripts.is_empty())
+        && job
+            .context
+            .tx_set_hash
+            .is_none_or(|digest| digest == [0; 32])
+    {
+        return Err(TranscriptBatchError::MissingTransactionSetCommitment);
+    }
     let mut batches = match batches_from_exec_witness(&job.witness) {
         Ok(batches) => batches,
         Err(TranscriptBatchError::MissingFastpqBatches) => Vec::new(),

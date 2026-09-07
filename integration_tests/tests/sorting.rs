@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr as _};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::{KeyPair, PublicKey},
     data_model::{account::Account, name::Name, prelude::*, query::parameters::SortOrder},
 };
@@ -93,6 +93,7 @@ fn correct_pagination_assets_after_creating_new_one() {
     submit_chunked(&test_client, &register_asset_definitions).expect("Valid");
     submit_chunked(&test_client, &register_assets).expect("Valid");
     let queried_assets = test_client
+        .client()
         .query(FindAssets::new())
         .filter(xor_filter.clone())
         .with_pagination(pagination)
@@ -111,6 +112,7 @@ fn correct_pagination_assets_after_creating_new_one() {
     submit_chunked(&test_client, &missing_register_asset_definitions).expect("Valid");
     submit_chunked(&test_client, &missing_register_assets).expect("Valid");
     let queried_assets = test_client
+        .client()
         .query(FindAssets::new())
         .filter(xor_filter)
         .with_pagination(pagination)
@@ -131,7 +133,7 @@ where
 {
     for chunk in instructions.chunks(MAX_INSTRUCTIONS_PER_TX) {
         client
-            .submit_all_blocking(
+            .submit_all(
                 chunk.iter().cloned(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -151,6 +153,7 @@ fn wait_for_sorted_asset_definitions(
     let mut last_observed = "asset definitions were not queried".to_owned();
     while Instant::now() < deadline {
         match client
+            .client()
             .query(FindAssetsDefinitions::new())
             .with_sorting(sorting.clone())
             .execute_all()
@@ -197,6 +200,7 @@ fn wait_for_sorted_accounts(
     let mut last_observed = "accounts were not queried".to_owned();
     while Instant::now() < deadline {
         match client
+            .client()
             .query(FindAccounts::new())
             .with_sorting(sorting.clone())
             .execute_all()
@@ -242,6 +246,7 @@ fn wait_for_sorted_domains(
     let mut last_observed = "domains were not queried".to_owned();
     while Instant::now() < deadline {
         match client
+            .client()
             .query(FindDomains::new())
             .with_sorting(sorting.clone())
             .execute_all()
@@ -473,6 +478,7 @@ fn metadata_sorting_descending() {
     }
     submit_chunked(&test_client, &instructions).expect("Valid");
     let res = test_client
+        .client()
         .query(FindAssetsDefinitions::new())
         .with_sorting(Sorting::new(
             Some(sort_by_metadata_key),

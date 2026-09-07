@@ -3563,7 +3563,8 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
                 f"found {direct_workflow_cargo}"
             )
         layout_tokens = (
-            "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX",
+            'invocation_base="$(cd -- /tmp && pwd -P)"',
+            'mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos.XXXXXX"',
             'printf \'CARGO_TARGET_DIR=%s\\n\' "$invocation_root/target"',
             'printf \'IROHA_RELEASE_ARTIFACT_ROOT=%s\\n\' "$invocation_root/artifacts"',
             'printf \'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\\n\' "$invocation_root/cancel-request.json"',
@@ -3577,7 +3578,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
                 f"{workflow_path}: nightly chaos job lacks one fresh private "
                 f"target/artifact/cancel layout; missing {missing_layout_tokens}"
             )
-        layout_marker = "mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX"
+        layout_marker = 'mktemp -d "$invocation_base/iroha-sumeragi-v2-chaos.XXXXXX"'
         gate_marker = "run: bash scripts/run_sumeragi_v2_100k_chaos.sh"
         counts = {
             "layout": job.count(layout_marker),
@@ -3659,6 +3660,7 @@ def _production_liveness_release_inventory_guard_errors(
             )
 
     guarded_modules = (
+        "native_amx::participant_application_role_tests",
         "kura::tests",
         "sumeragi::authoritative_runtime_gate_tests",
         "sumeragi::serviced_candidate_store::tests",

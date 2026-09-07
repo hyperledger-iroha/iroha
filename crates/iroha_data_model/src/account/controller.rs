@@ -11,6 +11,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::vec::Vec;
 use thiserror::Error;
+
+mod canonical_decode;
 /// Controller responsible for authorising account actions.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -18,6 +20,8 @@ use thiserror::Error;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "kind", content = "payload", no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::AccountController")]
 pub enum AccountController {
     /// Single public key controls the account.
     Single(PublicKey),
@@ -83,12 +87,11 @@ impl fmt::Display for AccountController {
     }
 }
 /// Multisignature authorisation policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::MultisigPolicy")]
 pub struct MultisigPolicy {
     version: u8,
     threshold: u16,
@@ -103,7 +106,28 @@ impl MultisigPolicy {
     ///
     /// Returns [`MultisigPolicyError`] if the supplied configuration is invalid.
     pub fn new(threshold: u16, members: Vec<MultisigMember>) -> Result<Self, MultisigPolicyError> {
-        Self::validate(Self::CURRENT_VERSION, threshold, members)
+        let mut members = members;
+        for member in &members {
+            member
+                .public_key()
+                .try_to_bytes()
+                .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
+        }
+        members.sort_unstable_by(|left, right| {
+            let (left_algorithm, left_payload) = left
+                .public_key()
+                .try_to_bytes()
+                .expect("validated member key");
+            let (right_algorithm, right_payload) = right
+                .public_key()
+                .try_to_bytes()
+                .expect("validated member key");
+            left_algorithm
+                .as_static_str()
+                .cmp(right_algorithm.as_static_str())
+                .then_with(|| left_payload.cmp(right_payload))
+        });
+        Self::from_serialized(Self::CURRENT_VERSION, threshold, members)
     }
     /// Wipe every member key, weight, and policy threshold before discard.
     ///
@@ -119,7 +143,10 @@ impl MultisigPolicy {
         zeroize_value_for_confidential_discard(self.members.spare_capacity_mut());
         drop(core::mem::take(&mut self.members));
     }
-    /// Construct a policy from serialized components.
+    /// Construct a policy from canonical serialized components.
+    ///
+    /// Unlike [`Self::new`], this boundary rejects members outside canonical
+    /// complete-key order instead of silently sorting external identities.
     ///
     /// # Errors
     ///
@@ -130,67 +157,69 @@ impl MultisigPolicy {
         threshold: u16,
         members: Vec<MultisigMember>,
     ) -> Result<Self, MultisigPolicyError> {
-        Self::validate(version, threshold, members)
+        Self::validate_canonical_members(
+            version,
+            threshold,
+            members
+                .iter()
+                .map(|member| (member.public_key(), member.weight())),
+        )?;
+        Ok(Self {
+            version,
+            threshold,
+            members,
+        })
     }
-    fn validate(
+    /// Validate borrowed serialized members without cloning keys or normalizing their order.
+    pub(super) fn validate_canonical_members<'a>(
         version: u8,
         threshold: u16,
-        members: Vec<MultisigMember>,
-    ) -> Result<Self, MultisigPolicyError> {
+        members: impl ExactSizeIterator<Item = (&'a PublicKey, u16)>,
+    ) -> Result<(), MultisigPolicyError> {
         if version != Self::CURRENT_VERSION {
             return Err(MultisigPolicyError::UnsupportedVersion(version));
         }
-        if members.is_empty() {
+        if members.len() == 0 {
             return Err(MultisigPolicyError::EmptyMembers);
+        }
+        if members.len() > usize::from(u16::MAX) {
+            return Err(MultisigPolicyError::TooManyMembers(members.len()));
         }
         if threshold == 0 {
             return Err(MultisigPolicyError::ZeroThreshold);
         }
-        for member in &members {
-            if member.weight() == 0 {
+        let mut total_weight = 0u32;
+        let mut previous: Option<(&'static str, &'a [u8])> = None;
+        for (key, weight) in members {
+            if weight == 0 {
                 return Err(MultisigPolicyError::MemberWeightZero);
             }
-            member
-                .public_key()
+            let (algorithm, payload) = key
                 .try_to_bytes()
                 .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
+            CurveId::try_from_algorithm(algorithm)
+                .map_err(|_| MultisigPolicyError::UnsupportedCurve(algorithm))?;
+            let current = (algorithm.as_static_str(), payload);
+            if let Some(previous) = previous {
+                match previous.cmp(&current) {
+                    core::cmp::Ordering::Equal => return Err(MultisigPolicyError::DuplicateMember),
+                    core::cmp::Ordering::Greater => {
+                        return Err(MultisigPolicyError::NonCanonicalMemberOrder);
+                    }
+                    core::cmp::Ordering::Less => {}
+                }
+            }
+            previous = Some(current);
+            // At most u16::MAX members each contribute at most u16::MAX.
+            total_weight += u32::from(weight);
         }
-        let mut members = members;
-        members.sort_unstable_by(|left, right| {
-            let (left_algorithm, left_payload) = left
-                .public_key()
-                .try_to_bytes()
-                .expect("multisig member key was validated above");
-            let (right_algorithm, right_payload) = right
-                .public_key()
-                .try_to_bytes()
-                .expect("multisig member key was validated above");
-            left_algorithm
-                .as_static_str()
-                .cmp(right_algorithm.as_static_str())
-                .then_with(|| left_payload.cmp(right_payload))
-        });
-        if members
-            .windows(2)
-            .any(|pair| pair[0].public_key() == pair[1].public_key())
-        {
-            return Err(MultisigPolicyError::DuplicateMember);
-        }
-        let total_weight = members
-            .iter()
-            .map(|member| u32::from(member.weight()))
-            .sum::<u32>();
         if u32::from(threshold) > total_weight {
             return Err(MultisigPolicyError::ThresholdExceedsTotal {
                 threshold,
                 total_weight,
             });
         }
-        Ok(Self {
-            version,
-            threshold,
-            members,
-        })
+        Ok(())
     }
     /// Policy version.
     #[must_use]
@@ -282,12 +311,11 @@ impl MultisigPolicy {
     }
 }
 /// Participant in a multisignature policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::controller::MultisigMember")]
 pub struct MultisigMember {
     public_key: PublicKey,
     weight: u16,
@@ -360,6 +388,12 @@ pub enum MultisigPolicyError {
     /// Multisignature policies require at least one member.
     #[error("multisig policy requires at least one member")]
     EmptyMembers,
+    /// Member count exceeds the canonical address's u16 capacity.
+    #[error("multisig policy has too many members: {0}")]
+    TooManyMembers(usize),
+    /// Serialized members are not in canonical complete-key order.
+    #[error("multisig members are not in canonical key order")]
+    NonCanonicalMemberOrder,
     /// Threshold cannot be zero.
     #[error("multisig threshold must be at least 1")]
     ZeroThreshold,

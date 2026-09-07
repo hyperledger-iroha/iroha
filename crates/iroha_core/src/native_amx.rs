@@ -1878,16 +1878,22 @@ impl NativeAmxSigningGuard {
         self.limits.max_records.get()
     }
     #[cfg(test)]
-    pub(crate) fn remove_one_record_for_test(&self) {
-        let path = self
-            .inner
-            .lock()
+    /// Remove a retained Commit record or Prepare quarantine anchor to model durable-file loss.
+    pub(crate) fn remove_one_retained_journal_file_for_test(&self) {
+        let inner = self.inner.lock();
+        let path = inner
             .record_identities
             .values()
             .next()
             .map(|(path, _)| path.clone())
-            .expect("test signing guard has a retained record");
-        std::fs::remove_file(path).expect("remove one retained signing record for test");
+            .unwrap_or_else(|| {
+                assert!(
+                    inner.anchor.last_prepare_view.is_some(),
+                    "test signing guard has a retained Prepare quarantine anchor"
+                );
+                Self::anchor_path(&self.directory)
+            });
+        std::fs::remove_file(path).expect("remove one retained signing journal file for test");
     }
 }
 #[cfg(any(unix, test))]
@@ -3655,3 +3661,6 @@ impl NativeAmxSessionCache {
 mod tests {
     include!("native_amx/tests.rs");
 }
+#[cfg(test)]
+#[path = "native_amx/participant_application_role_tests.rs"]
+mod participant_application_role_tests;

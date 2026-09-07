@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Audit fail-closed Exact12 capability-manifest admission across SDKs.
 
-ABI23 intentionally has exactly five privacy C exports.  Its no-argument
+ABI23 intentionally has exactly six privacy C exports. Its no-argument
 compiled-profile getter can expose only immutable local build metadata; it
 cannot manufacture Torii's committed height, lifecycle, or registered release
-and network qualification.
+and network qualification. The capability-manifest validator accepts only
+caller-supplied canonical bytes and verifies their complete signed evidence.
 Consequently an SDK is release-ready only when it preserves Torii's canonical
 manifest bytes, validates them, and compares the selected row's complete
 compiled-profile tuple with the native local catalog before constructing a
@@ -14,7 +15,7 @@ The default mode reports source readiness without weakening the build.  Pass
 ``--require-ready`` as a prerequisite in a qualification lane to fail until
 every SDK has the complete admission path.  This source audit is never native
 execution evidence or release authority.  Structural safety violations always
-fail, including a sixth ABI export or a retained-protocol builder which lacks
+fail, including an unreviewed ABI export or a retained-protocol builder which lacks
 an explicit capability-admission guard.
 """
 
@@ -35,6 +36,7 @@ APPROVED_PRIVACY_EXPORTS = frozenset(
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
+        "iroha_privacy_validate_exact12_capability_manifest_v1",
         "iroha_privacy_free_buffer",
     }
 )
@@ -45,6 +47,7 @@ _RUST_BRIDGE_PLATFORM_JNI_PARTS = (
     "crates/connect_norito_bridge/src/platform_jni/part_1.rs",
     "crates/connect_norito_bridge/src/platform_jni/part_2.rs",
     "crates/connect_norito_bridge/src/platform_jni/part_3.rs",
+    "crates/connect_norito_bridge/src/platform_jni/private_settlement.rs",
 )
 _RUST_BRIDGE_SOURCE_FILES = (
     RUST_BRIDGE,
@@ -55,6 +58,7 @@ _RUST_BRIDGE_PLATFORM_JNI_INCLUDES = (
     "platform_jni/part_1.rs",
     "platform_jni/part_2.rs",
     "platform_jni/part_3.rs",
+    "platform_jni/private_settlement.rs",
 )
 C_HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 _JAVASCRIPT_CAPABILITIES = "javascript/iroha_js/src/privacyCapabilities.js"
@@ -186,7 +190,11 @@ SDK_CONTRACTS = (
             "Qualification",
             "PrivacyExact12QualificationRecordV1",
         ),
-        ("ValidateExact12CapabilityManifestV1", "ValidateCompiledProfileCatalogV1"),
+        (
+            "ValidateExact12CapabilityManifestV1",
+            "ValidateCompiledProfileCatalogV1",
+            "iroha_privacy_validate_exact12_capability_manifest_v1",
+        ),
         ("RequireExact12CapabilityTupleV1", "CompiledProfileCatalogV1"),
     ),
     SdkContract(
@@ -263,6 +271,170 @@ _SWIFT_TEST = (
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12CapabilityManifestV1Tests.swift"
 )
 
+# These source prerequisites pin the transport-to-construction authority chain.
+# They do not certify cryptographic execution, caller-provided transport code,
+# or freshness beyond the authenticated response and final ledger admission.
+_NETWORK_AUTHORITY_REQUIREMENTS = {
+    "javascript-napi": {
+        "javascript/iroha_js/src/privacyCapabilityTransport.js": (
+            "const transports = new WeakMap();",
+            "const receipts = new WeakMap();",
+            "const transport = transports.get(client);",
+            "receipts.delete(receipt);",
+        ),
+        _JAVASCRIPT_CAPABILITIES: (
+            "const transport = consumePrivacyExact12CapabilityManifestTransportV1(receipt);",
+            "state.expectedNetworkId = Uint8Array.from(transport.expectedNetworkId);",
+            "byte === qualification.genesis_hash[index]",
+            "protocolId, Uint8Array.from(state.expectedNetworkId)",
+        ),
+        "javascript/iroha_js/src/toriiClient.js": (
+            "registerPrivacyExact12CapabilityManifestTransportV1(",
+            'origin.protocol !== "https:"',
+            "this._localSigningContext?.networkId,",
+            'redirect: "error",',
+            'cache: "no-store",',
+            "responseRedirected || responseUrl !== expectedUrl",
+            'const response = await this.#request("GET", "/v1/privacy/capabilities", {',
+            "await this.#expectStatus(response, [200], { signal });",
+            "const { bytes } = await this.#readBoundedResponseBytes(",
+            "(auth, context) => ToriiClient.#normalizeCanonicalAuth(auth, context)",
+        ),
+        "crates/iroha_js_host/src/lib.rs": (
+            "expected_network_id: Uint8Array,",
+            "require_privacy_exact12_network_v1(",
+            "if actual != expected || genesis_hash != expected.as_bytes()",
+        ),
+    },
+    "python-pyo3": {
+        _PYTHON_RUST_MANIFEST: (
+            "authenticated_network_id: Option<NetworkId>",
+            "authenticated_network_id: None,",
+            "fn from_authenticated_torii(archive: &[u8], expected_network_id: NetworkId)",
+            "qualification.deployment_qualification.network_id != expected_network_id",
+            "decoded.authenticated_network_id = Some(expected_network_id);",
+            "if network_id != expected_network_id",
+            'client.get_type().is(&owner.getattr("ToriiClient")?)',
+            '.getattr("_fetch_authenticated_privacy_capabilities_archive_v1")?',
+            ".call1((client, canonical_auth))?",
+        ),
+        _PYTHON_CLIENT: (
+            "if type(client) is not ToriiClient:",
+            "client._require_local_signing_context(context).network_id",
+            'urlparse(client._base_url).scheme != "https"',
+            "canonical_auth.network_id != expected_network.literal",
+            'response.url != f"{client._base_url}/v1/privacy/capabilities" or response.history',
+            '"Cache-Control": "no-store",',
+            "_read_bounded_sccp_response_body(response, 256 * 1024, context)",
+        ),
+        _PYTHON_RUST_BRIDGE: (
+            "manifest.require_authenticated_network(self.network_id)?;",
+        ),
+    },
+    "jvm-android": {
+        _JVM_MODEL: (
+            "class PrivacyExact12CapabilityManifestV1 private constructor(",
+            "private val authenticatedNetworkId: NetworkId? = null,",
+            "@JvmSynthetic\n        internal fun fromAuthenticatedTorii(",
+            "val networkId = manifest.requireAuthenticatedNetwork()",
+            "require(expectedNetworkId == networkId)",
+            "admission.expectedNetworkId,",
+        ),
+        _JVM_KOTLIN_TRANSPORT: (
+            'require(config.baseUri().scheme == "https")',
+            "val expectedNetworkId = config.requireLocalSigningContext().networkId()",
+            "requestNoStore = true,",
+            "requireExactResponseProvenance = true,",
+            "PrivacyExact12CapabilityManifestV1.fromAuthenticatedTorii(archive, expectedNetworkId)",
+        ),
+        _JVM_KOTLIN_TRANSACTION_ADAPTER: (
+            "it.requirePrivacyExact12Network(value.networkId)",
+            "it.instruction.requirePrivacyExact12Network(value.networkId)",
+        ),
+        _JVM_KOTLIN_INSTRUCTION: (
+            "is WirePayload -> WireInstructionPayload(payload.wireName, payload.payloadBytes)",
+        ),
+        _RUST_BRIDGE_PLATFORM_JNI_PARTS[1]: (
+            "if !java_privacy_manifest_network_matches(&manifest, expected_network)",
+            "network.as_bytes() == expected_network",
+            "genesis_hash == expected_network",
+            ".context()\n            .network_id\n            .as_bytes()\n            == expected_network",
+        ),
+        _RUST_BRIDGE_PLATFORM_JNI_PARTS[2]: (
+            "nativeValidateExact12CapabilityManifestForNetworkV1(",
+            "nativeRequireExact12CapabilityTupleForNetworkV1(",
+            "nativeValidateExact12SubmitProofConstructionForNetworkV1(",
+        ),
+    },
+    "swift": {
+        _SWIFT_MODEL: (
+            "fileprivate let authenticatedNetworkId: NetworkId?",
+            "authenticatedNetworkId: NetworkId? = nil",
+            "guard let expectedNetworkId = manifest.authenticatedNetworkId else",
+            "networkId == expectedNetworkId else",
+            "deployment.networkId == expectedNetworkId,",
+            "deployment.genesisHash == expectedNetworkId.bytes else",
+            "guard genesisHash.count == 32, genesisHash == networkId.bytes else",
+            "for index in 0..<13",
+            "guard fields[0] == proofWireMagic, fields[1] == exact12CatalogCommitment else",
+            "fields[11], protocolId: row.protocolId, expectedNetworkId: expectedNetworkId",
+        ),
+        _SWIFT_TORII: (
+            "guard let localSigningContext else",
+            "data, expectedNetworkId: localSigningContext.networkId",
+            "response.url?.absoluteString == request.url?.absoluteString",
+            "let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)",
+        ),
+        _SWIFT_TRANSACTION: (
+            "guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId else",
+            "expectedNetworkId: expectedNetworkId,",
+        ),
+        _SWIFT_ENCODER: (
+            "encodeBatchExecutable(entries, expectedNetworkId: networkId)",
+            "frame.compactInstructionBoxPayload(expectedNetworkId: expectedNetworkId)",
+        ),
+    },
+}
+
+
+def _authenticated_network_authority(root: Path, sdk: str) -> bool:
+    """Reject source drift in the sealed transport and expected-network path."""
+
+    required = _NETWORK_AUTHORITY_REQUIREMENTS[sdk]
+    if not all(
+        marker in _read(root, path)
+        for path, markers in required.items()
+        for marker in markers
+    ):
+        return False
+    if sdk == "javascript-napi":
+        source = _read(root, _JAVASCRIPT_CAPABILITIES)
+        decoder = source[source.find("export function decodePrivacyExact12CapabilityManifestV1("):
+                         source.find("export async function getPrivacyExact12CapabilityManifestV1(")]
+        return bool(decoder) and "bindPrivacyExact12CapabilityAdmissionV1(" not in decoder
+    if sdk == "python-pyo3":
+        return _read(root, _PYTHON_RUST_BRIDGE).count(
+            "manifest.require_authenticated_network(self.network_id)?;"
+        ) >= 2
+    if sdk == "jvm-android":
+        bridge = _read(root, _RUST_BRIDGE_PLATFORM_JNI_PARTS[2])
+        return not re.search(
+            r"_native(?:ValidateExact12CapabilityManifest|RequireExact12CapabilityTuple|"
+            r"ValidateExact12SubmitProofConstruction)\(",
+            bridge,
+        )
+    if sdk == "swift":
+        source = _read(root, _SWIFT_TORII)
+        start = source.find("    func makePrivacyExact12CapabilityRequestV1(")
+        end = source.find("    public func getSccpCapabilities()", start)
+        request = source[start:end] if 0 <= start < end else ""
+        return all(marker in request for marker in (
+            '"Cache-Control": "no-cache, no-store",',
+            "request.cachePolicy = .reloadIgnoringLocalCacheData",
+            "try applyCanonicalAuth(canonicalAuth, to: &request, body: nil)",
+        ))
+    return True
+
 
 def _read(root: Path, relative: str) -> str:
     path = root / relative
@@ -296,7 +468,7 @@ def _rust_bridge_source(root: Path) -> str:
     if observed_includes != _RUST_BRIDGE_PLATFORM_JNI_INCLUDES:
         raise AuditError(
             "Rust bridge platform_jni include closure differs from the exact "
-            f"three-part inventory: found {observed_includes}"
+            f"approved inventory: found {observed_includes}"
         )
     parts = tuple(
         _read_required_source(root, path) for path in _RUST_BRIDGE_PLATFORM_JNI_PARTS
@@ -327,12 +499,12 @@ def _require_exact_abi23(root: Path) -> None:
     header = _header_exports(_read(root, C_HEADER))
     if rust != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "Rust ABI23 privacy exports differ from the exact approved five: "
+            "Rust ABI23 privacy exports differ from the exact approved six: "
             f"found {sorted(rust)}"
         )
     if header != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "C ABI23 privacy declarations differ from the exact approved five: "
+            "C ABI23 privacy declarations differ from the exact approved six: "
             f"found {sorted(header)}"
         )
 
@@ -347,7 +519,7 @@ def _require_authority_boundary(root: Path) -> None:
         "iroha_privacy_exact12_capability_manifest_v1",
     )
     if any(symbol in combined for symbol in forbidden):
-        raise AuditError("ABI23 added a sixth capability export")
+        raise AuditError("ABI23 added a capability authority getter or retired alias")
     if "compiled_privacy_profile_catalog_v1" not in bridge:
         raise AuditError("ABI23 local catalog is no longer derived from native Rust profiles")
     if "contains no committed height" not in combined.lower():
@@ -465,7 +637,7 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
     transaction_admission = all(
         (
             "bindPrivacyExact12CapabilityAdmissionV1(" in capabilities,
-            "admitPrivacyExact12CapabilityTupleV1(this, protocolId)" in capabilities,
+            "admitPrivacyExact12CapabilityTupleV1(manifest, protocolId)" in capabilities,
             "privacyExact12ManifestState.get(manifest)" in capabilities,
             "requirePrivacyExact12CapabilityAdmissionV1" in transaction,
         )
@@ -546,9 +718,9 @@ def _python_cutover_gates(root: Path) -> dict[str, bool]:
             "requires a validated Torii Exact12 capability manifest" in bridge,
             "PyRef<'_, privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>"
             in bridge,
-            'headers={"Accept": "application/x-norito"}' in client,
-            'media_type != "application/x-norito"' in client,
-            "privacy_exact12_capability_manifest_v1(response.content)" in client,
+            '"Accept": "application/x-norito"' in client,
+            'response.headers.get("Content-Type") != "application/x-norito"' in client,
+            "_fetch_privacy_exact12_capability_manifest_v1(" in client,
         )
     )
     return {
@@ -566,6 +738,7 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
     kotlin_bridge = _read(root, _JVM_KOTLIN_BRIDGE)
     java_bridge = _read(root, _JVM_JAVA_BRIDGE)
     rust_bridge = _rust_bridge_source(root)
+    rust_manifest_admission = _read(root, _RUST_BRIDGE_PLATFORM_JNI_PARTS[1])
     kotlin_transport = _read(root, _JVM_KOTLIN_TRANSPORT)
     java_transport = _read(root, _JVM_JAVA_TRANSPORT)
     kotlin_instruction = _read(root, _JVM_KOTLIN_INSTRUCTION)
@@ -577,7 +750,7 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
     canonical_model = all(
         marker in model
         for marker in (
-            "class PrivacyExact12CapabilityManifestV1 internal constructor",
+            "class PrivacyExact12CapabilityManifestV1 private constructor",
             "canonicalArchive.copyOf()",
             "fun canonicalBytes(): ByteArray = archive.copyOf()",
             "protocols.size == expected.size",
@@ -607,17 +780,18 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
     )
     native_validation = all(
         (
-            "nativeValidateExact12CapabilityManifest" in kotlin_bridge,
+            "nativeValidateExact12CapabilityManifestForNetworkV1" in kotlin_bridge,
             "nativeInspectExact12CapabilityManifest" in kotlin_bridge,
             "check(nativeAvailable)" in kotlin_bridge,
             "nativeValidateExact12CapabilityManifest" in java_bridge,
             "if (!NATIVE_AVAILABLE)" in java_bridge,
-            "validate_privacy_capability_archive_v1(archive)" in rust_bridge,
+            "if !validate_privacy_capability_archive_v1(archive).is_valid()"
+            in rust_manifest_admission,
             "PrivacyExact12CapabilityManifestV1>(archive)" in rust_bridge,
             "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_"
-            "nativeValidateExact12CapabilityManifest" in rust_bridge,
+            "nativeValidateExact12CapabilityManifestForNetworkV1" in rust_bridge,
             "Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_"
-            "nativeValidateExact12CapabilityManifest" in rust_bridge,
+            "nativeValidateExact12CapabilityManifestForNetworkV1" in rust_bridge,
         )
     )
     exact_tuple_match = all(
@@ -637,8 +811,8 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "fun requireForConstruction(" in model,
             "PrivacyNativeBridge.requireExact12CapabilityTuple(" in model,
             "PrivacyNativeBridge.requireExact12SubmitProofConstruction(" in model,
-            "nativeRequireExact12CapabilityTuple" in kotlin_bridge,
-            "nativeValidateExact12SubmitProofConstruction" in kotlin_bridge,
+            "nativeRequireExact12CapabilityTupleForNetworkV1" in kotlin_bridge,
+            "nativeValidateExact12SubmitProofConstructionForNetworkV1" in kotlin_bridge,
             "nativeRequireExact12CapabilityTuple" in java_bridge,
             "nativeValidateExact12SubmitProofConstruction" in java_bridge,
             "fromPrivacyExact12WirePayload" in kotlin_instruction,
@@ -651,7 +825,7 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "requirePrivacyExact12CapabilityAdmission" in java_transport,
             "buildExactNoritoGetRequest(" in kotlin_transport,
             "buildExactNoritoGetRequest(" in java_transport,
-            "PrivacyNativeBridge::decodeExact12CapabilityManifestV1" in kotlin_transport,
+            "PrivacyExact12CapabilityManifestV1.fromAuthenticatedTorii(archive, expectedNetworkId)" in kotlin_transport,
             "PrivacyNativeBridge::decodeExact12CapabilityManifestV1" in java_transport,
             "application/x-norito" in kotlin_transport,
             "application/x-norito" in java_transport,
@@ -667,12 +841,11 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
 
 
 def _swift_cutover_gates(root: Path) -> dict[str, bool]:
-    """Audit Swift's managed semantics plus its mandatory ABI23 catalog anchor.
+    """Audit Swift's canonical Rust validator and mandatory local catalog anchor.
 
-    The fixed five-export C ABI has no Rust manifest validator.  This gate is
-    therefore true only when Swift strictly validates the Torii bytes and every
-    fetch, admission, construction, and final encode necessarily re-enters the
-    native catalog getter and validator before exact tuple comparison.
+    The manifest validator must authenticate the complete signed qualification
+    before managed projection. Every fetch, admission, construction, and final
+    encode also re-enters native validation before exact tuple comparison.
     """
 
     model = _read(root, _SWIFT_MODEL)
@@ -692,6 +865,27 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
     admission = (
         model[admission_start:admission_end]
         if admission_start >= 0 and admission_end > admission_start
+        else ""
+    )
+    origin_factory_start = model.find("    static func fromAuthenticatedToriiResponseV1(")
+    origin_factory_end = model.find("    public func canonicalBytes()", origin_factory_start)
+    origin_factory = (
+        model[origin_factory_start:origin_factory_end]
+        if origin_factory_start >= 0 and origin_factory_end > origin_factory_start
+        else ""
+    )
+    network_admission_start = model.find("    public static func requireExact12CapabilityTupleV1(")
+    network_admission_end = model.find("        let row = current.row(", network_admission_start)
+    network_admission = (
+        model[network_admission_start:network_admission_end]
+        if network_admission_start >= 0 and network_admission_end > network_admission_start
+        else ""
+    )
+    fetch_start = torii.find("    public func getPrivacyExact12CapabilityManifestV1(")
+    fetch_end = torii.find("    public func getSccpCapabilities()", fetch_start)
+    fetch = (
+        torii[fetch_start:fetch_end]
+        if fetch_start >= 0 and fetch_end > fetch_start
         else ""
     )
 
@@ -751,6 +945,8 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
     native_backed_validation = all(
         (
             "validateExact12CapabilityManifestV1" in bridge,
+            ".privacyExact12CapabilityManifestValidationStatusV1(archive)" in bridge,
+            "guard status == 0 else" in bridge,
             "localCatalog = try compiledProfileCatalogV1()" in bridge,
             "let archive = try NoritoNativeBridge.shared.privacyCompiledProfileCatalogV1()"
             in bridge,
@@ -783,6 +979,17 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "private static let authenticSeal" in admission,
             not re.search(r"\b(?:Codable|Decodable)\b", admission),
             "public static func requireExact12CapabilityTupleV1" in model,
+            "fileprivate let authenticatedNetworkId: NetworkId?" in model,
+            "authenticatedNetworkId: NetworkId? = nil" in model,
+            "let validated = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(archive)"
+            in origin_factory,
+            "authenticatedNetworkId: expectedNetworkId" in origin_factory,
+            re.search(
+                r"guard let expectedNetworkId = manifest\.authenticatedNetworkId else\s*\{\s*"
+                r"throw PrivacyExact12CapabilityManifestErrorV1\.invalidAdmission\s*\}",
+                network_admission,
+            )
+            is not None,
             model.count("PrivacyNativeBridge.validateExact12CapabilityManifestV1(") >= 2,
             re.search(
                 r"public struct TransactionInstructionFrame:[^\n]*"
@@ -793,18 +1000,19 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "wireName != PrivacyExact12FixtureCodecV1.submitProofWireId" in transaction,
             "public static func privacyExact12SubmitProof" in transaction,
             "private let privacyAdmission" in transaction,
-            "func compactInstructionBoxPayload() throws" in transaction,
+            "func compactInstructionBoxPayload(expectedNetworkId: NetworkId? = nil) throws" in transaction,
             transaction.count(
                 "PrivacyExact12CapabilityAdmissionV1.requireForConstruction("
             ) >= 2,
-            "try frame.compactInstructionBoxPayload()" in encoder,
-            "getPrivacyExact12CapabilityManifestV1(" in torii,
-            "canonicalAuth: ToriiCanonicalRequestAuth" in torii,
-            'baseURL.scheme?.lowercased() == "https"' in torii,
-            'path: "/v1/privacy/capabilities"' in torii,
-            "try applyCanonicalAuth(canonicalAuth" in torii,
-            "_ = try PrivacyNativeBridge.compiledProfileCatalogV1()" in torii,
-            'contentType == "application/x-norito"' in torii,
+            "try frame.compactInstructionBoxPayload(expectedNetworkId: expectedNetworkId)" in encoder,
+            "canonicalAuth: ToriiCanonicalRequestAuth" in fetch,
+            'baseURL.scheme?.lowercased() == "https"' in fetch,
+            'path: "/v1/privacy/capabilities"' in fetch,
+            "try applyCanonicalAuth(canonicalAuth" in fetch,
+            "_ = try PrivacyNativeBridge.compiledProfileCatalogV1()" in fetch,
+            'contentType == "application/x-norito"' in fetch,
+            "return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1("
+            in fetch,
             "ToriiRejectRedirectTaskDelegate.shared" in torii,
             "validatedSccpContentLength(" in torii,
             "testEveryTruncationAndOneByteSuffixFailClosed" in tests,
@@ -828,6 +1036,10 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
     tuple_match = all(marker in model + "\n" + native for marker in contract.tuple_markers)
     transaction_admission = bool(_ADMISSION_MARKER.search(transactions))
     extra_gates: dict[str, bool] = {}
+    if contract.name in _NETWORK_AUTHORITY_REQUIREMENTS:
+        extra_gates["authenticated_network_authority"] = (
+            _authenticated_network_authority(root, contract.name)
+        )
     if contract.name == "javascript-napi" and _read(root, _JAVASCRIPT_CAPABILITIES):
         javascript = _javascript_cutover_gates(root)
         manifest_model = manifest_model and javascript["canonical_manifest_model"]
@@ -837,12 +1049,12 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
         )
         tuple_match = tuple_match and javascript["exact_native_local_tuple_match"]
         transaction_admission = javascript["transaction_admission_guard"]
-        extra_gates = {
+        extra_gates.update({
             "authenticated_native_authority": javascript[
                 "authenticated_native_authority"
             ],
             "browser_fail_closed": javascript["browser_fail_closed"],
-        }
+        })
     if contract.name == "python-pyo3" and _read(root, _PYTHON_RUST_MANIFEST):
         python = _python_cutover_gates(root)
         manifest_model = manifest_model and python["canonical_manifest_model"]
@@ -870,6 +1082,24 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
             transaction_admission and swift["transaction_admission_guard"]
         )
     if contract.name == "csharp":
+        evidence_start = native.find("internal static void RequireValidCapabilityArchive(")
+        evidence_end = native.find("private static T RunWithNativeStack<T>", evidence_start)
+        evidence_validation = (
+            native[evidence_start:evidence_end]
+            if evidence_start >= 0 and evidence_end > evidence_start
+            else ""
+        )
+        native_validation = native_validation and all(
+            marker in evidence_validation
+            for marker in (
+                "NativeValidateExact12CapabilityManifest(",
+                "if (status != 0)",
+                "The mandatory native Exact12 capability validator is unavailable.",
+            )
+        ) and (
+            "RequireValidCapabilityArchive(snapshot);" in native
+            and "PrivacyNative.RequireValidCapabilityArchive(archive);" in model
+        )
         manifest_model = manifest_model and all(
             marker in model
             for marker in (
@@ -884,6 +1114,30 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
                 "HasProductionQualification",
             )
         )
+        fetch_start = model.find("    internal static async Task<PrivacyExact12CapabilityManifestV1> FetchAuthenticatedToriiAsync(")
+        fetch_end = model.find("    private static void RequireExactNoritoContentType(", fetch_start)
+        fetch = model[fetch_start:fetch_end] if fetch_start >= 0 and fetch_end > fetch_start else ""
+        token_start = model.find("public sealed class PrivacyExact12CapabilityTupleAdmissionV1")
+        token_end = model.find("public static class PrivacyExact12CapabilityAdmissionV1", token_start)
+        token = model[token_start:token_end] if token_start >= 0 and token_end > token_start else ""
+        extra_gates["authenticated_network_authority"] = all((
+            "private PrivacyExact12CapabilityManifestV1(" in model,
+            "public NetworkId NetworkId { get; }" in model,
+            "client.Options.NetworkId ?? throw" in fetch,
+            "decoded.Qualification, expectedNetworkId" in fetch,
+            "private readonly byte[] manifestArchive;" in token,
+            "private readonly object seal;" in token,
+            "decoded.Qualification, manifest.NetworkId, requireQualification: true" in token,
+            "|| !NetworkId.Equals(expectedNetworkId)" in token,
+            "decoded.Qualification, expectedNetworkId, requireQualification: true" in token,
+            "PrivacyNative.RequireValidCapabilityArchive(manifestArchive);" in token,
+            "PrivacyNative.CompiledProfileCatalogV1().NoritoBytes" in token,
+            "if (!genesisHash.SequenceEqual(networkId.AsSpan()))" in model,
+            "if (!qualification.DeploymentQualification.NetworkId.Equals(expectedNetworkId))" in model,
+            "admission.RequireAuthentic(protocol, expectedNetworkId);" in model,
+            "internal void RequireExact12CapabilityAdmission(" in transactions,
+            "RequireForConstruction(admission, protocol, NetworkId)" in transactions,
+        ))
     retained_builders = sorted(set(_RETAINED_BUILDER.findall(transactions)))
     fail_closed = not retained_builders or transaction_admission
     if not fail_closed:
@@ -930,7 +1184,7 @@ def _format_human(report: dict[str, object]) -> str:
     lines = [
         "Exact12 cross-SDK capability-manifest parity: "
         + ("READY" if report["ready"] else "NOT READY"),
-        "ABI23 privacy exports: exact five",
+        "ABI23 privacy exports: exact six",
         "Network authority: Torii committed canonical manifest bytes",
     ]
     sdks = report["sdk"]

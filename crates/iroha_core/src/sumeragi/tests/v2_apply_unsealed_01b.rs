@@ -1012,7 +1012,7 @@ v2_apply_test!(restart_recovers_kura_block_written_before_wsv_commit, {
     );
 });
 v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let baseline_state_hash =
         crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
     fixture.kura.fail_next_native_amx_prepublication_for_tests();

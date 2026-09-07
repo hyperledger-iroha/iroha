@@ -985,23 +985,8 @@ mod model {
     pub type QueryBox<T> = Box<dyn ErasedQuery<T> + Send + Sync>;
     pub(super) const QUERY_BOX_PACKED_STRUCT_ERROR: &str = "packed-struct QueryBox layout";
     fn query_box_tuple_flags() -> Result<u8, norito::core::Error> {
-        let defaults = norito::core::default_encode_flags();
-        let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
-        let static_defaults = defaults & !dynamic_mask;
-        let flags = match norito::core::effective_decode_flags() {
-            None => defaults,
-            Some(0) => 0,
-            Some(current) => {
-                let current_dynamic = current & dynamic_mask;
-                let current_static = current & !dynamic_mask;
-                let effective_static = if current_static == 0 {
-                    static_defaults
-                } else {
-                    current_static | static_defaults
-                };
-                current_dynamic | effective_static
-            }
-        };
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return Err(norito::core::Error::UnsupportedFeature(
                 QUERY_BOX_PACKED_STRUCT_ERROR,
@@ -2585,7 +2570,7 @@ where
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            norito::core::write_len_prefixed_exact(writer, value, &mut field)?;
+            norito::core::write_len_prefixed(writer, value, &mut field)?;
         }
         Ok(())
     }
@@ -4396,6 +4381,7 @@ mod trait_object_tests {
         for flags in [
             0,
             norito::core::header_flags::COMPACT_LEN,
+            norito::core::header_flags::PACKED_SEQ,
             norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN,
         ] {
             let actual = bare_bytes_with_flags(&query, flags);
@@ -4617,6 +4603,8 @@ mod trait_object_tests {
     }
 }
 /// A macro reducing boilerplate when defining query types.
+/// Each item supplies its captured `norito_schema(name = "...")` identity;
+/// the template derives the identity once alongside the existing codecs.
 macro_rules! queries {
     ($($($meta:meta)* $item:item)+) => {
         pub use self::model::*;
@@ -4632,6 +4620,7 @@ macro_rules! queries {
             )]
             #[derive(derive_more::Constructor)]
             #[derive(iroha_schema::IntoSchema)]
+            #[derive(norito::NoritoSchema)]
             $($meta)*
             $item )+
         }
@@ -4649,6 +4638,7 @@ pub mod sns {
         #[derive(Display)]
         #[display("Find SNS dataspace owner for `{dataspace_id}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::sns::model::FindDataspaceNameOwnerById")]
         pub struct FindDataspaceNameOwnerById {
             /// Dataspace identifier whose leased alias owner should be resolved.
             pub dataspace_id: DataSpaceId,
@@ -4677,16 +4667,19 @@ pub mod trigger {
         #[derive(Copy, Display)]
         #[display("Find all trigger ids")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::trigger::model::FindActiveTriggerIds")]
         pub struct FindActiveTriggerIds;
         /// Find all currently active (as in not disabled and/or expired) triggers.
         #[derive(Copy, Display)]
         #[display("Find all triggers")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::trigger::model::FindTriggers")]
         pub struct FindTriggers;
         /// Find a trigger by identifier.
         #[derive(Display)]
         #[display("Find trigger `{id}`")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::trigger::model::FindTriggerById")]
         pub struct FindTriggerById {
             /// Trigger identifier to resolve.
             pub id: crate::trigger::TriggerId,
@@ -4713,6 +4706,7 @@ pub mod smart_contract {
         #[derive(Display)]
         #[display("Find contract manifest by `{code_hash}`")]
         #[repr(transparent)]
+        #[norito_schema(name = "iroha_data_model::query::smart_contract::model::FindContractManifestByCodeHash")]
         pub struct FindContractManifestByCodeHash {
             /// Content-addressed code hash of the compiled `.to` bytecode.
             pub code_hash: iroha_crypto::Hash,
@@ -4735,6 +4729,7 @@ pub mod transaction {
         #[derive(Copy, Display)]
         #[display("Find all transactions")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::transaction::model::FindTransactions")]
         pub struct FindTransactions;
     }
     pub mod prelude {
@@ -4754,12 +4749,14 @@ pub mod block {
         #[derive(Copy, Display)]
         #[display("Find all blocks")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::block::model::FindBlocks")]
         pub struct FindBlocks;
         /// [`FindBlockHeaders`] Iroha Query lists all block headers
         /// sorted by height in descending order
         #[derive(Copy, Display)]
         #[display("Find all block headers")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito_schema(name = "iroha_data_model::query::block::model::FindBlockHeaders")]
         pub struct FindBlockHeaders;
     }
     pub mod prelude {
@@ -4775,10 +4772,11 @@ pub mod prelude {
         CertifiedMergeTransactionInclusion, CommittedTransaction, QueryBox, QueryRequest,
         SingularQueryBox, account::prelude::*, asset::prelude::*, block::prelude::*,
         builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
-        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, game::prelude::*, nft_market::prelude::*, musubi::prelude::*,
-        nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
-        permission::prelude::*, role::prelude::*, rwa::prelude::*, settlement::prelude::*,
-        sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,
+        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, game::prelude::*,
+        musubi::prelude::*, nft::prelude::*, nft_market::prelude::*, oracle::prelude::*,
+        parameters::prelude::*, peer::prelude::*, permission::prelude::*, role::prelude::*,
+        rwa::prelude::*, settlement::prelude::*, sorafs::prelude::*, transaction::prelude::*,
+        trigger::prelude::*,
     };
 }
 include!("query_tail_tests.rs");

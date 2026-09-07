@@ -1,6 +1,8 @@
 //! Iroha configuration parameters on different layers and their default values.
 pub mod actual;
 pub mod defaults;
+/// Checked Inrou startup probe geometry.
+pub mod inrou_startup_probe;
 pub mod user;
 use url::{Host, Url};
 /// Reason a runtime-provider handle cannot identify a production adapter.

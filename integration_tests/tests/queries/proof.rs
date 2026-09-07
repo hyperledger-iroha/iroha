@@ -205,7 +205,7 @@ fn proof_query_scenarios() -> Result<()> {
     let client = network.client();
     // find_proof_records_lists_after_verify
     {
-        client.submit_blocking(
+        client.submit(
             iroha::data_model::isi::zk::VerifyProof::new(find_attachment),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -218,13 +218,13 @@ fn proof_query_scenarios() -> Result<()> {
     }
     // find_proof_records_by_backend_filters
     {
-        client.submit_all_blocking(
+        client.submit_all(
             [iroha::data_model::isi::zk::VerifyProof::new(
                 backend_attachment,
             )],
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        client.submit_all_blocking(
+        client.submit_all(
             [iroha::data_model::isi::zk::VerifyProof::new(
                 stark_backend_attachment,
             )],
@@ -257,6 +257,7 @@ fn proof_query_scenarios() -> Result<()> {
             "backend query should only return stark/fri/poseidon-x7-goldilocks-6x64-v1 proof records, got {stark_backends:?}"
         );
         let nonexistent = client
+            .client()
             .query(FindProofRecordsByBackend::new("nonexistent".into()))
             .execute_all()?;
         assert!(
@@ -266,13 +267,13 @@ fn proof_query_scenarios() -> Result<()> {
     }
     // find_proof_records_by_status_filters
     {
-        client.submit_all_blocking(
+        client.submit_all(
             [iroha::data_model::isi::zk::VerifyProof::new(
                 verified_attachment,
             )],
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        client.submit_all_blocking(
+        client.submit_all(
             [iroha::data_model::isi::zk::VerifyProof::new(
                 rejected_attachment,
             )],
@@ -295,26 +296,28 @@ fn proof_query_scenarios() -> Result<()> {
     Ok(())
 }
 fn retry_records_by_status(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     status: iroha::data_model::proof::ProofStatus,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     retry_proof_records(|| {
         Ok(client
+            .client()
             .query(FindProofRecordsByStatus::new(status))
             .execute_all()?)
     })
 }
 fn retry_all_proof_records(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
-    retry_proof_records(|| Ok(client.query(FindProofRecords).execute_all()?))
+    retry_proof_records(|| Ok(client.client().query(FindProofRecords).execute_all()?))
 }
 fn retry_records_by_backend(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     backend: &str,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     retry_proof_records(|| {
         Ok(client
+            .client()
             .query(FindProofRecordsByBackend::new(backend.into()))
             .execute_all()?)
     })

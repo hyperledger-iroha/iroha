@@ -44,6 +44,8 @@ pub const RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.reserve.au
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "tier", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveTier")]
 pub enum ReserveTier {
     /// Tier A — preferred operators with track record (2× underwriting).
     TierA,
@@ -57,6 +59,8 @@ impl ReserveTier {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "duration", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveDuration")]
 pub enum ReserveDuration {
     /// Monthly commitment (no discount).
     Monthly,
@@ -68,6 +72,8 @@ pub enum ReserveDuration {
 /// Rent rate per storage class (GiB-month basis).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ClassRentRate")]
 pub struct ClassRentRate {
     /// Storage class (`Hot`, `Warm`, `Cold`).
     pub storage_class: StorageClass,
@@ -87,6 +93,8 @@ impl ClassRentRate {
 /// Duration factors encoded as basis points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::DurationFactorSet")]
 pub struct DurationFactorSet {
     /// Monthly factor (defaults to 1.0 = `10_000` bps).
     pub monthly_bps: u16,
@@ -116,6 +124,8 @@ impl Default for DurationFactorSet {
 /// Per-tier underwriting + credit configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveTierConfig")]
 pub struct ReserveTierConfig {
     /// Tier identifier.
     pub tier: ReserveTier,
@@ -147,6 +157,8 @@ impl ReserveTierConfig {
 /// Reserve + rent policy payload (mirrors `sorafs_reserve_rent_plan.md`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReservePolicyV1")]
 pub struct ReservePolicyV1 {
     /// Schema version (`RESERVE_POLICY_VERSION_V1`).
     pub version: u8,
@@ -192,6 +204,8 @@ impl Default for ReservePolicyV1 {
 /// Quoted rent/reserve breakdown for a provider + tier.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveQuote")]
 pub struct ReserveQuote {
     /// Storage class for the commitment.
     pub storage_class: StorageClass,
@@ -224,6 +238,8 @@ pub struct ReserveQuote {
 /// Ledger-oriented projection derived from a [`ReserveQuote`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveLedgerProjection")]
 pub struct ReserveLedgerProjection {
     /// Effective rent that must be settled for the period.
     pub rent_due: XorQuantity,
@@ -242,6 +258,8 @@ pub struct ReserveLedgerProjection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "stage", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveLifecycleStage")]
 pub enum ReserveLifecycleStage {
     /// Provider is current and reserve balance clears policy thresholds.
     Active,
@@ -258,6 +276,8 @@ pub enum ReserveLifecycleStage {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[allow(clippy::struct_excessive_bools)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveLifecycleProjection")]
 pub struct ReserveLifecycleProjection {
     /// Derived lifecycle stage.
     pub stage: ReserveLifecycleStage,
@@ -651,6 +671,8 @@ impl ReservePolicyV1 {
 /// Governance envelope that makes reserve economics and custody chain-authoritative.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveAuthorityPolicyV1")]
 pub struct ReserveAuthorityPolicyV1 {
     /// Schema version.
     pub version: u8,
@@ -814,6 +836,8 @@ pub enum ReserveAuthorityPolicyError {
 /// Activated reserve policy with governance provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveAuthorityPolicyRecordV1")]
 pub struct ReserveAuthorityPolicyRecordV1 {
     /// Activated policy body.
     pub policy: ReserveAuthorityPolicyV1,
@@ -828,6 +852,8 @@ pub struct ReserveAuthorityPolicyRecordV1 {
 /// Immutable provider underwriting terms used to derive rent and credit caps.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveProviderTermsV1")]
 pub struct ReserveProviderTermsV1 {
     /// Provider registry identifier.
     pub provider_id: ProviderId,
@@ -845,6 +871,8 @@ pub struct ReserveProviderTermsV1 {
 /// Authoritative per-provider reserve, debt, and lifecycle partition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveProviderAccountV1")]
 pub struct ReserveProviderAccountV1 {
     /// Immutable underwriting terms.
     pub terms: ReserveProviderTermsV1,
@@ -972,6 +1000,8 @@ impl ReserveProviderAccountV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveMovementKindV1")]
 pub enum ReserveMovementKindV1 {
     /// Move provider funds into reserve custody.
     TopUp,
@@ -982,6 +1012,8 @@ pub enum ReserveMovementKindV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveMovementStatusV1")]
 pub enum ReserveMovementStatusV1 {
     /// Awaiting a governance decision.
     Pending,
@@ -993,6 +1025,8 @@ pub enum ReserveMovementStatusV1 {
 /// Authoritative reserve top-up or withdrawal request and decision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveMovementRecordV1")]
 pub struct ReserveMovementRecordV1 {
     /// Globally unique movement identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1025,6 +1059,8 @@ pub struct ReserveMovementRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveAppealStatusV1")]
 pub enum ReserveAppealStatusV1 {
     /// Awaiting governance decision.
     Pending,
@@ -1036,6 +1072,8 @@ pub enum ReserveAppealStatusV1 {
 /// Authoritative reserve lifecycle appeal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveAppealRecordV1")]
 pub struct ReserveAppealRecordV1 {
     /// Globally unique appeal identifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1070,6 +1108,8 @@ pub struct ReserveAppealRecordV1 {
 /// Finalized block anchor for one coherent reserve-ledger query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveFinalizedCursorV1")]
 pub struct ReserveFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -1080,6 +1120,8 @@ pub struct ReserveFinalizedCursorV1 {
 /// Exclusive cursor for one committed reserve-ledger event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveFinalizedEventCursorV1")]
 pub struct ReserveFinalizedEventCursorV1 {
     /// Monotonic reserve-event sequence beginning at one.
     pub sequence: u64,
@@ -1094,6 +1136,8 @@ pub struct ReserveFinalizedEventCursorV1 {
 /// Typed reserve-ledger event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveFinalizedEventV1")]
 pub struct ReserveFinalizedEventV1 {
     /// Monotonic reserve-event sequence beginning at one.
     pub sequence: u64,
@@ -1122,6 +1166,8 @@ impl ReserveFinalizedEventV1 {
 /// Cursor-bounded page of typed committed reserve-ledger events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveFinalizedEventPageV1")]
 pub struct ReserveFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ReserveFinalizedCursorV1,
@@ -1135,6 +1181,8 @@ pub struct ReserveFinalizedEventPageV1 {
 /// Finalized, exclusive-provider-id page of authoritative reserve accounts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveProviderAccountPageV1")]
 pub struct ReserveProviderAccountPageV1 {
     /// Finalized state anchor shared by every account in the page.
     pub finalized_cursor: ReserveFinalizedCursorV1,
@@ -1148,6 +1196,8 @@ pub struct ReserveProviderAccountPageV1 {
 /// Finalized, exclusive-movement-id page of authoritative reserve movements.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveMovementPageV1")]
 pub struct ReserveMovementPageV1 {
     /// Finalized state anchor shared by every movement in the page.
     pub finalized_cursor: ReserveFinalizedCursorV1,
@@ -1165,6 +1215,8 @@ pub struct ReserveMovementPageV1 {
 /// Finalized, exclusive-appeal-id page of authoritative reserve appeals.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::reserve::ReserveAppealPageV1")]
 pub struct ReserveAppealPageV1 {
     /// Finalized state anchor shared by every appeal in the page.
     pub finalized_cursor: ReserveFinalizedCursorV1,
@@ -1865,3 +1917,6 @@ mod tests {
         assert_page_round_trip!(appeal_page, ReserveAppealPageV1);
     }
 }
+
+#[cfg(test)]
+mod captured_reserve_schema_tests;

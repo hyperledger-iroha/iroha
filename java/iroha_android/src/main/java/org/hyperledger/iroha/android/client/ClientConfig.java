@@ -30,7 +30,6 @@ import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 /** Configuration options for {@link IrohaClient} implementations. */
 public final class ClientConfig {
   private final LocalSigningContext localSigningContext;
-  private final OperatorSigningContext operatorSigningContext;
   private final URI baseUri;
   private final URI sorafsGatewayUri;
   private final Duration requestTimeout;
@@ -52,7 +51,6 @@ public final class ClientConfig {
 
   private ClientConfig(final Builder builder) {
     this.localSigningContext = builder.localSigningContext;
-    this.operatorSigningContext = builder.operatorSigningContext;
     this.baseUri = builder.baseUri;
     this.sorafsGatewayUri =
         builder.sorafsGatewayUri != null ? builder.sorafsGatewayUri : builder.baseUri;
@@ -105,19 +103,6 @@ public final class ClientConfig {
     return localSigningContext;
   }
 
-  /** Returns the immutable exact-network signer used by operator-only Torii APIs. */
-  public Optional<OperatorSigningContext> operatorSigningContext() {
-    return Optional.ofNullable(operatorSigningContext);
-  }
-
-  OperatorSigningContext requireOperatorSigningContext() {
-    if (operatorSigningContext == null) {
-      throw new IllegalStateException(
-          "operatorSigningContext must be configured before an operator request");
-    }
-    return operatorSigningContext;
-  }
-
   public URI baseUri() {
     return baseUri;
   }
@@ -158,9 +143,6 @@ public final class ClientConfig {
         .setCrashTelemetryEnabled(crashTelemetryEnabled);
     if (localSigningContext != null) {
       builder.setLocalSigningContext(localSigningContext);
-    }
-    if (operatorSigningContext != null) {
-      builder.setOperatorSigningContext(operatorSigningContext);
     }
     return builder;
   }
@@ -328,7 +310,6 @@ public final class ClientConfig {
 
   public static final class Builder {
     private LocalSigningContext localSigningContext;
-    private OperatorSigningContext operatorSigningContext;
     private URI baseUri = URI.create("http://localhost:8080");
     private URI sorafsGatewayUri;
     private Duration requestTimeout = Duration.ofSeconds(10);
@@ -352,12 +333,6 @@ public final class ClientConfig {
     /** Enables local draft signing with one immutable, caller-owned network identity. */
     public Builder setLocalSigningContext(final LocalSigningContext context) {
       this.localSigningContext = Objects.requireNonNull(context, "localSigningContext");
-      return this;
-    }
-
-    /** Enables fresh exact-network signing for operator-only Torii APIs. */
-    public Builder setOperatorSigningContext(final OperatorSigningContext context) {
-      this.operatorSigningContext = Objects.requireNonNull(context, "operatorSigningContext");
       return this;
     }
 

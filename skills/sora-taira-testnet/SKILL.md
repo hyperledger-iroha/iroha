@@ -136,6 +136,18 @@ attempts bounded teardown, and destroys the bundle after proving shutdown and
 directory identity. If either proof fails, it warns and retains the complete
 bundle instead of claiming cleanup.
 
+The local `iroha taira public-reset source-manifest --source-root /absolute/iroha`
+command prints the exact Norito source manifest consumed by admission. Capture
+stdout outside the checkout after its reviewed signed checkpoint. Export requires
+one clean `optimizations` HEAD/tree and does not grant release authority; preflight
+also requires the revision to match the compiled CLI. Every tracked entry is
+bound: regular files retain exact modes and match their indexed Git blob bytes
+through one streaming Git process, the unbuilt SDK symlink retains its
+Git-authenticated relative target text with an absent in-root referent, and an
+empty gitlink directory retains its exact indexed commit. Populated gitlinks or
+materialized symlink referents require an explicitly supported closure; never
+ignore them or relabel working-tree observations as a committed release.
+
 Build the public-reset evidence binary with the release profile, then admit the
 complete runtime input closure locally before authorizing mutation:
 
@@ -150,7 +162,8 @@ target/release/iroha taira public-reset preflight \
 ```
 
 `iroha taira public-reset preflight` and `iroha taira public-reset apply` are
-the only public-reset surfaces. There is no Python controller, compatibility
+the only public-reset admission and execution surfaces. The local
+`source-manifest` command only exports source metadata. There is no Python controller, compatibility
 alias, or parallel V1 schema. Preflight performs local fail-closed admission;
 apply is the live mutating operation. Apply requires explicit owner-private,
 runtime-only authorization, SSH, and canary inputs and every admitted host must

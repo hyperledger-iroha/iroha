@@ -2,6 +2,7 @@
 use super::*;
 isi! {
     /// Replace the controller governing an existing account while preserving linked state.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::ReplaceAccountController")]
     pub struct ReplaceAccountController {
         /// Canonical account identifier to replace.
         pub account: AccountId,
@@ -16,6 +17,7 @@ impl ReplaceAccountController {
 impl crate::seal::Instruction for ReplaceAccountController {}
 isi! {
     /// Set or replace the alias-keyed recovery policy for an account.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy")]
     pub struct SetAccountRecoveryPolicy {
         /// Canonical account identifier whose stable alias policy should be updated.
         pub account: AccountId,
@@ -30,6 +32,7 @@ impl SetAccountRecoveryPolicy {
 impl crate::seal::Instruction for SetAccountRecoveryPolicy {}
 isi! {
     /// Clear the alias-keyed recovery policy for an account.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy")]
     pub struct ClearAccountRecoveryPolicy {
         /// Canonical account identifier whose recovery policy should be cleared.
         pub account: AccountId,
@@ -42,6 +45,7 @@ impl ClearAccountRecoveryPolicy {
 impl crate::seal::Instruction for ClearAccountRecoveryPolicy {}
 isi! {
     /// Propose a controller replacement through the social-recovery workflow.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::ProposeAccountRecovery")]
     pub struct ProposeAccountRecovery {
         /// Stable account alias whose active account should be recovered.
         pub alias: crate::account::AccountAlias,
@@ -56,6 +60,7 @@ impl ProposeAccountRecovery {
 impl crate::seal::Instruction for ProposeAccountRecovery {}
 isi! {
     /// Record a guardian approval for the active recovery request of an alias.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::ApproveAccountRecovery")]
     pub struct ApproveAccountRecovery {
         /// Stable account alias whose pending recovery should receive an approval.
         pub alias: crate::account::AccountAlias,
@@ -68,6 +73,7 @@ impl ApproveAccountRecovery {
 impl crate::seal::Instruction for ApproveAccountRecovery {}
 isi! {
     /// Cancel a pending social-recovery request for an alias.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::CancelAccountRecovery")]
     pub struct CancelAccountRecovery {
         /// Stable account alias whose pending recovery should be cancelled.
         pub alias: crate::account::AccountAlias,
@@ -80,6 +86,7 @@ impl CancelAccountRecovery {
 impl crate::seal::Instruction for CancelAccountRecovery {}
 isi! {
     /// Finalize a pending social-recovery request once quorum and timelock are satisfied.
+    #[norito_schema(name = "iroha_data_model::isi::account_recovery::FinalizeAccountRecovery")]
     pub struct FinalizeAccountRecovery {
         /// Stable account alias whose pending recovery should be finalized.
         pub alias: crate::account::AccountAlias,

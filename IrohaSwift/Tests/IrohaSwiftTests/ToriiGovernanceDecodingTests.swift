@@ -122,7 +122,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
 
     private func sccpOutboundProofPolicyJSON() -> String {
         """
-        {"version":1,"semantic_profile":{"profile":"sora_taira_finality_inclusion_groth16_bn254","commitments":{"version":1,"circuit_commitment":\(fixedBytes(28)),"witness_generator_commitment":\(fixedBytes(29)),"public_signal_schema_hash":\(byteArrayJSON(sccpBn254SchemaHash()))}},"sora_finality_anchor":{"version":1,"source_network":{"network":"sora_taira","profile":null},"protocol_version":4,"chain_id_hash":\(byteArrayJSON(sccpTairaChainIdHash())),"checkpoint_height":1,"checkpoint_block_hash":\(fixedBytes(32)),"checkpoint_context_id":\(fixedBytes(33)),"checkpoint_finality_artifact_hash":\(fixedBytes(34))}}
+        {"version":1,"semantic_profile":{"profile":"sora_taira_finality_inclusion_groth16_bn254","commitments":{"version":1,"circuit_commitment":\(fixedBytes(28)),"witness_generator_commitment":\(fixedBytes(29)),"public_signal_schema_hash":\(byteArrayJSON(sccpBn254SchemaHash()))}},"sora_finality_anchor":{"version":1,"source_network":{"network":"sora_taira","profile":null},"protocol_version":4,"chain_id_hash":\(byteArrayJSON(sccpTairaChainIdHash())),"epoch":1,"epoch_end_height":1,"roster_commitment":\(fixedBytes(35)),"checkpoint_height":1,"checkpoint_block_hash":\(fixedBytes(32)),"checkpoint_context_id":\(fixedBytes(33)),"checkpoint_finality_artifact_hash":\(fixedBytes(34))}}
         """
     }
 

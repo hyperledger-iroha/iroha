@@ -45,10 +45,6 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
-#[cfg(all(feature = "kaigi_privacy_mocks", not(test)))]
-compile_error!(
-    "`kaigi_privacy_mocks` is a unit-test-only feature and cannot be enabled in a production library"
-);
 #[cfg(not(feature = "zk-halo2"))]
 compile_error!(
     "Halo2 backends are mandatory; enable `zk-halo2` (default) when building iroha_core"
@@ -156,8 +152,6 @@ pub mod snapshot;
 pub mod sns;
 /// Shared Soracloud runtime snapshot types and traits.
 pub mod soracloud_runtime;
-/// SoraNet relay incentive calculator and treasury helpers.
-pub mod soranet_incentives;
 /// In-memory state and view types.
 pub mod state;
 /// Norito Streaming handshake/state helpers.
@@ -1978,7 +1972,7 @@ mod tests {
         let canonical = norito::canonical_decode_limits(4 * 1024);
         assert_eq!(
             canonical.max_nesting_depth(),
-            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH
+            norito::core::MAX_VALUE_NESTING_DEPTH
         );
         assert!(canonical.max_total_allocated_bytes() > 4 * 1024);
     }

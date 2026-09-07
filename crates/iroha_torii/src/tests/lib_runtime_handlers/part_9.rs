@@ -1311,7 +1311,7 @@ async fn proof_rate_limit_sets_retry_after_header() {
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(3),
             usize::try_from(iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES.get())
-                .expect("proof body limit fits usize"),
+                .expect("proof body limit fits target address space"),
             std::time::Duration::from_millis(
                 iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
             ),

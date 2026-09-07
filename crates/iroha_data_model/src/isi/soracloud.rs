@@ -38,6 +38,8 @@ fn decode_flags() -> u8 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::DeploySoracloudService")]
 pub struct DeploySoracloudService {
     /// Bundle being admitted.
     pub bundle: SoraDeploymentBundleV1,
@@ -60,6 +62,8 @@ impl PartialOrd for DeploySoracloudService {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::UpgradeSoracloudService")]
 pub struct UpgradeSoracloudService {
     /// Bundle being admitted as the candidate revision.
     pub bundle: SoraDeploymentBundleV1,
@@ -82,6 +86,8 @@ impl PartialOrd for UpgradeSoracloudService {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra")]
 pub struct DeploySoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
@@ -133,6 +139,8 @@ impl PartialOrd for DeploySoracloudAppInfra {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra")]
 pub struct UpgradeSoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
@@ -184,6 +192,8 @@ impl PartialOrd for UpgradeSoracloudAppInfra {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RollbackSoracloudService")]
 pub struct RollbackSoracloudService {
     /// Service to roll back.
     pub service_name: Name,
@@ -202,6 +212,8 @@ impl PartialOrd for RollbackSoracloudService {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudServiceConfig")]
 pub struct SetSoracloudServiceConfig {
     /// Service whose config entry should be updated.
     pub service_name: Name,
@@ -222,6 +234,8 @@ impl PartialOrd for SetSoracloudServiceConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::DeleteSoracloudServiceConfig")]
 pub struct DeleteSoracloudServiceConfig {
     /// Service whose config entry should be removed.
     pub service_name: Name,
@@ -240,6 +254,8 @@ impl PartialOrd for DeleteSoracloudServiceConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudServiceSecret")]
 pub struct SetSoracloudServiceSecret {
     /// Service whose secret entry should be updated.
     pub service_name: Name,
@@ -260,6 +276,8 @@ impl PartialOrd for SetSoracloudServiceSecret {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::DeleteSoracloudServiceSecret")]
 pub struct DeleteSoracloudServiceSecret {
     /// Service whose secret entry should be removed.
     pub service_name: Name,
@@ -278,6 +296,8 @@ impl PartialOrd for DeleteSoracloudServiceSecret {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::MutateSoracloudState")]
 pub struct MutateSoracloudState {
     /// Service whose state binding should be mutated.
     pub service_name: Name,
@@ -313,6 +333,8 @@ impl PartialOrd for MutateSoracloudState {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudFhePolicy")]
 pub struct RegisterSoracloudFhePolicy {
     /// Service that owns the policy.
     pub service_name: Name,
@@ -331,6 +353,8 @@ impl PartialOrd for RegisterSoracloudFhePolicy {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RotateSoracloudFhePolicy")]
 pub struct RotateSoracloudFhePolicy {
     /// Service that owns the policy.
     pub service_name: Name,
@@ -351,6 +375,8 @@ impl PartialOrd for RotateSoracloudFhePolicy {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RevokeSoracloudFhePolicy")]
 pub struct RevokeSoracloudFhePolicy {
     /// Service that owns the policy.
     pub service_name: Name,
@@ -369,6 +395,8 @@ impl PartialOrd for RevokeSoracloudFhePolicy {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RunSoracloudFheJob")]
 pub struct RunSoracloudFheJob {
     /// Service whose ciphertext state receives the job output.
     pub service_name: Name,
@@ -399,6 +427,8 @@ impl PartialOrd for RunSoracloudFheJob {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest")]
 pub struct RecordSoracloudDecryptionRequest {
     /// Service whose ciphertext state is being requested.
     pub service_name: Name,
@@ -419,6 +449,8 @@ impl PartialOrd for RecordSoracloudDecryptionRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease")]
 pub struct JoinSoracloudHfSharedLease {
     /// Hugging Face repository identifier.
     pub repo_id: String,
@@ -450,6 +482,8 @@ impl PartialOrd for JoinSoracloudHfSharedLease {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::LeaveSoracloudHfSharedLease")]
 pub struct LeaveSoracloudHfSharedLease {
     /// Hugging Face repository identifier.
     pub repo_id: String,
@@ -478,6 +512,8 @@ impl PartialOrd for LeaveSoracloudHfSharedLease {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RenewSoracloudHfSharedLease")]
 pub struct RenewSoracloudHfSharedLease {
     /// Hugging Face repository identifier.
     pub repo_id: String,
@@ -509,6 +545,8 @@ impl PartialOrd for RenewSoracloudHfSharedLease {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost")]
 pub struct AdvertiseSoracloudInrouHost {
     /// Capability advert being published by the validator.
     pub capability: SoraInrouHostCapabilityRecordV1,
@@ -525,6 +563,8 @@ impl PartialOrd for AdvertiseSoracloudInrouHost {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost")]
 pub struct WithdrawSoracloudInrouHost {
     /// Validator account that owns the host advert.
     pub validator_account_id: AccountId,
@@ -540,6 +580,8 @@ impl PartialOrd for WithdrawSoracloudInrouHost {
 /// Reconcile active hosted Inrou placements against current host adverts and service leases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements")]
 pub struct ReconcileSoracloudInrouPlacements;
 impl crate::seal::Instruction for ReconcileSoracloudInrouPlacements {}
 impl PartialOrd for ReconcileSoracloudInrouPlacements {
@@ -551,6 +593,8 @@ impl PartialOrd for ReconcileSoracloudInrouPlacements {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment")]
 pub struct DeploySoracloudAgentApartment {
     /// Apartment manifest being admitted.
     pub manifest: AgentApartmentManifestV1,
@@ -571,6 +615,8 @@ impl PartialOrd for DeploySoracloudAgentApartment {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RenewSoracloudAgentLease")]
 pub struct RenewSoracloudAgentLease {
     /// Apartment to renew.
     pub apartment_name: Name,
@@ -589,6 +635,8 @@ impl PartialOrd for RenewSoracloudAgentLease {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment")]
 pub struct RestartSoracloudAgentApartment {
     /// Apartment to restart.
     pub apartment_name: Name,
@@ -607,6 +655,8 @@ impl PartialOrd for RestartSoracloudAgentApartment {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RevokeSoracloudAgentPolicy")]
 pub struct RevokeSoracloudAgentPolicy {
     /// Apartment whose policy should change.
     pub apartment_name: Name,
@@ -628,6 +678,8 @@ impl PartialOrd for RevokeSoracloudAgentPolicy {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RequestSoracloudAgentWalletSpend")]
 pub struct RequestSoracloudAgentWalletSpend {
     /// Apartment initiating the spend.
     pub apartment_name: Name,
@@ -650,6 +702,8 @@ impl PartialOrd for RequestSoracloudAgentWalletSpend {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::ApproveSoracloudAgentWalletSpend")]
 pub struct ApproveSoracloudAgentWalletSpend {
     /// Apartment owning the pending request.
     pub apartment_name: Name,
@@ -668,6 +722,8 @@ impl PartialOrd for ApproveSoracloudAgentWalletSpend {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::EnqueueSoracloudAgentMessage")]
 pub struct EnqueueSoracloudAgentMessage {
     /// Sender apartment.
     pub from_apartment: Name,
@@ -690,6 +746,8 @@ impl PartialOrd for EnqueueSoracloudAgentMessage {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::AcknowledgeSoracloudAgentMessage")]
 pub struct AcknowledgeSoracloudAgentMessage {
     /// Apartment consuming the mailbox message.
     pub apartment_name: Name,
@@ -708,6 +766,8 @@ impl PartialOrd for AcknowledgeSoracloudAgentMessage {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::AllowSoracloudAgentAutonomyArtifact")]
 pub struct AllowSoracloudAgentAutonomyArtifact {
     /// Apartment receiving the allowlist rule.
     pub apartment_name: Name,
@@ -729,6 +789,8 @@ impl PartialOrd for AllowSoracloudAgentAutonomyArtifact {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RunSoracloudAgentAutonomy")]
 pub struct RunSoracloudAgentAutonomy {
     /// Apartment owning the run.
     pub apartment_name: Name,
@@ -757,6 +819,8 @@ impl PartialOrd for RunSoracloudAgentAutonomy {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudAgentAutonomyExecution")]
 pub struct RecordSoracloudAgentAutonomyExecution {
     /// Apartment that owns the executed run.
     pub apartment_name: Name,
@@ -800,6 +864,8 @@ impl PartialOrd for RecordSoracloudAgentAutonomyExecution {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::StartSoracloudTrainingJob")]
 pub struct StartSoracloudTrainingJob {
     /// Service that owns the training job.
     pub service_name: Name,
@@ -834,6 +900,8 @@ impl PartialOrd for StartSoracloudTrainingJob {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::CheckpointSoracloudTrainingJob")]
 pub struct CheckpointSoracloudTrainingJob {
     /// Service that owns the training job.
     pub service_name: Name,
@@ -858,6 +926,8 @@ impl PartialOrd for CheckpointSoracloudTrainingJob {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RetrySoracloudTrainingJob")]
 pub struct RetrySoracloudTrainingJob {
     /// Service that owns the training job.
     pub service_name: Name,
@@ -878,6 +948,8 @@ impl PartialOrd for RetrySoracloudTrainingJob {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudModelArtifact")]
 pub struct RegisterSoracloudModelArtifact {
     /// Service that owns the artifact.
     pub service_name: Name,
@@ -908,6 +980,8 @@ impl PartialOrd for RegisterSoracloudModelArtifact {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudModelWeight")]
 pub struct RegisterSoracloudModelWeight {
     /// Service that owns the model.
     pub service_name: Name,
@@ -943,6 +1017,8 @@ impl PartialOrd for RegisterSoracloudModelWeight {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::PromoteSoracloudModelWeight")]
 pub struct PromoteSoracloudModelWeight {
     /// Service that owns the model.
     pub service_name: Name,
@@ -967,6 +1043,8 @@ impl PartialOrd for PromoteSoracloudModelWeight {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RollbackSoracloudModelWeight")]
 pub struct RollbackSoracloudModelWeight {
     /// Service that owns the model.
     pub service_name: Name,
@@ -989,6 +1067,8 @@ impl PartialOrd for RollbackSoracloudModelWeight {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudUploadedModelBundle")]
 pub struct RegisterSoracloudUploadedModelBundle {
     /// Deterministic uploaded-model bundle metadata.
     pub bundle: SoraUploadedModelBundleV1,
@@ -1005,6 +1085,8 @@ impl PartialOrd for RegisterSoracloudUploadedModelBundle {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::FinalizeSoracloudUploadedModelBundle")]
 pub struct FinalizeSoracloudUploadedModelBundle {
     /// Service that owns the artifact.
     pub service_name: Name,
@@ -1041,6 +1123,8 @@ impl PartialOrd for FinalizeSoracloudUploadedModelBundle {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::AdvanceSoracloudRollout")]
 pub struct AdvanceSoracloudRollout {
     /// Service whose rollout should advance.
     pub service_name: Name,
@@ -1069,6 +1153,8 @@ impl PartialOrd for AdvanceSoracloudRollout {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudRuntimeState")]
 pub struct SetSoracloudRuntimeState {
     /// Runtime state to persist.
     pub state: SoraServiceRuntimeStateV1,
@@ -1083,6 +1169,8 @@ impl PartialOrd for SetSoracloudRuntimeState {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState")]
 pub struct SetSoracloudInrouReplicaRuntimeState {
     /// Runtime state to persist.
     pub state: SoraInrouReplicaRuntimeStateV1,
@@ -1101,6 +1189,8 @@ impl PartialOrd for SetSoracloudInrouReplicaRuntimeState {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState")]
 pub struct ClearSoracloudInrouReplicaRuntimeState {
     /// Service whose replica state should be removed.
     pub service_name: Name,
@@ -1129,6 +1219,8 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage")]
 pub struct ReportSoracloudServiceLeaseUsage {
     /// Service whose hosted-service lease should be updated.
     pub service_name: Name,
@@ -1162,6 +1254,8 @@ impl PartialOrd for ReportSoracloudServiceLeaseUsage {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage")]
 pub struct RecordSoracloudMailboxMessage {
     /// Mailbox message to persist.
     pub message: SoraServiceMailboxMessageV1,
@@ -1181,6 +1275,8 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt")]
 pub struct RecordSoracloudRuntimeReceipt {
     /// Runtime receipt to persist; `emitted_sequence` must be the zero submission sentinel.
     pub receipt: SoraRuntimeReceiptV1,
@@ -1193,6 +1289,8 @@ pub struct RecordSoracloudRuntimeReceipt {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult")]
 pub struct ApplySoracloudOrderedMailboxResult {
     /// Atomic result envelope prepared by the selected runtime validator.
     pub result: SoraOrderedMailboxResultV1,
@@ -2499,3 +2597,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_soracloud_schema_tests;

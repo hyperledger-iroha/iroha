@@ -2432,6 +2432,104 @@ struct MetalPipelines {
     twiddle_cache: Mutex<TwiddleCache>,
     bn254_twiddles: Mutex<Bn254TwiddleCache>,
 }
+
+struct Digest384MetalPipelinesV1 {
+    device: Device,
+    queues: QueuePool,
+    pipeline: ComputePipelineState,
+    // Serialize this bounded primitive path. On uncertain completion, retaining
+    // these exact allocations prevents wiping/recycling memory still in use.
+    quarantine: Mutex<Option<Vec<(PooledBuffer, Buffer)>>>,
+}
+fn digest384_metal_context_v1() -> MetalResult<&'static Digest384MetalPipelinesV1> {
+    static CONTEXT: OnceLock<MetalResult<Digest384MetalPipelinesV1>> = OnceLock::new();
+    match CONTEXT.get_or_init(|| {
+        let device = select_metal_device().ok_or(GpuError::Unsupported(GpuBackend::Metal))?;
+        let library = load_metal_library(&device)?;
+        let pipeline = load_pipeline(&device, &library, "digest384_hash_frames_v1")?;
+        let queues = QueuePool::new(&device, resolve_queue_policy(&device))?;
+        Ok(Digest384MetalPipelinesV1 {
+            device,
+            queues,
+            pipeline,
+            quarantine: Mutex::new(None),
+        })
+    }) {
+        Ok(context) => Ok(context),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+pub(crate) fn digest384_hash_frames_v1(
+    staged: &crate::digest384_gpu::StagedDigest384V1,
+    output: &mut [u64],
+) -> MetalResult<()> {
+    use crate::digest384_gpu::digest384_gpu_parameters_v1;
+    if output.len() != staged.frame_count * 6 {
+        return Err(GpuError::InvalidInput(
+            "six-lane Metal output shape mismatch",
+        ));
+    }
+    let context = digest384_metal_context_v1()?;
+    let mut quarantine = context.quarantine.lock().map_err(|_| GpuError::Execution {
+        backend: GpuBackend::Metal,
+        message: "six-lane dispatch lock poisoned".to_owned(),
+    })?;
+    if quarantine.is_some() {
+        return Err(GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: "six-lane backend quarantined after uncertain completion".to_owned(),
+        });
+    }
+    for len in [
+        staged.words.len(),
+        staged.descriptors.len(),
+        digest384_gpu_parameters_v1().len(),
+        output.len(),
+    ] {
+        validate_metal_pooled_word_len(&context.device, len)?;
+    }
+    let mut buffers = Vec::with_capacity(4);
+    for mut pool in [
+        PooledBuffer::sensitive_from_slice(&staged.words)?,
+        PooledBuffer::sensitive_from_slice(&staged.descriptors)?,
+        PooledBuffer::from_slice(digest384_gpu_parameters_v1())?,
+        PooledBuffer::sensitive_zeroed(output.len())?,
+    ] {
+        let buffer = shared_pooled_buffer(&context.device, &mut pool)?;
+        buffers.push((pool, buffer));
+    }
+    let args = [staged.frame_count as u32, staged.words.len() as u32];
+    let (queue, queue_index) = context.queues.select(args[0], 0);
+    let ticket = submit_compute_with_geometry(
+        queue,
+        queue_index,
+        &context.pipeline,
+        None,
+        (staged.frame_count * 6) as u64,
+        None,
+        false,
+        |encoder| {
+            for (index, (_, buffer)) in buffers.iter().enumerate() {
+                encoder.set_buffer(index as u64, Some(buffer), 0);
+            }
+            encoder.set_bytes(
+                4,
+                mem::size_of_val(&args) as u64,
+                ptr::from_ref(&args).cast(),
+            );
+        },
+    )?;
+    if let Err(error) = wait_for_ticket(ticket) {
+        *quarantine = Some(buffers);
+        return Err(error);
+    }
+    buffers[3].0.copy_to_slice(output);
+    // GPU completion is known. The last retained backing owner wipes complete
+    // sensitive pages before they can re-enter the shared pool.
+    Ok(())
+}
+
 struct Bn254PoseidonMetalPipelines {
     device: Device,
     queues: QueuePool,
@@ -4772,9 +4870,21 @@ impl BufferPool {
 struct PooledBufferBacking {
     pages: Vec<MetalBufferPage>,
     logical_len: usize,
+    sensitive: bool,
+}
+impl PooledBufferBacking {
+    fn wipe_sensitive_pages(&mut self) {
+        if self.sensitive {
+            use zeroize::Zeroize as _;
+            for page in &mut self.pages {
+                page.words.zeroize();
+            }
+        }
+    }
 }
 impl Drop for PooledBufferBacking {
     fn drop(&mut self) {
+        self.wipe_sensitive_pages();
         let pages = mem::take(&mut self.pages);
         if pages.capacity() == 0 {
             return;
@@ -4790,8 +4900,24 @@ struct PooledBuffer {
 impl PooledBuffer {
     fn from_pages(pages: Vec<MetalBufferPage>, logical_len: usize) -> Self {
         Self {
-            backing: Arc::new(PooledBufferBacking { pages, logical_len }),
+            backing: Arc::new(PooledBufferBacking {
+                pages,
+                logical_len,
+                sensitive: false,
+            }),
         }
+    }
+    fn sensitive_from_slice(elements: &[u64]) -> MetalResult<Self> {
+        let mut buffer = Self::sensitive_zeroed(elements.len())?;
+        buffer.copy_from_slice_at(0, elements);
+        Ok(buffer)
+    }
+    fn sensitive_zeroed(len: usize) -> MetalResult<Self> {
+        let mut buffer = Self::zeroed(len)?;
+        Arc::get_mut(&mut buffer.backing)
+            .expect("unshared sensitive buffer")
+            .sensitive = true;
+        Ok(buffer)
     }
     fn from_columns(columns: &[Vec<u64>]) -> MetalResult<Self> {
         let total_len = columns.iter().try_fold(0usize, |total, column| {
@@ -6599,6 +6725,32 @@ mod tests {
             assert_eq!(*inverse, super::goldilocks_inv(*forward));
         }
     }
+    #[test]
+    fn digest384_gpu_sensitive_pages_wipe_only_after_exclusive_ownership() {
+        let mut buffer = PooledBuffer::sensitive_from_slice(&[17, 23, 91]).unwrap();
+        let retained = Arc::clone(&buffer.backing);
+        assert!(Arc::get_mut(&mut buffer.backing).is_none());
+        assert_eq!(buffer.to_vec().unwrap(), [17, 23, 91]);
+        drop(retained);
+        let backing = Arc::get_mut(&mut buffer.backing).unwrap();
+        backing.pages[0].words[METAL_BUFFER_PAGE_WORDS - 1] = 99;
+        backing.wipe_sensitive_pages();
+        assert!(
+            backing
+                .pages
+                .iter()
+                .all(|page| page.words.iter().all(|word| *word == 0))
+        );
+        let mut ordinary = PooledBuffer::from_slice(&[17, 23, 91]).unwrap();
+        Arc::get_mut(&mut ordinary.backing)
+            .unwrap()
+            .wipe_sensitive_pages();
+        assert_eq!(ordinary.to_vec().unwrap(), [17, 23, 91]);
+        let zeroed = PooledBuffer::sensitive_zeroed(3).unwrap();
+        assert_eq!(zeroed.to_vec().unwrap(), [0; 3]);
+        assert!(zeroed.backing.sensitive);
+    }
+
     #[test]
     fn buffer_pool_recycles_aligned_page_vectors() {
         let mut pool = BufferPool::default();

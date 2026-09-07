@@ -349,8 +349,16 @@ impl ProofManagedNoteStarkProtocolV1 {
         let consensus_proof_cap = self.domains.digest_context.maximum_proof_bytes_v1();
         // Native game microcycles use a separately committed domain cap. Existing private-note
         // profiles retain their exact first-release geometry and theorem floor.
-        let maximum_native_log = if self.domains.digest_context.is_execution_v1() {19} else {PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1};
-        let minimum_commitment_bits = if self.domains.digest_context.is_execution_v1() {187} else {PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1};
+        let maximum_native_log = if self.domains.digest_context.is_execution_v1() {
+            19
+        } else {
+            PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1
+        };
+        let minimum_commitment_bits = if self.domains.digest_context.is_execution_v1() {
+            187
+        } else {
+            PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
+        };
         let _combined_profile_digest =
             proof_managed_note_stark_profile_digest_v1(self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
@@ -366,8 +374,7 @@ impl ProofManagedNoteStarkProtocolV1 {
             || self.parameters.maximum_proof_bytes > consensus_proof_cap
             || PROOF_MANAGED_NOTE_MASK_DEGREE_V1 < mask_geometry.minimum_mask_degree
             || fri_soundness.query_error_bits != PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1
-            || fri_soundness.commitment_error_bits
-                < minimum_commitment_bits
+            || fri_soundness.commitment_error_bits < minimum_commitment_bits
             || fri_soundness.query_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || self.profile_binding_label.is_empty()
@@ -2376,7 +2383,10 @@ impl FixedOpeningsV1<'_> {
     fn row(&self, index: usize) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
         match self {
             Self::FullLde(columns) => row_at_columns_v1(columns, index),
-            Self::ExecutionQueries(rows) => rows.get(&index).cloned().ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile),
+            Self::ExecutionQueries(rows) => rows
+                .get(&index)
+                .cloned()
+                .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile),
         }
     }
 }
@@ -2399,7 +2409,9 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
             .get(lane)
             .filter(|alphas| alphas.len() == self.prepared.constraint_count)
             .ok_or(aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
-        let fixed = self.fixed_openings.row(query_index)
+        let fixed = self
+            .fixed_openings
+            .row(query_index)
             .map_err(|_| aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
         let residues = all_constraint_residues_v1(
             self.adapter,
@@ -2444,7 +2456,11 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     // Execution profiles can have much larger public traces than privacy
     // profiles. Reject malformed wire, transcript and Merkle paths before
     // materializing any execution fixed-column or copy-permutation matrix.
-    let execution = adapter.protocol_v1().domains.digest_context.is_execution_v1();
+    let execution = adapter
+        .protocol_v1()
+        .domains
+        .digest_context
+        .is_execution_v1();
     let prepared = prepare_note_profile_with_fixed_v1(adapter, !execution)?;
     let (proof, deep) = aggregate::decode_proof_with_deep_v1(
         proof_bytes,
@@ -2773,7 +2789,10 @@ mod tests {
         fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
             let mut domains = MOCK_DOMAINS_V1;
             if self.execution {
-                domains.digest_context = super::super::transparent_stark::TransparentStarkDigestContextV1::execution_v1(b"execution-fixed-rejection-test");
+                domains.digest_context =
+                    super::super::transparent_stark::TransparentStarkDigestContextV1::execution_v1(
+                        b"execution-fixed-rejection-test",
+                    );
             }
             ProofManagedNoteStarkProtocolV1 {
                 parameters: self.parameters,
@@ -2805,7 +2824,10 @@ mod tests {
             1
         }
         fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
-            assert!(!self.reject_fixed_materialization, "fixed trace must not be materialized for malformed execution proof");
+            assert!(
+                !self.reject_fixed_materialization,
+                "fixed trace must not be materialized for malformed execution proof"
+            );
             let trace_size = 1_usize << self.trace_log2_v1();
             let policies = vec![[NoteCopyCellPolicyV1::Variable; NOTE_COPY_WIDTH_V1]; trace_size];
             let mut sigma = vec![[0_u32; NOTE_COPY_WIDTH_V1]; trace_size];
@@ -2866,7 +2888,8 @@ mod tests {
             reject_fixed_materialization: true,
             ..MockAdapterV1::default()
         };
-        let geometry = prepare_note_profile_with_fixed_v1(&adapter, false).expect("allocation-free geometry");
+        let geometry =
+            prepare_note_profile_with_fixed_v1(&adapter, false).expect("allocation-free geometry");
         assert!(geometry.fixed_columns.is_empty());
         for bytes in [vec![], b"RCE1".to_vec(), vec![0; 1_048_576]] {
             assert!(verify_proof_managed_note_stark_v1(&adapter, &bytes).is_err());

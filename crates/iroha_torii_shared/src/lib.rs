@@ -8,6 +8,10 @@ use iroha_data_model::{
     transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+/// Public account-bootstrap network and signing policy.
+pub mod account_capabilities;
+/// Canonical node configuration snapshots and operator update records.
+pub mod configuration;
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
@@ -30,6 +34,8 @@ pub mod route_catalog;
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.
 pub mod sorafs_moderation_api;
+/// Canonical node status response and capability snapshots.
+pub mod status;
 /// Canonical response envelopes for the Sumeragi evidence audit API.
 pub mod sumeragi_evidence_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
@@ -491,6 +497,8 @@ pub mod uri {
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
     /// Governance: read the active binding for a canonical contract address
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
+    /// Accounts: public bootstrap network identity and explicit signing default.
+    pub const ACCOUNTS_CAPABILITIES: &str = "/v1/accounts/capabilities";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Node: latest persisted query projection checkpoint descriptor
@@ -1999,11 +2007,11 @@ mod tests {
         assert_eq!(fee.observation_height, Some(42));
     }
     #[test]
-    fn error_envelope_json_discards_unknown_members_and_rejects_duplicates() {
+    fn error_envelope_json_rejects_unknown_members_and_duplicates() {
         let decoded: ErrorEnvelope = norito::json::from_str(
-            r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"field":"amount"}}"#,
         )
-        .expect("decode envelope with independently additive members");
+        .expect("decode envelope with its declared members");
         assert_eq!(decoded.code(), "bad_request");
         assert_eq!(
             decoded
@@ -2015,6 +2023,14 @@ mod tests {
         let canonical = norito::json::to_string(&decoded).expect("re-encode closed envelope");
         assert!(!canonical.contains("unknown"));
         assert!(!canonical.contains("secret"));
+        for json in [
+            r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+        ] {
+            let error = norito::json::from_str::<ErrorEnvelope>(json)
+                .expect_err("unknown error members must fail closed at either boundary");
+            assert!(matches!(error, norito::json::Error::UnknownField { .. }));
+        }
         for json in [
             r#"{"code":"bad_request","code":"conflict","message":"invalid"}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","field":"asset"}}"#,

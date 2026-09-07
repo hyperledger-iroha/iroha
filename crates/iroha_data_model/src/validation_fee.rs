@@ -466,6 +466,8 @@ impl std::error::Error for ValidationFeePolicyRegistryError {}
     rename_all = "SCREAMING_SNAKE_CASE",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeChargingMode")]
 pub enum ValidationFeeChargingMode {
     /// Disable validation-fee charging through the governed policy chain.
     Disabled,
@@ -476,6 +478,8 @@ pub enum ValidationFeeChargingMode {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1")]
 pub struct ValidationFeeParliamentAuthorizationV1 {
     /// Canonical transaction authority bound into the exact proposal preimage.
     pub proposal_operator: AccountId,
@@ -530,6 +534,8 @@ impl ValidationFeeParliamentAuthorizationV1 {
 /// physical lifecycle-retirement state or caller-supplied reference count.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleReferenceV1")]
 pub struct ValidationFeePayoutLifecycleReferenceV1 {
     /// Non-zero lifecycle seal bound into the proposal fingerprint.
     pub lifecycle_seal: [u8; 32],
@@ -554,6 +560,8 @@ impl ValidationFeePayoutLifecycleReferenceV1 {
 /// One entry in the registered validation-fee policy hash chain.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyRegistryEntryV1")]
 pub struct ValidationFeePolicyRegistryEntryV1 {
     /// Complete governed policy, retained so scheduled policies do not hide
     /// the policy that is effective at the current height.
@@ -589,6 +597,8 @@ impl ValidationFeePolicyRegistryEntryV1 {
 /// skipped-version policy changes while retaining scheduled policy history.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1")]
 pub struct ValidationFeePolicyRegistryV1 {
     /// Registered policy chain in ascending, contiguous version order.
     pub registered_policies: Vec<ValidationFeePolicyRegistryEntryV1>,
@@ -765,6 +775,8 @@ impl ValidationFeePolicyRegistryV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotAvailableV1")]
 pub struct ValidationFeePolicySnapshotAvailableV1 {
     /// Hash of the canonical complete registry.
     pub registry_hash: [u8; 32],
@@ -787,6 +799,8 @@ pub struct ValidationFeePolicySnapshotAvailableV1 {
     ),
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotStatusV1")]
 pub enum ValidationFeePolicySnapshotStatusV1 {
     /// Parliament has not enacted the first policy.
     Unconfigured,
@@ -799,6 +813,8 @@ pub enum ValidationFeePolicySnapshotStatusV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1")]
 pub struct ValidationFeePolicySnapshotCommitmentV1 {
     /// Snapshot format version.
     pub version: u16,
@@ -876,6 +892,8 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyWitnessProofV1")]
 pub struct ValidationFeePolicyWitnessProofV1 {
     /// Fixed raw execution-witness key.
     pub key: Vec<u8>,
@@ -951,23 +969,33 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
 // hash domain, so a future discriminant mistake cannot create a cross-kind
 // fingerprint collision. Parity tests below verify the complete encoded bytes
 // and fingerprints against the always-compiled Parliament type layer.
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::validation_fee::ValidationFeePolicyProposalFingerprintEnvelopeV1"
+)]
 enum ValidationFeePolicyProposalFingerprintEnvelopeV1 {
     #[codec(index = 3)]
     ValidationFeePolicy(ValidationFeePolicyFingerprintPayloadV1),
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1"
+)]
 enum ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1 {
     #[codec(index = 4)]
     ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleFingerprintPayloadV1),
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyFingerprintPayloadV1")]
 struct ValidationFeePolicyFingerprintPayloadV1 {
     proposal_operator: AccountId,
     policy: ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleFingerprintPayloadV1"
+)]
 struct ValidationFeePayoutLifecycleFingerprintPayloadV1 {
     proposal_operator: AccountId,
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,
@@ -1069,6 +1097,8 @@ fn validate_registry_entry_authorization(
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutRecipientV1")]
 pub struct ValidationFeeTreasuryPayoutRecipientV1 {
     /// Validator account receiving XOR.
     pub account_id: AccountId,
@@ -1083,6 +1113,8 @@ pub struct ValidationFeeTreasuryPayoutRecipientV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1")]
 pub struct ValidationFeeTreasuryPayoutBindingV1 {
     /// Immutable deployed pool contract address.
     pub contract_address: ContractAddress,
@@ -1187,6 +1219,8 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyV1")]
 pub struct ValidationFeePolicyV1 {
     /// Policy schema version.
     pub schema_version: u16,
@@ -2358,3 +2392,6 @@ mod snapshot_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_validation_fee_schema_tests;

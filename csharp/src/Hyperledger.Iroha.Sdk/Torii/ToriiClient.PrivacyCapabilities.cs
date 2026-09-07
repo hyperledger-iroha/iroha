@@ -6,7 +6,8 @@ public sealed partial class ToriiClient
 {
     /// <summary>
     /// Fetch the canonical Exact12 manifest through HTTPS and canonical request authentication,
-    /// then require byte-exact agreement with this binary's native compiled-profile catalog.
+    /// then require byte-exact agreement with this binary's native compiled-profile catalog
+    /// and the client's configured genesis-derived network identity.
     /// </summary>
     /// <remarks>
     /// Redirected responses, JSON/browser fallbacks, bearer-only requests, oversized bodies,

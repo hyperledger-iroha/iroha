@@ -3,7 +3,7 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{isi::InstructionBox, prelude::*},
 };
 use iroha_test_network::*;
@@ -20,7 +20,10 @@ fn wait_for_asset_value(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "asset was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.query_single(FindAssetById::new(asset_id.clone())) {
+        match client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
             Ok(asset) => {
                 last_observed = format!("value={:?}", asset.value());
                 if asset.value() == expected_value {
@@ -70,12 +73,18 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let mint = Mint::asset_quantity(200_u32, asset_id.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), mint.clone().into()];
-        let tx = test_client.build_transaction(
-            instructions,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            metadata,
-        );
-        test_client.submit_transaction_blocking(&tx)?;
+        let tx = {
+            let account = test_client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    instructions,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    metadata,
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
+        test_client.submit_transaction_and_wait(&tx)?;
         wait_for_asset_value(
             &test_client,
             &asset_id,
@@ -84,7 +93,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         )?;
         assert!(
             test_client
-                .submit_all_blocking(
+                .submit_all(
                     [mint],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
                 )
@@ -111,14 +120,14 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         );
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let register_asset = Mint::asset_quantity(1_u32, asset_id.clone());
-        test_client.submit_all_blocking::<InstructionBox>(
+        test_client.submit_all::<InstructionBox>(
             [create_asset.into(), register_asset.clone().into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         wait_for_asset_value(&test_client, &asset_id, &Quantity::one(), "seeded mint")?;
         assert!(
             test_client
-                .submit_blocking(
+                .submit(
                     register_asset,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
                 )
@@ -127,7 +136,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         let mint = Mint::asset_quantity(1u32, asset_id);
         assert!(
             test_client
-                .submit_blocking(
+                .submit(
                     mint,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
                 )

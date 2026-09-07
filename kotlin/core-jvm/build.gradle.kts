@@ -1,9 +1,11 @@
+import java.io.File
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     `maven-publish`
+    `java-library`
 }
 
 group = "org.hyperledger.iroha.sdk"
@@ -20,6 +22,12 @@ repositories {
 }
 
 dependencies {
+    api(libs.okhttp)
+    api(platform(libs.netty.bom))
+    api(libs.netty.transport)
+    implementation(libs.netty.handler)
+    implementation(libs.netty.codec.http)
+    testImplementation(libs.mockwebserver)
     implementation(libs.zstd.jni)
     implementation(libs.bcprov)
     implementation(libs.serialization.json)
@@ -41,8 +49,16 @@ kotlin {
     }
 }
 
+// Java consumers are compiled against JDK 8 APIs, just like the Kotlin API.
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(8)
+}
+
 tasks.test {
-    useJUnitPlatform()
+    enableAssertions = true
+    useJUnitPlatform {
+        excludeTags("cuda-hardware")
+    }
     inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")
@@ -99,6 +115,40 @@ tasks.test {
         file(configuredNativeDir)
     }
     systemProperty("java.library.path", hostNativeDir.absolutePath)
+}
+
+// Device qualification is explicit and must execute against the bridge built by
+// the calling job. A cached result or a missing CUDA device is not qualification.
+val cudaNativeDirectory = providers.environmentVariable("IROHA_NATIVE_LIBRARY_PATH")
+tasks.register<Test>("cudaHardwareTest") {
+    description = "Qualify every Kotlin/Java CUDA operation against CPU reference results."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    enableAssertions = true
+    useJUnitPlatform {
+        includeTags("cuda-hardware")
+    }
+    filter {
+        includeTestsMatching("org.hyperledger.iroha.sdk.gpu.CudaAcceleratorsHardwareTest")
+        isFailOnNoMatchingTests = true
+    }
+    maxParallelForks = 1
+    outputs.upToDateWhen { false }
+    outputs.doNotCacheIf("CUDA device state must be qualified on every invocation") { true }
+    doFirst {
+        val nativeDirectory = cudaNativeDirectory.orNull
+        require(!nativeDirectory.isNullOrBlank()) {
+            "cudaHardwareTest requires IROHA_NATIVE_LIBRARY_PATH for the freshly built CUDA bridge"
+        }
+        val directory = File(nativeDirectory)
+        require(directory.isAbsolute && directory.isDirectory) {
+            "IROHA_NATIVE_LIBRARY_PATH must be an absolute existing directory"
+        }
+        val library = directory.resolve(System.mapLibraryName("connect_norito_bridge"))
+        require(library.isFile) { "Fresh CUDA bridge is missing: $library" }
+        systemProperty("iroha.cuda.nativeLibrary", library.absolutePath)
+    }
 }
 
 publishing {

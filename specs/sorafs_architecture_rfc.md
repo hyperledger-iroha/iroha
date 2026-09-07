@@ -145,6 +145,13 @@ The canonical encoding ships as [`ManifestV1`](../crates/sorafs_manifest/src/lib
 [`ManifestBuilder`](../crates/sorafs_manifest/src/lib.rs) wiring Norito values
 into manifests that the CLI emits.
 
+Framed V1 identity and signature preimages always use the uncompressed canonical
+Norito layout, independent of an enclosing decoder or caller layout guard.
+Full-frame admission counts the same canonical encoding, including its header
+and padding. Checkpoint byte limits and retention therefore make the same
+decision on every replica; an ambient encoding setting cannot change an object
+identifier, signature preimage, accounting key, or retained checkpoint prefix.
+
 The V1 archive commitment is exact: `car_digest` hashes every byte of the
 canonical CARv2 file—the pragma, CARv2 header, embedded CARv1 payload, and
 MultihashIndexSorted index—and `car_size` is that complete file's byte length.

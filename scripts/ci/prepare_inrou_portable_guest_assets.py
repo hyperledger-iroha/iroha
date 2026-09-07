@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare signed-and-pinned Debian guest assets for the Inrou PortableVm smoke."""
+"""Prepare repository-pinned Debian guest assets for the Inrou PortableVm smoke."""
 
 from __future__ import annotations
 
@@ -29,6 +29,9 @@ DEBIAN_IMAGE_BUILD = "20260413-2447"
 DEBIAN_VARIANT = "genericcloud"
 EFI_SYSTEM_PARTITION = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 SECTOR_SIZE = 512
+# The shipping Taira root lease is fixed to this size. Always derive a fresh
+# filesystem from the repository-pinned archive; never truncate an unresized image.
+NORMALIZED_ROOTFS_BYTES = 1536 * 1024 * 1024
 PINNED_ARCHIVE_SHA512 = {
     f"debian-{DEBIAN_RELEASE}-{DEBIAN_VARIANT}-amd64-{DEBIAN_IMAGE_BUILD}.tar.xz": (
         "1995b19708ba5a7eec0ffb98ddd58dfa0dab09afee96e57bf243b2540688c5b6"
@@ -39,18 +42,6 @@ PINNED_ARCHIVE_SHA512 = {
         "1ec66a4ba92864ca84ed6e06d96d3592008ef49d3e438c4b63b70f86f5681c09c7"
     ),
 }
-DEBIAN_KEYRING_ENV = "DEBIAN_ARCHIVE_KEYRING"
-DEBIAN_KEYRING_CANDIDATES = (
-    "/usr/share/keyrings/debian-archive-keyring.gpg",
-    "/usr/share/keyrings/debian-cloud-images-archive-keyring.gpg",
-    "/usr/share/keyrings/debian-cloud-images-keyring.gpg",
-    "/usr/share/keyrings/debian-role-keys.gpg",
-    "/etc/apt/trusted.gpg.d/debian-archive-bookworm-stable.gpg",
-    "/etc/apt/trusted.gpg.d/debian-archive-bookworm-security-automatic.gpg",
-    "/etc/apt/trusted.gpg.d/debian-archive-bookworm-automatic.gpg",
-    "/opt/homebrew/share/keyrings/debian-archive-keyring.gpg",
-    "/usr/local/share/keyrings/debian-archive-keyring.gpg",
-)
 
 
 def default_image_base_url() -> str:
@@ -96,22 +87,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="print shell exports for the prepared IROHA_INROU_PORTABLE_* paths",
     )
-    parser.add_argument(
-        "--image-base-url",
-        default=default_image_base_url(),
-        help=(
-            "base URL for Debian cloud image assets; defaults to the pinned "
-            f"{DEBIAN_CODENAME} build {DEBIAN_IMAGE_BUILD}"
-        ),
-    )
-    parser.add_argument(
-        "--debian-keyring",
-        type=Path,
-        help=(
-            "GPG keyring used to verify SHA512SUMS.sign; defaults to "
-            f"${DEBIAN_KEYRING_ENV} or common Debian archive keyring paths"
-        ),
-    )
     return parser.parse_args()
 
 
@@ -144,14 +119,6 @@ def find_tool(name: str) -> str:
     )
 
 
-def find_gpg_tool() -> str:
-    for name in ("gpgv", "gpg"):
-        if resolved := shutil.which(name):
-            return resolved
-    raise SystemExit(
-        "required GPG verifier `gpgv` or `gpg` was not found; install GnuPG "
-        "before preparing Inrou PortableVm guest assets"
-    )
 
 
 def run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -184,14 +151,41 @@ def atomic_output(destination: Path) -> Iterator[BinaryIO]:
             pass
 
 
+class PinnedDebianRedirects(urllib.request.HTTPRedirectHandler):
+    """Allow only the observed official TLS mirror for the exact pinned path."""
+
+    def __init__(self, initial_url: str):
+        super().__init__()
+        self.initial_url = initial_url
+        self.mirror_url = initial_url.replace(
+            "https://cloud.debian.org/", "https://laotzu.ftp.acc.umu.se/", 1
+        )
+        self.redirected = False
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if self.redirected or req.full_url != self.initial_url or newurl != self.mirror_url:
+            raise SystemExit("Debian guest download redirect differs from the exact official HTTPS mirror route")
+        # One exact hop only: no wildcard mirrors, downgrade, credentials, port,
+        # query, fragment, path substitution or redirect loop can match this URL.
+        self.redirected = True
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def open_https_download(url: str):
+    return urllib.request.build_opener(PinnedDebianRedirects(url)).open(url, timeout=60)
+
+
 def download(url: str, destination: Path) -> None:
+    allowed = {f"{default_image_base_url()}/{name}" for name in ("SHA512SUMS", *PINNED_ARCHIVE_SHA512)}
+    if url not in allowed:
+        raise SystemExit("Debian guest downloads require an exact repository-pinned official HTTPS URL")
     if destination.is_symlink():
         raise SystemExit(f"refusing symlinked download destination: {destination}")
     if destination.is_file():
         return
     if destination.exists():
         raise SystemExit(f"download destination is not a regular file: {destination}")
-    with urllib.request.urlopen(url) as response, atomic_output(destination) as out:
+    with open_https_download(url) as response, atomic_output(destination) as out:
         shutil.copyfileobj(response, out, length=1024 * 1024)
 
 
@@ -261,22 +255,27 @@ def sha512(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_archive(archive: Path, sums_path: Path) -> None:
-    wanted = archive.name
-    expected = None
+
+
+def verify_checksum_manifest(sums_path: Path, archive_name: str) -> None:
+    """The HTTPS manifest must agree with the independently reviewed repo pin."""
+    pinned = PINNED_ARCHIVE_SHA512.get(archive_name)
+    if pinned is None:
+        raise SystemExit(f"{archive_name} has no repository SHA512 pin")
+    matches = []
     for line in sums_path.read_text(encoding="utf-8").splitlines():
-        parts = line.split()
-        if len(parts) < 2:
+        if not line:
             continue
-        filename = parts[-1].removeprefix("*").removeprefix("./")
-        if filename == wanted:
-            expected = parts[0]
-            break
-    if expected is None:
-        raise SystemExit(f"{sums_path} does not list {wanted}")
-    actual = sha512(archive)
-    if actual.lower() != expected.lower():
-        raise SystemExit(f"SHA512 mismatch for {archive}: expected {expected}, got {actual}")
+        match = re.fullmatch(r"([0-9a-f]{128}) [ *](\S+)", line)
+        if match is None:
+            raise SystemExit("Debian SHA512SUMS contains a malformed checksum entry")
+        digest, filename = match.groups()
+        if filename.removeprefix("./") == archive_name:
+            matches.append(digest)
+    if len(matches) != 1:
+        raise SystemExit(f"Debian SHA512SUMS must list {archive_name} exactly once")
+    if matches[0] != pinned:
+        raise SystemExit("Debian SHA512SUMS differs from the repository SHA512 pin")
 
 
 def verify_pinned_archive(archive: Path) -> None:
@@ -293,68 +292,8 @@ def verify_pinned_archive(archive: Path) -> None:
         )
 
 
-def resolve_debian_keyrings(configured: Path | None = None) -> list[Path]:
-    if configured is not None:
-        keyring = configured.expanduser().resolve()
-        if not keyring.is_file():
-            raise SystemExit(f"--debian-keyring does not exist or is not a file: {keyring}")
-        return [keyring]
-
-    candidates: list[Path] = []
-    if env_value := os.environ.get(DEBIAN_KEYRING_ENV):
-        candidates.extend(Path(value).expanduser() for value in env_value.split(os.pathsep))
-    candidates.extend(Path(value) for value in DEBIAN_KEYRING_CANDIDATES)
-
-    resolved: list[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        if not str(candidate):
-            continue
-        path = candidate.expanduser().resolve()
-        if path in seen or not path.is_file():
-            continue
-        seen.add(path)
-        resolved.append(path)
-    if resolved:
-        return resolved
-
-    raise SystemExit(
-        "Debian SHA512SUMS signature verification requires a Debian archive "
-        "or cloud-image GPG keyring. Install `debian-archive-keyring`, set "
-        f"${DEBIAN_KEYRING_ENV}, or pass --debian-keyring."
-    )
 
 
-def verify_signed_sums(
-    sums_path: Path,
-    signature_path: Path,
-    keyrings: list[Path],
-    gpg_tool: str,
-) -> None:
-    keyring_args = [
-        value
-        for keyring in keyrings
-        for value in ("--keyring", str(keyring))
-    ]
-    if Path(gpg_tool).name == "gpgv":
-        command = [gpg_tool, *keyring_args, str(signature_path), str(sums_path)]
-    else:
-        command = [
-            gpg_tool,
-            "--batch",
-            "--no-default-keyring",
-            *keyring_args,
-            "--verify",
-            str(signature_path),
-            str(sums_path),
-        ]
-    try:
-        run(command)
-    except subprocess.CalledProcessError as error:
-        detail = (error.stderr or error.stdout or str(error)).strip()
-        raise SystemExit(
-            f"failed to verify Debian SHA512SUMS signature with {gpg_tool}: {detail}"
-        ) from error
 
 
 def extract_disk(archive: Path, disk: Path, force: bool) -> None:
@@ -436,6 +375,76 @@ def patch_rootfs(rootfs: Path, root_label: str, debugfs: str, tune2fs: str) -> N
     run([debugfs, "-w", "-R", f"write {fstab} /etc/fstab", str(rootfs)])
 
 
+def ext4_filesystem_bytes(stream: BinaryIO) -> int:
+    """Read actual ext4 geometry; e2fsck remains the filesystem validator."""
+    metadata = os.fstat(stream.fileno())
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit("guest root filesystem must be a regular file")
+    superblock = os.pread(stream.fileno(), 1024, 1024)
+    if len(superblock) != 1024 or struct.unpack_from("<H", superblock, 56)[0] != 0xEF53:
+        raise SystemExit("guest root filesystem has no valid ext4 superblock")
+    log_block_size = struct.unpack_from("<I", superblock, 24)[0]
+    if log_block_size > 6:
+        raise SystemExit("guest root filesystem has an invalid ext4 block size")
+    blocks = struct.unpack_from("<I", superblock, 4)[0]
+    incompat = struct.unpack_from("<I", superblock, 96)[0]
+    if incompat & 0x80:  # EXT4_FEATURE_INCOMPAT_64BIT
+        blocks |= struct.unpack_from("<I", superblock, 336)[0] << 32
+    size = blocks * (1024 << log_block_size)
+    if not size or size > metadata.st_size:
+        raise SystemExit("guest root filesystem geometry exceeds its backing file")
+    return size
+
+
+def normalize_rootfs(rootfs: Path, e2fsck: str, resize2fs: str) -> None:
+    """Shrink an unmounted private copy, then publish only a clean exact image."""
+    original = rootfs.lstat()
+    if not stat.S_ISREG(original.st_mode):
+        raise SystemExit("guest root filesystem must be a regular, non-symlinked file")
+    with rootfs.open("rb") as source, atomic_output(rootfs) as out:
+        opened = os.fstat(source.fileno())
+        if (opened.st_dev, opened.st_ino) != (original.st_dev, original.st_ino):
+            raise SystemExit("guest root filesystem changed before normalization")
+        shutil.copyfileobj(source, out, length=1024 * 1024)
+        out.flush()
+        os.fsync(out.fileno())
+        temporary = Path(out.name)
+        staged = os.fstat(out.fileno())
+
+        def require_staged_file() -> None:
+            current = temporary.lstat()
+            if not stat.S_ISREG(current.st_mode) or (
+                current.st_dev, current.st_ino
+            ) != (staged.st_dev, staged.st_ino):
+                raise SystemExit("guest root filesystem staging file was replaced")
+
+        # -p repairs only problems e2fsck considers safe to fix automatically.
+        # 0 is clean; 1 means corrected. Reboot-required and every error fail.
+        checked = run([e2fsck, "-f", "-p", str(temporary)], check=False)
+        if checked.returncode not in (0, 1):
+            detail = (checked.stderr or checked.stdout).strip()
+            raise SystemExit(f"guest root filesystem precheck failed ({checked.returncode}): {detail}")
+        run([e2fsck, "-f", "-n", str(temporary)])
+        require_staged_file()
+        ext4_filesystem_bytes(out)
+        # No force flag or minimum-size estimate: the real resize must succeed.
+        run([resize2fs, str(temporary), f"{NORMALIZED_ROOTFS_BYTES // (1024 * 1024)}M"])
+        require_staged_file()
+        if ext4_filesystem_bytes(out) != NORMALIZED_ROOTFS_BYTES:
+            raise SystemExit("guest root filesystem resize did not produce the canonical size")
+        # Shrink the backing file only after the filesystem's own block count
+        # proves that it fits. resize2fs may already have shortened a regular file.
+        out.truncate(NORMALIZED_ROOTFS_BYTES)
+        out.flush()
+        os.fsync(out.fileno())
+        run([e2fsck, "-f", "-n", str(temporary)])
+        require_staged_file()
+        if ext4_filesystem_bytes(out) != NORMALIZED_ROOTFS_BYTES or (
+            os.fstat(out.fileno()).st_size != NORMALIZED_ROOTFS_BYTES
+        ):
+            raise SystemExit("guest root filesystem changed after its final check")
+
+
 def debugfs_stdout(debugfs: str, command: str, rootfs: Path) -> str:
     return run([debugfs, "-R", command, str(rootfs)]).stdout
 
@@ -463,7 +472,8 @@ def write_env(output_dir: Path, kernel: Path, rootfs: Path, initrd: Path, print_
         f"export IROHA_INROU_PORTABLE_INITRD_IMAGE={shlex.quote(str(initrd))}",
     ]
     env_path = output_dir / "env.sh"
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with atomic_output(env_path) as out:
+        out.write(("\n".join(lines) + "\n").encode("utf-8"))
     if print_env:
         print("\n".join(lines))
     else:
@@ -474,12 +484,13 @@ def main() -> None:
     args = parse_args()
     deb_arch, guest_arch, root_label = host_asset_arch()
     output_dir = prepare_output_directory(args.output_dir)
+    # A failed rebuild must not leave a success entry point for partial assets.
+    remove_cached_download(output_dir / "env.sh")
 
-    base_url = args.image_base_url.rstrip("/")
+    base_url = default_image_base_url()
     archive_name = debian_archive_name(deb_arch)
     archive = output_dir / archive_name
     sums = output_dir / "SHA512SUMS"
-    sums_signature = output_dir / "SHA512SUMS.sign"
     disk = output_dir / "disk.raw"
     rootfs = output_dir / f"rootfs-{guest_arch}.ext4"
     kernel = output_dir / f"vmlinux-{guest_arch}"
@@ -487,26 +498,28 @@ def main() -> None:
 
     debugfs = find_tool("debugfs")
     tune2fs = find_tool("tune2fs")
-    gpg_tool = find_gpg_tool()
-    debian_keyrings = resolve_debian_keyrings(args.debian_keyring)
+    e2fsck = find_tool("e2fsck")
+    resize2fs = find_tool("resize2fs")
 
     if args.force:
-        for cached_download in (archive, sums, sums_signature):
+        for cached_download in (archive, sums):
             remove_cached_download(cached_download)
 
     download(f"{base_url}/SHA512SUMS", sums)
-    download(f"{base_url}/SHA512SUMS.sign", sums_signature)
-    verify_signed_sums(sums, sums_signature, debian_keyrings, gpg_tool)
+    verify_checksum_manifest(sums, archive_name)
     download(f"{base_url}/{archive_name}", archive)
-    verify_archive(archive, sums)
     verify_pinned_archive(archive)
     # Never trust derived cache entries: rebuild them from the archive whose
-    # digest was authenticated by Debian's signed sums and matched the repository
-    # pin above.
+    # digest matched the independently reviewed repository pin above. Debian
+    # publishes this cloud-image pipeline over HTTPS without detached signatures.
     extract_disk(archive, disk, True)
     offset, length = root_partition_range(disk)
     copy_range(disk, rootfs, offset, length, True)
+    # The verified archive can reconstruct this private intermediate. Release it
+    # before copying the rootfs for normalization so preparation has a bounded peak.
+    remove_cached_download(disk)
     patch_rootfs(rootfs, root_label, debugfs, tune2fs)
+    normalize_rootfs(rootfs, e2fsck, resize2fs)
 
     kernel_name = newest_boot_file(debugfs, rootfs, "vmlinuz-")
     initrd_name = newest_boot_file(debugfs, rootfs, "initrd.img-")

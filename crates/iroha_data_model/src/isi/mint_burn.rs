@@ -5,6 +5,7 @@ use norito::json::{FastJsonWrite, JsonSerialize};
 use std::fmt::Display;
 isi! {
     /// Generic instruction for a mint of an object to the identifiable destination.
+    #[norito_schema(name = "iroha_data_model::isi::mint_burn::Mint")]
     pub struct Mint<O, D: Identifiable> {
         /// Object which should be minted.
         pub object: O,
@@ -48,6 +49,7 @@ impl_into_box! {
 }
 isi! {
     /// Generic instruction for a burn of an object to the identifiable destination.
+    #[norito_schema(name = "iroha_data_model::isi::mint_burn::Burn")]
     pub struct Burn<O, D: Identifiable> {
         /// Object which should be burned.
         pub object: O,
@@ -151,6 +153,7 @@ isi_box! {
     /// Enum with all supported [`Mint`] instructions.
     ///
     /// Dev note: "Box" is naming for a grouped enum, not heap allocation.
+    #[norito_schema(name = "iroha_data_model::isi::mint_burn::MintBox")]
     pub enum MintBox {
         /// Mint for [`Asset`].
         Asset(Mint<Quantity, Asset>),
@@ -159,6 +162,7 @@ isi_box! {
     }
 }
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::mint_burn::MintType")]
     pub(crate) enum MintType {
         Asset,
         TriggerRepetitions,
@@ -168,6 +172,7 @@ isi_box! {
     /// Enum with all supported [`Burn`] instructions.
     ///
     /// Dev note: this is a tagged union of concrete `Burn<_, _>` variants.
+    #[norito_schema(name = "iroha_data_model::isi::mint_burn::BurnBox")]
     pub enum BurnBox {
         /// Burn [`Asset`].
         Asset(Burn<Quantity, Asset>),
@@ -176,6 +181,7 @@ isi_box! {
     }
 }
 enum_type! {
+    #[norito_schema(name = "iroha_data_model::isi::mint_burn::BurnType")]
     pub(crate) enum BurnType {
         Asset,
         TriggerRepetitions,

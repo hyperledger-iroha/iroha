@@ -402,8 +402,9 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
 }
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const TAIRA_TESTNET_PEERS: u16 = 4;
-const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = 4;
-const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 = 4;
+const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = taira_defaults::HYDRATION_CONCURRENCY as i64;
+const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 =
+    taira_defaults::PREPARED_RUNTIME_CACHE_CAPACITY as i64;
 const TAIRA_RUNTIME_SIGNER_SEED_DOMAIN: &[u8] = b"iroha:kagami:taira:runtime-signer:v1|";
 const TAIRA_RUNTIME_SIGNER_REVISION: u64 = 1;
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN: &[u8] =
@@ -2540,6 +2541,13 @@ fn render_peer_config(
             ),
         );
         if taira {
+            storage.insert(
+                "max_wsv_memory_bytes".into(),
+                Value::Integer(
+                    i64::try_from(taira_defaults::NEXUS_MAX_WSV_MEMORY_BYTES)
+                        .expect("Taira WSV memory fits i64"),
+                ),
+            );
             let weights = TAIRA_NEXUS_STORAGE_WEIGHTS
                 .into_iter()
                 .map(|(name, value)| (name.to_owned(), Value::Integer(i64::from(value))))
@@ -3559,9 +3567,7 @@ fn apply_parameter_overrides(
             builder = builder.append_parameter(parameter);
         }
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn apply_localnet_crypto_overrides(
     genesis: RawGenesisTransaction,
@@ -3592,11 +3598,7 @@ fn apply_localnet_crypto_overrides(
         .collect();
     crypto.allowed_curve_ids.sort_unstable();
     crypto.allowed_curve_ids.dedup();
-    genesis
-        .into_builder()
-        .with_crypto(crypto)
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    genesis.into_builder().with_crypto(crypto).build_raw()
 }
 fn append_peer_pop(
     genesis: RawGenesisTransaction,
@@ -3614,7 +3616,6 @@ fn append_peer_pop(
         .next_transaction()
         .set_topology(topology)
         .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 #[cfg(test)]
 fn append_localnet_contract_permissions(
@@ -3649,9 +3650,7 @@ fn append_localnet_service_accounts(
                 builder.append_instruction(Register::account(Account::new((*account_id).clone())));
         }
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn append_localnet_alias_fee_bootstrap(
     genesis: RawGenesisTransaction,
@@ -3705,9 +3704,7 @@ fn append_localnet_alias_fee_bootstrap(
             AssetId::new(fee_asset_id, onboarding_account_id.clone()),
         ));
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn localnet_alias_setup_request(
     genesis_account_id: &AccountId,
@@ -3777,9 +3774,7 @@ fn append_localnet_alias_setup(
     for ensure in request.intents.iter().cloned() {
         builder = builder.append_instruction(ensure);
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 fn write_localnet_alias_setup_intent(
     out_dir: &Path,
@@ -3890,9 +3885,7 @@ fn append_localnet_contract_permissions_for_client(
     for (permission, destination) in grants {
         builder = builder.append_instruction(Grant::account_permission(permission, destination));
     }
-    builder
-        .build_raw()
-        .expect("existing localnet manifest preserves required signed consensus authority")
+    builder.build_raw()
 }
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,

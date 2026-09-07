@@ -2,6 +2,7 @@ use super::*;
 use crate::content::{ContentBundleId, ContentBundleManifest};
 isi! {
     /// Publish a content bundle (hashed tar archive) into the on-chain content lane.
+    #[norito_schema(name = "iroha_data_model::isi::content::PublishContentBundle")]
     pub struct PublishContentBundle {
         /// Expected bundle identifier (BLAKE3 of the tar archive).
         pub bundle_id: ContentBundleId,
@@ -19,6 +20,7 @@ isi! {
 impl crate::seal::Instruction for PublishContentBundle {}
 isi! {
     /// Retire a previously published content bundle as its original creator.
+    #[norito_schema(name = "iroha_data_model::isi::content::RetireContentBundle")]
     pub struct RetireContentBundle {
         /// Identifier of the bundle to retire.
         pub bundle_id: ContentBundleId,

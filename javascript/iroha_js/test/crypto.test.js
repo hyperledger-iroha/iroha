@@ -28,7 +28,8 @@ import {
   sm2PublicKeyMultihash,
   signSm2,
   verifySm2,
-  buildKaigiRosterJoinProof,
+  buildKaigiAuthorizationProofV1,
+  buildKaigiUsageProofV1,
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,
@@ -780,26 +781,158 @@ test("deriveConfidentialNullifierV2 binds the exact NetworkId bytes", () => {
   assert.notDeepEqual(calls[0][0], calls[1][0]);
 });
 
-test("buildKaigiRosterJoinProof fails closed before native dispatch", () => {
+function kaigiAuthorizationInputV1() {
+  return {
+    networkId: NetworkId.fromBytes(Buffer.alloc(32, 0x13)),
+    callId: { domainId: "wonderland", callName: "full-authorization" },
+    hostId: "complete-canonical-host", subjectId: "complete-canonical-subject",
+    participationSequence: 0xffff_ffff_ffff_ffffn, action: "leave",
+    preRosterRoot: Buffer.alloc(32, 0x35), blinding: Buffer.alloc(32, 0x11),
+  };
+}
+
+function kaigiAuthorizationResultV1(root) {
+  return {commitment: Buffer.alloc(32, 1), nullifier: Buffer.alloc(32, 2),
+    authorization: Buffer.alloc(32, 3), preRosterRoot: Buffer.from(root), proof: Buffer.from([1, 2, 3])};
+}
+
+test("final Kaigi authorization preserves complete context and bigint and consumes the supplied view", () => {
+  const input = kaigiAuthorizationInputV1();
+  const owner = Buffer.alloc(40, 0x11);
+  input.blinding = owner.subarray(4, 36);
+  let calls = 0;
+  const crypto = cryptoApiWithBinding({buildKaigiAuthorizationProofV1: (...args) => {
+    calls += 1;
+    assert.deepEqual(Buffer.from(args[0]), Buffer.from(input.networkId.toBytes()));
+    assert.deepEqual(args.slice(1, 7), [input.callId.domainId, input.callId.callName,
+      input.hostId, input.subjectId, input.participationSequence, input.action]);
+    assert.deepEqual(args[7], input.preRosterRoot);
+    assert.strictEqual(args[8], input.blinding);
+    assert.deepEqual(args[8], Buffer.alloc(32, 0x11));
+    return kaigiAuthorizationResultV1(args[7]);
+  }});
+  const result = crypto.buildKaigiAuthorizationProofV1(input);
+  assert.equal(calls, 1);
+  assert.deepEqual(input.blinding, Buffer.alloc(32));
+  assert.deepEqual(owner.subarray(0, 4), Buffer.alloc(4, 0x11));
+  assert.deepEqual(owner.subarray(36), Buffer.alloc(4, 0x11));
+  assert.deepEqual(result.authorization, Buffer.alloc(32, 3));
+  assert.equal(typeof buildKaigiAuthorizationProofV1, "function");
+  assert.equal("buildKaigiRosterJoinProof" in crypto, false);
+});
+
+test("final Kaigi authorization rejects lossy or retired inputs and clears blinding before returning", () => {
   let called = false;
-  const binding = { buildKaigiRosterJoinProof: () => { called = true; } };
-  const crypto = cryptoApiWithBinding(binding);
-  assert.throws(
-    () => crypto.buildKaigiRosterJoinProof({
-      seed: Buffer.from("seed"),
-      rosterRootHex: "44".repeat(32),
-    }),
-    /binds the signed participant authority/u,
-  );
+  const crypto = cryptoApiWithBinding({buildKaigiAuthorizationProofV1: () => { called = true; }});
+  for (const change of [
+    {participationSequence: 1}, {participationSequence: "1"}, {participationSequence: -1n},
+    {participationSequence: 1n << 64n}, {action: "JOIN"}, {action: 1},
+    {seed: Buffer.alloc(32)}, {roster_root_hex: "00".repeat(32)},
+    {preRosterRoot: Buffer.alloc(31)}, {networkId: "untrusted-network"},
+    {callId: {domainId: "x", callName: "y", alias: "z"}}, {subjectId: " subject "},
+  ]) {
+    const input = {...kaigiAuthorizationInputV1(), ...change};
+    assert.throws(() => crypto.buildKaigiAuthorizationProofV1(input));
+    assert.deepEqual(input.blinding, Buffer.alloc(32));
+  }
+  for (const blinding of [new Uint8Array(31).fill(1), new Uint8Array(33).fill(1)]) {
+    assert.throws(() => crypto.buildKaigiAuthorizationProofV1({...kaigiAuthorizationInputV1(), blinding}));
+    assert.ok(blinding.every((byte) => byte === 0));
+  }
+  const shared = new Uint8Array(new SharedArrayBuffer(32)).fill(1);
+  // Own properties cannot disguise the actual backing store from the guard.
+  Object.defineProperty(shared, "buffer", {value: new ArrayBuffer(32)});
+  assert.throws(() => crypto.buildKaigiAuthorizationProofV1({...kaigiAuthorizationInputV1(), blinding: shared}), /private mutable/u);
+  assert.ok(shared.every((byte) => byte === 0));
   assert.equal(called, false);
 });
 
-test("buildKaigiRosterJoinProof remains unavailable for well-formed inputs", () => {
-  assert.throws(
-    () => buildKaigiRosterJoinProof({
-      seed: Buffer.alloc(32, 0x44),
-      rosterRootHex: "00".repeat(32),
-    }),
-    /binds the signed participant authority/u,
-  );
+test("final Kaigi authorization clears blinding on native failure and rejects malformed public results", () => {
+  const nativeFailure = cryptoApiWithBinding({buildKaigiAuthorizationProofV1: () => {throw new Error("native proof rejected");}});
+  const input = kaigiAuthorizationInputV1();
+  assert.throws(() => nativeFailure.buildKaigiAuthorizationProofV1(input), /native proof rejected/u);
+  assert.deepEqual(input.blinding, Buffer.alloc(32));
+  for (const mutation of [
+    {commitment: Buffer.alloc(32, 0xff)}, {authorization: Buffer.alloc(31)},
+    {nullifier: Buffer.alloc(32, 0xff)}, {proof: Buffer.alloc(0)}, {preRosterRoot: Buffer.alloc(32)},
+  ]) {
+    const input = kaigiAuthorizationInputV1();
+    const crypto = cryptoApiWithBinding({buildKaigiAuthorizationProofV1: (...args) => ({...kaigiAuthorizationResultV1(args[7]), ...mutation})});
+    assert.throws(() => crypto.buildKaigiAuthorizationProofV1(input));
+    assert.deepEqual(input.blinding, Buffer.alloc(32));
+  }
+});
+
+function kaigiUsageInputV1() {
+  return {
+    networkId: NetworkId.fromBytes(Buffer.alloc(32, 0x13)),
+    callId: { domainId: "wonderland.sora", callName: "host-usage" },
+    hostId: "canonical-original-host", preRosterRoot: Buffer.alloc(32, 0x35),
+    segmentIndex: 0xffff_ffff, durationMs: 0xffff_ffff_ffff_ffffn, billedGas: 0xffff_ffff_ffff_ffffn,
+    hostCommitment: Buffer.alloc(32, 0x11), blinding: Buffer.alloc(32, 0x11),
+  };
+}
+function kaigiUsageResultV1(root, host) {
+  return {hostCommitment: Buffer.from(host), usageCommitment: Buffer.alloc(32, 0x12),
+    preRosterRoot: Buffer.from(root), proof: Buffer.from([1, 2, 3])};
+}
+
+test("final Kaigi usage preserves the full context and exact metrics and consumes the supplied view", () => {
+  const input = kaigiUsageInputV1();
+  const owner = Buffer.alloc(40, 0x11);
+  input.blinding = owner.subarray(4, 36);
+  let calls = 0;
+  const crypto = cryptoApiWithBinding({buildKaigiUsageProofV1: (...args) => {
+    calls += 1;
+    assert.deepEqual(Buffer.from(args[0]), Buffer.from(input.networkId.toBytes()));
+    assert.deepEqual(args.slice(1, 4), [input.callId.domainId, input.callId.callName, input.hostId]);
+    assert.deepEqual(args[4], input.preRosterRoot);
+    assert.deepEqual(args.slice(5, 8), [input.segmentIndex, input.durationMs, input.billedGas]);
+    assert.deepEqual(args[8], input.hostCommitment);
+    assert.strictEqual(args[9], input.blinding);
+    return kaigiUsageResultV1(args[4], args[8]);
+  }});
+  const result = crypto.buildKaigiUsageProofV1(input);
+  assert.equal(calls, 1);
+  assert.deepEqual(input.blinding, Buffer.alloc(32));
+  assert.deepEqual(owner.subarray(0, 4), Buffer.alloc(4, 0x11));
+  assert.deepEqual(owner.subarray(36), Buffer.alloc(4, 0x11));
+  assert.deepEqual(result.hostCommitment, input.hostCommitment);
+  assert.ok(Object.isFrozen(result));
+  assert.equal(typeof buildKaigiUsageProofV1, "function");
+});
+
+test("final Kaigi usage rejects lossy metrics and unknown fields and clears every supplied blinding", () => {
+  let called = false;
+  const crypto = cryptoApiWithBinding({buildKaigiUsageProofV1: () => { called = true; }});
+  for (const change of [
+    {segmentIndex: -1}, {segmentIndex: 0.5}, {segmentIndex: 0x1_0000_0000}, {segmentIndex: 1n},
+    {segmentIndex: NaN}, {segmentIndex: Infinity}, {durationMs: 0n}, {durationMs: 1}, {durationMs: -1n},
+    {durationMs: 1n << 64n}, {billedGas: 1}, {billedGas: "1"}, {billedGas: -1n}, {billedGas: 1n << 64n},
+    {hostCommitment: Buffer.alloc(32, 0xff)}, {hostCommitment: Buffer.alloc(31)},
+    {preRosterRoot: Buffer.alloc(31)}, {networkId: "untrusted-network"}, {hostId: " host "},
+    {callId: {domainId: "x", callName: "y", alias: "z"}}, {seed: Buffer.alloc(32)}, {usageCommitment: Buffer.alloc(32)},
+  ]) {
+    const input = {...kaigiUsageInputV1(), ...change};
+    assert.throws(() => crypto.buildKaigiUsageProofV1(input));
+    assert.deepEqual(input.blinding, Buffer.alloc(32));
+  }
+  for (const blinding of [new Uint8Array(31).fill(1), new Uint8Array(33).fill(1), new Uint8Array(new SharedArrayBuffer(32)).fill(1)]) {
+    assert.throws(() => crypto.buildKaigiUsageProofV1({...kaigiUsageInputV1(), blinding}));
+    assert.ok(blinding.every((byte) => byte === 0));
+  }
+  assert.equal(called, false);
+});
+
+test("final Kaigi usage clears blinding on native failure and rejects changed host root or malformed outputs", () => {
+  const input = kaigiUsageInputV1();
+  assert.throws(() => cryptoApiWithBinding({buildKaigiUsageProofV1: () => { throw new Error("opening mismatch"); }}).buildKaigiUsageProofV1(input), /opening mismatch/u);
+  assert.deepEqual(input.blinding, Buffer.alloc(32));
+  for (const mutation of [{hostCommitment: Buffer.alloc(32)}, {usageCommitment: Buffer.alloc(32, 0xff)},
+    {usageCommitment: Buffer.alloc(31)}, {preRosterRoot: Buffer.alloc(32)}, {proof: Buffer.alloc(0)}]) {
+    const input = kaigiUsageInputV1();
+    const crypto = cryptoApiWithBinding({buildKaigiUsageProofV1: (...args) => ({...kaigiUsageResultV1(args[4], args[8]), ...mutation})});
+    assert.throws(() => crypto.buildKaigiUsageProofV1(input));
+    assert.deepEqual(input.blinding, Buffer.alloc(32));
+  }
 });

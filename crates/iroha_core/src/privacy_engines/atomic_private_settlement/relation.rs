@@ -4,7 +4,8 @@ use super::super::ivm_private_note::{
     IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
     PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1,
     PrivateNotePlaintextV1, PrivateNoteRelationProfileV1, PrivateOpcodeV1, PrivateProgramV1,
-    derive_ivm_private_recipient_id_v1, derive_note_authority_v1, derive_private_program_id_v1,
+    derive_ivm_private_recipient_id_v1, derive_note_authority_v1,
+    derive_private_note_input_openings_commitment_v1, derive_private_program_id_v1,
     derive_profiled_input_commitment_v1, derive_profiled_output_commitment_v1,
     preflight_private_note_relation_with_profile_v1,
     validate_ivm_private_wallet_encryption_opening_v1,
@@ -20,7 +21,8 @@ use iroha_data_model::{
     nexus::{
         AtomicPrivateSettlementV1, PRIVATE_SETTLEMENT_INPUT_SLOTS_V1,
         PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1,
-        PrivateSettlementAuditPlaintextV1, PrivateSettlementProofStatementV1,
+        PrivateSettlementAuditNoteOpeningV1, PrivateSettlementAuditPlaintextV1,
+        PrivateSettlementProofStatementV1,
     },
     privacy::{
         IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
@@ -46,7 +48,7 @@ const SETTLEMENT_DUMMY_INPUT_MEMO_DOMAIN_V1: &[u8] =
     b"iroha.atomic-private-settlement.input.dummy.v1";
 
 /// Semantic descriptor for the settlement-only IVM relation binding.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_RELATION_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-relation-v1:separate-from-transparent-amx:ivm-private-note-fixed-2-input-3-output:balanced-only:zero-valued-cover-notes-with-nonzero-authority-rho-blinding-and-path:payer=purpose-separated-fixed-input-controller-authorization:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:reimbursement-success-fee-carriers=2:asset=salted-auditor-approved-pool-binding:public=canonical-manifest-intent-proof-binding+statement+genesis:post-proof-artifacts=manifest+committee-qc+carrier:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier";
+pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_RELATION_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-relation-v1:separate-from-transparent-amx:ivm-private-note-fixed-2-input-3-output:balanced-only:positive-input-membership-only:zero-valued-virtual-dummies-with-nonzero-authority-rho-blinding-and-path:input-openings=public-air-sha256-binding-of-exact-ordered-value-authority-rho-blinding-memo:payer=purpose-separated-fixed-input-controller-authorization:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:reimbursement-success-fee-carriers=2:asset=salted-auditor-approved-pool-binding:public=canonical-manifest-intent-proof-binding+statement+genesis:post-proof-artifacts=manifest+committee-qc+carrier:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier";
 
 /// Public, redacted failure at the settlement proof relation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -281,6 +283,7 @@ pub fn atomic_private_settlement_output_memo_digests_v1(
             statement.pool_id,
             statement.asset_binding_commitment,
             statement.audit_plaintext_commitment,
+            statement.audit_input_commitment,
         ),
         (
             statement.audit_policy_digest,
@@ -413,7 +416,66 @@ pub(crate) fn relation_profile_v1(
 ) -> Result<PrivateNoteRelationProfileV1, AtomicPrivateSettlementRelationErrorV1> {
     Ok(PrivateNoteRelationProfileV1::exact_three_output_balanced(
         atomic_private_settlement_output_memo_digests_v1(manifest, statement)?,
+        statement.audit_input_commitment,
     ))
+}
+
+/// Commit the exact two auditor-visible input openings used by the proof.
+///
+/// The private nonce and blinding are included, so honestly randomized openings
+/// do not permit testing pairs of public note commitments. Activity is derived
+/// from the value and must agree with the capsule's declared selector. The
+/// result preserves all 256 SHA-256 bits without Iroha entity-hash markers.
+///
+/// # Errors
+///
+/// Rejects a noncanonical fixed-slot shape, activity, dummy domain, note
+/// opening, or commitment before producing a digest.
+pub fn atomic_private_settlement_audit_input_commitment_v1(
+    openings: &[PrivateSettlementAuditNoteOpeningV1],
+) -> Result<[u8; 32], AtomicPrivateSettlementRelationErrorV1> {
+    if openings.len() != PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 {
+        return Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial);
+    }
+    // Note validation is independent of the finalized binding. This profile
+    // is used only to construct the openings whose digest is being computed.
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+        [[1; 32]; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1],
+        [1; 32],
+    );
+    let mut notes = Vec::with_capacity(PRIVATE_SETTLEMENT_INPUT_SLOTS_V1);
+    for opening in openings {
+        if opening.active != (opening.value != 0)
+            || opening.memo_digest == [0; 32]
+            || if opening.active {
+                opening.dummy_domain.is_some()
+            } else {
+                opening
+                    .dummy_domain
+                    .is_none_or(|domain| domain == Hash::prehashed([0; 32]))
+            }
+        {
+            return Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial);
+        }
+        let note = PrivateNotePlaintextV1::new_profiled_input_v1(
+            opening.value,
+            opening.spending_authority,
+            opening.rho,
+            opening.blinding,
+            opening.memo_digest,
+            profile,
+        )
+        .map_err(|_| AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)?;
+        if derive_profiled_input_commitment_v1(&note, profile)
+            .map_err(|_| AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)?
+            != opening.commitment
+        {
+            return Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial);
+        }
+        notes.push(note);
+    }
+    derive_private_note_input_openings_commitment_v1(&notes)
+        .map_err(|_| AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
 }
 
 fn validate_audit_plaintext_against_statement_v1(
@@ -577,6 +639,11 @@ pub(crate) fn validate_audit_openings_v1(
     plaintext: &PrivateSettlementAuditPlaintextV1,
 ) -> Result<(), AtomicPrivateSettlementRelationErrorV1> {
     validate_audit_plaintext_against_statement_v1(manifest, statement, plaintext)?;
+    if atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)?
+        != statement.audit_input_commitment
+    {
+        return Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial);
+    }
     validate_payer_input_authorization_v1(plaintext, statement)?;
     validate_output_view_key_authorizations_v1(plaintext)?;
     let profile = relation_profile_v1(manifest, statement)?;
@@ -784,7 +851,20 @@ pub(crate) fn compile_witness_v1(
 mod tests {
     use super::*;
     use crate::{
-        privacy_engines::ivm_private_note::ivm_private_recipient_public_key_v1,
+        privacy_engines::{
+            atomic_private_settlement::wallet::{
+                derive_atomic_private_settlement_input_nullifiers_v1,
+                prepare_atomic_private_settlement_input_openings_v1,
+                prepare_atomic_private_settlement_outputs_v1,
+            },
+            ivm_private_note::{
+                accumulator_leaf_digest_for_testing_v1, accumulator_node_digest_for_testing_v1,
+                ivm_private_recipient_public_key_v1,
+            },
+            proof_managed_accumulator::{
+                append_proof_managed_commitments_v1, build_proof_managed_frontier_v1,
+            },
+        },
         private_settlement::sidecar_store::tests::sidecar_fixture,
     };
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
@@ -796,8 +876,12 @@ mod tests {
             PrivateSettlementAuditViewKeyAuthorizationBodyV1,
             PrivateSettlementAuditViewKeyAuthorizationV1, PrivateSettlementAuditViewKeySignatureV1,
         },
-        privacy::{PrivacyCommitmentV1, PrivacyNullifierV1},
+        privacy::{
+            PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+            PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        },
     };
+    use rand_08::{SeedableRng as _, rngs::StdRng};
 
     fn signature_entry(
         signer: &KeyPair,
@@ -817,6 +901,356 @@ mod tests {
             signer.public_key().clone(),
             SignatureOf::try_new(signer.private_key(), body).expect("payer authorization signs"),
         )
+    }
+
+    fn recommit_audit_input(opening: &mut PrivateSettlementAuditNoteOpeningV1) {
+        let profile =
+            PrivateNoteRelationProfileV1::exact_three_output_balanced([[1; 32]; 3], [1; 32]);
+        let note = PrivateNotePlaintextV1::new_profiled_input_v1(
+            opening.value,
+            opening.spending_authority,
+            opening.rho,
+            opening.blinding,
+            opening.memo_digest,
+            profile,
+        )
+        .expect("input opening constructs");
+        opening.commitment =
+            derive_profiled_input_commitment_v1(&note, profile).expect("input commitment");
+    }
+
+    fn continuation_membership_path(
+        statement: &IrohaIvmPrivateNoteStarkStatementV1,
+        commitments: &[PrivacyCommitmentV1],
+        mut position: usize,
+    ) -> ([u8; 32], [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1]) {
+        let mut nodes: Vec<_> = commitments
+            .iter()
+            .map(|commitment| {
+                accumulator_leaf_digest_for_testing_v1(statement, 0, *commitment)
+                    .expect("historical leaf")
+            })
+            .collect();
+        let mut empty: [u8; 32] =
+            Sha256::digest(b"iroha.privacy.proof-managed-note-tree.empty-leaf.v1").into();
+        let path = core::array::from_fn(|level| {
+            let sibling = nodes.get(position ^ 1).copied().unwrap_or(empty);
+            let level = u8::try_from(level).expect("depth fits u8");
+            nodes = nodes
+                .chunks(2)
+                .map(|pair| {
+                    accumulator_node_digest_for_testing_v1(
+                        0,
+                        level,
+                        &pair[0],
+                        pair.get(1).unwrap_or(&empty),
+                    )
+                    .expect("historical subtree")
+                })
+                .collect();
+            empty = accumulator_node_digest_for_testing_v1(0, level, &empty, &empty)
+                .expect("empty subtree");
+            position >>= 1;
+            sibling
+        });
+        assert_eq!(position, 0);
+        (nodes[0], path)
+    }
+
+    #[test]
+    fn wallet_continues_settlement_with_fresh_virtual_dummy_without_bootstrap() {
+        let fixture = sidecar_fixture();
+        let mut manifest = fixture.sidecar.manifest;
+        let mut statement = fixture.sidecar.payload.statement;
+        let mut plaintext = fixture.plaintext;
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
+                pool_id: statement.pool_id,
+                program_id: atomic_private_settlement_program_id_v1().expect("program"),
+            }),
+        );
+        let mut historical_commitments: Vec<_> = plaintext
+            .inputs
+            .iter()
+            .map(|input| input.commitment)
+            .collect();
+        historical_commitments.sort_unstable();
+        let mut frontier = build_proof_managed_frontier_v1(namespace, &historical_commitments)
+            .expect("one governed origin");
+        let mut rng = StdRng::seed_from_u64(0x4150_535f_434f_4e54);
+        let recipient = KeyPair::from_seed(vec![0x39; 32], Algorithm::Ed25519);
+        let sponsor = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+        let mut previous_dummy_nullifier = None;
+        for settlement in 0_u8..2 {
+            let payer = KeyPair::from_seed(
+                vec![if settlement == 0 { 0x38 } else { 0x39 }; 32],
+                Algorithm::Ed25519,
+            );
+            manifest.authority_context_height = 10 + u64::from(settlement);
+            manifest.bundle_id = manifest.computed_bundle_id().expect("fresh bundle");
+            statement.bundle_id = manifest.bundle_id;
+            statement.authority_context_height = manifest.authority_context_height;
+            statement.old_root = frontier.root;
+            statement.old_epoch = 1 + u64::from(settlement);
+            statement.new_epoch = statement.old_epoch + 1;
+            // Output preparation precedes the deterministic frontier append.
+            statement.new_root = PrivacyRootV1::new([0xE0 + settlement; 32]);
+            plaintext.bundle_id = manifest.bundle_id;
+            plaintext.payer = AccountId::new(payer.public_key().clone());
+            plaintext.amount = plaintext.inputs[0].value - 5;
+            plaintext.outputs[0].note.value = plaintext.amount;
+            prepare_atomic_private_settlement_input_openings_v1(
+                &manifest,
+                &statement,
+                &mut plaintext.inputs,
+            )
+            .expect("prepare live note and current-bundle virtual dummy");
+            if settlement != 0 {
+                assert!(
+                    !historical_commitments.contains(&plaintext.inputs[1].commitment),
+                    "the second bundle's dummy was never inserted into the pool"
+                );
+            }
+            let secrets = [[if settlement == 0 { 0x81 } else { 0x91 }; 32], [0x82; 32]];
+            statement.nullifiers = derive_atomic_private_settlement_input_nullifiers_v1(
+                &manifest,
+                &statement,
+                &plaintext.inputs,
+                &secrets,
+            )
+            .expect("pool-scoped nullifiers")
+            .to_vec();
+            if let Some(previous) = previous_dummy_nullifier {
+                assert_ne!(
+                    statement.nullifiers[1], previous,
+                    "dummy cannot replay the old nullifier"
+                );
+            }
+            previous_dummy_nullifier = Some(statement.nullifiers[1]);
+            let payer_body = plaintext
+                .payer_authorization_body(&statement.nullifiers)
+                .expect("current payer authorization");
+            plaintext.payer_authorization = PrivateSettlementAuditPayerAuthorizationV1::new(
+                payer_body.clone(),
+                vec![payer_signature_entry(&payer, &payer_body)],
+            );
+            for (index, key) in [&recipient, &payer, &sponsor].into_iter().enumerate() {
+                plaintext.outputs[index].recipient_view_key = ivm_private_recipient_public_key_v1(
+                    &[0xA1 + u8::try_from(index).unwrap() + settlement * 3; 32],
+                )
+                .expect("fresh output view key");
+                plaintext.outputs[index].note.rho[0] ^= settlement;
+                let body = plaintext
+                    .output_view_key_authorization_body(index)
+                    .expect("output role authorization");
+                plaintext.outputs[index].view_key_authorization =
+                    PrivateSettlementAuditViewKeyAuthorizationV1::new(
+                        body.clone(),
+                        vec![signature_entry(key, &body)],
+                    );
+            }
+            statement.audit_plaintext_commitment =
+                plaintext.commitment().expect("audit commitment");
+            statement.audit_input_commitment =
+                atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)
+                    .expect("AIR input binding");
+            statement.encrypted_outputs = prepare_atomic_private_settlement_outputs_v1(
+                &mut rng,
+                &manifest,
+                &statement,
+                &mut plaintext.outputs,
+            )
+            .expect("current fixed output ciphertexts");
+            statement.output_commitments = plaintext
+                .outputs
+                .iter()
+                .map(|output| output.note.commitment)
+                .collect();
+            let next_frontier = append_proof_managed_commitments_v1(
+                namespace,
+                frontier.tree_size,
+                frontier.leaf,
+                &frontier.ommers,
+                frontier.root,
+                &statement.output_commitments,
+            )
+            .expect("append outputs to the existing frontier");
+            statement.new_root = next_frontier.root;
+            let active_position = historical_commitments
+                .iter()
+                .position(|commitment| *commitment == plaintext.inputs[0].commitment)
+                .expect("the actual funding note is already in the pool");
+            let internal = internal_statement_v1(&manifest, &statement).expect("current statement");
+            let (root, path) =
+                continuation_membership_path(&internal, &historical_commitments, active_position);
+            assert_eq!(
+                PrivacyRootV1::new(root),
+                frontier.root,
+                "path matches canonical frontier"
+            );
+            let witness = AtomicPrivateSettlementProverWitnessV1::new(
+                plaintext.clone(),
+                [
+                    AtomicPrivateSettlementInputWitnessV1::new(
+                        secrets[0],
+                        u32::try_from(active_position).unwrap(),
+                        path,
+                    )
+                    .expect("live membership"),
+                    AtomicPrivateSettlementInputWitnessV1::new(
+                        secrets[1],
+                        u32::try_from(active_position ^ 1).unwrap(),
+                        [[0xED; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+                    )
+                    .expect("virtual dummy secret and fixed-shape path"),
+                ],
+            );
+            compile_witness_v1(&manifest, &statement, &witness)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "full audit validation and relation preflight reject settlement {settlement}: {error:?}"
+                    )
+                });
+            historical_commitments.extend(&statement.output_commitments);
+            frontier = next_frontier;
+            plaintext.inputs[0] = plaintext.outputs[0].note.clone();
+        }
+        assert_eq!(
+            frontier.tree_size, 8,
+            "one origin and two three-output appends"
+        );
+    }
+
+    #[test]
+    fn audit_input_commitment_preserves_both_raw_sha256_low_bit_parities() {
+        let fixture = sidecar_fixture();
+        let mut inputs = fixture.plaintext.inputs.clone();
+        let profile =
+            PrivateNoteRelationProfileV1::exact_three_output_balanced([[1; 32]; 3], [1; 32]);
+        let mut observed_parities = [false; 2];
+        for nonce in 0_u8..=u8::MAX {
+            inputs[0].rho[0] = nonce;
+            recommit_audit_input(&mut inputs[0]);
+            let notes = inputs
+                .iter()
+                .map(|opening| {
+                    PrivateNotePlaintextV1::new_profiled_input_v1(
+                        opening.value,
+                        opening.spending_authority,
+                        opening.rho,
+                        opening.blinding,
+                        opening.memo_digest,
+                        profile,
+                    )
+                    .expect("canonical input note")
+                })
+                .collect::<Vec<_>>();
+            let raw_digest = derive_private_note_input_openings_commitment_v1(&notes)
+                .expect("raw SHA-256 digest consumed by the AIR");
+            let public_digest = atomic_private_settlement_audit_input_commitment_v1(&inputs)
+                .expect("public input opening commitment");
+            assert_eq!(
+                public_digest, raw_digest,
+                "the public field must not apply Iroha entity-hash marker bits"
+            );
+            observed_parities[usize::from(raw_digest[31] & 1)] = true;
+            if observed_parities == [true; 2] {
+                break;
+            }
+        }
+        assert_eq!(observed_parities, [true; 2]);
+    }
+
+    #[test]
+    fn audit_input_commitment_binds_order_and_every_opening_field() {
+        let fixture = sidecar_fixture();
+        let inputs = fixture.plaintext.inputs.clone();
+        let expected = atomic_private_settlement_audit_input_commitment_v1(&inputs)
+            .expect("canonical input commitment");
+        assert_eq!(
+            expected,
+            fixture.sidecar.payload.statement.audit_input_commitment
+        );
+        for field in 0..5 {
+            let mut substituted = inputs.clone();
+            match field {
+                0 => substituted[0].value += 1,
+                1 => substituted[0].spending_authority[0] ^= 1,
+                2 => substituted[0].rho[0] ^= 1,
+                3 => substituted[0].blinding[0] ^= 1,
+                4 => substituted[0].memo_digest[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                atomic_private_settlement_audit_input_commitment_v1(&substituted).is_err(),
+                "a stale note commitment cannot open substituted field {field}"
+            );
+            recommit_audit_input(&mut substituted[0]);
+            assert_ne!(
+                atomic_private_settlement_audit_input_commitment_v1(&substituted)
+                    .expect("substituted opening is self-consistent"),
+                expected,
+                "the full input hash must bind field {field}"
+            );
+        }
+        let mut reordered = inputs.clone();
+        reordered.reverse();
+        assert_ne!(
+            atomic_private_settlement_audit_input_commitment_v1(&reordered)
+                .expect("reordered openings remain well-formed"),
+            expected
+        );
+        assert!(atomic_private_settlement_audit_input_commitment_v1(&inputs[..1]).is_err());
+        let mut wrong_activity = inputs.clone();
+        wrong_activity[1].active = true;
+        wrong_activity[1].dummy_domain = None;
+        assert!(atomic_private_settlement_audit_input_commitment_v1(&wrong_activity).is_err());
+        let mut missing_domain = inputs;
+        missing_domain[1].dummy_domain = None;
+        assert!(atomic_private_settlement_audit_input_commitment_v1(&missing_domain).is_err());
+    }
+
+    #[test]
+    fn auditor_rejects_self_consistent_resigned_input_substitution() {
+        let fixture = sidecar_fixture();
+        let mut statement = fixture.sidecar.payload.statement;
+        let mut plaintext = fixture.plaintext;
+        plaintext.inputs[0].value -= 1;
+        plaintext.inputs[1].value = 1;
+        plaintext.inputs[1].active = true;
+        plaintext.inputs[1].dummy_domain = None;
+        for input in &mut plaintext.inputs {
+            recommit_audit_input(input);
+        }
+        let payer = KeyPair::from_seed(vec![0x38; 32], Algorithm::Ed25519);
+        let body = plaintext
+            .payer_authorization_body(&statement.nullifiers)
+            .expect("substituted payer body");
+        plaintext.payer_authorization = PrivateSettlementAuditPayerAuthorizationV1::new(
+            body.clone(),
+            vec![payer_signature_entry(&payer, &body)],
+        );
+        statement.audit_plaintext_commitment =
+            plaintext.commitment().expect("refreshed capsule hash");
+        validate_audit_plaintext_against_statement_v1(
+            &fixture.sidecar.manifest,
+            &statement,
+            &plaintext,
+        )
+        .expect("substituted plaintext has the same balanced value and public context");
+        validate_payer_input_authorization_v1(&plaintext, &statement)
+            .expect("the cooperating payer signed the substituted funding provenance");
+        assert_ne!(
+            atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)
+                .expect("self-consistent substitute input openings"),
+            statement.audit_input_commitment
+        );
+        assert_eq!(
+            validate_audit_openings_v1(&fixture.sidecar.manifest, &statement, &plaintext),
+            Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial),
+            "the auditor must match the capsule openings to the AIR input binding"
+        );
     }
 
     #[test]

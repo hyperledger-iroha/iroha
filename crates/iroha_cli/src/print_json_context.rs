@@ -2,6 +2,7 @@ struct PrintJsonContext<W, E> {
     write: W,
     err_write: E,
     config: Config,
+    filesystem_config: client_config::FilesystemConfig,
     operator_key_pair: Option<KeyPair>,
     transaction_metadata: Option<Metadata>,
     fee_payment: FeePaymentArgs,
@@ -13,6 +14,14 @@ struct PrintJsonContext<W, E> {
 impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
     fn config(&self) -> &Config {
         &self.config
+    }
+    fn connect_queue_root(&self) -> PathBuf {
+        self.filesystem_config.connect_queue_root.clone()
+    }
+    fn soracloud_http_witness_file(&self) -> Option<&Path> {
+        self.filesystem_config
+            .soracloud_http_witness_file
+            .as_deref()
     }
     fn operator_key_pair(&self) -> Option<&KeyPair> {
         self.operator_key_pair.as_ref()

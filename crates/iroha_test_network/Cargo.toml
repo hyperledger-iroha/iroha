@@ -24,7 +24,7 @@ iroha_core = { workspace = true, default-features = false, features = ["node"] }
 iroha_version = { workspace = true, features = ["json"] }
 iroha_futures.workspace = true
 iroha_test_samples.workspace = true
-iroha_telemetry.workspace = true
+iroha_torii_shared.workspace = true
 base64.workspace = true
 url.workspace = true
 

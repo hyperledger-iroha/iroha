@@ -20,11 +20,12 @@ use iroha::data_model::{
     },
 };
 use iroha::{
+    blocking::Client,
     client::{
-        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1, Client, canonical_network_request_hash,
-        canonical_network_request_signature_message, canonical_request_account_header_value,
-        canonical_request_signature_header_value, canonical_request_timestamp_header_value,
-        canonical_request_witness_header_value,
+        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1, FeeQuoteRequest,
+        canonical_network_request_hash, canonical_network_request_signature_message,
+        canonical_request_account_header_value, canonical_request_signature_header_value,
+        canonical_request_timestamp_header_value, canonical_request_witness_header_value,
     },
     config::Config as ClientConfig,
     data_model::{
@@ -116,7 +117,9 @@ use iroha_config::{
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
-use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest};
+use iroha_torii_shared::{
+    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest as FeeQuoteWireRequest,
+};
 use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -154,9 +157,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read as _, Seek as _, SeekFrom, Write as _},
+    marker::PhantomData,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio},
+    rc::Rc,
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -522,7 +527,7 @@ const TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1: &str = "manifests/bundle.to";
 const TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1: &str = "manifests/aarch64.to";
 const TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1: &str = "manifests/discovery.to";
 const TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1: u64 = 1024 * 1024;
-const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES;
 const TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 const TAIRA_INROU_CANARY_SERVICE_NAME_V1: &str = "taira_inrou_canary";
 const TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1: &str = "artifact-";
@@ -542,12 +547,16 @@ const TAIRA_INROU_CANARY_SERVICE_TEMPLATE_V1: &str =
 const TAIRA_INROU_CANARY_KERNEL_PATH_V1: &str = "/inrou/aarch64/vmlinux";
 const TAIRA_INROU_CANARY_ROOTFS_PATH_V1: &str = "/inrou/aarch64/rootfs.ext4";
 const TAIRA_INROU_CANARY_INITRD_PATH_V1: &str = "/inrou/aarch64/initrd.img";
-const TAIRA_INROU_CANARY_CPU_MILLIS_V1: u32 = 750;
-const TAIRA_INROU_CANARY_MEMORY_BYTES_V1: u64 = 512 * 1024 * 1024;
-const TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+const TAIRA_INROU_CANARY_CPU_MILLIS_V1: u32 = defaults::taira::INROU_CANARY_CPU_MILLIS;
+const TAIRA_INROU_CANARY_MEMORY_BYTES_V1: u64 = defaults::taira::INROU_CANARY_MEMORY_BYTES;
+const TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_EPHEMERAL_STORAGE_BYTES;
+const TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_ROOT_VOLUME_BYTES;
+const TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_SHARED_VOLUME_BYTES;
+const TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1: u64 =
+    defaults::taira::INROU_CANARY_HOST_STORAGE_BYTES;
 const TAIRA_INROU_CANARY_MAX_OPEN_FILES_PER_PROCESS_V1: u32 = 512;
 const TAIRA_INROU_CANARY_MAX_TASKS_V1: u16 = 64;
 const INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES: u64 = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES;
@@ -561,9 +570,34 @@ const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
 const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
 const SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1: u64 =
     (CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1 * 2) as u64;
+#[derive(Clone)]
+struct SoracloudInvocationContext {
+    submission_config: ClientConfig,
+    http_witness_file: Option<PathBuf>,
+    fee_payment: Result<FeePaymentIntent, String>,
+}
 thread_local! {
-    static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
-    static SORACLOUD_FEE_PAYMENT: RefCell<Option<Result<FeePaymentIntent, String>>> = const { RefCell::new(None) };
+    static SORACLOUD_INVOCATION_CONTEXT: RefCell<Option<SoracloudInvocationContext>> = const { RefCell::new(None) };
+}
+struct SoracloudInvocationGuard {
+    previous: Option<SoracloudInvocationContext>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+impl SoracloudInvocationGuard {
+    fn install(context: SoracloudInvocationContext) -> Self {
+        Self {
+            previous: SORACLOUD_INVOCATION_CONTEXT.with(|slot| slot.replace(Some(context))),
+            _not_send_or_sync: PhantomData,
+        }
+    }
+}
+impl Drop for SoracloudInvocationGuard {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        SORACLOUD_INVOCATION_CONTEXT.with(|slot| {
+            slot.replace(previous);
+        });
+    }
 }
 #[cfg(test)]
 thread_local! {
@@ -798,15 +832,12 @@ impl AppCommand {
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
-            *slot.borrow_mut() = Some(context.config().clone());
-        });
-        SORACLOUD_FEE_PAYMENT.with(|slot| {
-            *slot.borrow_mut() = Some(
-                context
-                    .transaction_fee_payment()
-                    .map_err(|error| format!("{error:#}")),
-            );
+        let _invocation = SoracloudInvocationGuard::install(SoracloudInvocationContext {
+            submission_config: context.config().clone(),
+            http_witness_file: context.soracloud_http_witness_file().map(Path::to_path_buf),
+            fee_payment: context
+                .transaction_fee_payment()
+                .map_err(|error| format!("{error:#}")),
         });
         match self {
             Command::App(command) => command.run(context),
@@ -8663,21 +8694,18 @@ fn taira_inrou_validator_table(
     table.insert(
         "max_cpu_millis".to_owned(),
         taira_toml_integer(
-            u64::from(defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS.get()),
+            u64::from(defaults::taira::INROU_MAX_CPU_MILLIS),
             "max_cpu_millis",
         )?,
     );
     table.insert(
         "max_memory_bytes".to_owned(),
-        taira_toml_integer(
-            defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES.get(),
-            "max_memory_bytes",
-        )?,
+        taira_toml_integer(defaults::taira::INROU_MAX_MEMORY_BYTES, "max_memory_bytes")?,
     );
     table.insert(
         "max_storage_bytes".to_owned(),
         taira_toml_integer(
-            defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES.get(),
+            defaults::taira::INROU_MAX_STORAGE_BYTES,
             "max_storage_bytes",
         )?,
     );
@@ -8714,9 +8742,12 @@ fn expected_taira_inrou_validator_config(
         }),
         guest_image_max_bytes: NonZeroU64::new(TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1)
             .expect("Taira guest-image limit is nonzero"),
-        max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
-        max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
-        max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
+        max_cpu_millis: NonZeroU32::new(defaults::taira::INROU_MAX_CPU_MILLIS)
+            .expect("nonzero Taira resource ceiling"),
+        max_memory_bytes: NonZeroU64::new(defaults::taira::INROU_MAX_MEMORY_BYTES)
+            .expect("nonzero Taira resource ceiling"),
+        max_storage_bytes: NonZeroU64::new(defaults::taira::INROU_MAX_STORAGE_BYTES)
+            .expect("nonzero Taira resource ceiling"),
         bundle_archive_max_compressed_bytes:
             defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
         bundle_archive_max_decoded_bytes:
@@ -10758,6 +10789,7 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_taira_inrou_canary_operation(
     config: &ClientConfig,
+    http_witness_file: Option<&Path>,
     fee_payment: FeePaymentIntent,
     binding: TairaMutationBindingV1,
     stage_dir: &Path,
@@ -10849,16 +10881,12 @@ pub(crate) fn prepare_taira_inrou_canary_operation(
         MutationMode::Deploy => "v1/soracloud/deploy",
         MutationMode::Upgrade => "v1/soracloud/upgrade",
     };
-    SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
-        *slot.borrow_mut() = Some(config.clone());
-    });
-    SORACLOUD_FEE_PAYMENT.with(|slot| {
-        *slot.borrow_mut() = Some(Ok(fee_payment.clone()));
-    });
     let requested = request_torii_soracloud_mutation_draft(
         torii_url,
         endpoint_path,
         &request,
+        config,
+        http_witness_file,
         api_token,
         timeout_secs,
     )?;
@@ -14620,6 +14648,7 @@ fn sorafs_pin_manifest_readiness(
 ) -> Result<SorafsPinManifestReadiness> {
     let manifest_digest_hex = hex::encode(expected.digest.as_bytes());
     let response = client
+        .client()
         .get_sorafs_pin_manifest(&manifest_digest_hex)
         .wrap_err_with(|| {
             format!("failed to query SoraFS pin registry for {manifest_digest_hex}")
@@ -16414,7 +16443,7 @@ fn register_built_sorafs_manifest(
     config.account = authority.clone();
     config.key_pair = key_pair.clone();
     register_sorafs_pin_manifest_and_wait(
-        &Client::new(config),
+        &Client::new(config).wrap_err("failed to initialize blocking SoraFS client")?,
         iroha::client::SorafsPinRegisterArgs {
             manifest_payload: &built.bytes,
             alias: None,
@@ -16439,15 +16468,16 @@ fn prepare_built_sorafs_manifest_registration(
     config.torii_api_url = url::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
     config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = Client::new(config);
+    let client = Client::new(config).wrap_err("failed to initialize blocking Soracloud client")?;
     let instruction =
         iroha::data_model::isi::sorafs::RegisterPinManifest::new(built.bytes.clone(), None, None);
     let payload = client
-        .try_build_transaction_payload_from_items(
+        .account_client()
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(instruction)],
             requested_fee_payment.clone(),
             binding.metadata(operation)?,
-        )
+        ))
         .wrap_err("failed to build exact SoraFS pin-registration payload")?;
     let payload = TransactionBuilder::from_payload(payload)
         .wrap_err("failed to reconstruct exact SoraFS pin-registration payload")?
@@ -16455,7 +16485,7 @@ fn prepare_built_sorafs_manifest_registration(
         .into_payload()
         .wrap_err("failed to finalize exact SoraFS pin-registration payload")?;
     let quote = client
-        .quote_fees(&payload)
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact SoraFS pin-registration payload")?;
     let mut payload = payload;
     if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
@@ -16469,7 +16499,8 @@ fn prepare_built_sorafs_manifest_registration(
         .wrap_err("SoraFS pin-registration fee quote is invalid")?;
     payload.fee_payment = quote.intent.clone();
     let transaction = client
-        .try_sign_transaction_payload(payload)
+        .account_client()
+        .sign_transaction(payload)
         .wrap_err("failed to sign exact SoraFS pin-registration payload")?;
     PreparedSoracloudTransactionV1::from_signed(operation, binding, quote, transaction)
 }
@@ -18697,21 +18728,20 @@ fn encode_model_weight_rollback_signature_payload(
     )
     .wrap_err("failed to encode model weight rollback signature payload tuple")
 }
-fn soracloud_submission_config() -> Result<ClientConfig> {
-    SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
+fn soracloud_invocation_context() -> Result<SoracloudInvocationContext> {
+    SORACLOUD_INVOCATION_CONTEXT.with(|slot| {
         slot.borrow()
             .clone()
-            .ok_or_else(|| eyre!("Soracloud submission config is not initialized"))
+            .ok_or_else(|| eyre!("Soracloud invocation context is not initialized"))
     })
 }
+fn soracloud_submission_config() -> Result<ClientConfig> {
+    soracloud_invocation_context().map(|context| context.submission_config)
+}
 fn soracloud_fee_payment() -> Result<FeePaymentIntent> {
-    SORACLOUD_FEE_PAYMENT.with(|slot| match slot.borrow().as_ref() {
-        Some(Ok(intent)) => Ok(intent.clone()),
-        Some(Err(error)) => Err(eyre!(error.clone())),
-        None => Err(eyre!(
-            "Soracloud fee payment selection is not initialized; pass --fee-payer authority or an exact sponsor program and revision"
-        )),
-    })
+    soracloud_invocation_context()?
+        .fee_payment
+        .map_err(eyre::Report::msg)
 }
 fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1> {
     let mut file = fs::File::open(path)
@@ -18775,18 +18805,26 @@ struct SoracloudMutationAuth {
 }
 fn build_soracloud_mutation_auth_headers(
     submission_config: &ClientConfig,
+    http_witness_file: Option<&Path>,
     endpoint: &reqwest::Url,
     body: &[u8],
 ) -> Result<SoracloudMutationAuth> {
-    build_soracloud_mutation_auth_headers_with_rng(submission_config, endpoint, body, &mut OsRng)
+    build_soracloud_mutation_auth_headers_with_rng(
+        submission_config,
+        http_witness_file,
+        endpoint,
+        body,
+        &mut OsRng,
+    )
 }
 fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
     submission_config: &ClientConfig,
+    http_witness_file: Option<&Path>,
     endpoint: &reqwest::Url,
     body: &[u8],
     rng: &mut R,
 ) -> Result<SoracloudMutationAuth> {
-    if let Some(witness_file) = submission_config.soracloud_http_witness_file.as_deref() {
+    if let Some(witness_file) = http_witness_file {
         let witness = load_soracloud_http_witness(witness_file)?;
         if witness.subject_account != submission_config.account {
             return Err(eyre!(
@@ -19172,7 +19210,7 @@ fn soracloud_transaction_client(
     config.torii_api_url = url::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
     config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    Ok(Client::new(config))
+    Client::new(config)
 }
 
 /// Quote and sign one exact Soracloud draft without submitting it.
@@ -19193,14 +19231,15 @@ pub(crate) fn prepare_soracloud_draft_transaction(
     let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
     let executable = Executable::Instructions(instructions.into());
     let mut payload = client
-        .try_build_transaction_payload(
+        .account_client()
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             executable,
             requested_fee_payment.clone(),
             binding.metadata(operation)?,
-        )
+        ))
         .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
     let quote = client
-        .quote_fees(&payload)
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact Soracloud mutation fees")?;
     if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
@@ -19213,7 +19252,8 @@ pub(crate) fn prepare_soracloud_draft_transaction(
         .wrap_err("fee quote returned an invalid Soracloud payment intent")?;
     payload.fee_payment = quote.intent.clone();
     let transaction = client
-        .try_sign_transaction_payload(payload)
+        .account_client()
+        .sign_transaction(payload)
         .wrap_err("failed to sign the exact quoted Soracloud mutation payload")?;
     PreparedSoracloudTransactionV1::from_signed(operation, binding, quote, transaction)
 }
@@ -19228,7 +19268,7 @@ pub(crate) fn submit_prepared_soracloud_transaction(
     let transaction = prepared.decode_and_validate()?;
     let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
     client
-        .submit_transaction_blocking(&transaction)
+        .submit_transaction_and_wait(&transaction)
         .map(Into::into)
         .wrap_err("failed to submit exact prepared Soracloud mutation transaction")
 }
@@ -19270,6 +19310,7 @@ pub(crate) fn recover_prepared_soracloud_transaction(
     let expected = prepared.decode_and_validate()?;
     let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
     let Some(status) = client
+        .client()
         .get_transaction_status_response_global(expected.hash())
         .wrap_err("read-only exact Soracloud transaction status lookup failed")?
     else {
@@ -19327,6 +19368,7 @@ fn verify_committed_prepared_soracloud_transaction(
     let entrypoint_hash = expected.hash_as_entrypoint();
     let one = NonZeroU64::new(1).expect("nonzero committed lookup bound");
     let committed = client
+        .client()
         .query(FindTransactions::new())
         .filter(CompoundPredicate::from_filters(CommittedTxFilters {
             entry_eq: Some(entrypoint_hash),
@@ -19380,14 +19422,15 @@ fn submit_soracloud_draft_transaction(
     let requested_fee_payment = soracloud_fee_payment()?;
     let executable = Executable::Instructions(instructions.into());
     let mut payload = client
-        .try_build_transaction_payload(
+        .account_client()
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             executable,
             requested_fee_payment.clone(),
             Metadata::default(),
-        )
+        ))
         .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
     let quote = client
-        .quote_fees(&payload)
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact Soracloud mutation fees")?;
     if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
@@ -19400,10 +19443,11 @@ fn submit_soracloud_draft_transaction(
         .wrap_err("fee quote returned an invalid Soracloud payment intent")?;
     payload.fee_payment = quote.intent;
     let transaction = client
-        .try_sign_transaction_payload(payload)
+        .account_client()
+        .sign_transaction(payload)
         .wrap_err("failed to sign the exact quoted Soracloud mutation payload")?;
     client
-        .submit_transaction_blocking(&transaction)
+        .submit_transaction_and_wait(&transaction)
         .map(Into::into)
         .wrap_err("failed to submit Soracloud mutation transaction")
 }
@@ -19446,6 +19490,8 @@ fn request_torii_soracloud_mutation_draft<T>(
     torii_url: &str,
     endpoint_path: &str,
     request_payload: &T,
+    submission_config: &ClientConfig,
+    http_witness_file: Option<&Path>,
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<RequestedSoracloudMutationDraft>
@@ -19458,8 +19504,12 @@ where
         .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
     let body = json::to_vec(request_payload)
         .wrap_err("failed to encode soracloud mutation request payload")?;
-    let submission_config = soracloud_submission_config()?;
-    let auth = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
+    let auth = build_soracloud_mutation_auth_headers(
+        submission_config,
+        http_witness_file,
+        &endpoint,
+        &body,
+    )?;
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
         .timeout(timeout)
@@ -19539,10 +19589,13 @@ fn post_torii_soracloud_mutation<T>(
 where
     T: JsonSerialize + ?Sized,
 {
+    let invocation = soracloud_invocation_context()?;
     let requested = request_torii_soracloud_mutation_draft(
         torii_url,
         endpoint_path,
         request_payload,
+        &invocation.submission_config,
+        invocation.http_witness_file.as_deref(),
         api_token,
         timeout_secs,
     )?;
@@ -24858,7 +24911,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     #[cfg(unix)]
     #[test]
-    fn taira_validator_inrou_table_uses_only_exact_v1_defaults() {
+    fn taira_validator_inrou_table_uses_the_single_bounded_taira_profile() {
         let receipt = canonical_taira_stage_receipt_fixture();
         let table = taira_inrou_validator_table(2, &receipt)
             .expect("build exact Taira validator Inrou table");
@@ -24894,27 +24947,25 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             table
                 .get("guest_image_max_bytes")
                 .and_then(toml::Value::as_integer),
-            Some(10 * 1024 * 1024 * 1024)
+            i64::try_from(defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES).ok()
         );
         assert_eq!(
             table
                 .get("max_cpu_millis")
                 .and_then(toml::Value::as_integer),
-            Some(i64::from(
-                defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS.get()
-            ))
+            Some(i64::from(defaults::taira::INROU_MAX_CPU_MILLIS))
         );
         assert_eq!(
             table
                 .get("max_memory_bytes")
                 .and_then(toml::Value::as_integer),
-            i64::try_from(defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES.get()).ok()
+            i64::try_from(defaults::taira::INROU_MAX_MEMORY_BYTES).ok()
         );
         assert_eq!(
             table
                 .get("max_storage_bytes")
                 .and_then(toml::Value::as_integer),
-            i64::try_from(defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES.get()).ok()
+            i64::try_from(defaults::taira::INROU_MAX_STORAGE_BYTES).ok()
         );
         assert_eq!(
             table
@@ -28542,7 +28593,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         if request.method != "POST" || request.path != iroha_torii_shared::uri::FEES_QUOTE {
             return None;
         }
-        let request: FeeQuoteRequest = json::from_slice(&request.body).ok()?;
+        let request: FeeQuoteWireRequest = json::from_slice(&request.body).ok()?;
         let (debit_source, program_revision) = match request.payload.fee_payment.sponsor_program() {
             Some((program_id, revision)) => (
                 FeeDebitSource::SponsorProgram(program_id.clone()),
@@ -28685,16 +28736,19 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         config.account = authority.clone();
         config.key_pair = key_pair;
         config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
-        let client = Client::new(config);
+        let client = Client::new(config).expect("blocking Soracloud fixture client");
         let requested_intent = FeePaymentIntent::authority(Vec::new(), None);
         let payload = client
-            .try_build_transaction_payload(
+            .account_client()
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
                 requested_intent.clone(),
                 Metadata::default(),
-            )
+            ))
             .expect("build exact unsigned fee quote payload");
-        let quote = client.quote_fees(&payload).expect("quote mock fees");
+        let quote = client
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+            .expect("quote mock fees");
         assert_eq!(quote.intent, requested_intent);
         assert_eq!(quote.observation.route_dataspace_id, DataSpaceId::UNIVERSAL);
         assert!(matches!(
@@ -28820,16 +28874,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         binding: &TairaMutationBindingV1,
         operation: &str,
     ) -> SignedTransaction {
-        let client = Client::new(config.clone());
+        let client = Client::new(config.clone()).expect("blocking Soracloud fixture client");
         let payload = client
-            .try_build_transaction_payload_from_items(
+            .account_client()
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [instruction],
                 FeePaymentIntent::authority(Vec::new(), None),
                 binding.metadata(operation).expect("exact binding metadata"),
-            )
+            ))
             .expect("build prepared Inrou fixture payload");
         client
-            .try_sign_transaction_payload(payload)
+            .account_client()
+            .sign_transaction(payload)
             .expect("sign prepared Inrou fixture transaction")
     }
 
@@ -29146,18 +29202,22 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let mut config = crate::fallback_config();
         config.account = authority;
         config.key_pair = key_pair;
-        let client = Client::new(config);
-        let transaction = client
-            .try_build_transaction_from_items(
-                [iroha::data_model::isi::sorafs::RegisterPinManifest::new(
-                    manifest_bytes.clone(),
-                    None,
-                    None,
-                )],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            )
-            .expect("build mock native pin registration transaction");
+        let client = Client::new(config).expect("blocking Soracloud fixture client");
+        let transaction = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [iroha::data_model::isi::sorafs::RegisterPinManifest::new(
+                        manifest_bytes.clone(),
+                        None,
+                        None,
+                    )],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build mock native pin registration transaction");
         let request = CapturedHttpRequest {
             method: "POST".to_owned(),
             path: "/v1/sorafs/pin/register".to_owned(),
@@ -29295,7 +29355,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         config.key_pair = key_pair;
         config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
         let error = register_sorafs_pin_manifest_and_wait(
-            &Client::new(config),
+            &Client::new(config).expect("blocking Soracloud fixture client"),
             iroha::client::SorafsPinRegisterArgs {
                 manifest_payload: &manifest_bytes,
                 alias: None,
@@ -29783,11 +29843,12 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let mut config = crate::fallback_config();
         config.account = authority.clone();
         config.key_pair = key_pair.clone();
-        SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
-            *slot.borrow_mut() = Some(config);
-        });
-        SORACLOUD_FEE_PAYMENT.with(|slot| {
-            *slot.borrow_mut() = Some(Ok(FeePaymentIntent::authority(Vec::new(), None)));
+        SORACLOUD_INVOCATION_CONTEXT.with(|slot| {
+            *slot.borrow_mut() = Some(SoracloudInvocationContext {
+                submission_config: config,
+                http_witness_file: None,
+                fee_payment: Ok(FeePaymentIntent::authority(Vec::new(), None)),
+            });
         });
         SORACLOUD_TEST_SUBMITTED_TX_HASH.with(|slot| {
             *slot.borrow_mut() = Some(Hash::new(b"soracloud-cli-test-submission"));
@@ -33808,7 +33869,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
-        let mut config = crate::fallback_config();
+        let config = crate::fallback_config();
         let endpoint =
             reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let body = br#"{"noop":true}"#;
@@ -33834,14 +33895,14 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             json::to_vec(&witness).expect("encode witness json"),
         )
         .expect("write witness file");
-        config.soracloud_http_witness_file = Some(witness_path);
-        let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
-            .expect_err("mismatched witness account must fail");
+        let err =
+            build_soracloud_mutation_auth_headers(&config, Some(&witness_path), &endpoint, body)
+                .expect_err("mismatched witness account must fail");
         assert!(err.to_string().contains("subject_account"));
     }
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_hash_mismatch() {
-        let mut config = crate::fallback_config();
+        let config = crate::fallback_config();
         let endpoint =
             reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let body = br#"{"noop":true}"#;
@@ -33860,9 +33921,9 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             json::to_vec(&witness).expect("encode witness json"),
         )
         .expect("write witness file");
-        config.soracloud_http_witness_file = Some(witness_path);
-        let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
-            .expect_err("mismatched witness hash must fail");
+        let err =
+            build_soracloud_mutation_auth_headers(&config, Some(&witness_path), &endpoint, body)
+                .expect_err("mismatched witness hash must fail");
         assert!(err.to_string().contains("canonical_request_hash"));
     }
     #[test]

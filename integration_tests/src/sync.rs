@@ -1,7 +1,8 @@
 //! Synchronization helpers for integration tests.
 use eyre::{Result, WrapErr};
-use iroha::client::{Client, Status};
+use iroha::{blocking::Client, client::Client as AsyncClient};
 use iroha_test_network::{BlockHeight, Network};
+use iroha_torii_shared::status::Status;
 use std::{
     env,
     thread::sleep,
@@ -14,6 +15,23 @@ use tokio::task::spawn_blocking;
 // Torii is unreachable, but allow env overrides for slower hosts.
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
+/// Create a fresh blocking context after explicitly updating a cloned async context.
+///
+/// This keeps integration-test configuration changes from mutating or escaping
+/// through the blocking facade while preserving its account-binding validation.
+#[must_use]
+pub fn rebind_blocking_client(client: &Client, configure: impl FnOnce(&mut AsyncClient)) -> Client {
+    try_rebind_blocking_client(client, configure)
+        .expect("reconfigured integration-test client must remain valid")
+}
+fn try_rebind_blocking_client(
+    client: &Client,
+    configure: impl FnOnce(&mut AsyncClient),
+) -> Result<Client> {
+    let mut inner = client.client().clone();
+    configure(&mut inner);
+    Client::from_client(inner)
+}
 /// Poll `/status` with a bounded retry budget to tolerate startup jitter.
 ///
 /// # Errors
@@ -36,7 +54,7 @@ pub fn get_status_with_retry_at_least(client: &Client, minimum_blocks: u64) -> R
     let deadline = Instant::now() + retry_budget;
     let mut last_observation = None;
     while Instant::now() < deadline {
-        match client.get_status() {
+        match client.client().get_status() {
             Ok(status) => {
                 if status_reaches_height(&status, minimum_blocks) {
                     return Ok(status);
@@ -64,7 +82,8 @@ pub fn get_status_with_retry_at_least(client: &Client, minimum_blocks: u64) -> R
     Err(terminal).wrap_err_with(|| {
         format!(
             "status retry budget exhausted after {:?} hitting {}",
-            retry_budget, client.torii_url
+            retry_budget,
+            client.client().torii_url
         )
     })
 }
@@ -101,7 +120,7 @@ fn apply_storage_fallback(
                 Err(err).wrap_err_with(|| {
                     format!(
                         "status retry failed and no storage snapshot available ({context}); torii={}",
-                        client.torii_url
+                        client.client().torii_url
                     )
                 })
             }
@@ -148,7 +167,8 @@ pub fn sync_after_submission(
     get_status_with_retry_or_storage(network, client, context).wrap_err_with(|| {
         format!(
             "failed to refresh status after submission ({context}); target height={}, torii={}",
-            target_height, client.torii_url
+            target_height,
+            client.client().torii_url
         )
     })
 }
@@ -201,13 +221,11 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
+    use iroha::config::Config;
+    use iroha::crypto::{Hash, HashOf};
     use iroha::data_model::{ChainId, NetworkId};
-    use iroha::{
-        client::Client,
-        crypto::{Hash, HashOf},
-    };
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use iroha_service_model::soranet::AnonymityPolicy;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use std::{
         collections::HashMap,
@@ -271,15 +289,48 @@ mod tests {
             transaction_add_nonce: false,
             transaction_ttl: ttl,
             transaction_status_timeout: ttl,
-            connect_queue_root: default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: AliasCachePolicy::new(ttl, ttl, ttl, ttl, ttl, ttl, ttl, ttl),
             sorafs_anonymity_policy: AnonymityPolicy::default(),
-            sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::default(),
+            sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
         };
-        let mut client = Client::new(config);
+        let mut client = AsyncClient::new(config);
         client.headers = HashMap::new();
-        client
+        Client::from_client(client).expect("blocking status fixture client")
+    }
+    #[test]
+    fn rebind_blocking_client_isolates_configuration_and_rebinds_account() {
+        let original = dummy_client();
+        let original_timeout = original.client().torii_request_timeout;
+        let updated_timeout = original_timeout + Duration::from_millis(1);
+        let rebound = rebind_blocking_client(&original, |client| {
+            client.torii_request_timeout = updated_timeout;
+            client.account = BOB_ID.clone();
+            client.key_pair = BOB_KEYPAIR.clone();
+        });
+        assert_eq!(original.client().torii_request_timeout, original_timeout);
+        assert_eq!(&original.client().account, &*ALICE_ID);
+        assert_eq!(
+            original.client().key_pair.public_key(),
+            ALICE_KEYPAIR.public_key()
+        );
+        assert_eq!(rebound.client().torii_request_timeout, updated_timeout);
+        assert_eq!(rebound.account_client().authority(), &*BOB_ID);
+        assert_eq!(
+            rebound.client().key_pair.public_key(),
+            BOB_KEYPAIR.public_key()
+        );
+
+        let error = try_rebind_blocking_client(&original, |client| {
+            client.account = BOB_ID.clone();
+        })
+        .expect_err("mismatched account and signing key must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to bind blocking account authority"),
+            "unexpected mismatched-key error: {error:#}"
+        );
+        assert_eq!(&original.client().account, &*ALICE_ID);
     }
     #[test]
     fn status_retry_budget_env_parses_ms_suffix() {

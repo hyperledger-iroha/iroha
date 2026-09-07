@@ -32,6 +32,8 @@ iroha_torii = { path = "crates/iroha_torii", default-features = false }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
 iroha = { path = "crates/iroha" }
+iroha_storage_client = { path = "crates/iroha_storage_client" }
+iroha_musubi_service = { path = "crates/iroha_musubi_service" }
 
 iroha_telemetry = { path = "crates/iroha_telemetry" }
 iroha_p2p = { path = "crates/iroha_p2p" }
@@ -67,6 +69,7 @@ iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
+iroha_service_model = { path = "crates/iroha_service_model" }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
 iroha_test_network = { path = "crates/iroha_test_network" }
@@ -79,6 +82,7 @@ sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest" }
 sorafs_orchestrator = { path = "crates/sorafs_orchestrator" }
 soranet_pq = { path = "crates/soranet_pq" }
+soranet_incentives = { path = "crates/soranet_incentives" }
 
 # Note: remaining dependencies stay pinned until we resolve the outstanding
 # compatibility issues with their latest major releases.
@@ -164,6 +168,7 @@ rustc-hash = "2.1.1"
 json5 = "1.0.0"
 toml = "0.9.8"
 zstd = "0.13.3"
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
 
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }

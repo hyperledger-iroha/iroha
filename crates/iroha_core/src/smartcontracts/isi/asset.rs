@@ -1866,7 +1866,10 @@ pub mod isi {
                 &purpose,
                 EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(_)
             );
-            let is_game_funding = matches!(&purpose, EmbeddedNumericAssetMovementPurpose::GameSession(_));
+            let is_game_funding = matches!(
+                &purpose,
+                EmbeddedNumericAssetMovementPurpose::GameSession(_)
+            );
             let (debit, tag, binding) = match purpose {
                 EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
@@ -5321,7 +5324,8 @@ pub mod isi {
                     source_id.definition(),
                     "transfer",
                 )?;
-                let source_dataspace = transfer_source_dataspace_hint(state_transaction, source_id)?;
+                let source_dataspace =
+                    transfer_source_dataspace_hint(state_transaction, source_id)?;
                 let source_id = state_transaction
                     .world
                     .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
@@ -5477,7 +5481,8 @@ pub mod isi {
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !is_sccp_custody_asset(state_transaction, &destination_id) {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "SCCP route escrow deposit destination is not governed protocol custody".into(),
+                        "SCCP route escrow deposit destination is not governed protocol custody"
+                            .into(),
                     )
                     .into());
                 }
@@ -5546,7 +5551,8 @@ pub mod isi {
                         .sponsor_vault_custody_account_id
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "fee sponsor custody transfer source does not match configured custody".into(),
+                        "fee sponsor custody transfer source does not match configured custody"
+                            .into(),
                     )
                     .into());
                 }
@@ -5688,13 +5694,16 @@ pub mod isi {
         authorization: crate::state::VerifiedNexusFeeBurn,
     ) -> Result<(), Error> {
         let (source_id, amount) = authorization.into_parts();
-        let expected_definition =
-            crate::block::parse_asset_definition_literal_with_world(world, &nexus.fees.fee_asset_id, 0)
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "verified Nexus fee burn has an invalid configured fee asset".into(),
-                    )
-                })?;
+        let expected_definition = crate::block::parse_asset_definition_literal_with_world(
+            world,
+            &nexus.fees.fee_asset_id,
+            0,
+        )
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "verified Nexus fee burn has an invalid configured fee asset".into(),
+            )
+        })?;
         if nexus.fees.settlement_mode
             != iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
             || source_id.definition() != &expected_definition

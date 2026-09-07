@@ -17,12 +17,12 @@ iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["node-crypto
 iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["application-model"], default-features = false }
 iroha_primitives = { path = "../../../crates/iroha_primitives" }
 iroha_schema = { path = "../../../crates/iroha_schema" }
+iroha_service_model = { path = "../../../crates/iroha_service_model" }
 iroha_version = { path = "../../../crates/iroha_version" }
 iroha_torii_shared = { path = "../../../crates/iroha_torii_shared" }
 norito = { path = "../../../crates/norito", default-features = false, features = ["node-codec"] }
 ivm = { path = "../../../crates/ivm" }
 sorafs_manifest = { path = "../../../crates/sorafs_manifest" }
-iroha_config = { path = "../../../crates/iroha_config" }
 iroha_core = { path = "../../../crates/iroha_core", features = ["node"], default-features = false }
 iroha_zkp_halo2 = { path = "../../../crates/iroha_zkp_halo2" }
 zk_ace_prover = { path = "../../../crates/zk_ace_prover" }
@@ -46,6 +46,7 @@ url = { workspace = true }
 pyo3-build-config = "0.29.0"
 
 [dev-dependencies]
+iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["privacy-exact12-conformance"], default-features = false }
 once_cell = "1.21.3"
 tempfile = { workspace = true }
 ed25519-dalek = "2.2.0"

@@ -491,7 +491,7 @@ async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
         &headers,
         Some(remote_ip),
         "v1/pipeline/transactions/status",
-        None,
+        app.authenticated_api_token_principal(&headers),
     );
     assert!(limits::allow_conditionally(&app.rate_limiter, &rate_key, true).await);
     assert!(!limits::allow_conditionally(&app.rate_limiter, &rate_key, true).await);
@@ -552,7 +552,7 @@ async fn pipeline_status_handler_charges_cache_hits_before_local_reads() {
         &headers,
         Some(remote_ip),
         "v1/pipeline/transactions/status",
-        None,
+        app.authenticated_api_token_principal(&headers),
     );
     assert!(limits::allow_conditionally(&app.pipeline_status_rate_limiter, &rate_key, true).await);
     assert!(!limits::allow_conditionally(&app.pipeline_status_rate_limiter, &rate_key, true).await);
@@ -809,16 +809,15 @@ async fn account_read_for_routes_skips_route_unavailable_until_success() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
     let (local_route, foreign_route) =
         configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-    let response = super::execute_torii_read_fanout_for_resolved_routes(
+    let response = super::execute_torii_account_read_for_resolved_routes(
         &app,
         vec![foreign_route, local_route],
-        super::ToriiFanoutRouteScopeV1::AllDataspaces,
-        super::ToriiReadFanoutMergeV1::Account,
-        super::ToriiReadEndpointV1::AccountGet,
-        vec![account_id.to_string()],
-        None,
-        Vec::new(),
-        super::ToriiProxyResponseFormatV1::Json,
+        super::ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: account_id.to_string(),
+            caller_account_id: Some(account_id.to_string()),
+        },
+        account_id.to_string(),
+        ResponseFormat::Json,
         None,
     )
     .await;
@@ -1330,16 +1329,15 @@ async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_m
     let mut app = mk_app_state_for_tests();
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-    let response = super::execute_torii_read_fanout_for_resolved_routes(
+    let response = super::execute_torii_account_read_for_resolved_routes(
         &app,
         vec![foreign_route, local_route],
-        super::ToriiFanoutRouteScopeV1::AllDataspaces,
-        super::ToriiReadFanoutMergeV1::Account,
-        super::ToriiReadEndpointV1::AccountGet,
-        vec![missing.to_string()],
-        None,
-        Vec::new(),
-        super::ToriiProxyResponseFormatV1::Json,
+        super::ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: missing.to_string(),
+            caller_account_id: Some(missing.to_string()),
+        },
+        missing.to_string(),
+        ResponseFormat::Json,
         None,
     )
     .await;
@@ -1360,16 +1358,15 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
     let mut app = mk_app_state_for_tests();
     let (_local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-    let response = super::execute_torii_read_fanout_for_resolved_routes(
+    let response = super::execute_torii_account_read_for_resolved_routes(
         &app,
         vec![foreign_route],
-        super::ToriiFanoutRouteScopeV1::AllDataspaces,
-        super::ToriiReadFanoutMergeV1::Account,
-        super::ToriiReadEndpointV1::AccountGet,
-        vec![missing.to_string()],
-        None,
-        Vec::new(),
-        super::ToriiProxyResponseFormatV1::Json,
+        super::ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: missing.to_string(),
+            caller_account_id: Some(missing.to_string()),
+        },
+        missing.to_string(),
+        ResponseFormat::Json,
         None,
     )
     .await;

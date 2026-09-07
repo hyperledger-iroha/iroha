@@ -1677,12 +1677,34 @@ fn deployment_bundle_accepts_inrou_http_service_without_login_surface() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn deployment_bundle_rejects_http_service_replica_count_over_quota() {
+fn deployment_source_rejects_http_service_replica_count_over_quota() {
     let mut bundle = expected_inrou_http_deployment_bundle();
+    // Source compatibility runs before release preparation binds placement
+    // targets. A five-replica source must fail quota checks at that boundary;
+    // an admitted bundle cannot have five targets under the four-target limit.
+    bundle.service.placement_targets.clear();
+    bundle.container.validate().expect("valid container source");
+    bundle
+        .service
+        .validate()
+        .expect("valid unbound service source");
+    SoraDeploymentBundleV1::validate_source_compatibility(
+        bundle.container.runtime,
+        &bundle.container.capabilities,
+        bundle.container.resources,
+        &bundle.container.lifecycle,
+        &bundle.service,
+    )
+    .expect("two-replica source is within quota");
     bundle.service.replicas = NonZeroU16::new(5).expect("nonzero");
-    let error = bundle
-        .validate_for_admission()
-        .expect_err("HTTP service replicas must stay within quota class limits");
+    let error = SoraDeploymentBundleV1::validate_source_compatibility(
+        bundle.container.runtime,
+        &bundle.container.capabilities,
+        bundle.container.resources,
+        &bundle.container.lifecycle,
+        &bundle.service,
+    )
+    .expect_err("HTTP service replicas must stay within quota class limits");
     assert!(matches!(
         error,
         SoracloudManifestError::InvalidField {
@@ -1690,6 +1712,38 @@ fn deployment_bundle_rejects_http_service_replica_count_over_quota() {
             ..
         }
     ));
+    assert!(matches!(
+        bundle
+            .validate_for_admission()
+            .expect_err("bundle admission also enforces the replica quota"),
+        SoracloudManifestError::InvalidField {
+            field: "service.replicas",
+            ..
+        }
+    ));
+}
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_replicas_without_distinct_placement_targets() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    bundle
+        .validate_for_admission()
+        .expect("valid placed bundle");
+    bundle.service.replicas = NonZeroU16::new(4).expect("nonzero");
+    assert!(matches!(
+        bundle
+            .validate_for_admission()
+            .expect_err("two targets cannot host four replicas"),
+        SoracloudManifestError::InvalidField {
+            field: "service.placement_targets",
+            ..
+        }
+    ));
+    bundle.service.placement_targets =
+        expected_inrou_placement_targets(bundle.service.replicas.get());
+    bundle
+        .validate_for_admission()
+        .expect("four distinct targets can host four replicas within quota");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -1713,13 +1767,26 @@ fn deployment_bundle_rejects_http_service_task_limit_over_quota() {
 fn deployment_bundle_charges_replica_private_lease_bytes_for_every_replica() {
     let mut bundle = expected_inrou_http_deployment_bundle();
     bundle.service.replicas = NonZeroU16::new(4).expect("nonzero");
-    let data = bundle
+    bundle.service.placement_targets =
+        expected_inrou_placement_targets(bundle.service.replicas.get());
+    bundle
+        .validate_for_admission()
+        .expect("four-replica baseline is within quota");
+    let data_index = bundle
         .service
         .lease_volumes
-        .iter_mut()
-        .find(|volume| volume.is_data_volume())
+        .iter()
+        .position(|volume| volume.is_data_volume())
         .expect("data lease volume");
-    data.max_total_bytes = NonZeroU64::new(128 * 1024 * 1024 * 1024).expect("nonzero");
+    // Four copies of the 8-GiB root and 120-GiB data volumes exactly fill
+    // the 512-GiB quota. Raising only the data volume must reject admission.
+    bundle.service.lease_volumes[data_index].max_total_bytes =
+        NonZeroU64::new(120 * 1024 * 1024 * 1024).expect("nonzero");
+    bundle
+        .validate_for_admission()
+        .expect("exact aggregate lease quota is admitted");
+    bundle.service.lease_volumes[data_index].max_total_bytes =
+        NonZeroU64::new(128 * 1024 * 1024 * 1024).expect("nonzero");
     let error = bundle
         .validate_for_admission()
         .expect_err("HTTP service lease storage must stay within quota class limits");

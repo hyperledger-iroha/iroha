@@ -344,7 +344,7 @@ fn zk1_envelope_pasta_ipa_verify_add_public() {
     // Build ZK1 envelopes: VK has IPAK(k); proof has PROF + I10P(inst)
     let mut vk_env = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut vk_env, k);
-    zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/kaigi-roster-v1");
+    zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/tiny-add-public");
     zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
 
     let mut prf_env = zk1::wrap_start();
@@ -359,164 +359,22 @@ fn zk1_envelope_pasta_ipa_verify_add_public() {
 
 #[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
-fn kaigi_roster_backend_accepts_valid_proof() {
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{keygen_pk, keygen_vk},
-        transcript::{Blake2bWrite, Challenge255},
-    };
-    use kaigi_zk::{
-        KAIGI_ROSTER_CIRCUIT_K, KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1, compute_commitment,
-        compute_nullifier, empty_roster_root_hash, roster_root_limbs,
-    };
-    use rand_core_06::OsRng;
-
-    let k = KAIGI_ROSTER_CIRCUIT_K;
-    let params: PastaParams = pasta_params_new(k);
-
-    let account = Scalar::from(3u64);
-    let domain_salt = Scalar::from(17u64);
-    let nullifier_seed = Scalar::from(25u64);
-
-    let root_hash = empty_roster_root_hash();
-    let circuit = KaigiRosterJoinCircuit::new(
-        account,
-        domain_salt,
-        nullifier_seed,
-        roster_root_limbs(&root_hash),
-    );
-    let commitment = compute_commitment(account, domain_salt);
-    let nullifier = compute_nullifier(account, nullifier_seed);
-
-    let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
-    let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
-
-    let mut inst_cols = vec![vec![commitment], vec![nullifier]];
-    for limb in roster_root_limbs(&root_hash) {
-        inst_cols.push(vec![limb]);
-    }
-    let inst_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
-    let proof_instances = vec![inst_refs.as_slice()];
-
-    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<
-        IPACommitmentScheme<Curve>,
-        ProverIPA<'_, Curve>,
-        Challenge255<Curve>,
-        _,
-        _,
-        _,
-    >(
-        &params,
-        &pk,
-        &[circuit],
-        &proof_instances,
-        OsRng,
-        &mut transcript,
-    )
-    .expect("proof created");
-    let proof_bytes = transcript.finalize();
-
-    let mut vk_env = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut vk_env, k);
-    zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/kaigi-roster-v1");
-    zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
-
-    let mut prf_env = zk1::wrap_start();
-    zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
-    zk1::wrap_append_instances_pasta_fp_cols(&inst_refs, &mut prf_env);
-
-    let vk_box = VerifyingKeyBox::new(KAIGI_ROSTER_BACKEND.into(), vk_env);
-    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
-        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        circuit_id: "halo2/pasta/ipa/kaigi-roster-v1".into(),
-        vk_hash: super::hash_vk(&vk_box),
-        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-        proof_bytes: prf_env,
-        aux: Vec::new(),
-    };
-    let prf_box = ProofBox::new(
-        KAIGI_ROSTER_BACKEND.into(),
-        norito::encode_canonical(&envelope).expect("encode Kaigi roster OpenVerifyEnvelope"),
-    );
+fn kaigi_authorization_backend_accepts_valid_proof() {
+    let (proof, vk) =
+        super::kaigi_authorization_v1_tests::valid_envelope(KAIGI_AUTHORIZATION_BACKEND_V1);
     assert!(
-        super::verify_backend(KAIGI_ROSTER_BACKEND, &prf_box, Some(&vk_box)),
-        "exact Kaigi roster registry label should reach the roster verifier"
+        super::verify_backend(KAIGI_AUTHORIZATION_BACKEND_V1, &proof, Some(&vk)),
+        "exact Kaigi authorization registry label should reach the final verifier"
     );
 }
 
 #[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn kaigi_usage_backend_accepts_valid_proof() {
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{keygen_pk, keygen_vk},
-        transcript::{Blake2bWrite, Challenge255},
-    };
-    use kaigi_zk::{
-        KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K, KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1,
-        KaigiUsageCommitmentCircuit, compute_usage_commitment,
-    };
-    use rand_core_06::OsRng;
-
-    let params: PastaParams = pasta_params_new(KAIGI_USAGE_CIRCUIT_K);
-    let duration = Scalar::from(1_200u64);
-    let billed = Scalar::from(345u64);
-    let segment = Scalar::from(2u64);
-
-    let circuit = KaigiUsageCommitmentCircuit::new(duration, billed, segment);
-    let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
-    let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
-
-    let commitment = compute_usage_commitment(duration, billed, segment);
-    let inst_cols = vec![vec![commitment]];
-    let inst_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
-    let proof_instances = vec![inst_refs.as_slice()];
-
-    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
-    halo2_proofs::plonk::create_proof::<
-        IPACommitmentScheme<Curve>,
-        ProverIPA<'_, Curve>,
-        Challenge255<Curve>,
-        _,
-        _,
-        _,
-    >(
-        &params,
-        &pk,
-        &[circuit],
-        &proof_instances,
-        OsRng,
-        &mut transcript,
-    )
-    .expect("proof created");
-    let proof_bytes = transcript.finalize();
-
-    let mut vk_env = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut vk_env, KAIGI_USAGE_CIRCUIT_K);
-    zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/kaigi-usage-v1");
-    zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
-
-    let mut prf_env = zk1::wrap_start();
-    zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
-    zk1::wrap_append_instances_pasta_fp_cols(&inst_refs, &mut prf_env);
-
-    let vk_box = VerifyingKeyBox::new(KAIGI_USAGE_BACKEND.into(), vk_env);
-    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
-        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
-        vk_hash: super::hash_vk(&vk_box),
-        public_inputs: KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-        proof_bytes: prf_env,
-        aux: Vec::new(),
-    };
-    let prf_box = ProofBox::new(
-        KAIGI_USAGE_BACKEND.into(),
-        norito::encode_canonical(&envelope).expect("encode Kaigi usage OpenVerifyEnvelope"),
-    );
+    let (proof, vk) = super::kaigi_usage_v1_tests::valid_envelope(KAIGI_USAGE_BACKEND_V1);
     assert!(
-        super::verify_backend(KAIGI_USAGE_BACKEND, &prf_box, Some(&vk_box)),
-        "exact Kaigi usage registry label should reach the usage verifier"
+        super::verify_backend(KAIGI_USAGE_BACKEND_V1, &proof, Some(&vk)),
+        "exact Kaigi usage registry label should reach the final verifier"
     );
 }
 

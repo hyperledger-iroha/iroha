@@ -95,10 +95,49 @@ pub mod common {
 }
 /// Canonical first-release Taira deployment policy shared by generators and launchers.
 pub mod taira {
+    /// Canonical first-release Inrou canary guest CPU allocation.
+    pub const INROU_CANARY_CPU_MILLIS: u32 = 750;
+    /// Canonical first-release Inrou canary guest RAM.
+    pub const INROU_CANARY_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+    /// Canary temporary filesystem; its sole durable state is separately bounded.
+    pub const INROU_CANARY_EPHEMERAL_STORAGE_BYTES: u64 = 16 * 1024 * 1024;
+    /// Exact normalized Debian ext4 size produced by the verified asset helper.
+    pub const INROU_CANARY_ROOT_VOLUME_BYTES: u64 = 1536 * 1024 * 1024;
+    /// Ext4 app-data volume for the at-most-1024-byte canonical state plus journal.
+    pub const INROU_CANARY_SHARED_VOLUME_BYTES: u64 = 64 * 1024 * 1024;
+    /// Exact per-replica root and temporary storage admission.
+    pub const INROU_CANARY_HOST_STORAGE_BYTES: u64 =
+        INROU_CANARY_ROOT_VOLUME_BYTES + INROU_CANARY_EPHEMERAL_STORAGE_BYTES;
+    /// Host CPU ceiling includes one canonical canary plus mandatory VMM overhead.
+    pub const INROU_MAX_CPU_MILLIS: u32 = INROU_CANARY_CPU_MILLIS
+        + iroha_data_model::soracloud::SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1 as u32;
+    /// Host RAM ceiling includes one canonical canary plus mandatory VMM overhead.
+    pub const INROU_MAX_MEMORY_BYTES: u64 = INROU_CANARY_MEMORY_BYTES
+        + iroha_data_model::soracloud::SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1;
+    /// Full writable allowance, including the declared app-data volume.
+    pub const INROU_MAX_STORAGE_BYTES: u64 =
+        INROU_CANARY_HOST_STORAGE_BYTES + INROU_CANARY_SHARED_VOLUME_BYTES;
+    /// Normalized 1536 MiB rootfs plus pinned kernel/initrd fit within 1600 MiB.
+    /// Exact prepared material is still checked by staging and runtime admission.
+    pub const INROU_GUEST_IMAGE_MAX_BYTES: u64 = 1600 * 1024 * 1024;
+    /// One bounded hydration worker per first-release validator.
+    pub const HYDRATION_CONCURRENCY: usize = 1;
+    /// One retained prepared runtime per first-release validator.
+    pub const PREPARED_RUNTIME_CACHE_CAPACITY: usize = 1;
+    /// Whole-validator CPU bound for the signed service unit, outside its Inrou worker.
+    pub const VALIDATOR_CPU_MILLIS: u64 = 1000;
+    /// Whole-validator RAM bound for the signed service unit, outside its Inrou worker.
+    pub const VALIDATOR_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    /// Explicit guest-system CPU outside the four validators and their workers.
+    pub const SYSTEM_CPU_RESERVE_MILLIS: u64 = 1000;
+    /// Explicit guest-system memory outside the four validators and their workers.
+    pub const SYSTEM_MEMORY_RESERVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    /// Encoded WSV budget inside the whole-validator memory bound.
+    pub const NEXUS_MAX_WSV_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
     /// Denominator used by the Nexus storage weight fields.
     pub const STORAGE_WEIGHT_BASIS_POINTS: u16 = 10_000;
     /// Aggregate Nexus disk budget for one validator.
-    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 68_719_476_736;
+    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
     /// Kura share of the Nexus disk budget, in basis points.
     pub const NEXUS_KURA_BLOCKS_BPS: u16 = 6_000;
     /// WSV snapshot share of the Nexus disk budget, in basis points.
@@ -112,6 +151,43 @@ pub mod taira {
     pub const INROU_EGRESS_RATE_PER_MINUTE: u32 = 600;
     /// Inrou egress byte budget per minute.
     pub const INROU_EGRESS_MAX_BYTES_PER_MINUTE: u64 = 100 * 1024 * 1024;
+
+    #[cfg(test)]
+    mod compact_tests {
+        use super::*;
+        #[test]
+        fn four_validators_and_required_workloads_fit_nine_cpus_and_sixteen_gib() {
+            assert_eq!(
+                4 * (VALIDATOR_CPU_MILLIS + u64::from(INROU_MAX_CPU_MILLIS))
+                    + SYSTEM_CPU_RESERVE_MILLIS,
+                9_000
+            );
+            let memory =
+                4 * (VALIDATOR_MEMORY_BYTES + INROU_MAX_MEMORY_BYTES) + SYSTEM_MEMORY_RESERVE_BYTES;
+            assert_eq!(memory, 13 * 1024 * 1024 * 1024);
+            assert!(memory < 16 * 1024 * 1024 * 1024);
+            assert!(NEXUS_MAX_WSV_MEMORY_BYTES < VALIDATOR_MEMORY_BYTES);
+        }
+        #[test]
+        fn normalized_debian_geometry_and_complete_canary_storage_fit_the_profile() {
+            let upstream_root = 3_085_959_168_u64;
+            let root = 1536 * 1024 * 1024;
+            let kernel = 27_236_288_u64;
+            let initrd = 13_923_072_u64;
+            assert!(upstream_root > INROU_CANARY_ROOT_VOLUME_BYTES);
+            assert_eq!(root, INROU_CANARY_ROOT_VOLUME_BYTES);
+            assert_eq!(INROU_GUEST_IMAGE_MAX_BYTES, 1600 * 1024 * 1024);
+            assert!(root + kernel + initrd <= INROU_GUEST_IMAGE_MAX_BYTES);
+            assert_eq!(
+                INROU_MAX_STORAGE_BYTES,
+                INROU_CANARY_ROOT_VOLUME_BYTES
+                    + INROU_CANARY_EPHEMERAL_STORAGE_BYTES
+                    + INROU_CANARY_SHARED_VOLUME_BYTES
+            );
+            assert_eq!(INROU_MAX_CPU_MILLIS, 1000);
+            assert_eq!(INROU_MAX_MEMORY_BYTES, 768 * 1024 * 1024);
+        }
+    }
 
     const _: () = assert!(
         NEXUS_KURA_BLOCKS_BPS + NEXUS_WSV_SNAPSHOTS_BPS + NEXUS_SORAFS_BPS
@@ -1001,7 +1077,10 @@ pub mod snapshot {
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
     /// Maximum typed-decoder nesting depth for one snapshot payload.
-    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(128_usize);
+    ///
+    /// Keep the default tied to the codec's structural ceiling so a default
+    /// configuration can never advertise a depth that Norito rejects.
+    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(::norito::core::MAX_VALUE_NESTING_DEPTH);
     /// Maximum aggregate collection items decoded from one snapshot payload.
     pub const MAX_DECODE_ITEMS: NonZeroUsize = nonzero!(10_000_000_usize);
     /// Maximum UTF-8 bytes accepted for any individual snapshot string.
@@ -2263,27 +2342,33 @@ pub mod torii {
         /// Replay archive reads are unavailable until an operator supplies the
         /// complete signed three-replica production policy.
         pub const ENABLED: bool = false;
-        /// Complete checkpoint-set response buffered before verification.
+        /// Complete bounded checkpoint-set response.
         pub const MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
-        /// Maximum encoded bytes buffered for one independently verified snapshot.
+        /// Maximum encoded bytes in one independently verified snapshot.
         pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(32 * 1024 * 1024);
-        /// Maximum leaves retained by one in-memory snapshot.
+        /// Maximum leaves retained by one snapshot.
         pub const MAX_SNAPSHOT_LEAVES: usize = 256 * 1024;
         /// Maximum route/boundary accumulators in one checkpoint set.
         pub const MAX_ACCUMULATORS: usize = 4_096;
         /// Complete deadline for one pinned replica fetch.
         pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-        /// First-release response-size ceiling for one buffered response.
+        /// Delay between bounded refresh attempts after a replica is behind or unavailable.
+        pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+        /// First-release response-size ceiling.
         pub const MAX_RESPONSE_BYTES_HARD: u64 = 256 * 1024 * 1024;
-        /// First-release per-snapshot size ceiling, below the Norito archive limit.
+        /// First-release per-snapshot size ceiling.
         pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 128 * 1024 * 1024;
         const _: () = assert!(MAX_SNAPSHOT_BYTES_HARD <= super::super::norito::MAX_ARCHIVE_LEN);
-        /// First-release per-snapshot in-memory leaf ceiling.
+        /// First-release per-snapshot leaf ceiling.
         pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 1024 * 1024;
         /// First-release checkpoint-set cardinality ceiling.
         pub const MAX_ACCUMULATORS_HARD: u64 = 65_536;
         /// First-release request deadline ceiling.
-        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(5 * 60);
+        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(60);
+        /// Smallest production refresh interval.
+        pub const REFRESH_INTERVAL_MIN: Duration = Duration::from_secs(1);
+        /// Largest production refresh interval.
+        pub const REFRESH_INTERVAL_HARD: Duration = Duration::from_secs(5 * 60);
     }
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
@@ -3085,22 +3170,6 @@ pub mod torii {
             XorQuantity::from_str(value).expect("canonical appeal-finance XOR quantity default")
         }
     }
-    /// Alias cache positive TTL (seconds) applied by Torii gateways and SDK helpers.
-    pub const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
-    /// Alias cache refresh window (seconds) before positive TTL elapses.
-    pub const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
-    /// Hard expiry (seconds) after which stale alias proofs are rejected even if refresh failed.
-    pub const SORAFS_ALIAS_HARD_EXPIRY_SECS: u64 = 15 * 60;
-    /// Alias cache negative TTL (seconds) for missing aliases.
-    pub const SORAFS_ALIAS_NEGATIVE_TTL_SECS: u64 = 60;
-    /// Alias cache TTL (seconds) for revoked aliases (`410 Gone` responses).
-    pub const SORAFS_ALIAS_REVOCATION_TTL_SECS: u64 = 5 * 60;
-    /// Maximum tolerated age (seconds) for alias proof bundles before rotation is required.
-    pub const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
-    /// Grace period (seconds) applied after an approved successor before refusing predecessor proofs.
-    pub const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
-    /// Grace period (seconds) applied to governance rotation events.
-    pub const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
     /// Default set of capability names recognised by Torii's discovery cache.
     pub fn sorafs_known_capabilities() -> Vec<String> {
         vec![
