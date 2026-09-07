@@ -37,7 +37,7 @@ fn proof_test_helpers_seed_records() {
 async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     // World with domain/account/asset
     let state = blank_state();
-    let_row! { block = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 1; }) };
+    let_row! { block = result_bearing_time_trigger_block(&state, |h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 1; }) };
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -73,7 +73,7 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     stx.apply();
     let _ = state_block.apply_without_execution(&block, Vec::new());
     state_block.commit().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let_row! { block2 = result_bearing_time_trigger_block(&state, |h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     // Now execute the by-call trigger via transaction API and expect data trigger to chain
     let mut state_block2 = state.block(block2.as_ref().header());
     let mut stx2 = state_block2.transaction();

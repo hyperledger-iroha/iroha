@@ -86,6 +86,7 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
         .unpack(|_| {});
     let header = new_block.header();
     let expected_calls;
+    let expected_time_entrypoints;
     {
         let mut trial = state.block(header);
         let event = trial.create_time_event(&header);
@@ -100,6 +101,11 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
             .collect::<Vec<_>>();
         let (entrypoints, display_hashes, results, calls) = trial.execute_time_triggers(&header);
         assert_eq!(entrypoints.len(), 2);
+        expected_time_entrypoints = entrypoints
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::Time)
+            .collect::<Vec<_>>();
         assert_eq!(calls, expected_calls);
         assert!(results[0].is_ok(), "{:?}", results[0]);
         assert!(results[1].is_err(), "overdrawn transfer must fail");
@@ -164,12 +170,27 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
             Some(&DataSpaceId::UNIVERSAL)
         );
     }
-    // Time invocation identities are source entries, not external canonical wires.
-    let external: [TransactionEntrypoint; 0] = [];
+    // Invocation call hashes identify source entries. The wire commitment also
+    // binds both complete Time entrypoints, including the rejected invocation.
     let canonical_wire_hash: [u8; 32] =
-        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(external.iter())
-            .unwrap()
-            .into();
+        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+            expected_time_entrypoints.iter(),
+        )
+        .unwrap()
+        .into();
+    let omitted_failed_wire: [u8; 32] =
+        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+            expected_time_entrypoints[..1].iter(),
+        )
+        .unwrap()
+        .into();
+    let reversed_wires: [u8; 32] = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+        expected_time_entrypoints.iter().rev(),
+    )
+    .unwrap()
+    .into();
+    assert_ne!(canonical_wire_hash, omitted_failed_wire);
+    assert_ne!(canonical_wire_hash, reversed_wires);
     assert_eq!(block.fastpq_tx_set_hash, Some(canonical_wire_hash));
     assert_eq!(inventory.tx_set_hash(), canonical_wire_hash);
 }

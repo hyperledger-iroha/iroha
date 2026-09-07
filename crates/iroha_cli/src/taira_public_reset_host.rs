@@ -7223,6 +7223,34 @@ fn installed_preseed_binary(admitted: &HostAdmission, carrier: &ValidatorV1) -> 
     Ok(path)
 }
 
+fn canonical_preseed_receipt_targets(
+    stores: &[ValidatorPreseedStore],
+) -> Vec<OperatorPreseedTargetReceiptV1> {
+    let mut targets = stores
+        .iter()
+        .map(|store| OperatorPreseedTargetReceiptV1 {
+            validator_account_id: store.placement.validator_account_id.to_string(),
+            peer_id: store.placement.peer_id.clone(),
+            store_root: store.data_dir.to_string_lossy().into_owned(),
+        })
+        .collect::<Vec<_>>();
+    // The receipt protocol orders encoded identity strings, while placement
+    // targets order typed account controllers. Their orderings may differ.
+    targets.sort_by(|left, right| {
+        (
+            left.validator_account_id.as_str(),
+            left.peer_id.as_str(),
+            left.store_root.as_str(),
+        )
+            .cmp(&(
+                right.validator_account_id.as_str(),
+                right.peer_id.as_str(),
+                right.store_root.as_str(),
+            ))
+    });
+    targets
+}
+
 fn parse_preseed_session_receipt(
     output: &[u8],
     stores: &[ValidatorPreseedStore],
@@ -7243,14 +7271,7 @@ fn parse_preseed_session_receipt(
     receipt
         .validate()
         .map_err(|error| eyre!("invalid SoraFS preseed helper receipt: {error}"))?;
-    let expected_targets = stores
-        .iter()
-        .map(|store| OperatorPreseedTargetReceiptV1 {
-            validator_account_id: store.placement.validator_account_id.to_string(),
-            peer_id: store.placement.peer_id.clone(),
-            store_root: store.data_dir.to_string_lossy().into_owned(),
-        })
-        .collect::<Vec<_>>();
+    let expected_targets = canonical_preseed_receipt_targets(stores);
     let expected_mode = if verify_only { "verify_only" } else { "ingest" };
     let expected_artifacts = BTreeMap::from([
         (
@@ -11731,6 +11752,43 @@ fn inherited_client_config_args(
     ))
 }
 
+/// Keep SSH inputs in this launcher: OpenSSH closes every inherited descriptor
+/// above stderr before parsing its options. Parent proc paths name the pinned
+/// inodes across that sweep without reopening provenance or copying secrets.
+struct ParentHeldSshInputs {
+    identity_path: PathBuf,
+    known_hosts_path: PathBuf,
+    _identity_file: File,
+    _known_hosts_file: File,
+}
+
+impl ParentHeldSshInputs {
+    fn new(identity: &super::PinnedInput, known_hosts: &super::PinnedInput) -> Result<Self> {
+        // Fake process runners can inspect the exact Linux argv on any test host.
+        if !cfg!(any(target_os = "linux", test)) {
+            return Err(eyre!(
+                "public-reset SSH preflight and apply require a Linux controller"
+            ));
+        }
+        let identity_file = super::clone_revalidated_pinned(identity, "OpenSSH identity")?.file;
+        let known_hosts_file =
+            super::clone_revalidated_pinned(known_hosts, "OpenSSH known-hosts")?.file;
+        let parent_path = |file: &File| {
+            PathBuf::from(format!(
+                "/proc/{}/fd/{}",
+                std::process::id(),
+                file.as_raw_fd()
+            ))
+        };
+        Ok(Self {
+            identity_path: parent_path(&identity_file),
+            known_hosts_path: parent_path(&known_hosts_file),
+            _identity_file: identity_file,
+            _known_hosts_file: known_hosts_file,
+        })
+    }
+}
+
 fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
     revalidate_pinned(input, label)?;
     let file = input
@@ -12086,6 +12144,38 @@ impl<'a> SealCleanupSshTransport<'a> {
     }
 }
 
+/// Check all five logical targets without runtime signing custody or a journal.
+pub(super) fn preflight_hosts(admitted: &AdmittedReset) -> Result<()> {
+    preflight_hosts_with_runner(admitted, &mut RealProcessRunner)
+}
+
+fn preflight_hosts_with_runner<R: ProcessRunner>(
+    admitted: &AdmittedReset,
+    runner: &mut R,
+) -> Result<()> {
+    let timeout_secs = admitted.inventory.timeouts.install_secs;
+    for validator in &admitted.inventory.validators {
+        dispatch_custodied_host_action(
+            admitted,
+            runner,
+            &validator.slug,
+            &validator.endpoint,
+            HostAction::Preflight,
+            timeout_secs,
+        )
+        .wrap_err_with(|| format!("read-only host preflight failed for {}", validator.slug))?;
+    }
+    dispatch_custodied_host_action(
+        admitted,
+        runner,
+        &admitted.inventory.edge.slug,
+        &admitted.inventory.edge.endpoint,
+        HostAction::Preflight,
+        timeout_secs,
+    )
+    .wrap_err("read-only host preflight failed for edge")
+}
+
 fn dispatch_custodied_host_action<R: ProcessRunner>(
     admitted: &AdmittedReset,
     runner: &mut R,
@@ -12096,9 +12186,11 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
 ) -> Result<()> {
     if !matches!(
         action,
-        HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+        HostAction::Preflight | HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
     ) {
-        return Err(eyre!("minimal host dispatch rejects forward action"));
+        return Err(eyre!(
+            "minimal host dispatch permits only preflight, rollback, seal, or cleanup"
+        ));
     }
     let timeout_ms = timeout_secs
         .checked_mul(1_000)
@@ -12140,11 +12232,13 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
     frame.extend_from_slice(&request_bytes);
     let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
     validate_remote_command(&remote_command)?;
-    let (identity_path, identity_file) =
-        inherited_input_path(&admitted.ssh_identity, "OpenSSH identity")?;
-    let (known_hosts_path, known_hosts_file) =
-        inherited_input_path(&admitted.known_hosts, "OpenSSH known-hosts")?;
-    let mut args = ssh_common_args(endpoint, &identity_path, &known_hosts_path, timeout_secs);
+    let ssh_inputs = ParentHeldSshInputs::new(&admitted.ssh_identity, &admitted.known_hosts)?;
+    let mut args = ssh_common_args(
+        endpoint,
+        &ssh_inputs.identity_path,
+        &ssh_inputs.known_hosts_path,
+        timeout_secs,
+    );
     args.push(OsString::from("--"));
     args.push(OsString::from(format!(
         "{}@{}",
@@ -12158,10 +12252,10 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
             stdin_prefix: frame,
             stdin_file: None,
             stdin_files: Vec::new(),
-            inherited_files: vec![identity_file, known_hosts_file],
+            inherited_files: Vec::new(),
             deadline,
         })?,
-        "pinned SSH minimal terminal dispatch",
+        "pinned SSH minimal host dispatch",
     )?;
     let receipt: HostReceiptV1 =
         json::from_slice(&output).wrap_err("minimal host dispatch returned no exact receipt")?;
@@ -12568,11 +12662,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         frame.extend_from_slice(&stage_frame);
         let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
         validate_remote_command(&remote_command)?;
-        let (identity_path, identity_file) =
-            inherited_input_path(&self.admitted.ssh_identity, "OpenSSH identity")?;
-        let (known_hosts_path, known_hosts_file) =
-            inherited_input_path(&self.admitted.known_hosts, "OpenSSH known-hosts")?;
-        let mut args = ssh_common_args(endpoint, &identity_path, &known_hosts_path, timeout_secs);
+        let ssh_inputs =
+            ParentHeldSshInputs::new(&self.admitted.ssh_identity, &self.admitted.known_hosts)?;
+        let mut args = ssh_common_args(
+            endpoint,
+            &ssh_inputs.identity_path,
+            &ssh_inputs.known_hosts_path,
+            timeout_secs,
+        );
         args.push(OsString::from("--"));
         args.push(OsString::from(format!(
             "{}@{}",
@@ -12585,7 +12682,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             stdin_prefix: frame,
             stdin_file,
             stdin_files,
-            inherited_files: vec![identity_file, known_hosts_file],
+            inherited_files: Vec::new(),
             deadline,
         };
         let ambiguous_recoverable =
@@ -18551,6 +18648,106 @@ mod tests {
     }
 
     #[test]
+    fn preseed_receipt_targets_follow_receipt_order_for_reversed_stores() {
+        use sorafs_manifest::operator_preseed::OperatorPreseedArtifactReceiptV1;
+
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let mut admitted = progress_admission();
+        let HostTarget::Validator(target) = &mut admitted.target else {
+            panic!("validator fixture");
+        };
+        // The real parser reaches this deterministic post-binding sentinel
+        // before any filesystem access. It needs no root privileges or live state.
+        target.reset_guard = "/invalid-preseed-fixture/guard".to_owned();
+        let mut stores = admitted
+            .inventory
+            .inrou_canary
+            .placement_targets
+            .iter()
+            .enumerate()
+            .map(|(index, placement)| ValidatorPreseedStore {
+                slug: format!("taira-validator-{}", index + 1),
+                placement: placement.clone(),
+                data_dir: PathBuf::from(format!("/var/lib/taira/validator-{index}/sorafs")),
+                max_capacity_bytes: 1024,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 4);
+        let mut targets = stores
+            .iter()
+            .map(|store| OperatorPreseedTargetReceiptV1 {
+                validator_account_id: store.placement.validator_account_id.to_string(),
+                peer_id: store.placement.peer_id.clone(),
+                store_root: store.data_dir.to_string_lossy().into_owned(),
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| {
+            (
+                target.validator_account_id.clone(),
+                target.peer_id.clone(),
+                target.store_root.clone(),
+            )
+        });
+        let canary = &admitted.inventory.inrou_canary;
+        let mut artifacts = [
+            &canary.bundle_manifest_digest_hex,
+            &canary.guest_manifest_digest_hex,
+            &canary.discovery_manifest_digest_hex,
+        ]
+        .into_iter()
+        .map(|digest| OperatorPreseedArtifactReceiptV1 {
+            manifest_digest_blake3: digest.clone(),
+            payload_digest_blake3: "22".repeat(32),
+            content_length: 1,
+            store_count: 4,
+        })
+        .collect::<Vec<_>>();
+        artifacts.sort_by(|left, right| {
+            left.manifest_digest_blake3
+                .cmp(&right.manifest_digest_blake3)
+        });
+        let mut receipt = OperatorPreseedSessionReceiptV1 {
+            schema_version: 1,
+            status: "ready".to_owned(),
+            mode: "ingest".to_owned(),
+            max_capacity_bytes: 1024,
+            targets,
+            artifacts,
+        };
+        receipt.validate().expect("canonical producer receipt");
+        stores.sort_by_key(|store| store.placement.validator_account_id.to_string());
+        stores.reverse();
+        let parse = |receipt: &OperatorPreseedSessionReceiptV1| {
+            let mut wire = json::to_json(receipt)
+                .expect("canonical receipt")
+                .into_bytes();
+            wire.push(b'\n');
+            parse_preseed_session_receipt(&wire, &stores, &admitted, false)
+                .expect_err("fixture sentinel or explicit receipt rejection")
+                .to_string()
+        };
+        assert_eq!(
+            parse(&receipt),
+            "reset guard escaped the fixed host-global control root",
+            "all receipt and exact-binding checks must pass before stage access"
+        );
+
+        receipt.targets.swap(0, 1);
+        assert!(parse(&receipt).contains("targets must be strictly ordered"));
+        receipt.targets.swap(0, 1);
+        receipt.targets[0].store_root.push_str("-different");
+        receipt
+            .validate()
+            .expect("well-shaped but differently bound receipt");
+        assert_eq!(
+            parse(&receipt),
+            "SoraFS preseed helper receipt differs from the exact requested stores and artifacts"
+        );
+        receipt.targets[0] = receipt.targets[1].clone();
+        assert!(parse(&receipt).contains("identities must each be distinct"));
+    }
+
+    #[test]
     fn locked_preseed_session_releases_only_after_ready_receipt_validation() {
         let mut validated = false;
         run_locked_preseed_session(
@@ -21200,5 +21397,284 @@ mod tests {
             .expect("durable retry accepts the same admitted prior inode");
         assert_eq!(route.metadata().expect("durable config inode").ino(), inode);
         assert_eq!(fs::read(&route).expect("durable prior bytes"), bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_dispatches_five_read_only_hosts_without_runtime_custody() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        struct ProbeRunner {
+            seen: Vec<String>,
+            fail_at: Option<usize>,
+            corrupt_receipt: bool,
+            timeout_secs: u64,
+        }
+        impl ProcessRunner for ProbeRunner {
+            fn run(&mut self, spec: &ProcessSpec) -> Result<ProcessOutput> {
+                assert_eq!(spec.program, Path::new(SSH));
+                assert!(
+                    spec.inherited_files.is_empty(),
+                    "OpenSSH closes inherited inputs"
+                );
+                assert!(spec.stdin_file.is_none());
+                assert!(spec.stdin_files.is_empty());
+                assert!(
+                    spec.args
+                        .contains(&OsString::from("StrictHostKeyChecking=yes"))
+                );
+                assert!(spec.args.contains(&OsString::from("IdentityAgent=none")));
+                assert!(spec.args.contains(&OsString::from(format!(
+                    "ConnectTimeout={}",
+                    self.timeout_secs
+                ))));
+                let parent_prefix = format!("/proc/{}/fd/", std::process::id());
+                let identity_index = spec
+                    .args
+                    .iter()
+                    .position(|arg| arg == "-i")
+                    .expect("exact identity");
+                let identity = Path::new(&spec.args[identity_index + 1]);
+                assert!(identity.to_string_lossy().starts_with(&parent_prefix));
+                #[cfg(target_os = "linux")]
+                let fixture_read_path = identity.to_path_buf();
+                #[cfg(not(target_os = "linux"))]
+                let fixture_read_path = Path::new("/dev/fd").join(identity.file_name().unwrap());
+                use std::os::unix::fs::FileExt as _;
+                let mut fixture_bytes = [0_u8; b"SSH-FIXTURE-ONLY".len()];
+                File::open(fixture_read_path)
+                    .expect("live parent-held fixture")
+                    .read_exact_at(&mut fixture_bytes, 0)
+                    .expect("read fixture without changing shared offsets");
+                assert_eq!(&fixture_bytes, b"SSH-FIXTURE-ONLY");
+                assert!(spec.args.iter().any(|arg| {
+                    arg.to_string_lossy()
+                        .starts_with(&format!("UserKnownHostsFile={parent_prefix}"))
+                }));
+                assert_eq!(&spec.stdin_prefix[8..9], b"\n");
+                let length = usize::from_str_radix(
+                    std::str::from_utf8(&spec.stdin_prefix[..8]).unwrap(),
+                    16,
+                )
+                .unwrap();
+                assert_eq!(
+                    spec.stdin_prefix.len(),
+                    length + 9,
+                    "only one public request frame"
+                );
+                let request: HostRequestV1 =
+                    json::from_slice(&spec.stdin_prefix[9..]).expect("host request");
+                assert_eq!(request.action, "preflight");
+                assert!(!request.recovery_only);
+                assert!(request.artifact_role.is_empty() && request.artifact_sha256.is_empty());
+                assert_eq!(request.artifact_size, 0);
+                assert!(
+                    request.mutation_kind.is_empty() && request.mutation_prepared_base64.is_empty()
+                );
+                assert!(request.mutation_evidence_base64.is_empty());
+                for secret in [
+                    b"SSH-FIXTURE-ONLY".as_slice(),
+                    b"KNOWN-HOSTS-FIXTURE-ONLY".as_slice(),
+                ] {
+                    assert!(
+                        !spec
+                            .stdin_prefix
+                            .windows(secret.len())
+                            .any(|part| part == secret)
+                    );
+                    let encoded = BASE64.encode(secret);
+                    assert!(
+                        !spec
+                            .stdin_prefix
+                            .windows(encoded.len())
+                            .any(|part| part == encoded.as_bytes())
+                    );
+                }
+                let (inventory, _chain) = super::super::decode_inventory(
+                    &BASE64.decode(&request.inventory_base64).unwrap(),
+                    "fixture inventory",
+                )
+                .expect("inventory boundary");
+                self.seen.push(request.host_slug.clone());
+                if self.fail_at == Some(self.seen.len()) {
+                    return Err(eyre!("injected SSH preflight failure"));
+                }
+                let receipt = HostReceiptV1 {
+                    schema: HOST_RECEIPT_SCHEMA_V1.to_owned(),
+                    action: request.action.clone(),
+                    host_slug: if self.corrupt_receipt {
+                        "wrong-host".to_owned()
+                    } else {
+                        request.host_slug.clone()
+                    },
+                    request_sha256: host_request_identity_sha256(&request)?,
+                    inventory_sha256: sha256_hex(&BASE64.decode(&request.inventory_base64)?),
+                    authorization_sha256: request.authorization_semantic_sha256.clone(),
+                    authorization_nonce: inventory.authorization_nonce,
+                    status: "ok".to_owned(),
+                    idempotent: false,
+                    bytes_before: 0,
+                    bytes_after: 0,
+                    reclaimed_bytes: 0,
+                    detail: "read-only fixture preflight".to_owned(),
+                    mutation_state: String::new(),
+                    mutation_prepared_base64: String::new(),
+                    mutation_prepared_sha256: String::new(),
+                    mutation_transaction_hash: String::new(),
+                };
+                Ok(ProcessOutput {
+                    status: ExitStatus::from_raw(0),
+                    stdout: json::to_vec(&receipt)?,
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let directory = super::super::private_custody_test_dir("taira-read-only-preflight-");
+        let mut admitted = admitted_reset_fixture();
+        for (name, bytes) in [
+            ("identity", b"SSH-FIXTURE-ONLY".as_slice()),
+            ("known-hosts", b"KNOWN-HOSTS-FIXTURE-ONLY".as_slice()),
+        ] {
+            let path = directory.path().join(name);
+            fs::write(&path, bytes).expect("harmless fixture");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("private fixture");
+        }
+        admitted.ssh_identity =
+            pin_owner_private_file(&directory.path().join("identity"), "fixture identity").unwrap();
+        admitted.known_hosts =
+            pin_owner_private_file(&directory.path().join("known-hosts"), "fixture hosts").unwrap();
+        // No runtime custody, artifact descriptors or journal are available.
+        assert!(admitted.pinned_artifacts.is_empty());
+        let before = fs::read_dir(directory.path()).unwrap().count();
+        let expected = admitted
+            .inventory
+            .validators
+            .iter()
+            .map(|validator| validator.slug.clone())
+            .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(expected.len(), 5);
+        let mut runner = ProbeRunner {
+            seen: Vec::new(),
+            fail_at: None,
+            corrupt_receipt: false,
+            timeout_secs: admitted.inventory.timeouts.install_secs,
+        };
+        preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect("five exact read-only host receipts");
+        assert_eq!(runner.seen, expected);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), before);
+        for absent in [
+            "journal-v1",
+            "local-receipts-v1",
+            "runtime-client.toml",
+            "onboarding-token",
+            "inrou-stage",
+        ] {
+            assert!(
+                !directory.path().join(absent).exists(),
+                "preflight created {absent}"
+            );
+        }
+        runner.seen.clear();
+        runner.fail_at = Some(2);
+        let error = preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect_err("SSH failure cannot report readiness");
+        assert!(format!("{error:#}").contains("injected SSH preflight failure"));
+        assert_eq!(runner.seen, expected[..2]);
+        runner.seen.clear();
+        runner.fail_at = None;
+        runner.corrupt_receipt = true;
+        let error = preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect_err("wrong-host receipt must fail");
+        assert!(
+            format!("{error:#}").contains("remote host receipt does not exactly bind its request")
+        );
+        assert_eq!(runner.seen.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn openssh_parent_pinned_inputs_survive_descriptor_sweep_without_network() {
+        let directory = super::super::private_custody_test_dir("taira-openssh-parent-fd-");
+        let identity_path = directory.path().join("identity");
+        let config_path = directory.path().join("harmless-ssh-config");
+        for (path, bytes) in [
+            (&identity_path, b"harmless-not-a-key\n".as_slice()),
+            (&config_path, b"Host *\n  User fixture-user\n".as_slice()),
+        ] {
+            fs::write(path, bytes).expect("harmless fixture");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("private fixture");
+        }
+        let identity = pin_owner_private_file(&identity_path, "fixture identity").unwrap();
+        let config = pin_owner_private_file(&config_path, "fixture config").unwrap();
+        let inherited = identity.file.try_clone().unwrap();
+        let old_path = inherited_file_path(&inherited).unwrap();
+        let old = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from(SSH),
+            args: vec![
+                "-G".into(),
+                "-F".into(),
+                "/dev/null".into(),
+                "-i".into(),
+                old_path.as_os_str().to_owned(),
+                "fixture.invalid".into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![inherited],
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("actual OpenSSH configuration-only child");
+        assert!(old.status.success());
+        assert!(String::from_utf8_lossy(&old.stderr).contains(&format!(
+            "Identity file {} not accessible",
+            old_path.display()
+        )));
+        let held = ParentHeldSshInputs::new(&identity, &config).expect("parent-held custody");
+        assert!(
+            rustix::io::fcntl_getfd(&held._identity_file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&held._known_hosts_file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        fs::rename(&identity_path, directory.path().join("retained-identity")).unwrap();
+        fs::rename(&config_path, directory.path().join("retained-config")).unwrap();
+        fs::write(&identity_path, b"replacement identity").unwrap();
+        fs::write(&config_path, b"this is not valid SSH config").unwrap();
+        let result = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from(SSH),
+            args: vec![
+                "-G".into(),
+                "-F".into(),
+                held.known_hosts_path.as_os_str().to_owned(),
+                "-i".into(),
+                held.identity_path.as_os_str().to_owned(),
+                "fixture.invalid".into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("OpenSSH reads parent descriptors after closing inherited descriptors");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stdout)
+                .lines()
+                .any(|line| line == "user fixture-user")
+        );
+        assert!(!String::from_utf8_lossy(&result.stderr).contains("not accessible"));
     }
 }

@@ -16,10 +16,7 @@ fn statuses(tx: &StateTransaction<'_, '_>) -> Vec<bool> {
         .internal_event_buf
         .iter()
         .filter_map(|event| match event.as_ref() {
-            DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-                event: AssetEvent::BatchTransferOutcome(outcome),
-                ..
-            })) => Some(matches!(
+            DataEvent::Asset(AssetEvent::BatchTransferOutcome(outcome)) => Some(matches!(
                 &outcome.status,
                 iroha_data_model::events::data::prelude::AssetBatchTransferLegStatus::Applied
             )),

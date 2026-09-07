@@ -177,10 +177,19 @@ fn check_full_quantity_ledger() {
                 .total_quantity(),
             &initial_supply
         );
+        // Direct fixture execution has no external or time entrypoint wires.
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
+                &iroha_data_model::transaction::TransactionEntrypoint,
+            >())
+            .unwrap()
+            .into();
+        block.set_fastpq_tx_set_hash(tx_set_hash);
         block
             .finalize_fastpq_source_inventory(&[], &[], &[])
             .unwrap();
         let inventory = block.fastpq_source_inventory().unwrap().unwrap().clone();
+        assert_eq!(inventory.tx_set_hash(), tx_set_hash);
         assert_eq!(inventory.entries().len(), 1);
         assert!(inventory.transcript_entry_hashes().contains(&call));
         let transcripts = block.drain_transfer_transcripts();
@@ -377,10 +386,19 @@ fn check_supply_changes_between_transfers() {
                 .total_quantity(),
             &supply
         );
+        // Direct fixture execution has no external or time entrypoint wires.
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
+                &iroha_data_model::transaction::TransactionEntrypoint,
+            >())
+            .unwrap()
+            .into();
+        block.set_fastpq_tx_set_hash(tx_set_hash);
         block
             .finalize_fastpq_source_inventory(&[], &[], &[])
             .unwrap();
         let inventory = block.fastpq_source_inventory().unwrap().unwrap().clone();
+        assert_eq!(inventory.tx_set_hash(), tx_set_hash);
         let transcripts = block.drain_transfer_transcripts();
         let bundle = &transcripts[&call];
         assert_eq!(inventory.entries().len(), 1);

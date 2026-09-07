@@ -95,7 +95,7 @@ enum PublicResetCommand {
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
     Authorize(inputs::Authorize),
-    /// Verify the signed reset inventory and pinned local inputs without contacting any host.
+    /// Verify signed inputs and read-only readiness of all four validators and the edge host.
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
     Apply(PublicResetApply),
@@ -273,11 +273,12 @@ impl PublicReset {
                     &args.ssh_identity,
                     &args.known_hosts,
                 )?;
+                host::preflight_hosts(&admitted)?;
                 report(
                     &admitted,
                     "preflight",
                     "ok",
-                    "signed inventory and pinned local inputs admitted",
+                    "signed inputs and read-only preflight of four validators and the edge host verified",
                 )
             }
             PublicResetCommand::Apply(args) => {

@@ -1,3 +1,31 @@
+/// The fee fixtures start from a synthetic parent with already registered assets.
+/// Give those definitions their parent registration identities before exercising fees.
+fn seed_fee_fixture_asset_incarnations(state: &State, parent: &SignedBlock) {
+    let registration_header_hash = parent.header().hash();
+    let execution_identity = Hash::new(b"fee-fixture-parent-asset-registration");
+    let mut definitions = state
+        .world
+        .asset_definitions
+        .view()
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    definitions.sort();
+    let mut incarnations = state.world.axt_asset_incarnations.block();
+    for (ordinal, definition) in definitions.iter().enumerate() {
+        assert!(incarnations.get(definition).is_none());
+        let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+            &state.network_id,
+            definition,
+            &registration_header_hash,
+            &execution_identity,
+            u64::try_from(ordinal).expect("fixture registration ordinal"),
+        );
+        incarnations.insert(definition.clone(), incarnation);
+    }
+    incarnations.commit();
+}
+
 #[test]
 fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -73,29 +101,7 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    // Both definitions predate this height-two candidate. Seed the registration
-    // identities belonging to its retained synthetic parent fixture.
-    {
-        let registration_header_hash = latest_signed.header().hash();
-        let execution_identity = Hash::new(b"fee-detached-parent-asset-registration");
-        let mut incarnations = state.world.axt_asset_incarnations.block();
-        for (ordinal, asset_definition_id) in
-            [&transfer_asset_definition_id, &fee_asset_definition_id]
-                .into_iter()
-                .enumerate()
-        {
-            assert!(incarnations.get(asset_definition_id).is_none());
-            let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
-                &state.network_id,
-                asset_definition_id,
-                &registration_header_hash,
-                &execution_identity,
-                u64::try_from(ordinal).expect("fixture registration ordinal"),
-            );
-            incarnations.insert(asset_definition_id.clone(), incarnation);
-        }
-        incarnations.commit();
-    }
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -226,6 +232,7 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
@@ -374,6 +381,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -720,6 +728,7 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         header.set_height(nonzero!(1_u64));
     });
     let previous: SignedBlock = previous.into();
+    seed_fee_fixture_asset_incarnations(&state, &previous);
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let block = BlockBuilder::new_with_time_source(vec![register, transfer], block_time_source)
         .chain(1, Some(&previous))
@@ -978,6 +987,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1098,6 +1108,7 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1228,6 +1239,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1399,6 +1411,7 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1554,6 +1567,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("tx_sequence").expect("metadata key"),
@@ -1919,6 +1933,7 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -1932,12 +1947,13 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
             recipient_id,
         )])
         .sign(payer_keypair.private_key());
-    let tx = AcceptedTransaction::accept(
+    let tx = accept_transaction_at_mock_time(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         state.crypto().as_ref(),
+        Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
@@ -2046,6 +2062,7 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
+    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
     let trigger_id: TriggerId = "fee_depth_limit_trigger".parse().unwrap();
     let flag_key: Name = "fee_trigger_flag".parse().unwrap();
     let event_key: Name = "fee_trigger_event".parse().unwrap();
@@ -2086,12 +2103,13 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
             SetKeyValue::account(payer_id.clone(), event_key.clone(), Json::from(true)).into(),
         ])
         .sign(payer_keypair.private_key());
-    let tx = AcceptedTransaction::accept(
+    let tx = accept_transaction_at_mock_time(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         state.crypto().as_ref(),
+        Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));

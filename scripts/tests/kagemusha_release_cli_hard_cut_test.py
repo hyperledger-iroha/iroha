@@ -1,4 +1,4 @@
-"""Pin Kagami's sole KAGEMUSHA V1 release-authentication command.
+"""Pin Kagami's KAGEMUSHA V1 authentication and public provisioning commands.
 
 These source-only tests require no compiled binary, network access, release
 artifacts, or environment variables. Runtime authentication is covered by the
@@ -63,7 +63,19 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         self.assertNotIn("--abi-version", production)
         self.assertNotRegex(command_source, r"\babi_version\b|\bserde(?:_json)?\b")
         command_names = re.findall(r'#\[command\(name = "([^"]+)"\)\]', command_source)
-        self.assertEqual(command_names, ["authenticate-release-v1"])
+        self.assertEqual(
+            command_names,
+            ["authenticate-release-v1", "derive-mint-finality-next-epoch-v1"],
+        )
+        self.assertIn(
+            "Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer)",
+            command_source,
+        )
+        self.assertRegex(
+            command_source,
+            r"Command::DeriveMintFinalityNextEpochV1\(args\) => \{\s*"
+            r"derive_mint_finality_next_epoch_v1::run\(args, writer\)",
+        )
         for field in (
             "recursive_profile",
             "artifact_root",

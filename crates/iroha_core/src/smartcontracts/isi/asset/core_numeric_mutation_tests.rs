@@ -172,10 +172,7 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
     );
     assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
         event.as_ref(),
-        DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-            event: AssetEvent::Transferred(transfer),
-            ..
-        })) if transfer.source() == &source_id
+        DataEvent::Asset(AssetEvent::Transferred(transfer)) if transfer.source() == &source_id
             && transfer.destination() == &destination_id
             && transfer.amount() == &Quantity::from(4_u32)
     )));
@@ -218,10 +215,11 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     assert!(
         stx.world.internal_event_buf.iter().all(|event| !matches!(
             event.as_ref(),
-            DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-                event: AssetEvent::Transferred(_),
-                ..
-            }))
+            DataEvent::Asset(AssetEvent::Transferred(_))
+                | DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Transferred(_),
+                    ..
+                }))
         )),
         "burn must never be represented as an account-to-account transfer"
     );
@@ -1015,10 +1013,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
     );
     assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
         event.as_ref(),
-        DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-            event: AssetEvent::Transferred(transfer),
-            ..
-        })) if transfer.source() == &asset_id
+        DataEvent::Asset(AssetEvent::Transferred(transfer)) if transfer.source() == &asset_id
             && transfer.destination() == &asset_id
             && transfer.amount() == &Quantity::one()
     )));
@@ -1409,10 +1404,11 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
     assert!(
         !stx.world.internal_event_buf.iter().any(|event| matches!(
             event.as_ref(),
-            DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-                event: AssetEvent::Transferred(_),
-                ..
-            }))
+            DataEvent::Asset(AssetEvent::Transferred(_))
+                | DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Transferred(_),
+                    ..
+                }))
         )),
         "mint and burn must not emit the transfer-specific event"
     );
@@ -1840,7 +1836,15 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     let error = batch
         .execute(&ALICE_ID, &mut stx)
         .expect_err("aggregate six-unit debit must exceed five-unit cap");
-    assert!(error.to_string().contains("cap exceeded"), "{error}");
+    assert!(
+        matches!(
+            &error,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::PolicyRejected(message)
+            ) if message.contains("outbound transfer cap exceeded")
+        ),
+        "unexpected admission error: {error:?}"
+    );
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
         Quantity::from(10_u32)
@@ -1902,8 +1906,13 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("over-cap transfer must be rejected");
     assert!(
-        err.to_string().contains("cap exceeded"),
-        "unexpected error: {err}"
+        matches!(
+            &err,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::PolicyRejected(message)
+            ) if message.contains("outbound transfer cap exceeded")
+        ),
+        "unexpected admission error: {err:?}"
     );
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
@@ -2907,11 +2916,16 @@ fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
         asset_balance_or_zero(&tx, &destination),
         Quantity::from(3_u32)
     );
-    assert!(tx.world.internal_event_buf.iter().any(|event| matches!(event.as_ref(),
-        DataEvent::Domain(DomainEvent::Asset(ScopedAsset { event: AssetEvent::Transferred(transfer), .. }))
-            if transfer.source() == &source && transfer.destination() == &destination
-                && transfer.amount() == &Quantity::from(3_u32)
-    )));
+    assert!(
+        tx.world
+            .internal_event_buf
+            .iter()
+            .any(|event| matches!(event.as_ref(),
+                DataEvent::Asset(AssetEvent::Transferred(transfer))
+                    if transfer.source() == &source && transfer.destination() == &destination
+                        && transfer.amount() == &Quantity::from(3_u32)
+            ))
+    );
     assert_eq!(tx.pending_transfer_transcript_count_for_testing(), 0);
     tx.apply();
     assert!(block.drain_transfer_transcripts().is_empty());
