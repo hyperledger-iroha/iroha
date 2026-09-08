@@ -132,6 +132,7 @@ STAGES = (
     )),
     ("candidate qualification before edge cutover", (
         "taira_public_reset::host::tests::public_reset_convergence_waits_for_first_commit_without_accepting_pending_proof",
+        "taira_public_reset::host::tests::public_reset_convergence_waits_for_applied_successor_before_canary",
         "taira_public_reset::host::tests::public_reset_convergence_rejects_fatal_identity_during_startup",
         "taira_public_reset::host::tests::public_reset_convergence_deadline_reports_last_public_progress",
         "taira_public_reset::host::tests::public_reset_convergence_accepts_same_decision_across_certificate_rounds",
@@ -149,6 +150,10 @@ STAGES = (
         "taira_public_reset::host::tests::candidate_client_fd_preserves_signer_and_expires_with_child_custody",
         "taira_public_reset::host::tests::candidate_probe_host_key_rejects_another_host_before_mutation",
         "taira_public_reset::host::tests::prepared_candidate_write_cannot_be_reinterpreted_as_public_evidence",
+        "taira_public_reset::host::tests::typed_write_envelope_producer_reaches_authenticated_host_consumer",
+        "taira::tests::prepared_binding_metadata_matches_objects_before_submission_and_after_commit",
+        "taira::tests::typed_inrou_envelopes_reach_fd_and_exact_predecessor_consumers",
+        "taira::tests::inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer",
         "taira_public_reset::host::tests::inrou_restart_evidence_binds_ordered_host_and_exact_guest_transition",
         "taira_public_reset::host::tests::prepared_inrou_report_rejects_every_missing_or_extra_v1_field",
         "taira_public_reset::host::tests::readiness_http_server_waits_for_request_bytes_after_accept",

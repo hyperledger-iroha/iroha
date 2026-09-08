@@ -59,17 +59,23 @@ daemon within the original deadline, without submitting another manager job.
 Changed launcher commands remain immediate failures.
 The active journaled restart path also waits for four actual Torii backends before
 onboarding, using the deadline captured before its one restart submission.
-Convergence treats a valid zero-height commit frontier as pending within that
-deadline; identity mismatches and restart requirements fail immediately. Tests
-keep pending startup status out of retained proof and preserve public progress
-fields in deadline errors.
+Convergence waits within that deadline until the active height has advanced beyond
+a positive committed frontier. A CommitQC or an `Applied` body at the same height
+can still precede the durable application anchor needed by onboarding. Tests keep
+both intermediate states out of retained proof; identity mismatches and restart
+requirements remain immediate failures, with public progress in deadline errors.
 Converged certificates use Core's committed-decision comparison, allowing
 different re-proposal rounds for the same subject and execution commitment while
 retaining each validator's actual certificate and requiring a higher committed
 height after restart.
 Candidate tests exercise the real HTTP producer and strict host receipt consumer,
 direct signed probe origins, private signer descriptor lifetime, ordered recovery
-and failure before edge cutover. Stopped-owner tests preserve the slot lock while
+and failure before edge cutover. Prepared-envelope tests cross the actual typed
+write producer into the authenticated host consumer and all four Inrou variants
+through inherited descriptors and predecessor decoding. Binding checks cover
+canonical object metadata before submission and after commit, rejecting changed
+fields and JSON strings substituted for objects. Unknown envelope fields remain
+invalid. Stopped-owner tests preserve the slot lock while
 releasing exact empty worker cgroups, reject live or substituted runtime state,
 and verify idempotent cleanup before a stop receipt can be reused. Firewall
 fixtures admit only exact slot-owned rules and real construction/deletion cuts;

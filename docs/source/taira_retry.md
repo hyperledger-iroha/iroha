@@ -60,6 +60,11 @@ The `guest` object contains exactly these fields:
   `guard_support`, `unit_renderer`, `local_node`. These refer to the existing
   admitted owner-guard, service-unit renderer and native Inrou controller helpers.
 - `expected_mac`: the actual approved guest's lowercase colon-delimited MAC.
+- `retired_public_imports`: an explicit list, empty when no older imports are
+  superseded, with at most four entries. Each entry names `inventory`,
+  `retirement`, `binary_manifest` and `source_manifest` using the public
+  `{ "path": "...", "sha256": "..." }` reference shape, plus `source_pack`
+  pointing to that source manifest's sibling `source.pack`.
 
 Use the preceding native assembly's actual inventory and the imported source's
 actual `verified-manifest.json` path. The command derives the retry directory,
@@ -118,10 +123,20 @@ Retirement first admits one dispatcher copy and up to 64 MiB of publication
 and cleanup records, plus the existing guest and backing reserves. After the
 native rolled-back terminal and retired custody are verified under their locks,
 it prunes disposable executable and guest-image copies and chunks belonging to
-the three admitted public SoraFS manifests. Canonical inputs, runtime keys and
-configs, directories, unrelated manifests, storage metadata and native history
-remain intact. Unadmitted partial ingestion data is preserved. An owner-only
-intent makes interrupted unlink and trim operations resumable.
+the three admitted public SoraFS manifests. Runtime keys and configs, unrelated
+manifests, storage metadata and native history remain intact. Unadmitted partial
+ingestion data is preserved. An owner-only intent makes interrupted unlink and
+trim operations resumable.
+
+The same retirement owner also removes explicitly superseded public imports.
+Their completed native retirement and transfer receipts must agree on the old
+inventory, signed source tree and canonical binaries. Current candidate and
+replay inputs remain protected. Source removal admits the complete tracked path
+set and import-created Git metadata, checks process and mount references, and
+uses a durable quarantine intent so interrupted deletion can resume. Canonical
+binary and transport-pack removal requires exact file custody. Import manifests,
+source closure records, native authority and terminal receipts are retained;
+release-number patterns never select deletion targets.
 
 After pruning, native `sync -f` flushes the runtime filesystem before `fstrim`
 requests discard of freed blocks. Each command has a 60-second timeout. Both

@@ -339,24 +339,25 @@ impl PreparedTransactionOperationV1 {
     }
 
     fn binding_metadata(&self) -> Result<(&'static str, String)> {
-        Ok(match self {
+        let (name, binding) = match self {
             Self::OnboardingPrepared(operation) => (
                 "prepared_operation_binding",
-                json::to_json(&operation.binding)?,
+                json::to_value(&operation.binding)?,
             ),
             Self::OnboardingProofRequired(operation) => (
                 "prepared_operation_binding",
-                json::to_json(&operation.result.binding)?,
+                json::to_value(&operation.result.binding)?,
             ),
             Self::FaucetPrepared(operation) => (
                 "prepared_operation_binding",
-                json::to_json(&operation.binding)?,
+                json::to_value(&operation.binding)?,
             ),
             Self::FinalCanary(operation) => (
                 PREPARED_BINDING_METADATA,
-                json::to_json(&operation.binding)?,
+                json::to_value(&operation.binding)?,
             ),
-        })
+        };
+        Ok((name, json::to_json(&binding)?))
     }
 
     const fn label(&self) -> &'static str {
@@ -1473,7 +1474,8 @@ fn make_prepared_inrou_envelope(
 }
 
 fn canonical_prepared_inrou_envelope_bytes(envelope: &PreparedInrouEnvelopeV1) -> Result<Vec<u8>> {
-    let mut bytes = json::to_json(envelope)
+    let value = json::to_value(envelope).wrap_err("project canonical prepared Inrou envelope")?;
+    let mut bytes = json::to_json(&value)
         .wrap_err("encode canonical prepared Inrou envelope")?
         .into_bytes();
     bytes.push(b'\n');
@@ -2163,7 +2165,7 @@ fn prove_inrou_predecessor_applied(
 }
 
 fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Result<Value> {
-    let (value, mut canonical) = match expected_kind {
+    let (value, canonical) = match expected_kind {
         "write_canary" => {
             let envelope: PreparedMutationEnvelopeV1 = json::from_slice(bytes)
                 .wrap_err("Inrou predecessor is not an exact prepared-mutation V1 envelope")?;
@@ -2175,7 +2177,7 @@ fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Resul
             }
             (
                 json::to_value(&envelope)?,
-                json::to_json(&envelope)?.into_bytes(),
+                canonical_prepared_envelope_bytes(&envelope)?,
             )
         }
         "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" => {
@@ -2199,12 +2201,11 @@ fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Resul
             }
             (
                 json::to_value(&envelope)?,
-                json::to_json(&envelope)?.into_bytes(),
+                canonical_prepared_inrou_envelope_bytes(&envelope)?,
             )
         }
         _ => return Err(eyre!("unsupported Inrou predecessor kind")),
     };
-    canonical.push(b'\n');
     if canonical != bytes {
         eyre::bail!("Inrou predecessor envelope is not canonical newline JSON");
     }
@@ -4112,7 +4113,9 @@ fn validate_prepared_binding(binding: &PreparedMutationBindingV1) -> Result<()> 
 }
 
 fn canonical_prepared_envelope_bytes(envelope: &PreparedMutationEnvelopeV1) -> Result<Vec<u8>> {
-    let mut bytes = json::to_json(envelope)
+    let value =
+        json::to_value(envelope).wrap_err("project canonical prepared mutation envelope")?;
+    let mut bytes = json::to_json(&value)
         .wrap_err("encode canonical prepared mutation envelope")?
         .into_bytes();
     bytes.push(b'\n');
@@ -4120,6 +4123,13 @@ fn canonical_prepared_envelope_bytes(envelope: &PreparedMutationEnvelopeV1) -> R
         eyre::bail!("prepared mutation envelope exceeds its V1 byte bound");
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+/// Exercise the actual typed write-envelope producer from authenticated host fixtures.
+pub(crate) fn typed_write_envelope_bytes_for_test(value: Value) -> Result<Vec<u8>> {
+    let envelope: PreparedMutationEnvelopeV1 = json::from_value(value)?;
+    canonical_prepared_envelope_bytes(&envelope)
 }
 
 fn inherited_fd_path(fd: u32) -> Result<PathBuf> {
@@ -4420,15 +4430,8 @@ fn validate_prepared_transaction_closure(
     if prepared.as_bytes() != wire || prepared.hash() != transaction.hash() {
         eyre::bail!("prepared client payload differs from the exact signed transaction");
     }
-    let (binding_key, binding_json) = operation.binding_metadata()?;
     let metadata = transaction.metadata();
-    let binding_name = Name::from_str(binding_key)?;
-    if metadata
-        .get(&binding_name)
-        .map(IrohaJson::get)
-        .map(String::as_str)
-        != Some(binding_json.as_str())
-    {
+    if !prepared_operation_binding_matches(metadata, operation)? {
         eyre::bail!("prepared transaction metadata does not bind `{PREPARED_BINDING_METADATA}`");
     }
     for (key, expected) in [
@@ -4786,8 +4789,6 @@ fn verify_exact_committed_prepared_operation(
     client: &IrohaClient,
     validated: &ValidatedPreparedOperation,
 ) -> Result<Hash> {
-    let (binding_key, expected_binding) = validated.envelope.operation.binding_metadata()?;
-    let binding_name = Name::from_str(binding_key)?;
     let operation_name = Name::from_str(PREPARED_OPERATION_METADATA)?;
     let expected_transaction = validated.transaction()?;
     let entrypoint_hash = expected_transaction.hash_as_entrypoint();
@@ -4811,12 +4812,8 @@ fn verify_exact_committed_prepared_operation(
     let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
         eyre::bail!("Applied status resolves to a non-external transaction entrypoint");
     };
-    let binding_matches = transaction
-        .metadata()
-        .get(&binding_name)
-        .and_then(|value| value.try_into_any_norito::<String>().ok())
-        .as_deref()
-        == Some(expected_binding.as_str());
+    let binding_matches =
+        prepared_operation_binding_matches(transaction.metadata(), &validated.envelope.operation)?;
     let operation_matches = transaction
         .metadata()
         .get(&operation_name)
@@ -4835,6 +4832,18 @@ fn verify_exact_committed_prepared_operation(
         eyre::bail!("committed proof differs from the exact prepared transaction");
     }
     Ok(entrypoint_hash.into())
+}
+
+fn prepared_operation_binding_matches(
+    metadata: &Metadata,
+    operation: &PreparedTransactionOperationV1,
+) -> Result<bool> {
+    let (binding_key, expected_binding) = operation.binding_metadata()?;
+    Ok(metadata
+        .get(&Name::from_str(binding_key)?)
+        .map(IrohaJson::get)
+        .map(String::as_str)
+        == Some(expected_binding.as_str()))
 }
 
 fn report_prepared_classification(
@@ -7713,8 +7722,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer() {
+    fn final_canary_envelope_fixture() -> PreparedMutationEnvelopeV1 {
         let account = AccountId::new(fixture_key_pair(0x45).public_key().clone());
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
         let binding = PreparedMutationBindingV1 {
@@ -7752,7 +7760,7 @@ mod tests {
                 },
             },
         };
-        let envelope = PreparedMutationEnvelopeV1 {
+        PreparedMutationEnvelopeV1 {
             schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
             binding,
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
@@ -7760,7 +7768,206 @@ mod tests {
             network_id: "fixture-network".to_owned(),
             authority: account.to_string(),
             operation: PreparedTransactionOperationV1::FinalCanary(operation),
+        }
+    }
+
+    #[test]
+    fn prepared_binding_metadata_matches_objects_before_submission_and_after_commit() {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        ))
+        .expect("public signed preparation fixtures");
+        let vectors = fixture
+            .pointer("/vectors")
+            .and_then(Value::as_array)
+            .unwrap();
+        let vector = |name: &str| {
+            vectors
+                .iter()
+                .find(|value| value.pointer("/name").and_then(Value::as_str) == Some(name))
+                .expect("named signed fixture")
         };
+        let onboarding: AccountOnboardingPreparedTransactionV1 = json::from_value(
+            vector("onboarding_prepared")
+                .pointer("/response")
+                .unwrap()
+                .clone(),
+        )
+        .expect("typed onboarding fixture");
+        let proof = PreparedOnboardingProofRequiredV1 {
+            schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
+            receipt: onboarding.receipt.clone(),
+            result: json::from_value(
+                vector("onboarding_proof_required")
+                    .pointer("/response")
+                    .unwrap()
+                    .clone(),
+            )
+            .expect("typed onboarding proof fixture"),
+        };
+        let faucet = json::from_value(
+            vector("faucet_prepared")
+                .pointer("/response")
+                .unwrap()
+                .clone(),
+        )
+        .expect("typed faucet fixture");
+        for operation in [
+            PreparedTransactionOperationV1::OnboardingPrepared(onboarding),
+            PreparedTransactionOperationV1::OnboardingProofRequired(proof),
+            PreparedTransactionOperationV1::FaucetPrepared(faucet),
+            final_canary_envelope_fixture().operation,
+        ] {
+            let value = json::to_value(&operation).expect("typed operation projection");
+            let binding = value
+                .pointer("/envelope/binding")
+                .or_else(|| value.pointer("/envelope/result/binding"))
+                .expect("operation binding object");
+            let (binding_key, expected) = operation.binding_metadata().unwrap();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                Name::from_str(binding_key).unwrap(),
+                IrohaJson::from_norito_value_ref(binding)
+                    .expect("actual binding metadata producer"),
+            );
+            assert!(prepared_operation_binding_matches(&metadata, &operation).unwrap());
+            insert_string_metadata(&mut metadata, binding_key, &expected).unwrap();
+            assert!(
+                !prepared_operation_binding_matches(&metadata, &operation).unwrap(),
+                "a JSON string must not substitute for the bound object"
+            );
+            let mut substituted = binding.clone();
+            substituted
+                .as_object_mut()
+                .unwrap()
+                .insert("execution_expires_at_unix_ms".to_owned(), 1_u64.into());
+            metadata.insert(
+                Name::from_str(binding_key).unwrap(),
+                IrohaJson::from_norito_value_ref(&substituted).unwrap(),
+            );
+            assert!(
+                !prepared_operation_binding_matches(&metadata, &operation).unwrap(),
+                "a changed binding field must remain fatal"
+            );
+
+            if matches!(
+                operation,
+                PreparedTransactionOperationV1::OnboardingPrepared(_)
+                    | PreparedTransactionOperationV1::FaucetPrepared(_)
+            ) {
+                let wire = hex::decode(operation.signed_transaction_wire_hex().unwrap()).unwrap();
+                let transaction = SignedTransaction::decode_all_versioned(&wire)
+                    .expect("actual signed fixture transaction");
+                validate_prepared_transaction_closure(
+                    &transaction,
+                    &operation,
+                    &wire,
+                    transaction.network_id().unwrap(),
+                )
+                .expect("real pre-submit closure accepts signed object binding");
+                assert!(
+                    prepared_operation_binding_matches(transaction.metadata(), &operation)
+                        .expect("same exact binding check used by committed transaction proof")
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_inrou_envelopes_reach_fd_and_exact_predecessor_consumers() {
+        use std::{io::Seek as _, os::fd::AsRawFd as _};
+
+        let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let canary = final_canary_envelope_fixture();
+        let PreparedTransactionOperationV1::FinalCanary(final_operation) = &canary.operation else {
+            panic!("final-canary fixture");
+        };
+        for operation in [
+            InrouCanaryOperation::BundlePin,
+            InrouCanaryOperation::GuestPin,
+            InrouCanaryOperation::DiscoveryPin,
+            InrouCanaryOperation::ServiceMutation,
+        ] {
+            let binding = crate::soracloud::TairaMutationBindingV1 {
+                authorization_sha256: canary.binding.authorization_sha256.clone(),
+                authorization_nonce: canary.binding.authorization_nonce.clone(),
+                kind: operation.mutation_kind().to_owned(),
+                phase: canary.binding.phase.clone(),
+                idempotency_key: canary.binding.idempotency_key.clone(),
+                execution_expires_at_unix_ms: canary.binding.execution_expires_at_unix_ms,
+            };
+            let transaction = PreparedInrouTransactionV1 {
+                schema: PREPARED_INROU_OPERATION_SCHEMA_V1.to_owned(),
+                binding: binding.clone(),
+                operation: operation.label().to_owned(),
+                transaction_hash_hex: final_operation.transaction_hash_hex.clone(),
+                signed_transaction_wire_hex: final_operation.signed_transaction_wire_hex.clone(),
+                signed_transaction_wire_sha256: final_operation
+                    .signed_transaction_wire_sha256
+                    .clone(),
+                fee_payment: final_operation.fee_payment.clone(),
+                fee_quote: final_operation.fee_quote.clone(),
+            };
+            let tagged = match operation {
+                InrouCanaryOperation::BundlePin => {
+                    PreparedInrouOperationV1::InrouBundlePin(transaction)
+                }
+                InrouCanaryOperation::GuestPin => {
+                    PreparedInrouOperationV1::InrouGuestPin(transaction)
+                }
+                InrouCanaryOperation::DiscoveryPin => {
+                    PreparedInrouOperationV1::InrouDiscoveryPin(transaction)
+                }
+                InrouCanaryOperation::ServiceMutation => {
+                    PreparedInrouOperationV1::InrouCanary(transaction)
+                }
+            };
+            let envelope = PreparedInrouEnvelopeV1 {
+                schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+                probe_scope: "candidate".to_owned(),
+                binding,
+                public_root: canary.public_root.clone(),
+                chain_id: canary.chain_id.clone(),
+                network_id: canary.network_id.clone(),
+                authority: canary.authority.clone(),
+                stage: (&inrou_canary_stage_identity("deploy", "v1")).into(),
+                operation: tagged,
+            };
+            let produced = canonical_prepared_inrou_envelope_bytes(&envelope)
+                .expect("actual typed Inrou producer");
+            let mut canonical = json::to_json(&json::to_value(&envelope).unwrap())
+                .unwrap()
+                .into_bytes();
+            canonical.push(b'\n');
+            assert_eq!(produced, canonical, "host canonical JSON boundary");
+            let mut file = NamedTempFile::new().unwrap();
+            file.write_all(&produced).unwrap();
+            file.rewind().unwrap();
+            let (reopened, bytes) =
+                read_prepared_inrou_envelope(u32::try_from(file.as_raw_fd()).unwrap())
+                    .expect("actual inherited-FD consumer");
+            assert_eq!(reopened, envelope);
+            assert_eq!(bytes, produced);
+            if operation != InrouCanaryOperation::ServiceMutation {
+                let predecessor =
+                    decode_exact_inrou_predecessor_v1(&produced, operation.mutation_kind())
+                        .expect("actual typed predecessor consumer");
+                assert_eq!(predecessor, json::to_value(&envelope).unwrap());
+            }
+            let mut declaration_order = json::to_json(&envelope).unwrap().into_bytes();
+            declaration_order.push(b'\n');
+            assert_ne!(
+                produced, declaration_order,
+                "fixture exercises differing object field orders"
+            );
+        }
+    }
+
+    #[test]
+    fn inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer() {
+        let envelope = final_canary_envelope_fixture();
         let exact = canonical_prepared_envelope_bytes(&envelope).expect("canonical predecessor");
         decode_exact_inrou_predecessor_v1(&exact, "write_canary")
             .expect("exact final-canary predecessor");

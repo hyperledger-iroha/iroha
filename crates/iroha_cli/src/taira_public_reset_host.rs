@@ -17365,6 +17365,15 @@ fn observe_convergence_status(
             "Sumeragi CommitQC is not the exact authenticated 3-of-4 committed checkpoint"
         ));
     }
+    // A decision and even the adapter's Applied body can precede durable Kura
+    // publication. A successor context proves the committed world-state anchor
+    // is available to onboarding, faucet and the subsequent application checks.
+    if status.height == status.last_committed_height {
+        return Ok(ConvergenceStatusObservation {
+            checkpoint: None,
+            progress,
+        });
+    }
     let context = json::to_value(&commit.certificate.round.context_id.0)?
         .as_str()
         .ok_or_else(|| eyre!("CommitQC context identifier is not canonical JSON"))?
@@ -17388,7 +17397,7 @@ fn validate_convergence_status(
     let observed = observe_convergence_status(value, expected)?;
     observed.checkpoint.ok_or_else(|| {
         eyre!(
-            "Sumeragi status is awaiting its first authenticated commit; {}",
+            "Sumeragi status is awaiting an applied authenticated checkpoint; {}",
             observed.progress,
         )
     })
@@ -19258,7 +19267,7 @@ mod tests {
         assert_eq!(observations[1].checkpoint.as_ref().unwrap().0, 7);
         let error = validate_convergence_status(&startup, &validator)
             .expect_err("pending observation is never retained convergence proof");
-        assert!(format!("{error:#}").contains("awaiting its first authenticated commit"));
+        assert!(format!("{error:#}").contains("awaiting an applied authenticated checkpoint"));
         validate_convergence_status(&committed, &validator).expect("strict committed proof");
 
         let mut impossible = committed.clone();
@@ -19342,6 +19351,51 @@ mod tests {
                 "missing retained diagnostic {field}"
             );
         }
+    }
+
+    #[test]
+    fn public_reset_convergence_waits_for_applied_successor_before_canary() {
+        use iroha::data_model::block::consensus_v2::{SumeragiV2BodyState, SumeragiV2StatusPhase};
+        let (inventory, applied_wave) = reproposed_convergence_wave_fixture();
+        for body_state in [
+            SumeragiV2BodyState::PendingApply,
+            SumeragiV2BodyState::Applied,
+        ] {
+            let mut wave = applied_wave.clone();
+            let reports = wave
+                .get_mut("validator_reports")
+                .unwrap()
+                .as_array_mut()
+                .unwrap();
+            for (report, validator) in reports.iter_mut().zip(&inventory.validators) {
+                let mut status: SumeragiV2Status = json::from_value(report.clone()).unwrap();
+                let commit = status.last_commit_qc.as_ref().unwrap();
+                status.height_context_id = commit.certificate.round.context_id;
+                status.height = status.last_committed_height;
+                status.view = commit.certificate.round.view;
+                status.phase = SumeragiV2StatusPhase::PendingApply;
+                status.body_state = body_state;
+                status.pending_persistence_id = None;
+                status.liveness = Default::default();
+                status
+                    .validate()
+                    .expect("actual decision-before-application status is valid");
+                *report = json::to_value(&status).unwrap();
+                assert!(
+                    observe_convergence_status(report, validator)
+                        .unwrap()
+                        .checkpoint
+                        .is_none(),
+                    "a decided or PendingKura block is not application readiness"
+                );
+            }
+            assert!(
+                validate_convergence_wave(&wave, 0, &inventory).is_err(),
+                "four matching pre-activation QCs must not be retained as canary readiness"
+            );
+        }
+        validate_convergence_wave(&applied_wave, 0, &inventory)
+            .expect("successor activation exposes the committed application state");
     }
 
     fn reproposed_convergence_wave_fixture() -> (InventoryV1, norito::json::Value) {
@@ -22013,6 +22067,27 @@ time.sleep(30)
             typed_result.account_id,
             typed_result.alias,
         )
+    }
+
+    #[test]
+    fn typed_write_envelope_producer_reaches_authenticated_host_consumer() {
+        // The captured signed fixture uses SORA-discriminant account literals.
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let (admitted, prepared, fixture_bytes, _, _) =
+            authenticated_proof_required_fixture("http://127.0.0.1:8080");
+        let value = json::from_slice(&fixture_bytes).expect("authenticated fixture JSON");
+        let produced = crate::taira::typed_write_envelope_bytes_for_test(value)
+            .expect("real typed CLI envelope producer");
+        let (digest, transaction_hash, operation) = validate_prepared_mutation_envelope(
+            &admitted,
+            &produced,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect("actual host consumer accepts typed producer bytes and verifies signatures");
+        assert_eq!(produced, fixture_bytes);
+        assert_eq!(digest, prepared.prepared_sha256);
+        assert_eq!(transaction_hash, prepared.transaction_hash);
+        assert_eq!(operation, prepared.operation);
     }
 
     fn proof_required_evidence(admitted: &HostAdmission, prepared: &PreparedMutationV1) -> Vec<u8> {

@@ -1040,6 +1040,7 @@ class WorkflowTests(unittest.TestCase):
         reference = {"path": "/public-fixture/helper.py", "sha256": "f" * 64}
         self.plan = {
             "runtime_root": str(self.root),
+            "retired_public_imports": [],
             "attempts_root": str(self.attempts),
             "previous_inventory": record("inventory.json", self.inventory),
             "previous_terminal": str(
@@ -1364,7 +1365,7 @@ class MainOrderTests(unittest.TestCase):
             root.chmod(0o700)
             build, binary, source = artifact_receipts()
             plan = {
-                "guest": {"runtime_root": "/runtime", "expected_mac": "00:00:00:00:00:00"},
+                "guest": {"runtime_root": "/runtime", "expected_mac": "00:00:00:00:00:00", "retired_public_imports": []},
                 "guest_ssh": {"argv": ["approved-guest"]},
                 "backing_ssh": {"argv": ["approved-backing"]},
                 "backing_path": "/backing",
@@ -1695,6 +1696,235 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.file(self.targets[0], b'public executable', 0o755)
         with self.assertRaisesRegex(retry._retire_RebindError, 'appeared or changed'): self.prune()
         self.assertTrue(self.targets[0].exists())
+
+
+class SupersededImportTests(unittest.TestCase):
+    """Actual native record joins and interrupted public deletion, without host I/O."""
+
+    def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRIPT.parent)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.runtime = self.root / 'runtime'
+        self.work = self.runtime / 'retry-v1/attempt/retirement'
+        self.work.mkdir(mode=0o700, parents=True)
+        self.source_root = self.root / 'public-source'
+        self.source_root.mkdir(mode=0o755)
+        self.bins = self.runtime / 'old-release/bin'
+        self.current_bins = self.runtime / 'current-release/bin'
+        self.pack = self.runtime / 'old-source-import/source.pack'
+        self.tracked = [
+            {'path': 'src/lib.rs', 'mode': 0o644, 'size': 4, 'sha256': 'a' * 64},
+            {'path': 'run', 'mode': 0o755, 'size': 4, 'sha256': 'a' * 64},
+            {'path': 'leaf', 'mode': 0o120000, 'size': 10, 'sha256': 'b' * 64},
+            {'path': 'iroha-docs', 'mode': 0o160000, 'size': 0, 'sha256': 'c' * 64},
+        ]
+        for relative, mode in [('src/lib.rs', 0o644), ('run', 0o755)]:
+            self.file(self.source_root / relative, b'code', mode, directory_mode=0o755)
+        (self.source_root / 'leaf').symlink_to('/no-follow')
+        if hasattr(os, 'lchmod'): os.lchmod(self.source_root / 'leaf', 0o777)
+        (self.source_root / 'iroha-docs').mkdir(mode=0o755)
+        for name in ('HEAD', 'ORIG_HEAD', 'config', 'shallow', 'refs/heads/optimizations',
+                     'logs/HEAD', 'logs/refs/heads/optimizations'):
+            self.file(self.source_root / '.git' / name, b'public git', 0o644, directory_mode=0o755)
+        self.file(self.source_root / '.git/index', b'public index', 0o600, directory_mode=0o755)
+        for name in ('objects/info', 'refs/tags'):
+            (self.source_root / '.git' / name).mkdir(mode=0o755, parents=True, exist_ok=True)
+        for suffix in ('.pack', '.idx', '.rev'):
+            self.file(self.source_root / ('.git/objects/pack/pack-' + 'd' * 40 + suffix),
+                      b'public pack', 0o444, directory_mode=0o755)
+        self.file(self.pack, b'public pack', 0o600)
+        self.closure = {
+            'schema': 'iroha.taira.public-reset.signed-source-closure.v1',
+            'branch': 'optimizations', 'head_commit_sha1': 'a' * 40,
+            'head_tree_sha1': 'b' * 40, 'closure_sha256': 'c' * 64,
+            'cargo_lock_sha256': 'd' * 64, 'tracked_files': self.tracked, 'untracked_files': [],
+        }
+        closure_ref = self.record(self.runtime / 'old-inputs/source-manifest.json', self.closure, 0o644)
+        self.old = {'deployment_id': 'closed-attempt', 'authorization_nonce': 'e' * 32,
+                    'revision': {'branch': 'optimizations', 'commit': 'a' * 40, 'tree': 'b' * 40,
+                        'source_root': str(self.source_root), 'source_manifest_path': closure_ref['path'],
+                        'source_manifest_sha256': closure_ref['sha256'], 'source_closure_sha256': 'c' * 64,
+                        'cargo_lock_sha256': 'd' * 64}, 'validators': []}
+        self.artifacts = []
+        for name in ('iroha', 'iroha3d_taira', 'sorafs-node', 'kagami'):
+            self.file(self.bins / name, b'public binary', 0o755)
+            self.file(self.current_bins / name, b'current binary', 0o755)
+            self.artifacts.append({'name': name, 'size': len(b'public binary'), 'sha256': 'f' * 64})
+        roles = [('iroha_cli', 'iroha'), ('iroha3d', 'iroha3d_taira'), ('sorafs_node', 'sorafs-node')]
+        for index in range(5):
+            host = {'slug': retry.RETIRE_SLUGS[index], 'artifacts': [
+                {'role': role, 'local_path': str(self.bins / name), 'size': len(b'public binary'), 'sha256': 'f' * 64}
+                for role, name in (roles if index < 4 else roles[:1])]}
+            if index < 4: self.old['validators'].append(host)
+            else: self.old['edge'] = host
+        inventory_ref = self.record(self.runtime / 'old-inputs/inventory.json', self.old)
+        self.terminal = {'deployment_id': self.old['deployment_id'], 'inventory_sha256': inventory_ref['sha256'],
+            'authorization_sha256': 'a' * 64, 'authorization_nonce': 'e' * 32,
+            'status': 'rolled_back', 'phase': 'rolled_back', 'next_step': 7, 'recovery_intent': None,
+            'touched_validators': list(retry.RETIRE_SLUGS[:-1]), 'edge_touched': False,
+            'edge_rollback_complete': False, 'rollback_next_validator': 4, 'rollback_failures': []}
+        terminal_ref = self.record(self.runtime / 'journal-v1/rolled-back' / ('a' * 64 + '.json'), self.terminal)
+        self.retired = {'schema': 'taira.terminal-custody-retirement.v1', 'published': True,
+            'control_archived': True, 'native_rollback_completed': True, 'inventory_sha256': inventory_ref['sha256'],
+            'retained_commit': 'a' * 40, 'retained_deployment_id': self.old['deployment_id'],
+            'terminal_path': terminal_ref['path'], 'terminal_sha256': terminal_ref['sha256']}
+        retirement_ref = self.record(self.runtime / 'old-retirement/result.json', self.retired)
+        self.binary = {'commit': 'a' * 40, 'all_hashes_verified': True, 'activated': False,
+                       'destination': str(self.bins), 'artifacts': self.artifacts}
+        self.source = {'commit': 'a' * 40, 'tree': 'b' * 40, 'source_root': str(self.source_root),
+            'size': 11, 'sha256': 'b' * 64, 'clean': True, 'signature_verified': True,
+            'object_inventory_verified': True, 'activated': False, 'runtime_files_transferred': False,
+            'runtime_files_included': False, 'history_included': False}
+        self.descriptor = {'inventory': inventory_ref, 'retirement': retirement_ref,
+            'binary_manifest': self.record(self.bins.parent / 'verified-manifest.json', self.binary),
+            'source_manifest': self.record(self.pack.parent / 'verified-manifest.json', self.source),
+            'source_pack': str(self.pack)}
+        self.current = copy.deepcopy(self.old)
+        self.current['revision']['source_root'] = str(self.root / 'current-source')
+        for host in self.current['validators'] + [self.current['edge']]:
+            for artifact in host['artifacts']:
+                artifact['local_path'] = str(self.current_bins / Path(artifact['local_path']).name)
+        self.invpath = self.runtime / 'current-inputs/inventory.json'
+        ref = self.record(self.invpath, self.current)
+        self.context = {'inventory_sha256': ref['sha256'], 'terminal_sha256': '9' * 64}
+        self.result = {'published': True, 'control_archived': True, 'native_rollback_completed': True, **self.context}
+        self.preserved = {}
+        for path in (self.bins / 'private-config', self.pack.parent / 'retained-receipt',
+                     self.runtime / 'prep/private-key', self.root / 'current-source/Cargo.lock'):
+            self.file(path, b'PRIVATE OR CURRENT PRESERVE', 0o600)
+            self.preserved[path] = path.read_bytes()
+        self.stack = contextlib.ExitStack(); self.addCleanup(self.stack.close)
+        for name, value in {'RETIRE_RUNTIME': self.runtime, 'RETIRE_WORK': self.work,
+            'RETIRE_CONTROL': self.runtime / 'control', 'RETIRE_DISPATCHER': self.runtime / 'dispatcher',
+            'CONTINUITY_PREP': self.runtime / 'prep', 'RETIRE_BINS': self.current_bins,
+            'RETIRE_INVENTORY_PATH': self.invpath, 'RETIRE_PUBLIC_IMPORTS': [self.descriptor],
+            'RETIRE_PROTECTED_INPUTS': ()}.items():
+            self.stack.enter_context(mock.patch.object(retry, name, value))
+        self.stack.enter_context(mock.patch.object(retry, '_retire_retained_state'))
+        self.references = self.stack.enter_context(mock.patch.object(retry, '_retire_live_references', return_value={'passed': True}))
+        self.stack.enter_context(mock.patch.object(retry, '_retire_read_public', side_effect=lambda g,p,expected=None,**kw:
+            retry.public_record(p, expected, owner=os.geteuid(), private=True, **kw)))
+        self.stack.enter_context(mock.patch.object(retry, '_retire_rename_atomic', side_effect=os.rename))
+        self.native = self.stack.enter_context(mock.patch.object(retry.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
+        self.stack.enter_context(mock.patch.object(retry.os.path, 'ismount', side_effect=lambda p: Path(p) == self.root))
+        self.guard = {'fresh_write': self.fresh_write, 'sync_directory': retry.sync_directory}
+
+    def file(self, path, raw, mode, directory_mode=0o700):
+        path.parent.mkdir(mode=directory_mode, parents=True, exist_ok=True)
+        path.write_bytes(raw); path.chmod(mode)
+
+    def record(self, path, value, mode=0o600):
+        raw = retry._retire_canonical(value); self.file(path, raw, mode)
+        return {'path': str(path), 'sha256': retry._retire_digest(raw)}
+
+    def fresh_write(self, path, raw, mode):
+        with path.open('xb') as output:
+            output.write(raw); output.flush(); os.fsync(output.fileno())
+        path.chmod(mode)
+
+    def prune(self):
+        return retry._retire_completed_public_imports(self.guard, self.context, self.result)
+
+    def intent(self):
+        return self.work / 'public-import-retirement' / (self.descriptor['inventory']['sha256'] + '.intent.json')
+
+    def test_superseded_import_reclaims_exact_public_payloads_and_reopens(self):
+        all_receipts = {p: p.read_bytes() for p in self.runtime.rglob('*.json')}
+        first = self.prune(); self.assertEqual(first, self.prune())
+        self.assertGreater(first[0]['allocated_bytes_removed'], 0)
+        self.assertFalse(self.source_root.exists()); self.assertFalse(self.pack.exists())
+        self.assertTrue(all(not (self.bins / row['name']).exists() for row in self.artifacts))
+        self.assertTrue(all((self.current_bins / row['name']).exists() for row in self.artifacts))
+        self.assertTrue(all(p.read_bytes() == raw for p,raw in {**all_receipts, **self.preserved}.items()))
+        self.assertEqual([call.args[0][0] for call in self.native.call_args_list],
+                         ['/usr/bin/sync', '/usr/sbin/fstrim'] * 2)
+
+    def test_superseded_import_resumes_partial_quarantine_and_file_unlink(self):
+        def interrupted(path):
+            (Path(path) / 'src/lib.rs').unlink()
+            raise OSError('interrupted source deletion')
+        interrupted.avoids_symlink_attacks = True
+        with mock.patch.object(retry.shutil, 'rmtree', interrupted), self.assertRaises(OSError): self.prune()
+        self.assertTrue(self.intent().exists()); self.assertFalse(self.source_root.exists())
+        real_unlink = Path.unlink
+        def interrupt_binary(path, *args, **kwargs):
+            if path == self.bins / 'iroha3d_taira': raise OSError('interrupted binary deletion')
+            return real_unlink(path, *args, **kwargs)
+        with mock.patch.object(Path, 'unlink', interrupt_binary), self.assertRaises(OSError): self.prune()
+        self.assertEqual(len(self.prune()), 1)
+        self.assertFalse(self.pack.exists())
+
+    def test_superseded_import_resumes_flush_failure_without_deleting_current_inputs(self):
+        self.native.return_value = SimpleNamespace(returncode=1)
+        with self.assertRaisesRegex(retry.RetryError, 'flush failed'): self.prune()
+        self.assertEqual(self.native.call_count, 1)
+        self.native.return_value = SimpleNamespace(returncode=0)
+        self.assertEqual(len(self.prune()), 1)
+
+    def test_superseded_import_protects_same_artifact_source_and_all_four_binaries(self):
+        retry.RETIRE_BINS = self.bins
+        self.current = copy.deepcopy(self.old)
+        ref = self.record(self.invpath, self.current)
+        self.context['inventory_sha256'] = self.result['inventory_sha256'] = ref['sha256']
+        self.prune()
+        self.assertTrue(self.source_root.exists())
+        self.assertTrue(all((self.bins / row['name']).exists() for row in self.artifacts))
+        self.assertFalse(self.pack.exists())
+
+    def test_superseded_import_rejects_unpublished_receipt_and_foreign_live_journal(self):
+        self.retired['published'] = False
+        self.descriptor['retirement'] = self.record(Path(self.descriptor['retirement']['path']), self.retired)
+        with self.assertRaisesRegex(retry.RetryError, 'completed custody retirement'): self.prune()
+        self.retired['published'] = True
+        self.descriptor['retirement'] = self.record(Path(self.descriptor['retirement']['path']), self.retired)
+        self.file(self.runtime / 'journal-v1/closed-attempt.journal.json', b'PRESERVE', 0o600)
+        with self.assertRaisesRegex(retry.RetryError, 'live native journal'): self.prune()
+        self.assertFalse(self.intent().exists()); self.assertTrue(self.source_root.exists())
+
+    def test_superseded_import_rejects_ignored_private_file_and_live_reference_before_mutation(self):
+        extra = self.source_root / '.ignored-private-key'
+        self.file(extra, b'NEVER DELETE', 0o600)
+        with self.assertRaises(retry.RetryError): self.prune()
+        self.assertTrue(extra.exists()); self.assertFalse(self.intent().exists())
+        extra.unlink(); self.references.return_value = {'passed': False}
+        with self.assertRaisesRegex(retry.RetryError, 'live process'): self.prune()
+        self.assertTrue(self.source_root.exists()); self.assertTrue(self.pack.exists())
+
+    def test_superseded_import_rejects_replaced_binary_and_escaped_resume_quarantine(self):
+        self.native.return_value = SimpleNamespace(returncode=1)
+        with self.assertRaises(retry.RetryError): self.prune()
+        self.file(self.bins / 'iroha', b'public binary', 0o755)
+        with self.assertRaisesRegex(retry.RetryError, 'appeared after intent'): self.prune()
+        (self.bins / 'iroha').unlink()
+        value = json.loads(self.intent().read_bytes()); value['quarantine'] = str(self.root / 'current-source')
+        self.record(self.intent(), value)
+        with self.assertRaisesRegex(retry.RetryError, 'quarantine escaped'): self.prune()
+        self.assertTrue((self.root / 'current-source/Cargo.lock').exists())
+
+    def test_superseded_import_read_only_admission_checks_real_receipts_without_mutation(self):
+        admissions = retry._retire_import_admissions(None, self.current)
+        self.assertEqual(len(admissions), 1)
+        self.assertEqual(admissions[0]['source_root'], str(self.source_root))
+        self.assertFalse(self.intent().parent.exists())
+        self.native.assert_not_called(); self.references.assert_not_called()
+        self.source['commit'] = '9' * 40
+        self.descriptor['source_manifest'] = self.record(Path(self.descriptor['source_manifest']['path']), self.source)
+        with self.assertRaisesRegex(retry.RetryError, 'provenance differs'):
+            retry._retire_import_admissions(None, self.current)
+        self.assertTrue(self.source_root.exists()); self.assertTrue(self.pack.exists())
+
+    def test_superseded_import_shape_and_capacity_bounds_are_explicit(self):
+        self.assertEqual(retry.validate_retired_public_imports([self.descriptor]), [self.descriptor])
+        for descriptor in ({}, {**self.descriptor, 'source_pack': str(self.runtime / 'prep/private-key')}):
+            with self.assertRaises(retry.RetryError): retry.validate_retired_public_imports([descriptor])
+        with self.assertRaises(retry.RetryError): retry.validate_retired_public_imports([self.descriptor] * 2)
+        base = retry.retirement_capacity_plans(str(self.runtime), '/backing', self.binary)
+        extra = retry.retirement_capacity_plans(str(self.runtime), '/backing', self.binary, 2)
+        self.assertEqual(extra['guest_plan']['allocations'][0]['bytes'] - base['guest_plan']['allocations'][0]['bytes'],
+                         2 * (retry.RETIRE_IMPORT_MAX_INTENT_BYTES + 1024 * 1024))
+        with self.assertRaises(retry.RetryError): retry.retirement_capacity_plans(str(self.runtime), '/backing', self.binary, 5)
 
 
 if __name__ == "__main__":
