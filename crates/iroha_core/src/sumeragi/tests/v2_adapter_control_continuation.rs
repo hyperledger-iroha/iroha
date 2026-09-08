@@ -126,6 +126,9 @@ fn recovered_proposal_continuation_case(commit_state: u8, body_state: u8) {
     if body_state == 3 {
         votes.clear();
     }
+    if body_state == 5 {
+        votes[0].1 = None;
+    }
     let authenticated = initial
         .authenticate_final_wal_startup_authority()
         .unwrap_or_else(|(error, _)| panic!("authenticate original WAL: {error}"));
@@ -209,7 +212,7 @@ fn recovered_proposal_continuation_case(commit_state: u8, body_state: u8) {
         }
         let (payload_store, recovered) =
             super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                directory.path().join("serve"),
+                &directory.path().join("serve"),
                 &context,
             )
             .unwrap();
@@ -225,7 +228,7 @@ fn recovered_proposal_continuation_case(commit_state: u8, body_state: u8) {
             payloads,
             startup,
         );
-        if body_state == 0 {
+        if body_state == 0 || body_state == 5 {
             let mut owner = result.unwrap_or_else(|error| {
                 panic!(
                     "reopen advanced Proposal continuation {commit_state}: {}",
@@ -266,7 +269,8 @@ fn recovered_proposal_continuation_case(commit_state: u8, body_state: u8) {
 #[test]
 fn production_recovered_proposal_advanced_prepare_reopens_exactly() {
     run_lifecycle_fixture_on_large_stack("advanced Prepare continuation", || {
-        recovered_proposal_continuation_case(0, 0)
+        recovered_proposal_continuation_case(0, 0);
+        recovered_proposal_continuation_case(0, 5);
     });
 }
 #[cfg(feature = "bls")]

@@ -67,7 +67,10 @@ impl AuthenticatedRecoveredWalControlProjection {
         let (startup, mut combined) = self
             .project_authenticated_cold_signed_broadcast_and_sign(verified, seal)
             .ok_or("cold Proposal continuation changed its WAL/body authority")?;
-        if !combined.broadcast_exactly_matches(&broadcast) {
+        if !combined
+            .broadcast
+            .exactly_matches_durable_projection(&broadcast)
+        {
             return Err("cold Proposal continuation changed its signed Broadcast");
         }
         let authority = combined

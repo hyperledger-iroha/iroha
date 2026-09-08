@@ -206,6 +206,19 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
                 (Some(_), None) | (None, Some(_)) => false,
             }
     }
+    /// Join the durable message, binding and admission while retaining a local
+    /// body-store output capability which is deliberately absent from LedgerV1.
+    /// Opaque-to-opaque equality still requires the same output-store instance.
+    pub(super) fn exactly_matches_durable_projection(&self, durable: &Self) -> bool {
+        durable.cold_proposal_output.is_none()
+            && self.effect == durable.effect
+            && self.pending == durable.pending
+            && self.candidate == durable.candidate
+            && self
+                .cold_proposal_output
+                .as_ref()
+                .is_none_or(|output| output.matches_broadcast(&self.effect))
+    }
     /// Return the exact installed digest while retaining all replay authority.
     pub(super) fn digest(&self) -> super::LifecycleDigest {
         super::LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
@@ -1609,7 +1622,7 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             .is_ok_and(|(observed, parent_ordinal, observed_child)| {
                 parent_ordinal == self.ordinal
                     && observed_child == child_ordinal
-                    && observed.exactly_matches(broadcast)
+                    && broadcast.exactly_matches_durable_projection(&observed)
             })
     }
 
