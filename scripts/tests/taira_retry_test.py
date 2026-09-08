@@ -22,6 +22,7 @@ CAPACITY = SCRIPT.with_name("taira_disk_capacity.py")
 SPEC_CAPACITY = importlib.util.spec_from_file_location("retry_capacity_test", CAPACITY)
 capacity = importlib.util.module_from_spec(SPEC_CAPACITY)
 SPEC_CAPACITY.loader.exec_module(capacity)
+OPERATOR_PUBLIC_KEY = "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
 
 
 def artifact_receipts():
@@ -292,6 +293,7 @@ class RetryTests(unittest.TestCase):
     def test_fresh_inventory_changes_only_attempt_and_nonce(self):
         previous = {
             "deployment_id": "retained",
+            "operator_public_key": OPERATOR_PUBLIC_KEY,
             "authorization_nonce": "0" * 32,
             "revision": {"commit": "a" * 40},
             "validators": [{"artifact": "same-config"}],
@@ -319,12 +321,19 @@ class RetryTests(unittest.TestCase):
             )
 
     def test_candidate_probe_inventory_rejects_obsolete_or_ambiguous_drafts(self):
-        valid = {"validator_clients": [
+        valid = {"operator_public_key": OPERATOR_PUBLIC_KEY, "validator_clients": [
             {"slug": f"taira-validator-{index}",
              "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
             for index in range(1, 5)
         ]}
         retry.require_candidate_probe_inventory(valid)
+        for public_key in (None, "", OPERATOR_PUBLIC_KEY.lower(),
+                           OPERATOR_PUBLIC_KEY.upper(), OPERATOR_PUBLIC_KEY + "\n",
+                           OPERATOR_PUBLIC_KEY[:-1], "802620" + "A" * 64, 1):
+            value = copy.deepcopy(valid)
+            value["operator_public_key"] = public_key
+            with self.subTest(public_key=public_key), self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
         for origin in (None, "https://taira.sora.org/", "http://localhost:8080/",
                        "http://127.0.0.1/", "http://127.0.0.1:0/",
                        "http://127.0.0.1:80/", 8080,
@@ -629,6 +638,7 @@ class RetryTests(unittest.TestCase):
             "--validator-client-config": [
                 prep + f"/validator-{i}-client.toml" for i in range(1, 5)
             ],
+            "--validator-operator-key": ["/private/runtime/operator.key"],
             "--inrou-stage-dir": [prep + "/inrou-stage"],
             "--onboarding-token": [prep + "/network/runtime/onboarding.token"],
             "--known-hosts": ["/private/runtime/known-hosts"],
@@ -922,6 +932,7 @@ class RetryTests(unittest.TestCase):
         flags = (
             ("--runtime-client-config", 1),
             ("--validator-client-config", 4),
+            ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
             ("--inrou-stage-dir", 1),
             ("--validator-unit", 4),
@@ -934,6 +945,14 @@ class RetryTests(unittest.TestCase):
         actual, grouped = retry.local_arguments(json.dumps(args).encode())
         self.assertEqual(actual, args)
         self.assertEqual(len(grouped["--validator-client-config"]), 4)
+        self.assertEqual(len(grouped["--validator-operator-key"]), 1)
+        apply_arguments = actual[:actual.index("--validator-unit")]
+        self.assertIn("--validator-operator-key", apply_arguments)
+        missing_key = list(args)
+        offset = missing_key.index("--validator-operator-key")
+        del missing_key[offset:offset + 2]
+        with self.assertRaises(retry.RetryError):
+            retry.local_arguments(json.dumps(missing_key).encode())
         args[0] = "--private-key"
         with self.assertRaises(retry.RetryError):
             retry.local_arguments(json.dumps(args).encode())
@@ -960,6 +979,7 @@ class WorkflowTests(unittest.TestCase):
         build, self.binary, self.source = artifact_receipts()
         self.inventory = {
             "revision": {"commit": build["commit"], "source_root": "/source"},
+            "operator_public_key": OPERATOR_PUBLIC_KEY,
             "deployment_id": "retained",
             "authorization_nonce": "0" * 32,
             "next_genesis_hash": "c" * 64,
@@ -999,6 +1019,7 @@ class WorkflowTests(unittest.TestCase):
         for flag, count in (
             ("--runtime-client-config", 1),
             ("--validator-client-config", 4),
+            ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
             ("--inrou-stage-dir", 1),
             ("--validator-unit", 4),
@@ -1113,6 +1134,12 @@ class WorkflowTests(unittest.TestCase):
         self, argv, directory, *, phase, pass_fds=(), env=None, journal_path=None
     ):
         self.calls.append(phase)
+        if phase in ("assemble", "apply"):
+            self.assertIn("--validator-operator-key", argv)
+            self.assertEqual(
+                argv[argv.index("--validator-operator-key") + 1],
+                "/public-fixture/validator-operator-key-0",
+            )
         directory.mkdir(mode=0o700)
         if phase == self.fail_phase:
             self.fail_phase = None
@@ -1201,6 +1228,16 @@ class WorkflowTests(unittest.TestCase):
         del self.inventory["validator_clients"][0]["probe_origin"]
         Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
         with self.assertRaisesRegex(retry.RetryError, "candidate probe origin"):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        retry._retire_apply.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(list(self.attempts.iterdir()), [])
+
+    def test_missing_operator_identity_stops_before_retirement_or_native_calls(self):
+        del self.inventory["operator_public_key"]
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        with self.assertRaisesRegex(retry.RetryError, "operator public key"):
             retry.guest_locked(self.request, self.capacity, self.attempts)
         retry._retire_retained_state.assert_not_called()
         retry._retire_apply.assert_not_called()

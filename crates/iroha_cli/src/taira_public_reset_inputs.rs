@@ -14,6 +14,9 @@ pub(super) struct LocalInputs {
     validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
     onboarding_token: PathBuf,
+    /// Dedicated runtime key whose public identity every validator explicitly allows.
+    #[arg(long, value_name = "PATH")]
+    validator_operator_key: PathBuf,
     #[arg(long, value_name = "DIR")]
     inrou_stage_dir: PathBuf,
     /// Four exact local systemd units in validator order.
@@ -136,6 +139,7 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     }
     // Reject an impossible signed execution plan before source/artifact scans or custody reads.
     validate_timeout_policy(inventory)?;
+    let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
     let (source, source_bytes) = read_json::<SourceManifestV1>(
         Path::new(&inventory.revision.source_manifest_path),
         "source manifest",
@@ -200,6 +204,7 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     for entry in &pinned {
         revalidate_pinned(&entry.input, "release artifact")?;
     }
+    revalidate_pinned(&operator_key, "validator operator key")?;
     Ok(())
 }
 
@@ -248,6 +253,7 @@ fn derive_validator_identities(
             Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
             &inventory.next_genesis_hash,
         )?;
+        validate_validator_operator_config(&bytes, &inventory.operator_public_key)?;
         let text =
             std::str::from_utf8(&bytes).map_err(|_| eyre!("validator config is not UTF-8"))?;
         let table: toml::Table =

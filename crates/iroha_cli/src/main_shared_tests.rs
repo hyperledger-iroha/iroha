@@ -260,6 +260,114 @@ fn operator_private_key_file_is_an_explicit_global_runtime_option() {
     let args = Args::try_parse_from(["iroha", "ops", "sumeragi", "status"])
         .expect("operator credential remains optional for non-operator commands");
     assert!(args.operator_private_key_file.is_none());
+    assert!(args.operator_private_key_fd.is_none());
+    assert!(
+        load_runtime_operator_key(&args)
+            .expect("no inferred signer")
+            .is_none()
+    );
+}
+#[test]
+fn operator_private_key_fd_is_explicit_bounded_and_exclusive() {
+    for fd in ["3", "65535"] {
+        let args = Args::try_parse_from([
+            "iroha",
+            "--operator-private-key-fd",
+            fd,
+            "ops",
+            "sumeragi",
+            "status",
+        ])
+        .expect("bounded operator descriptor");
+        assert_eq!(args.operator_private_key_fd, Some(fd.parse().unwrap()));
+        assert!(args.operator_private_key_file.is_none());
+    }
+    for fd in ["0", "1", "2", "65536", "-1", "3.0", "not-a-descriptor"] {
+        assert!(
+            Args::try_parse_from([
+                "iroha",
+                "--operator-private-key-fd",
+                fd,
+                "ops",
+                "sumeragi",
+                "status",
+            ])
+            .is_err()
+        );
+    }
+    assert!(
+        Args::try_parse_from([
+            "iroha",
+            "--operator-private-key-fd",
+            "3",
+            "--operator-private-key-file",
+            "/run/secrets/iroha/operator.key",
+            "ops",
+            "sumeragi",
+            "status",
+        ])
+        .is_err()
+    );
+}
+#[test]
+fn credential_free_commands_reject_operator_fd_without_reading_it() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "--operator-private-key-fd",
+        "65535",
+        "ops",
+        "sumeragi",
+        "status",
+    ])
+    .expect("parse only; descriptor is never opened");
+    assert!(reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit pack").is_err());
+    for error in [
+        reject_irrelevant_taira_doctor_globals(&args).unwrap_err(),
+        reject_irrelevant_taira_public_reset_globals(&args).unwrap_err(),
+    ] {
+        assert!(format!("{error:?}").contains("--operator-private-key-fd"));
+    }
+}
+#[cfg(unix)]
+#[test]
+fn inherited_operator_key_load_installs_the_explicit_run_context_signer() {
+    use iroha::crypto::ExposedPrivateKey;
+    use std::{
+        io::{Seek as _, SeekFrom},
+        os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _},
+    };
+    let directory = tempfile::tempdir().expect("private operator fixture");
+    let path = directory.path().join("operator.key");
+    let key_pair = fixture_key_pair(0x73);
+    let encoded =
+        zeroize::Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
+    fs::write(&path, encoded.as_bytes()).expect("write explicit signer");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("owner-only signer");
+    let mut file = fs::File::open(&path).expect("read-only inherited file");
+    file.seek(SeekFrom::Start(5)).expect("caller offset");
+    let fd = file.as_raw_fd().to_string();
+    let args = Args::try_parse_from([
+        "iroha",
+        "--operator-private-key-fd",
+        &fd,
+        "ops",
+        "sumeragi",
+        "status",
+    ])
+    .expect("parse inherited signer");
+    let mut context = test_context(CliOutputFormat::Json);
+    context.operator_key_pair = load_runtime_operator_key(&args).expect("load real descriptor");
+    let client = context.client_from_config();
+    assert_eq!(
+        client.operator_key_pair.as_ref().map(KeyPair::public_key),
+        Some(key_pair.public_key())
+    );
+    assert_ne!(client.key_pair.public_key(), key_pair.public_key());
+    assert_eq!(client.network_id, context.config.network_id);
+    assert_eq!(
+        file.stream_position().expect("retained caller descriptor"),
+        5
+    );
 }
 #[test]
 fn run_context_installs_only_the_explicit_operator_key() {
@@ -516,7 +624,9 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     assert!(args.command.allows_fallback_config());
     assert!(args.command.allows_fallback_config_in_machine_mode());
     let network_id = iroha::data_model::NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"local-contract-test")),
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"local-contract-test",
+        )),
     )
     .to_string();
     for command in [
@@ -875,6 +985,8 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         "/private/runtime/known_hosts",
         "--runtime-client-config",
         "/private/runtime/client.toml",
+        "--validator-operator-key",
+        "/private/runtime/operator.key",
         "--validator-client-config",
         "/private/runtime/validator-1.toml",
         "/private/runtime/validator-2.toml",
@@ -913,6 +1025,77 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         .expect_err("retired public-reset apply flag must be rejected");
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
+}
+#[test]
+fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
+    let local = [
+        "--runtime-client-config",
+        "/private/runtime/client.toml",
+        "--validator-client-config",
+        "/private/runtime/client-1.toml",
+        "/private/runtime/client-2.toml",
+        "/private/runtime/client-3.toml",
+        "/private/runtime/client-4.toml",
+        "--onboarding-token",
+        "/private/runtime/token",
+        "--inrou-stage-dir",
+        "/private/runtime/stage",
+        "--validator-unit",
+        "/private/runtime/validator-1.service",
+        "/private/runtime/validator-2.service",
+        "/private/runtime/validator-3.service",
+        "/private/runtime/validator-4.service",
+        "--edge-unit",
+        "/private/runtime/edge.service",
+        "--known-hosts",
+        "/private/runtime/known_hosts",
+        "--output",
+        "/private/runtime/new.json",
+    ];
+    for subcommand in ["assemble", "authorize"] {
+        let mut argv = vec!["iroha", "taira", "public-reset", subcommand];
+        if subcommand == "assemble" {
+            argv.extend(["--inventory-draft", "/private/runtime/inventory-draft.json"]);
+        } else {
+            argv.extend([
+                "--inventory",
+                "/private/runtime/inventory.json",
+                "--trusted-public-key",
+                "/private/runtime/trusted.json",
+                "--signing-key-fd",
+                "3",
+            ]);
+        }
+        argv.extend(local);
+        let error = Args::try_parse_from(&argv).expect_err("explicit operator credential required");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--validator-operator-key"));
+        argv.extend(["--validator-operator-key", "/private/runtime/operator.key"]);
+        Args::try_parse_from(argv)
+            .expect("parse complete local custody arguments without opening files");
+    }
+}
+#[test]
+fn taira_public_reset_operator_keygen_has_explicit_private_output() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "public-reset",
+        "operator-keygen",
+        "--private-key-file",
+        "/private/runtime/new-operator.key",
+    ])
+    .expect("parse key generation without generating a credential");
+    reject_irrelevant_taira_public_reset_globals(&args).expect("no unrelated global signer");
+    let error = Args::try_parse_from(["iroha", "taira", "public-reset", "operator-keygen"])
+        .expect_err("explicit output is required");
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
 }
 #[test]
 fn taira_write_canary_cli_parses_defaults_and_overrides() {

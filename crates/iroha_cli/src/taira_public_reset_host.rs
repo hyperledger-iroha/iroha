@@ -11,6 +11,7 @@ use super::{
     ensure_authorization_current, ensure_pinned_unchanged, now_unix_ms, open_pinned_regular,
     pin_owner_private_file, read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex,
     validate_inventory, validate_owner_private_dir, validate_validator_genesis_config,
+    validate_validator_operator_config, validator_operator_public_key,
     verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -7150,6 +7151,7 @@ fn validator_preseed_store(
         Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
         &admitted.inventory.next_genesis_hash,
     )?;
+    validate_validator_operator_config(&bytes, &admitted.inventory.operator_public_key)?;
     let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
     let config: toml::Value =
         toml::from_str(text).map_err(|_| eyre!("installed validator config is not valid TOML"))?;
@@ -8507,6 +8509,9 @@ fn observe_validator_process(
             &admitted.inventory.previous_genesis_hash
         },
     )?;
+    if fresh_state {
+        validate_validator_operator_config(&bytes, &admitted.inventory.operator_public_key)?;
+    }
     verify_regular_hash(&expected_genesis, genesis_hash)?;
     require_root_directory(
         Path::new(&validator.state_root),
@@ -11730,6 +11735,7 @@ fn sync_directory(path: &Path) -> Result<()> {
 pub(super) struct RuntimeCanaryInputs {
     pub(super) client_config: PathBuf,
     pub(super) validator_client_configs: Vec<PathBuf>,
+    pub(super) validator_operator_key: PathBuf,
     pub(super) onboarding_token: PathBuf,
     pub(super) inrou_stage_dir: PathBuf,
     pub(super) fee_args: Vec<OsString>,
@@ -11738,11 +11744,39 @@ pub(super) struct RuntimeCanaryInputs {
 struct RuntimeCustody {
     client_config: super::PinnedInput,
     validator_client_configs: Vec<super::PinnedInput>,
+    validator_operator_key: Option<super::PinnedInput>,
     onboarding_token: Option<super::PinnedInput>,
     inrou_stage_dir: PathBuf,
     snapshot_stage_files: Vec<(String, super::PinnedInput)>,
     stage_identity: crate::soracloud::TairaInrouStageIdentity,
     fee_args: Vec<OsString>,
+}
+
+/// Retain the explicit operator credential and bind its public identity to the signed inventory.
+pub(super) fn pin_validator_operator_key(
+    path: &Path,
+    inventory: &InventoryV1,
+) -> Result<super::PinnedInput> {
+    let input = pin_owner_private_file(path, "validator operator key")?;
+    validate_pinned_validator_operator_key(&input, inventory)?;
+    Ok(input)
+}
+
+fn validate_pinned_validator_operator_key(
+    input: &super::PinnedInput,
+    inventory: &InventoryV1,
+) -> Result<()> {
+    let expected = validator_operator_public_key(&inventory.operator_public_key)?;
+    revalidate_pinned(input, "validator operator key")?;
+    let descriptor = u32::try_from(input.file.as_raw_fd())
+        .map_err(|_| eyre!("validator operator key descriptor is invalid"))?;
+    let key_pair = crate::operator_key::load_operator_key_pair_fd(descriptor)?;
+    if key_pair.public_key() != &expected {
+        return Err(eyre!(
+            "validator operator key does not match the signed inventory operator public key"
+        ));
+    }
+    revalidate_pinned(input, "validator operator key")
 }
 
 impl RuntimeCustody {
@@ -11757,6 +11791,8 @@ impl RuntimeCustody {
             ));
         }
         validate_fee_args(&inputs.fee_args)?;
+        let validator_operator_key =
+            pin_validator_operator_key(&inputs.validator_operator_key, &admitted.inventory)?;
         let client_config =
             pin_owner_private_file(&inputs.client_config, "Taira runtime client config")?;
         let onboarding_token =
@@ -11861,6 +11897,7 @@ impl RuntimeCustody {
         Ok(Self {
             client_config,
             validator_client_configs,
+            validator_operator_key: Some(validator_operator_key),
             onboarding_token: Some(onboarding_token),
             inrou_stage_dir: retained_stage_dir,
             snapshot_stage_files,
@@ -11887,6 +11924,9 @@ impl RuntimeCustody {
         }
         for input in &self.validator_client_configs {
             revalidate_pinned(input, "validator client config")?;
+        }
+        if let Some(input) = &self.validator_operator_key {
+            revalidate_pinned(input, "validator operator key")?;
         }
         for (_, input) in &self.snapshot_stage_files {
             revalidate_pinned(input, "snapshotted Inrou stage file")?;
@@ -11963,9 +12003,22 @@ impl RuntimeCustody {
     fn recover(
         client_config_path: PathBuf,
         validator_config_paths: Vec<PathBuf>,
+        validator_operator_key_path: Option<PathBuf>,
         admitted: &AdmittedReset,
         journal_dir: &Path,
     ) -> Result<Self> {
+        if !matches!(validator_config_paths.len(), 0 | 4) {
+            return Err(eyre!(
+                "recovery requires either zero or exactly four validator client configs"
+            ));
+        }
+        let validator_operator_key = if validator_config_paths.len() == 4 {
+            let path = validator_operator_key_path
+                .ok_or_else(|| eyre!("RestartProof recovery requires --validator-operator-key"))?;
+            Some(pin_validator_operator_key(&path, &admitted.inventory)?)
+        } else {
+            None
+        };
         let client_config =
             pin_owner_private_file(&client_config_path, "Taira recovery client config")?;
         let client_hash = hash_pinned_input(&client_config, "Taira recovery client config", None)?;
@@ -11983,11 +12036,6 @@ impl RuntimeCustody {
         {
             return Err(eyre!(
                 "recovery client config does not target the exact signed public Taira canary"
-            ));
-        }
-        if !matches!(validator_config_paths.len(), 0 | 4) {
-            return Err(eyre!(
-                "recovery requires either zero or exactly four validator client configs"
             ));
         }
         let validator_client_configs = validator_config_paths
@@ -12082,6 +12130,7 @@ impl RuntimeCustody {
         Ok(Self {
             client_config,
             validator_client_configs,
+            validator_operator_key,
             onboarding_token: None,
             inrou_stage_dir,
             snapshot_stage_files,
@@ -12297,6 +12346,35 @@ fn inherited_candidate_client_config_args(
     })();
     crate::soracloud::zeroize_taira_toml_table(&mut table);
     result
+}
+
+/// Build the exact convergence child with independent account and operator credentials.
+fn inherited_candidate_operator_status_args(
+    client_config: &super::PinnedInput,
+    operator_key: Option<&super::PinnedInput>,
+    inventory: &InventoryV1,
+    origin: &str,
+) -> Result<(Vec<OsString>, Vec<File>, tempfile::NamedTempFile)> {
+    let operator_key = operator_key
+        .ok_or_else(|| eyre!("validator convergence requires its retained operator key"))?;
+    validate_pinned_validator_operator_key(operator_key, inventory)?;
+    let operator_file = operator_key
+        .file
+        .try_clone()
+        .wrap_err("failed to duplicate retained validator operator key descriptor")?;
+    let (mut args, config_file, custody) =
+        inherited_candidate_client_config_args(client_config, "validator client config", origin)?;
+    args.extend([
+        "--operator-private-key-fd".into(),
+        operator_file.as_raw_fd().to_string().into(),
+        "--output-format".into(),
+        "json".into(),
+        "ops".into(),
+        "sumeragi".into(),
+        "status".into(),
+    ]);
+    revalidate_pinned(operator_key, "validator operator key")?;
+    Ok((args, vec![config_file, operator_file], custody))
 }
 
 fn inrou_probe_root(inventory: &InventoryV1, scope: crate::taira::InrouProbeScope) -> &str {
@@ -12677,12 +12755,14 @@ impl<'a> RecoverySshTransport<'a> {
         journal_dir: &Path,
         runtime_client_config: PathBuf,
         validator_client_configs: Vec<PathBuf>,
+        validator_operator_key: Option<PathBuf>,
     ) -> Result<Self> {
         validate_owner_private_dir(journal_dir, "public-reset journal directory")?;
         require_candidate_probe_host(&admitted.inventory)?;
         let runtime = RuntimeCustody::recover(
             runtime_client_config,
             validator_client_configs,
+            validator_operator_key,
             admitted,
             journal_dir,
         )?;
@@ -14805,31 +14885,35 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "four-validator convergence did not reach one atomic checkpoint"
                     ));
                 }
-                let (mut config_args, config_file, _candidate_custody) =
-                    inherited_candidate_client_config_args(
+                let (config_args, inherited_files, _candidate_custody) =
+                    inherited_candidate_operator_status_args(
                         &self.runtime.validator_client_configs[index],
-                        "validator client config",
+                        self.runtime.validator_operator_key.as_ref(),
+                        &self.admitted.inventory,
                         &self.admitted.inventory.validator_clients[index].probe_origin,
                     )?;
                 let poll_deadline = Instant::now()
                     .checked_add(Duration::from_secs(10))
                     .ok_or_else(|| eyre!("convergence poll deadline overflow"))?
                     .min(deadline);
-                config_args.extend([
-                    "--output-format".into(),
-                    "json".into(),
-                    "ops".into(),
-                    "sumeragi".into(),
-                    "status".into(),
-                ]);
                 let output = self.run_local_cli_until(
                     config_args,
-                    vec![config_file],
+                    inherited_files,
                     timeout_secs,
                     poll_deadline,
                     recovery_only,
                     "operator-signed validator convergence status",
+                );
+                revalidate_pinned(
+                    self.runtime
+                        .validator_operator_key
+                        .as_ref()
+                        .ok_or_else(|| {
+                            eyre!("validator convergence lost its retained operator key")
+                        })?,
+                    "validator operator key",
                 )?;
+                let output = output?;
                 let value = parse_json_report(&output, "validator convergence status")?;
                 let observed = validate_convergence_status(
                     &value,
@@ -20375,6 +20459,173 @@ time.sleep(30)
                 "http://192.0.2.1:8083/",
             )
             .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    fn validator_operator_key_fixture(
+        directory: &Path,
+        inventory: &mut InventoryV1,
+    ) -> (PathBuf, iroha_crypto::KeyPair) {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x81; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("checked operator fixture seed");
+        let encoded = zeroize::Zeroizing::new(
+            iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+        );
+        let path = directory.join("operator.key");
+        fs::write(&path, encoded.as_bytes()).expect("write private operator fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("operator fixture permissions");
+        inventory.operator_public_key = key_pair.public_key().to_string();
+        (path, key_pair)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validator_operator_key_custody_rejects_wrong_identity_and_mutation() {
+        let directory = super::super::private_custody_test_dir("taira-operator-custody-");
+        let mut inventory = super::super::sample_inventory_fixture();
+        let (path, key_pair) = validator_operator_key_fixture(directory.path(), &mut inventory);
+        let retained = pin_validator_operator_key(&path, &inventory).expect("bound operator key");
+        let mut wrong_inventory = inventory.clone();
+        wrong_inventory.operator_public_key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x82; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("different operator fixture")
+                .public_key()
+                .to_string();
+        let error = pin_validator_operator_key(&path, &wrong_inventory)
+            .err()
+            .expect("operator key must match the signed identity");
+        assert!(format!("{error:#}").contains("signed inventory operator public key"));
+        let encoded = zeroize::Zeroizing::new(
+            iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+        );
+        assert!(!format!("{error:#}").contains(encoded.as_str()));
+        fs::write(&path, b"mutated private operator fixture").expect("mutate pinned key");
+        assert!(validate_pinned_validator_operator_key(&retained, &inventory).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_operator_status_child_binds_both_inherited_signers() {
+        use clap::Parser as _;
+
+        let directory = super::super::private_custody_test_dir("taira-operator-status-");
+        let mut inventory = super::super::sample_inventory_fixture();
+        let (key_path, expected_operator) =
+            validator_operator_key_fixture(directory.path(), &mut inventory);
+        let config_path = directory.path().join("client.toml");
+        fs::write(
+            &config_path,
+            include_bytes!("../../../defaults/client.toml"),
+        )
+        .expect("public account config fixture");
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+            .expect("private account config");
+        let config = pin_owner_private_file(&config_path, "account fixture").expect("pin account");
+        let original =
+            load_client_config_from_pinned(&config, "account fixture").expect("original signer");
+        let mut operator = pin_validator_operator_key(&key_path, &inventory).expect("pin operator");
+        operator
+            .file
+            .seek(std::io::SeekFrom::Start(5))
+            .expect("set retained cursor");
+        let (args, files, custody) = inherited_candidate_operator_status_args(
+            &config,
+            Some(&operator),
+            &inventory,
+            "http://127.0.0.1:8083/",
+        )
+        .expect("actual convergence command");
+        let parsed =
+            crate::Args::try_parse_from(std::iter::once(OsString::from("iroha")).chain(args))
+                .expect("actual CLI parser accepts convergence arguments");
+        assert_eq!(files.len(), 2);
+        assert_eq!(
+            parsed.config_fd,
+            Some(u32::try_from(files[0].as_raw_fd()).unwrap())
+        );
+        assert_eq!(
+            parsed.operator_private_key_fd,
+            Some(u32::try_from(files[1].as_raw_fd()).unwrap())
+        );
+        assert!(parsed.operator_private_key_file.is_none());
+        let (child_config, _) = crate::client_config::load_inherited(
+            parsed.config_fd.expect("account descriptor"),
+            parsed
+                .config_source_path
+                .as_deref()
+                .expect("account provenance"),
+        )
+        .expect("strict child config loader");
+        let child_operator = crate::load_runtime_operator_key(&parsed)
+            .expect("actual CLI operator loader")
+            .expect("explicit operator signer");
+        assert_eq!(
+            child_config.torii_api_url.as_str(),
+            "http://127.0.0.1:8083/"
+        );
+        assert_eq!(child_config.key_pair, original.key_pair);
+        assert_eq!(child_config.account, original.account);
+        assert_eq!(child_config.network_id, original.network_id);
+        assert_eq!(child_operator.public_key(), expected_operator.public_key());
+        assert_ne!(
+            child_operator.public_key(),
+            child_config.key_pair.public_key()
+        );
+        assert_eq!(operator.file.stream_position().expect("retained cursor"), 5);
+        revalidate_pinned(&operator, "operator fixture").expect("operator remains unchanged");
+        let ephemeral = custody.path().to_owned();
+        drop(files);
+        drop(custody);
+        assert!(!ephemeral.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_operator_status_child_rejects_missing_or_replaced_operator_key() {
+        let directory = super::super::private_custody_test_dir("taira-operator-replaced-");
+        let mut inventory = super::super::sample_inventory_fixture();
+        let (key_path, _) = validator_operator_key_fixture(directory.path(), &mut inventory);
+        let config_path = directory.path().join("client.toml");
+        fs::write(
+            &config_path,
+            include_bytes!("../../../defaults/client.toml"),
+        )
+        .expect("public config fixture");
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+            .expect("private config fixture");
+        let config = pin_owner_private_file(&config_path, "account fixture").expect("pin config");
+        let operator = pin_validator_operator_key(&key_path, &inventory).expect("pin operator");
+        assert!(
+            inherited_candidate_operator_status_args(
+                &config,
+                None,
+                &inventory,
+                "http://127.0.0.1:8083/",
+            )
+            .is_err()
+        );
+        fs::rename(&key_path, directory.path().join("retained.key"))
+            .expect("replace operator path");
+        fs::write(&key_path, b"replacement must not reach request dispatch")
+            .expect("untrusted replacement");
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .expect("replacement metadata");
+        assert!(
+            inherited_candidate_operator_status_args(
+                &config,
+                Some(&operator),
+                &inventory,
+                "http://127.0.0.1:8083/",
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read_dir(directory.path()).unwrap().count(),
+            3,
+            "rejected operator custody must not create a child config"
         );
     }
 

@@ -95,6 +95,8 @@ enum PublicResetCommand {
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
     ConfigRebase(config::ConfigRebase),
+    /// Generate a dedicated runtime operator credential without exposing private key bytes.
+    OperatorKeygen(config::OperatorKeygen),
     /// Assemble exact release inputs locally from an explicit inventory draft.
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
@@ -151,6 +153,9 @@ struct PublicResetApply {
     /// Runtime-only owner-private pinned OpenSSH known-hosts file.
     #[arg(long, value_name = "PATH")]
     known_hosts: PathBuf,
+    /// Dedicated owner-private operator key for convergence and restart verification.
+    #[arg(long, value_name = "PATH")]
+    validator_operator_key: Option<PathBuf>,
     /// Owner-private signing config for forward work or read-only mutation recovery.
     #[arg(long, value_name = "PATH")]
     runtime_client_config: Option<PathBuf>,
@@ -167,6 +172,18 @@ struct PublicResetApply {
 }
 
 impl PublicResetApply {
+    fn recovery_validator_operator_key(
+        &self,
+        step: executor_model::ExecutionStep,
+    ) -> Result<Option<PathBuf>> {
+        if step == executor_model::ExecutionStep::RestartProof {
+            Ok(Some(self.validator_operator_key.clone().ok_or_else(
+                || eyre!("RestartProof recovery requires --validator-operator-key"),
+            )?))
+        } else {
+            Ok(None)
+        }
+    }
     fn recovery_client_config(&self) -> Result<PathBuf> {
         self.runtime_client_config
             .clone()
@@ -246,6 +263,10 @@ impl PublicResetApply {
         Ok(host::RuntimeCanaryInputs {
             client_config,
             validator_client_configs: self.validator_client_config.clone(),
+            validator_operator_key: self
+                .validator_operator_key
+                .clone()
+                .ok_or_else(|| eyre!("forward execution requires --validator-operator-key"))?,
             onboarding_token,
             inrou_stage_dir,
             fee_args: Self::fee_args(&admitted.inventory)?,
@@ -263,6 +284,10 @@ impl PublicReset {
             }
             PublicResetCommand::ConfigRebase(args) => {
                 config::config_rebase(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::OperatorKeygen(args) => {
+                config::operator_keygen(args, &mut output)?;
                 return Ok(());
             }
             PublicResetCommand::Assemble(args) => {
@@ -364,6 +389,7 @@ impl PublicReset {
                                     journal_dir,
                                     runtime_client_config,
                                     validator_client_configs,
+                                    args.recovery_validator_operator_key(recovery_step)?,
                                 )?;
                                 executor_model::execute_plan(
                                     &admitted.inventory,
@@ -529,6 +555,8 @@ struct InventoryV1 {
     revision: RevisionV1,
     validators: Vec<ValidatorV1>,
     validator_clients: Vec<ValidatorClientV1>,
+    /// Dedicated public operator identity accepted by every candidate validator.
+    operator_public_key: String,
     edge: EdgeV1,
     inrou_canary: InrouCanaryV1,
     canary_onboarding_request: AccountOnboardingPlanRequestV1,
@@ -1331,6 +1359,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     if inventory.schema != INVENTORY_SCHEMA_V1 {
         return Err(eyre!("inventory schema must be `{INVENTORY_SCHEMA_V1}`"));
     }
+    validator_operator_public_key(&inventory.operator_public_key)?;
     let _chain_guard = enter_inventory_chain_discriminant(inventory)?;
     validate_slug("deployment_id", &inventory.deployment_id)?;
     for (label, value) in [
@@ -2431,6 +2460,57 @@ fn validate_validator_genesis_config(
     result
 }
 
+/// Require one explicit canonical operator identity in the signed inventory.
+fn validator_operator_public_key(value: &str) -> Result<iroha_crypto::PublicKey> {
+    let key = value
+        .parse::<iroha_crypto::PublicKey>()
+        .map_err(|_| eyre!("validator operator public key must be canonical Ed25519"))?;
+    if key.try_algorithm().ok() != Some(Algorithm::Ed25519) || key.to_string() != value {
+        return Err(eyre!(
+            "validator operator public key must be canonical Ed25519"
+        ));
+    }
+    Ok(key)
+}
+
+/// Check that startup policy accepts the credential used by deployment probes.
+fn validate_validator_operator_config(bytes: &[u8], expected_public_key: &str) -> Result<()> {
+    validator_operator_public_key(expected_public_key)?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| eyre!("validator startup config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("validator startup config is not TOML"))?;
+    let result = (|| {
+        if table.contains_key("extends") {
+            return Err(eyre!(
+                "validator startup config cannot inherit unbound TOML"
+            ));
+        }
+        let policy = table
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("operator_signatures"))
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| eyre!("validator config requires explicit operator signing policy"))?;
+        if policy.get("enabled").and_then(toml::Value::as_bool) != Some(true)
+            || !policy
+                .get("allowed_public_keys")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|keys| {
+                    keys.iter()
+                        .any(|key| key.as_str() == Some(expected_public_key))
+                })
+        {
+            return Err(eyre!(
+                "validator config does not authorize the signed operator public key"
+            ));
+        }
+        Ok(())
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
 fn validate_pinned_validator_genesis_configs(
     inventory: &InventoryV1,
     pinned: &[PinnedArtifact],
@@ -2455,6 +2535,7 @@ fn validate_pinned_validator_genesis_configs(
             Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
             &inventory.next_genesis_hash,
         )?;
+        validate_validator_operator_config(&bytes, &inventory.operator_public_key)?;
     }
     Ok(())
 }
@@ -5046,6 +5127,7 @@ mod executor_model {
                 trusted_public_key: unavailable.join("trusted-key.json"),
                 ssh_identity: unavailable.join("identity"),
                 known_hosts: unavailable.join("known-hosts"),
+                validator_operator_key: Some(unavailable.join("operator.key")),
                 runtime_client_config: Some(unavailable.join("runtime.toml")),
                 validator_client_config: validator_configs.clone(),
                 onboarding_token: Some(unavailable.join("onboarding-token")),
@@ -5074,8 +5156,23 @@ mod executor_model {
                     "RestartProof must reject {count} configs"
                 );
             }
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::RestartProof)
+                    .unwrap()
+                    .is_some()
+            );
+            args.validator_operator_key = None;
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::RestartProof)
+                    .is_err()
+            );
             args.validator_client_config.clear();
             for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+                assert!(
+                    args.recovery_validator_operator_key(step)
+                        .unwrap()
+                        .is_none()
+                );
                 assert!(
                     args.recovery_validator_client_configs(step)
                         .expect("unused forward arguments remain optional")
@@ -7742,6 +7839,12 @@ mod executor_model {
                 revision: revision.clone(),
                 validators,
                 validator_clients,
+                operator_public_key: iroha_crypto::KeyPair::from_seed(
+                    b"fixture dedicated operator".to_vec(),
+                    Algorithm::Ed25519,
+                )
+                .public_key()
+                .to_string(),
                 edge: EdgeV1 {
                     slug: "taira-edge".to_owned(),
                     endpoint: endpoint(5, edge_root, &revision),
@@ -7911,6 +8014,62 @@ mod executor_model {
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod operator_admission_tests {
+    use super::*;
+
+    #[test]
+    fn operator_public_key_is_canonical_ed25519_and_authorization_bound() {
+        let mut inventory = sample_inventory_fixture();
+        validator_operator_public_key(&inventory.operator_public_key).unwrap();
+        let before = canonical_inventory_bytes(&inventory).unwrap();
+        inventory.operator_public_key = iroha_crypto::KeyPair::from_seed(
+            b"distinct deployment operator".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .public_key()
+        .to_string();
+        assert_ne!(before, canonical_inventory_bytes(&inventory).unwrap());
+        for invalid in [
+            String::new(),
+            "invalid".to_owned(),
+            inventory.operator_public_key.to_uppercase(),
+        ] {
+            assert!(validator_operator_public_key(&invalid).is_err());
+        }
+        let other =
+            iroha_crypto::KeyPair::from_seed(b"other algorithm".to_vec(), Algorithm::Secp256k1);
+        assert!(validator_operator_public_key(&other.public_key().to_string()).is_err());
+    }
+
+    #[test]
+    fn operator_policy_requires_explicit_enabled_allowlist_and_rejects_inference() {
+        let key = sample_inventory_fixture().operator_public_key;
+        let policy = format!(
+            "[torii.operator_signatures]\nenabled = true\nallowed_public_keys = [{key:?}]\n"
+        );
+        validate_validator_operator_config(policy.as_bytes(), &key).unwrap();
+        for invalid in [
+            String::new(),
+            policy.replace("true", "false"),
+            policy.replace(&format!("[{key:?}]"), "[]"),
+            "[torii.operator_signatures]\nenabled = true\nallow_node_key = true\n".to_owned(),
+            format!("extends = []\n{policy}"),
+        ] {
+            assert!(validate_validator_operator_config(invalid.as_bytes(), &key).is_err());
+        }
+        let foreign =
+            iroha_crypto::KeyPair::from_seed(b"foreign operator".to_vec(), Algorithm::Ed25519);
+        assert!(
+            validate_validator_operator_config(
+                policy.as_bytes(),
+                &foreign.public_key().to_string()
+            )
+            .is_err()
+        );
     }
 }
 

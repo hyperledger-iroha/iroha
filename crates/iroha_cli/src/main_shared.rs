@@ -336,8 +336,18 @@ struct Args {
     /// This runtime-only credential is never inferred from the account key, environment, or
     /// client TOML. The selected node must allowlist its public key for the configured exact
     /// NetworkId.
-    #[arg(long, value_name("ABSOLUTE_PATH"))]
+    #[arg(
+        long,
+        value_name("ABSOLUTE_PATH"),
+        conflicts_with = "operator_private_key_fd"
+    )]
     operator_private_key_file: Option<PathBuf>,
+    /// Borrow an inherited, read-only owner-private operator key descriptor without reopening it.
+    ///
+    /// The descriptor must be a singly linked regular file with exact mode 0600. Reading it
+    /// preserves the caller's file offset. No account, TOML, or environment key is inferred.
+    #[arg(long, value_name("FD"), value_parser = clap::value_parser!(u32).range(3..=65535), conflicts_with = "operator_private_key_file")]
+    operator_private_key_fd: Option<u32>,
     /// Print configuration details to stderr
     #[arg(short, long)]
     verbose: bool,
@@ -1224,16 +1234,11 @@ fn run() -> ReportResult<(), MainError> {
             .preflight_before_operator_key_load()
             .map_err(|error| Report::new(MainError::Command(error.to_string())))?;
     }
-    let operator_key_pair = args
-        .operator_private_key_file
-        .as_deref()
-        .map(operator_key::load_operator_key_pair)
-        .transpose()
-        .map_err(|error| {
-            Report::new(MainError::Config)
-                .attach("failed to load runtime operator signing key")
-                .attach(error.to_string())
-        })?;
+    let operator_key_pair = load_runtime_operator_key(&args).map_err(|error| {
+        Report::new(MainError::Config)
+            .attach("failed to load runtime operator signing key")
+            .attach(error.to_string())
+    })?;
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
@@ -1266,11 +1271,25 @@ fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
         report.change_context(MainError::Command(message))
     })
 }
+fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
+    match (
+        args.operator_private_key_file.as_deref(),
+        args.operator_private_key_fd,
+    ) {
+        (Some(_), Some(_)) => {
+            eyre::bail!("operator private-key file and descriptor are mutually exclusive")
+        }
+        (Some(path), None) => operator_key::load_operator_key_pair(path).map(Some),
+        (None, Some(fd)) => operator_key::load_operator_key_pair_fd(fd).map(Some),
+        (None, None) => Ok(None),
+    }
+}
 fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
     if args.config.is_some()
         || args.config_fd.is_some()
         || args.config_source_path.is_some()
         || args.operator_private_key_file.is_some()
+        || args.operator_private_key_fd.is_some()
         || args.verbose
         || args.metadata.is_some()
         || args.input
@@ -1292,6 +1311,9 @@ fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainE
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
+    }
+    if args.operator_private_key_fd.is_some() {
+        flags.push("--operator-private-key-fd");
     }
     if args.verbose {
         flags.push("--verbose");
@@ -1336,6 +1358,9 @@ fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(),
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
+    }
+    if args.operator_private_key_fd.is_some() {
+        flags.push("--operator-private-key-fd");
     }
     if args.verbose {
         flags.push("--verbose");

@@ -243,6 +243,7 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
         runtime_client_config: PathBuf::from("/missing"),
         validator_client_config: vec![],
         onboarding_token: PathBuf::from("/missing"),
+        validator_operator_key: PathBuf::from("/missing"),
         inrou_stage_dir: PathBuf::from("/missing"),
         validator_unit: vec![],
         edge_unit: PathBuf::from("/missing"),
@@ -295,6 +296,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
             .map(|slug| absent.join(format!("{slug}.toml")))
             .collect(),
         onboarding_token: absent.join("onboarding-token"),
+        validator_operator_key: absent.join("operator.key"),
         inrou_stage_dir: absent.join("stage"),
         validator_unit: VALIDATOR_SLUGS
             .iter()

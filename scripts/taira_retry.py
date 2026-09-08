@@ -349,6 +349,12 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 
 def require_candidate_probe_inventory(inventory):
     """Reject obsolete or ambiguous public drafts before any retirement mutation."""
+    operator_key = inventory.get("operator_public_key")
+    # PublicKey Display uses a lowercase multihash prefix and uppercase payload.
+    # Native admission performs the cryptographic key/config/custody joins.
+    require(isinstance(operator_key, str)
+            and re.fullmatch(r"ed0120[0-9A-F]{64}", operator_key) is not None,
+            "one explicit canonical Ed25519 operator public key is required")
     clients = inventory.get("validator_clients")
     require(isinstance(clients, list) and len(clients) == 4,
             "four explicit validator candidate probe origins are required")
@@ -2868,6 +2874,7 @@ def local_arguments(raw):
     shape = (
         ("--runtime-client-config", 1),
         ("--validator-client-config", 4),
+        ("--validator-operator-key", 1),
         ("--onboarding-token", 1),
         ("--inrou-stage-dir", 1),
         ("--validator-unit", 4),

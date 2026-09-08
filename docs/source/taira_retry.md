@@ -7,6 +7,13 @@ the completed attempt's custody, and runs native assemble, authorize, preflight,
 and apply. It then verifies seed continuity and boot persistence. It does not
 build or transfer unchanged binaries or source.
 
+For a changed release, freeze the source once and run `scripts/taira_release.py
+prepare` with the existing repository `target/` lane. Preparation runs the native
+CLI regressions before the Linux build. Use the routine development check while
+editing; a separate cold development check adds a second dependency build to a
+release that already runs the same gate. Keep each lane's Cargo home, profile and
+source location consistent so subsequent builds reuse its artifacts.
+
 After an operator has prepared one owner-only runtime plan, each retry is:
 
 ```sh
@@ -71,6 +78,17 @@ or ambiguous origins before retirement. Configs bind validator slots 1–4 to
 the dedicated Inrou UID/GID pairs 70000–70003. Old inventories and journals do
 not gain a compatibility path: prepare the current first-release inventory and
 use a fresh attempt for the current execution plan.
+
+The inventory also requires a canonical Ed25519 `operator_public_key`, and the
+retained native input list requires `--validator-operator-key PATH` before
+`--validator-unit`. This path identifies the same dedicated owner-private
+operator key admitted with all four validator configs. The native
+`iroha taira public-reset operator-keygen --private-key-file PATH` command creates
+a fresh key outside repositories and prints only its public identity and path;
+`config-rebase --operator-public-key PUBLIC_KEY` installs that identity while
+rebasing retained validator configs. Retry keeps the key unchanged and rejects
+missing or noncanonical public identity before retirement. Native assembly and
+child descriptor custody verify the actual credential; Python reads no key bytes.
 
 Native apply qualifies four-peer convergence, prepared application mutations,
 Inrou runtime health and all four recovery restarts through these direct

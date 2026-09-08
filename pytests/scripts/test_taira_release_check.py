@@ -63,7 +63,15 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_selection_has_no_duplicate_test_names(self):
         names = [name for _, tests in gate.STAGES for name in tests]
         self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(len(names), 81 + (gate.sys.platform == "linux"))
+        self.assertEqual(len(names), 106 + (gate.sys.platform == "linux"))
+        self.assertIn(
+            "taira_public_reset::host::tests::candidate_operator_status_child_binds_both_inherited_signers",
+            names,
+        )
+        self.assertIn(
+            "taira_public_reset::config::tests::operator_keygen_publishes_canonical_private_key_and_only_public_report",
+            names,
+        )
 
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,
